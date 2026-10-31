@@ -831,6 +831,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     tools: baseTools,
     allow: config.agent.tools,
     audit,
+    permissionMode: config.permissions.mode,
   });
 
   const startedAt = Date.now();
