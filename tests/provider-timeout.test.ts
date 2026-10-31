@@ -68,6 +68,25 @@ test("codex-oauth: servidor pendurado vira network_timeout", async () => {
   expect(error.message).not.toContain(jwt({ exp: 4102444800 }));
 });
 
+test("codex-oauth: refresh pendurado vira network_timeout (não trava o run)", async () => {
+  const p = new CodexOAuthProvider({
+    credentialsPath: authPath(1), // expirado → força o refresh
+    timeoutMs: 20,
+    fetchFn: hungFetch, // endpoint de auth pendurado: só termina se o sinal da chamada abortar
+  });
+
+  // corrida com rélogua própria para o RED não travar a suíte: antes do fix o
+  // refresh usa o signal nu do caller (undefined aqui) e nunca resolve.
+  const outcome = await Promise.race([
+    p.complete(req).then(
+      () => "resolved",
+      (e) => (e instanceof ProviderError ? `err:${e.errClass}` : `err:${String(e)}`),
+    ),
+    new Promise((resolve) => setTimeout(() => resolve("hung"), 500)),
+  ]);
+  expect(outcome).toBe("err:network_timeout");
+});
+
 test("policy: network_timeout retenta com backoff e nunca faz skip de quota", () => {
   expect(errorPolicy("network_timeout", 1)).toBe("retry_backoff");
   expect(errorPolicy("network_timeout", 99)).toBe("fallback");

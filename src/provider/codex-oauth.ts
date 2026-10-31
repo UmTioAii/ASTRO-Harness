@@ -381,7 +381,23 @@ export class CodexOAuthProvider implements Provider {
       return this.tokens;
     }
 
-    this.tokens = await refreshCodexTokens(this.tokens, this.fetchFn, signal);
+    // O refresh também tem timeout próprio (I-09): endpoint de auth pendurado
+    // não pode travar o run para sempre.
+    const net = networkCall(signal, this.timeoutMs);
+    try {
+      this.tokens = await refreshCodexTokens(this.tokens, this.fetchFn, net.signal);
+    } catch (error) {
+      if (isAbortError(error, signal)) throw error;
+      if (net.timedOut()) {
+        throw new ProviderError(
+          "network_timeout",
+          `renovação das credenciais do Codex sem resposta em ${this.timeoutMs}ms`,
+        );
+      }
+      throw error;
+    } finally {
+      net.dispose();
+    }
     return this.tokens;
   }
 
