@@ -71,6 +71,29 @@ describe("sanitizedEnv (I-03)", () => {
     expect(env.GIT_AUTHOR_NAME).toBe("autora");
     expect(env.PATH).toBe("/usr/bin");
   });
+
+  test("remove AUTHORIZATION e variantes; mantém identidade git (I-03)", () => {
+    const env = sanitizedEnv({
+      AUTHORIZATION: "Bearer aaa",
+      HTTP_AUTHORIZATION: "Bearer bbb",
+      PROXY_AUTHORIZATION: "Bearer ccc",
+      WWW_AUTHORIZATION: "Bearer ddd",
+      GIT_AUTHOR_NAME: "autora",
+      GIT_COMMITTER_NAME: "autor",
+      GIT_AUTHOR_EMAIL: "a@b.c",
+      GIT_COMMITTER_EMAIL: "a@b.c",
+      PATH: "/usr/bin",
+    });
+    expect(env).not.toHaveProperty("AUTHORIZATION");
+    expect(env).not.toHaveProperty("HTTP_AUTHORIZATION");
+    expect(env).not.toHaveProperty("PROXY_AUTHORIZATION");
+    expect(env).not.toHaveProperty("WWW_AUTHORIZATION");
+    expect(env.GIT_AUTHOR_NAME).toBe("autora");
+    expect(env.GIT_COMMITTER_NAME).toBe("autor");
+    expect(env.GIT_AUTHOR_EMAIL).toBe("a@b.c");
+    expect(env.GIT_COMMITTER_EMAIL).toBe("a@b.c");
+    expect(env.PATH).toBe("/usr/bin");
+  });
 });
 
 describe("run_command sandbox (F4-6)", () => {
