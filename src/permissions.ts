@@ -114,7 +114,9 @@ export function actionClassOf(tool: Tool, call: ToolCallLike): ActionClass {
   const declared = tool.manifest.class;
 
   if (declared === "read_common" || declared === "read_critical") {
-    return critical ? "read_critical" : "read_common";
+    // O manifesto só pode elevar, nunca rebaixar: read_critical declarado
+    // permanece read_critical mesmo sem `path` no input.
+    return declared === "read_critical" || critical ? "read_critical" : "read_common";
   }
   if (declared === "edit") return critical ? "critical_write" : "edit";
   if (declared === "identity_swap") return "identity";
