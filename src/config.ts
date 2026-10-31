@@ -7,7 +7,7 @@ import { DEFAULT_OUTPUT_LIMIT, type OutputLimitConfig } from "./output-limit";
 import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "./compaction/engine";
 import { isAuthHeader, looksLikeSecret } from "./secrets";
 import { headerEnvName, isValidHeaderName } from "./mcp/headers";
-import { outboundUrlProblem, urlProblem } from "./url-safety";
+import { outboundUrlProblem } from "./url-safety";
 import { CAPACITY_TAGS, ROLE_TAGS, isKnownTag } from "./tags";
 
 /** Configuração comum a todos os providers. */
@@ -384,7 +384,8 @@ function validateProvider(name: string, value: unknown): ProviderConfig {
 
   if (kind === "openai-compat") {
     const baseUrl = expectString(raw.baseUrl, `${field}.baseUrl`);
-    const baseUrlIssue = urlProblem(baseUrl);
+    // baseUrl recebe prompts e saída de tools: mesma regra de saída (SSRF/exfiltração).
+    const baseUrlIssue = outboundUrlProblem(baseUrl);
     if (baseUrlIssue !== undefined) fail(`config inválida: "${field}.baseUrl" ${baseUrlIssue}`);
     return {
       kind,
@@ -401,7 +402,7 @@ function validateProvider(name: string, value: unknown): ProviderConfig {
   if (kind === "codex-oauth") {
     const baseUrl = raw.baseUrl === undefined ? undefined : expectString(raw.baseUrl, `${field}.baseUrl`);
     if (baseUrl !== undefined) {
-      const baseUrlIssue = urlProblem(baseUrl);
+      const baseUrlIssue = outboundUrlProblem(baseUrl);
       if (baseUrlIssue !== undefined) fail(`config inválida: "${field}.baseUrl" ${baseUrlIssue}`);
     }
     return {
