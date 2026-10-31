@@ -22,6 +22,9 @@ function abortError(reason: unknown): Error {
   return new DOMException("cancelado", "AbortError");
 }
 
+/** Aprovador humano de uma chamada de tool no modo `ask` (PERM-01). */
+export type ToolApprover = (request: { name: string; action: ActionClass; mode: PermissionMode }) => boolean;
+
 /** Nome de diretório seguro para o run id (nunca escapa do cwd). */
 function safeRunDir(run: string): string {
   const clean = run.replace(/[^A-Za-z0-9_.-]/g, "_").replace(/^\.+/, "_").slice(0, 64);
@@ -41,8 +44,8 @@ export class ToolExecutor {
   private readonly auditRef: Auditor;
   /** Modo do gate por chamada (PERM-01); default `ask`. */
   private readonly mode: PermissionMode;
-  /** Aprovação humana injetada pela TUI/REPL; ausente = sem prompt (PERM-04/07). */
-  private readonly approveTool?: (request: { name: string; action: ActionClass; mode: PermissionMode }) => boolean;
+  /** Aprovação humana injetada pela TUI/REPL/CLI; ausente = fail-closed (ask vira deny). */
+  private readonly approveTool?: ToolApprover;
 
   constructor(opts: {
     tools: readonly Tool[];
@@ -50,7 +53,7 @@ export class ToolExecutor {
     audit: Auditor;
     ceiling?: string[];
     permissionMode?: PermissionMode;
-    approveTool?: (request: { name: string; action: ActionClass; mode: PermissionMode }) => boolean;
+    approveTool?: ToolApprover;
   }) {
     this.tools = opts.tools;
     this.byName = new Map(opts.tools.map((tool) => [tool.manifest.name, tool]));
@@ -65,6 +68,11 @@ export class ToolExecutor {
   /** Modo de permissão corrente (subagente herda do executor pai). */
   get permissionMode(): PermissionMode {
     return this.mode;
+  }
+
+  /** Aprovador de tools (subagente herda do executor pai). */
+  get toolApprover(): ToolApprover | undefined {
+    return this.approveTool;
   }
 
   /** Todas as tools registradas (para multi-agent session). */
@@ -240,8 +248,9 @@ export class ToolExecutor {
 
   /**
    * Gate por chamada depois do allowlist e do ceiling (PERM-01, I-01). `deny`
-   * bloqueia; `ask` consulta o aprovador injetado pela TUI/REPL. Sem aprovador,
-   * a decisão fica auditada e a chamada segue — PERM-07 nega sem TTY.
+   * bloqueia; `ask` consulta o aprovador injetado pela TUI/REPL/CLI.
+   * **Fail-closed**: sem aprovador, `ask` vira `deny` — a chamada nunca segue
+   * sem aprovação humana registrada.
    * O piso fixo (`.astro/`/`protectedPaths`, redação, confinamento) é aplicado
    * pelas próprias tools e não depende do modo.
    */
@@ -256,7 +265,7 @@ export class ToolExecutor {
     let effective: PermissionDecision = decision;
     if (decision === "ask") {
       const approved = this.approveTool?.({ name: call.name, action, mode: this.mode });
-      if (approved !== undefined) effective = approved ? "allow" : "deny";
+      effective = approved === undefined ? "deny" : approved ? "allow" : "deny";
     }
     // `allow` automático não gera evento; só o que passou pelo gate fica auditado.
     if (decision !== "allow") {

@@ -147,6 +147,27 @@ describe("gate no executor (#259)", () => {
     expect(result.isError).toBeFalsy();
   });
 
+  test("ask sem aprovador falha fechado: bloqueia e audita deny", async () => {
+    let ran = false;
+    const write: Tool = {
+      manifest: { ...manifest, name: "write_probe", permission: "write", sideEffects: "filesystem" },
+      async execute() {
+        ran = true;
+        return { output: "ok" };
+      },
+    };
+    const { cwd, audit, executor } = setup([write], { mode: "ask" }); // sem approveTool
+    const result = await executor.run({ cwd, run: "r1", agent: "a" },
+      { id: "c1", name: "write_probe", arguments: "{}" });
+
+    expect(ran).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("permiss");
+    const decisoes = audit.readAll().filter((e) => e.tipo === "permission.decision");
+    expect(decisoes).toHaveLength(1);
+    expect(decisoes[0]!.payload).toMatchObject({ name: "write_probe", action: "edit", mode: "ask", decision: "deny" });
+  });
+
   test("piso fixo: bypass não escreve em .astro", async () => {
     const { cwd, executor } = setup([writeFileTool], { mode: "bypass" });
     const result = await executor.run({ cwd, run: "r1", agent: "a" }, {
