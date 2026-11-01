@@ -14,15 +14,12 @@ import {
   trustPrompt,
   validateTrustedStore,
 } from "../src/trust";
-
 function tmpStore() {
   const dir = mkdtempSync(join(tmpdir(), "astro-trust-"));
   return { dir, path: join(dir, "trusted.json") };
 }
-
 // Fixture de segredo construído em runtime para não disparar o gate de segredos.
 const FAKE_SECRET = ["s", "k", "-"].join("") + "live-abcdef12345";
-
 function errOf(fn: () => void): Error {
   try {
     fn();
@@ -31,7 +28,6 @@ function errOf(fn: () => void): Error {
   }
   throw new Error("esperava erro");
 }
-
 describe("store de trust (#267)", () => {
   test("trustedPath: $ASTRO_HOME ou ~/.astro/trusted.json; arquivo ausente → vazio", () => {
     expect(trustedPath({ ASTRO_HOME: join("C:", "x") } as NodeJS.ProcessEnv)).toBe(join("C:", "x", "trusted.json"));
@@ -41,14 +37,12 @@ describe("store de trust (#267)", () => {
     const { path } = tmpStore();
     expect(loadTrustedStore(path)).toEqual({ version: 1, folders: [] });
   });
-
   test("roundtrip: grava atômico (0600 no POSIX) e relê igual", () => {
     const { path } = tmpStore();
     saveTrustedStore({ version: 1, folders: ["/a", "/b"] }, path);
     expect(loadTrustedStore(path)).toEqual({ version: 1, folders: ["/a", "/b"] });
     if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
   });
-
   test("store inválido → erro cita o caminho e nunca ecoa conteúdo/valor (I-03)", () => {
     const { path } = tmpStore();
     writeFileSync(path, `{"version":1,"folders":["${FAKE_SECRET}"]`); // JSON inválido + segredo
@@ -64,7 +58,6 @@ describe("store de trust (#267)", () => {
     expect(errOf(() => validateTrustedStore("x"))).toBeDefined();
   });
 });
-
 describe("TrustedFolders (#267)", () => {
   test("trust persiste, relê em outra instância e canonicaliza (realpath); subpasta herda", () => {
     const { dir, path } = tmpStore();
@@ -77,7 +70,6 @@ describe("TrustedFolders (#267)", () => {
     expect(reloaded.isTrusted(join(dir, "sub"))).toBe(true);
     expect(reloaded.isTrusted(resolve(dir, "..", "..", "etc"))).toBe(false);
   });
-
   test("revoke remove e persiste; revogar o que não existe é no-op sem gravar", () => {
     const { dir, path } = tmpStore();
     const folders = new TrustedFolders(path);
@@ -88,7 +80,6 @@ describe("TrustedFolders (#267)", () => {
     expect(new TrustedFolders(path).isTrusted(dir)).toBe(false);
   });
 });
-
 describe("ensureTrustedCwd (#267, I-11)", () => {
   test("primeiro open pergunta; aprovar persiste + audita allow", async () => {
     const { dir, path } = tmpStore();
@@ -106,7 +97,6 @@ describe("ensureTrustedCwd (#267, I-11)", () => {
     expect(events).toEqual([{ folder: canonicalFolder(dir), decision: "allow" }]);
     expect(new TrustedFolders(path).isTrusted(dir)).toBe(true);
   });
-
   test("pasta já confiável não pergunta de novo", async () => {
     const { dir, path } = tmpStore();
     new TrustedFolders(path).trust(dir);
@@ -120,7 +110,6 @@ describe("ensureTrustedCwd (#267, I-11)", () => {
     });
     expect(asked).toBe(0);
   });
-
   test("negar joga TrustDeniedError (trust_denied), audita deny e não persiste", async () => {
     const { dir, path } = tmpStore();
     const events: Array<{ folder: string; decision: string }> = [];
@@ -134,13 +123,11 @@ describe("ensureTrustedCwd (#267, I-11)", () => {
     expect(events).toEqual([{ folder: canonicalFolder(dir), decision: "deny" }]);
     expect(existsSync(path)).toBe(false);
   });
-
   test("sem ask (não-TTY/eval) prossegue em silêncio e não persiste", async () => {
     const { dir, path } = tmpStore();
     await ensureTrustedCwd(dir, { path });
     expect(existsSync(path)).toBe(false);
   });
-
   test("trustPrompt cita a pasta; trustChoice aceita s/sim/y/yes e nega o resto (incl. EOF)", () => {
     expect(trustPrompt("/tmp/x")).toContain("/tmp/x");
     for (const yes of ["s", "S", "sim", "yes", " y "]) expect(trustChoice(yes)).toBe(true);
