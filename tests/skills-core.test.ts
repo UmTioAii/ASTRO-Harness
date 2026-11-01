@@ -104,9 +104,14 @@ test("chave over-indentada no root é rejeitada em vez de sobrescrever campo (#1
   expect(() => parseSkill(overName, "project", "/p/SKILL.md")).toThrow(/indentação inconsistente/);
 });
 
-test("item de lista over-indentado é fundido na mesma lista rejeitado (#112)", () => {
+test("item over-indentado dentro do objeto do item é rejeitado (#112)", () => {
   const overItem = SKILL.replace("  - name: check\n    command: git status --short", "  - name: check\n    command: git status --short\n      - stray");
   expect(() => parseSkill(overItem, "project", "/p/SKILL.md")).toThrow(/indentação inconsistente/);
+});
+
+test("item over-indentado em lista de escalares é rejeitado em vez de fundido (#112)", () => {
+  const overList = SKILL.replace("  tools: [read_file, run_command]", "  tools:\n    - read_file\n      - evil_tool");
+  expect(() => parseSkill(overList, "project", "/p/SKILL.md")).toThrow(/frontmatter inválido: indentação inconsistente/);
 });
 
 test("chave over-indentada dentro do objeto do item é rejeitada (#112)", () => {
