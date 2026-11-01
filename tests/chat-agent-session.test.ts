@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -358,6 +358,23 @@ describe("AgentSession resume (T2, #63)", () => {
       expect(audit.some((event) => event.tipo === "compaction.manual")).toBe(false);
     } finally {
       chat.close();
+      stop();
+    }
+  });
+});
+
+describe("AgentSession.permissionMode (#270)", () => {
+  test("default ask; config permissions.mode vence; env ASTRO_PERMISSION_MODE vence tudo (D-24)", () => {
+    const { configPath, session, stop } = setup();
+    try {
+      expect(session().permissionMode()).toBe("ask"); // config sem permissions
+      const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+      writeFileSync(configPath, JSON.stringify({ ...raw, permissions: { mode: "allow-edits" } }));
+      expect(session().permissionMode()).toBe("allow-edits");
+      expect(session({ env: { KEY: "k", ASTRO_PERMISSION_MODE: "bypass" } }).permissionMode()).toBe("bypass");
+      // env sem a flag cai de volta na config
+      expect(session({ env: { KEY: "k" } }).permissionMode()).toBe("allow-edits");
+    } finally {
       stop();
     }
   });
