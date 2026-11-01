@@ -228,6 +228,7 @@ describe("pipeline cancelamento (#260)", () => {
       tools: [first, second, pipelineTool],
       allow: ["first", "second", "pipeline"],
       audit,
+      approveTool: () => true,
     });
 
     const result = await executor.run(

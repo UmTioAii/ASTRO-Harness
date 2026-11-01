@@ -15,7 +15,7 @@ import {
 } from "../src/permissions";
 import { ToolExecutor } from "../src/tools/executor";
 import { readFileTool } from "../src/tools/read-file";
-import { runCommandTool } from "../src/tools/run-command";
+import { configureRunCommand, runCommandTool } from "../src/tools/run-command";
 import { writeFileTool } from "../src/tools/write-file";
 import type { Tool } from "../src/tools/types";
 
@@ -102,11 +102,17 @@ describe("gate no executor (#259)", () => {
   }
 
   test("bypass libera shell", async () => {
-    const { cwd, executor } = setup([runCommandTool], { mode: "bypass" });
-    const result = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
-      { id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo oi" }) });
-    expect(result.isError).toBeFalsy();
-    expect(result.output).toContain("oi");
+    // opt-out do sandbox (#248 default-on): este teste exercita o gate, não o sandbox
+    configureRunCommand({ sandbox: false });
+    try {
+      const { cwd, executor } = setup([runCommandTool], { mode: "bypass" });
+      const result = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
+        { id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo oi" }) });
+      expect(result.isError).toBeFalsy();
+      expect(result.output).toContain("oi");
+    } finally {
+      configureRunCommand({ sandbox: true });
+    }
   });
 
   test("ask + approver negando bloqueia a tool e audita", async () => {
