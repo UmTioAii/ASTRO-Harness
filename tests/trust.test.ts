@@ -138,10 +138,8 @@ describe("ensureTrustedCwd (#267, I-11)", () => {
     await ensureTrustedCwd(dir, { path });
     expect(existsSync(path)).toBe(false);
   });
-});
 
-describe("prompt de trust (#267)", () => {
-  test("trustPrompt cita a pasta; trustChoice aceita s/sim/y/yes e nega o resto", () => {
+  test("trustPrompt cita a pasta; trustChoice aceita s/sim/y/yes e nega o resto (incl. EOF)", () => {
     expect(trustPrompt("/tmp/x")).toContain("/tmp/x");
     for (const yes of ["s", "S", "sim", "yes", " y "]) expect(trustChoice(yes)).toBe(true);
     for (const no of ["n", "", "talvez", null, undefined]) expect(trustChoice(no)).toBe(false);

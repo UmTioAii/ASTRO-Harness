@@ -160,11 +160,10 @@ export function trustChoice(answer: string | null | undefined): boolean {
 }
 
 export interface EnsureTrustedOptions {
-  /** Caminho do store (teste); default `trustedPath()`. */
+  /** Caminho do store (teste); default `trustedPath()`. Ausente em `ask` = não-TTY (prossegue sem persistir). */
   path?: string;
-  /** Canal interativo; ausente = não-TTY (prossegue sem persistir). */
   ask?: TrustAsk;
-  /** Audit hook: recebe a decisão tomada (`trust.decision`). */
+  /** Audit hook da decisão tomada (`trust.decision`). */
   onDecision?: (folder: string, decision: "allow" | "deny") => void;
 }
 
