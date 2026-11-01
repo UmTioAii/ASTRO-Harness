@@ -62,6 +62,19 @@ test("models list --json imprime JSON dos modelos", async () => {
   const { dir, cfgPath } = setup();
   const { out, code } = await run(["models", "list", "--config", cfgPath, "--json"], { ASTRO_HOME: dir });
   expect(code).toBe(0);
-  const parsed = JSON.parse(out) as Array<{ ref: string }>;
-  expect(parsed.map((model) => model.ref)).toContain("proj/p1");
+  const parsed = JSON.parse(out) as { models: Array<{ ref: string }> };
+  expect(parsed.models.map((model) => model.ref)).toContain("proj/p1");
+});
+
+test("models list --json --seeds emite JSON válido com models e seeds", async () => {
+  const { dir, cfgPath } = setup();
+  const { out, code } = await run(["models", "list", "--config", cfgPath, "--json", "--seeds"], {
+    ASTRO_HOME: dir,
+    SENTINEL_KEY: "sentinel-xyz",
+  });
+  expect(code).toBe(0);
+  const parsed = JSON.parse(out) as { models: Array<{ ref: string }>; seeds: Array<{ key: string }> };
+  expect(parsed.models.map((model) => model.ref)).toContain("proj/p1");
+  expect(parsed.seeds.map((seed) => seed.key)).toEqual(["nvidia", "codex", "openrouter", "openai-compatible"]);
+  expect(out).not.toContain("sentinel-xyz");
 });
