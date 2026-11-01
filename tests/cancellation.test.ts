@@ -49,7 +49,8 @@ function multiSetup(controller: AbortController, provider: Provider) {
   };
   const opts: MultiAgentSessionOptions = {
     run: "r1", credentialRef: "K", quotaDomain: "default", cwd, provider, registry, baseModel: model,
-    baseExecutor: new ToolExecutor({ tools: [handoffTool, writeFileTool, cancelTool(controller)], allow: ["handoff", "write_file", "cancel"], audit }),
+    // bypass: este teste exercita cancelamento (#260), não o gate de permissão (#259)
+    baseExecutor: new ToolExecutor({ tools: [handoffTool, writeFileTool, cancelTool(controller)], allow: ["handoff", "write_file", "cancel"], audit, permissionMode: "bypass" }),
     ledger, audit, baseMaxSteps: 5, entryAgent: "planner", signal: controller.signal,
   };
   return { cwd, ledger, opts };
@@ -257,7 +258,7 @@ describe("cancelamento explícito (F-06, #127)", () => {
 describe("AbortController por tool call (#260)", () => {
   const slowManifest = {
     name: "slow", description: "espera o cancelamento", parameters: { type: "object", properties: {} },
-    risk: "low" as const, permission: "test", timeoutMs: 30_000, retryable: false, idempotent: false, sideEffects: "none" as const,
+    risk: "low" as const, permission: "test", class: "read_common" as const, timeoutMs: 30_000, retryable: false, idempotent: false, sideEffects: "none" as const,
   };
   const call = (name: string) => ({ id: `c-${name}`, name, arguments: "{}" });
 

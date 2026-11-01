@@ -179,7 +179,7 @@ describe("gate no executor (#259)", () => {
   test("ask sem aprovador falha fechado: bloqueia e audita deny", async () => {
     let ran = false;
     const write: Tool = {
-      manifest: { ...manifest, name: "write_probe", permission: "write", sideEffects: "filesystem" },
+      manifest: { ...manifest, name: "write_probe", permission: "write", sideEffects: "filesystem", class: "edit" as const },
       async execute() {
         ran = true;
         return { output: "ok" };
