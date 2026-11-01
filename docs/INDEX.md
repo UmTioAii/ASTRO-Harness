@@ -10,7 +10,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 |---|---|---|
 | `AGENTS.md` | Sempre, no início de qualquer sessão | ~110 |
 | `docs/CONTRIBUTING-DOCS.md` | Antes de escrever ou revisar qualquer documento | ~25 |
-| `docs/implementation-guide.md` | **Primeiro doc ao implementar uma issue**: TDD, fluxo, revisão dupla, padrões de código | ~110 |
+| `docs/implementation-guide.md` | **Primeiro doc ao implementar uma issue**: TDD, fluxo, revisão dupla, padrões de código | ~130 |
 | `docs/workflow.md` | Ao abrir branch, commit ou PR (detalhe do fluxo) | ~90 |
 | `docs/review-checklist.md` | Ao revisar um PR | ~50 |
 | `docs/invariants.md` | Ao tocar em segredo, tool, caminho, custo, aprovação ou auditoria | ~50 |

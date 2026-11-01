@@ -1,8 +1,8 @@
 # Roadmap de execução — issues abertas (Harness 0.2)
 
-> Resumo: 19 issues abertas no milestone "Harness 0.2"; roadmap em 5 ondas por prioridade × complexidade, com protocolo de 2 revisores (segurança + correctness) antes de cada merge.
+> Resumo: 17 issues abertas (10 no milestone "Harness 0.2"); roadmap em 5 ondas por prioridade × complexidade, com protocolo de 2 revisores (segurança + correctness) antes de cada merge.
 
-**Data:** 2026-11-01 · **Base:** `main` @ `5bfcbd6` · **Milestone:** Harness 0.2 (13 issues no milestone, 19 abertas no total)
+**Data:** 2026-11-01 · **Base:** `main` @ `224c7e4` · **Milestone:** Harness 0.2 (10 issues no milestone, 17 abertas no total). #112/#137/#148 foram fechadas por #314/#315/#317 e saíram deste plano.
 
 ## 1. Análise das issues abertas
 
@@ -22,13 +22,11 @@
 | #57 | C3 Web tools | C3 | baixa | — | Média | F-00, F-09, F-11 | `web_search` + `web_fetch` com backends, rate limit, untrusted |
 | #59 | C5 Qualidade e benchmark | C5 | baixa | — | Média | F-14, F-15 | golden expandido, bench com success rate, CI matriz, docs |
 | #61 | C7 Organização/segurança | C7 | baixa | seguranca | Alta | C1–C6 | refatoração modular, política de segurança, `astro doctor` |
-| #112 | Skills parser over-indent | C1 | bug | — | Baixa | — | rejeita indent inconsistente no frontmatter de SKILL.md |
-| #137 | Docs invariants refresh | C0 | media | — | Baixa | — | atualiza coluna Cobertura de I-06/I-07/I-14/I-22 |
-| #148 | MCP backoff por reconexão | C2 | baixa | — | Baixa | — | 1 falha por reconexão, não por chamador |
+| #316 | Implementation guide doc | docs | — | — | Baixa | — | guia consolidado de implementação (fechada pelo PR deste plano) |
 | #138 | v2 backlog umbrella | C0 | baixa | — | Nenhuma | — | tracking apenas; sem implementação |
 | #230 | Execution roadmap (tracking) | docs | alta | — | Nenhuma | — | issue de tracking do ciclo; estado vive aqui e no milestone |
 
-\* #311 sem label de prioridade, masADR-0019 + risco de segurança a colocam effectively como alta.
+\* #311 sem label de prioridade, mas ADR-0019 + risco de segurança a colocam efetivamente como alta.
 
 ## 2. Matriz prioridade × complexidade
 
@@ -36,29 +34,30 @@
                  Complexidade
                  Baixa        Média         Alta
               ┌────────────┬─────────────┬─────────────┐
-   Alta       │ #112       │ #265        │ #135, #63   │
- Prioridade   │ #137       │ #267, #273  │ #311       │
+   Alta       │ #316       │ #265        │ #135, #63   │
+ Prioridade   │            │ #267, #273  │ #311       │
               ├────────────┼─────────────┼─────────────┤
    Média      │ #270, #271 │             │ #64, #58    │
               ├────────────┼─────────────┼─────────────┤
-   Baixa      │ #148       │ #57, #59    │ #65, #61    │
+   Baixa      │            │ #57, #59    │ #65, #61    │
               └────────────┴─────────────┴─────────────┘
    Tracking: #230, #138 (sem implementação)
 ```
 
 ## 3. Roadmap em 5 ondas
 
-### Onda 1 — Quick wins e docs (semana 1)
+### Onda 1 — Quick wins e docs (semana 1) — CONCLUÍDA
 
 Objetivo: fechar bugs pequenos e atualizar docs, sem risco.
 
-| Ordem | Issue | Ação | Estimativa |
-|-------|-------|------|-----------|
-| 1 | #112 | fix parser skills over-indent | 2–4h |
-| 2 | #137 | refresh invariants.md coverage | 1–2h |
-| 3 | #148 | fix MCP backoff counting | 2–3h |
+| Ordem | Issue | Ação | Estado |
+|-------|-------|------|--------|
+| 1 | #112 | fix parser skills over-indent | merged (#314) |
+| 2 | #137 | refresh invariants.md coverage | merged (#315) |
+| 3 | #148 | fix MCP backoff counting | merged (#317) |
+| 4 | #316 | implementation guide doc | neste PR (#318) |
 
-**Critério de saída da onda:** 3 PRs mergeados, CI verde, nenhum risco novo.
+**Critério de saída da onda:** atendido — 3 PRs mergeados com CI verde, nenhum risco novo; #316 fecha com este PR.
 
 ### Onda 2 — Segurança e robustez do núcleo (semanas 2–3)
 

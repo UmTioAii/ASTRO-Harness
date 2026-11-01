@@ -100,7 +100,7 @@ Regras:
 | Segredo só via `credentialRef`/cofre; nunca em código, teste, log (I-03) | `env[cfg.credentialRef]` |
 | Caminho de arquivo confinado ao `cwd` (I-11) | `resolveWithin(cwd, p)` em toda tool de FS |
 | Tool fora da allowlist não executa (I-01) | `ToolExecutor` valida `allow` |
-| Toda escrita de arquivo gera evento de auditoria sanitizado (I-04) | `auditor.append({ tipo: "tool.call", ... })` |
+| Toda escrita de arquivo gera evento de auditoria sanitizado (I-16) | `auditor.append({ tipo: "tool.call", ... })` |
 | Mudou comportamento → atualiza doc afetado no mesmo PR | `docs/providers.md` |
 
 ## 8. Checklist rápido antes de abrir o PR
