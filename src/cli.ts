@@ -89,11 +89,11 @@ function ttyTrustAsk(): TrustAsk | undefined {
   return async (cwd) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
-      const answer = await new Promise<string>((resolve) => {
-        rl.once("close", () => resolve("")); // EOF = não confiar
+      // EOF (Ctrl-D) = não confiar
+      return trustChoice(await new Promise<string>((resolve) => {
+        rl.once("close", () => resolve(""));
         rl.question(trustPrompt(cwd), resolve);
-      });
-      return trustChoice(answer);
+      }));
     } finally {
       rl.close();
     }

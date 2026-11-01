@@ -1,8 +1,7 @@
 /**
- * Trust por pasta (#267, I-11): no primeiro open de um cwd não confiável o
- * run pergunta (TTY) e a decisão fica persistida em `$ASTRO_HOME/trusted.json`
- * ou `~/.astro/trusted.json`, revogável. Sem canal interativo (eval/CI) o
- * run prossegue em silêncio e nada é persistido. Sem segredo neste store.
+ * Trust por pasta (#267, I-11): 1º open de cwd não confiável pergunta (TTY) e
+ * persiste em `$ASTRO_HOME/trusted.json` / `~/.astro/trusted.json`; sem canal
+ * interativo (eval/CI) prossegue sem gravar. Store sem segredo.
  */
 import { mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -45,7 +44,7 @@ export function validateTrustedStore(raw: unknown): TrustedStore {
   return { version: 1, folders };
 }
 
-/** Store ausente é um store vazio; JSON corrompido é erro só com o caminho (I-03). */
+/** Store ausente é vazio; corrompido/inválido é erro só com o caminho (I-03). */
 export function loadTrustedStore(path: string = trustedPath()): TrustedStore {
   let text: string;
   try {
@@ -60,8 +59,7 @@ export function loadTrustedStore(path: string = trustedPath()): TrustedStore {
   try {
     parsed = JSON.parse(text);
   } catch {
-    // Nunca ecoar o detalhe do parser: ele cita os primeiros caracteres do
-    // conteúdo, que pode ser um segredo colado (I-03).
+    // Nunca ecoar o detalhe do parser: ele cita o início do conteúdo, que pode ser segredo (I-03).
     throw new Error(`store de trust inválido em "${path}": JSON inválido`);
   }
   try {
@@ -171,9 +169,9 @@ export interface EnsureTrustedOptions {
 }
 
 /**
- * Garante trust do cwd antes do run: se já confia, segue; se não e há canal
- * interativo, pergunta (aprovar persiste + audita `allow`; negar audita `deny`
- * e joga `TrustDeniedError`); sem canal, prossegue sem persistir (eval/CI).
+ * Garante trust do cwd antes do run: já confiável → segue; sem canal
+ * interativo (eval/CI) → prossegue sem persistir; senão pergunta — aprovar
+ * persiste + audita `allow`, negar audita `deny` e joga `TrustDeniedError`.
  */
 export async function ensureTrustedCwd(cwd: string, opts: EnsureTrustedOptions = {}): Promise<void> {
   const folders = new TrustedFolders(opts.path);

@@ -560,8 +560,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     throw new ConfigError("model e resume são mutuamente exclusivos");
   }
   const run = opts.runId ?? opts.resume ?? randomUUID();
-  // Trust por pasta (I-11, #267): 1º open de cwd não confiável pergunta no TTY
-  // e persiste; negar para o run (TrustDeniedError); sem TTY prossegue sem gravar.
+  // Trust por pasta (I-11, #267): 1º open pergunta no TTY e persiste; negar para o run; sem TTY segue sem gravar.
   await ensureTrustedCwd(cwd, {
     ...(opts.trustStorePath === undefined ? {} : { path: opts.trustStorePath }),
     ask: opts.trustAsk,
