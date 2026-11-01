@@ -53,6 +53,14 @@ describe("store de trust (#267)", () => {
     const unknown = errOf(() => loadTrustedStore(path));
     expect(unknown.message).toMatch(/campo desconhecido/);
     expect(unknown.message).not.toContain(FAKE_SECRET);
+    // segredo como NOME de chave também não pode vazar na mensagem (I-03)
+    writeFileSync(path, JSON.stringify({ version: 1, folders: [], [FAKE_SECRET]: 1 }));
+    const keySecret = errOf(() => loadTrustedStore(path));
+    expect(keySecret.message).toMatch(/campo desconhecido/);
+    expect(keySecret.message).not.toContain(FAKE_SECRET);
+    // segredo como entrada de folders é recusado sem ecoar o valor (I-03)
+    const folderSecret = errOf(() => validateTrustedStore({ version: 1, folders: [FAKE_SECRET] }));
+    expect(folderSecret.message).not.toContain(FAKE_SECRET);
     expect(errOf(() => validateTrustedStore({ version: 2, folders: [] })).message).toMatch(/version/);
     expect(errOf(() => validateTrustedStore({ version: 1, folders: ["x", 42] })).message).toMatch(/folders/);
     expect(errOf(() => validateTrustedStore("x"))).toBeDefined();

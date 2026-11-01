@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFil
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { looksLikeSecret } from "./secrets";
 
 export interface TrustedStore {
   version: 1;
@@ -32,13 +33,16 @@ export function validateTrustedStore(raw: unknown): TrustedStore {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail(`"store" deve ser um objeto`);
   const root = raw as Record<string, unknown>;
   for (const key of Object.keys(root)) {
-    if (!ROOT_KEYS.has(key)) fail(`campo desconhecido "${key}"`);
+    // I-03: nunca interpolar a chave — ela é conteúdo do arquivo e pode ser um segredo colado.
+    if (!ROOT_KEYS.has(key)) fail("store de trust contém campo desconhecido");
   }
   if (root.version !== 1) fail(`"version" deve ser 1`);
   if (!Array.isArray(root.folders)) fail(`"folders" deve ser uma lista`);
   const folders: string[] = [];
   for (const entry of root.folders) {
     if (typeof entry !== "string" || entry.trim() === "") fail(`"folders" deve conter só caminhos não vazios`);
+    // I-03: recusar caminho com cara de segredo, sem ecoar o valor.
+    if (looksLikeSecret(entry)) fail(`"folders" contém entrada inválida`);
     if (!folders.includes(entry)) folders.push(entry);
   }
   return { version: 1, folders };
