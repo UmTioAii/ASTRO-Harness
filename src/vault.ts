@@ -1,8 +1,8 @@
 /**
  * Cofre local de credenciais (ADR-0019, #311, I-03): `~/.astro/vault.json`
  * (`ASTRO_HOME` sobrescreve), dir 0700, arquivo 0600, escrita atômica.
- * Windows: DPAPI via PowerShell (segredo só por env do filho). Fora: "plain"
- * 0600 com aviso explícito. O segredo nunca vai para log/audit/erro/prompt.
+ * Windows: DPAPI via PowerShell (segredo só por env do filho); fora: "plain"
+ * 0600 com aviso. O segredo nunca vai para log/audit/erro/prompt.
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -14,10 +14,10 @@ import { looksLikeSecret } from "./secrets";
 export type VaultScheme = "dpapi" | "plain";
 
 export interface VaultCredential {
-  /** `cred-<uuid>`; só entra no nome de arquivo via `checkpointPath`-style (aqui não há path). */
+  /** `cred-<uuid>`; nunca vai para path de arquivo. */
   id: string;
   providerId: string;
-  /** Rótulo em claro (metadado); valor com cara de segredo é recusado (I-03). */
+  /** Metadado em claro; com cara de segredo é recusado (I-03). */
   label: string;
   scheme: VaultScheme;
   /** dpapi: blob base64; plain: valor em claro. Nunca logado (I-03). */
@@ -35,14 +35,12 @@ export interface VaultStore {
   credentials: VaultCredential[];
 }
 
-/** Caminho do cofre: `$ASTRO_HOME/vault.json` ou `~/.astro/vault.json`. */
 export function vaultPath(env: NodeJS.ProcessEnv = process.env): string {
   const home = env.ASTRO_HOME?.trim();
   const base = home === undefined || home === "" ? join(homedir(), ".astro") : home;
   return join(base, "vault.json");
 }
 
-/** Backend padrão por plataforma (ADR-0019): DPAPI no Windows, plain fora. */
 export function defaultScheme(platform: NodeJS.Platform = process.platform): VaultScheme {
   return platform === "win32" ? "dpapi" : "plain";
 }
@@ -165,7 +163,6 @@ export function loadVault(path: string = vaultPath()): VaultStore {
   }
 }
 
-/** Grava atômico (tmp + rename, 0600); diretório 0700 no POSIX. */
 export function saveVault(store: VaultStore, path: string = vaultPath()): void {
   const valid = validateVaultStore(store);
   const dir = dirname(path);
@@ -194,7 +191,6 @@ export interface VaultMeta {
   active: number;
 }
 
-/** Lê só metadados do cofre (contagens/schemes); nunca devolve valores de segredo. */
 export function vaultMeta(path: string = vaultPath(), platform: NodeJS.Platform = process.platform): VaultMeta {
   const scheme = defaultScheme(platform);
   if (!existsSync(path)) {
@@ -211,7 +207,6 @@ export function vaultMeta(path: string = vaultPath(), platform: NodeJS.Platform 
   };
 }
 
-/** Aviso explícito de modo plain (health/TUI/chat); undefined quando ok ou ausente. */
 export function vaultPlainWarning(meta: VaultMeta): string | undefined {
   if (!meta.exists || !meta.plain) return undefined;
   return `aviso: cofre de credenciais em modo "plain" (sem cifra do SO) em ${meta.path} (arquivo 0600); no Windows o segredo é cifrado com DPAPI`;
