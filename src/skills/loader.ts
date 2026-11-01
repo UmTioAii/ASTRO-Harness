@@ -88,6 +88,10 @@ function parseYaml(text: string): YamlMap {
         }
         throw new SkillError("frontmatter inválido: lista sem chave");
       }
+      // Item mais fundo que o 1º item da lista: fundir em silêncio corromperia o array (#112).
+      if (indent > frame.indent) {
+        throw new SkillError(`frontmatter inválido: indentação inconsistente em "${trimmed}"`);
+      }
       const text = trimmed.slice(2).trim();
       const colon = text.indexOf(":");
       if (colon >= 0) {
