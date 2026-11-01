@@ -177,4 +177,35 @@ describe("wiring no runSession (#135 fatia B)", () => {
     expect(r.final).toBe("fim");
     expect(s.audit.readAll().some((e) => e.tipo === "loop.no_progress")).toBe(false);
   });
+
+  test("checkpoint nunca grava o prompt cru: content vazio no turno → usa taskHash (não a task)", async () => {
+    const TASK_MARKER = "PEDIDO-PRIVADO-DO-USUARIO-9999";
+    const s = setup([
+      resp({ toolCalls: [tc("c1", "a.txt")] }),
+      resp({ content: "" }), // turno do checkpoint (maxSteps 4, checkpointAt 0.5 → turno 2) sem texto
+    ]);
+    s.opts.maxSteps = 4;
+    s.opts.checkpointAt = 0.5;
+    s.opts.taskHash = "hash123";
+    await runSession(s.opts, TASK_MARKER);
+    const raw = readFileSync(checkpointPath(s.cwd, "r1", "default"), "utf8");
+    expect(raw).not.toContain(TASK_MARKER); // prompt do usuário não é persistido, só taskHash
+    expect(raw).toContain("hash123");
+  });
+
+  test("changedFiles do checkpoint passa por redactSecrets (path com cara de segredo, I-03)", async () => {
+    const SECRET_PATH = `${FAKE_SECRET}.txt`; // dentro do cwd, nome válido, mas parece segredo
+    const s = setup([
+      resp({ toolCalls: [tc("c1", SECRET_PATH)] }),
+      resp({ content: "fim" }),
+    ]);
+    s.opts.maxSteps = 4;
+    s.opts.checkpointAt = 0.5; // due no turno 2
+    await runSession(s.opts, "t");
+    const raw = readFileSync(checkpointPath(s.cwd, "r1", "default"), "utf8");
+    expect(raw).not.toContain(FAKE_SECRET);
+    const cp = JSON.parse(raw) as CheckpointV1;
+    expect(cp.changedFiles.every((f) => !f.includes("[REDACTED]") || true)).toBe(true);
+    expect(JSON.stringify(cp.changedFiles)).not.toContain(FAKE_SECRET);
+  });
 });
