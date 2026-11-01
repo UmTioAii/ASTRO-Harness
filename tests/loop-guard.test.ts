@@ -39,7 +39,7 @@ describe("buildCheckpoint (L5, I-03/I-11, #135)", () => {
     expect(cp.schema).toBe("checkpoint/v1");
     expect(cp.summary).not.toContain(fakeKey); // I-03: segredo nunca no checkpoint
     expect(cp.summary).toContain("[REDACTED]");
-    expect(cp.changedFiles).toEqual(["src/a.ts"]); // I-11: só caminhos dentro do cwd
+    expect(cp.changedFiles).toEqual([join("src", "a.ts")]); // I-11: só caminhos dentro do cwd
     expect(cp.nextStep).toBe("rodar bun test");
     expect(cp.createdAt).toBe("2026-11-01T12:00:00.000Z");
   });
