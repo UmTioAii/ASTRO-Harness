@@ -5,6 +5,7 @@ import {
   type EffectiveConfig,
   type ProviderSource,
 } from "./provider/profiles";
+import { PROVIDER_CATALOG, type CatalogEntry } from "./provider/catalog";
 
 export interface CatalogModel {
   ref: string;
@@ -51,5 +52,16 @@ export function formatModelCatalog(models: readonly CatalogModel[]): string {
       ? "n/d"
       : `in ${model.price.inputPerM}/M out ${model.price.outputPerM}/M (${model.price.fonte})`;
     return `${model.ref} · ${model.source} · ${model.status} · ${tags} · ${model.context} · ${price}`;
+  }).join("\n");
+}
+
+/** Sementes do wizard; só metadados e nomes de variável, nunca valor de segredo (I-03). */
+export function formatSeedList(entries: readonly CatalogEntry[] = PROVIDER_CATALOG): string {
+  if (entries.length === 0) return "nenhuma semente";
+  return entries.map((entry) => {
+    const endpoint = entry.baseUrl ?? entry.credentialsPath ?? "(definir no wizard)";
+    const key = entry.credentialRef === undefined ? "sem chave" : `chave: ${entry.credentialRef}`;
+    const models = entry.models.length === 0 ? "-" : entry.models.map((model) => model.id).join(", ");
+    return `${entry.key} · ${entry.name} · ${entry.kind} · ${endpoint} · ${key} · modelos: ${models}`;
   }).join("\n");
 }
