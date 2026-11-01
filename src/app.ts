@@ -942,6 +942,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           ledger,
           audit,
           maxSteps: sessionMaxSteps,
+          taskHash: shortTaskHash(opts.task),
           ...(config.run === undefined
             ? {}
             : { checkpointAt: config.run.checkpointAt, noProgressSegments: config.run.noProgressSegments }),

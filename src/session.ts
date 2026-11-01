@@ -106,6 +106,8 @@ export interface SessionOptions {
   noProgressSegments?: number;
   /** Decisor de não-progresso (L6); ausente = para seguro com `NoProgressError` (I-19). */
   onNoProgress?: NoProgressDecider;
+  /** Hash da tarefa (nunca o prompt cru) para o resumo do checkpoint (L5, I-03/prompt não persistido). */
+  taskHash?: string;
 }
 
 export const DEFAULT_SYSTEM_PROMPT =
@@ -422,7 +424,10 @@ export async function runSession(
         if (turnDue || budgetDue) {
           checkpointWritten = true;
           const checkpoint = buildCheckpoint({
-            summary: response.content.trim() === "" ? task : response.content,
+            // nunca o prompt cru: só taskHash (o prompt do usuário não é persistido)
+            summary: response.content.trim() === ""
+              ? (opts.taskHash === undefined ? "[tarefa não registrada]" : `tarefa #${opts.taskHash}`)
+              : response.content,
             changedFiles: touchedFiles,
             nextStep: `continuar a partir do turno ${step + 1}`,
           }, opts.cwd);

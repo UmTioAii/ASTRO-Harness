@@ -43,7 +43,8 @@ export function buildCheckpoint(draft: CheckpointDraft, cwd: string, now: Date =
   const changedFiles: string[] = [];
   for (const file of draft.changedFiles) {
     try {
-      changedFiles.push(relative(resolve(cwd), resolveWithin(cwd, file)));
+      // path vem de argumento de tool (controle do modelo): redige antes de gravar (I-03)
+      changedFiles.push(redactSecrets(relative(resolve(cwd), resolveWithin(cwd, file))));
     } catch {
       // fora do cwd (I-11): descarta em vez de gravar
     }
