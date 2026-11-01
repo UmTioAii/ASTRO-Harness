@@ -220,7 +220,7 @@ test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e res
   } finally {
     registry.close();
   }
-});
+}, 15000); // 5 spawns de processo bun; no win32 cada spawn leva ~1s
 
 test("3 calls concorrentes na mesma reconexão quebrada contam 1 falha e 1 warn (#148)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
