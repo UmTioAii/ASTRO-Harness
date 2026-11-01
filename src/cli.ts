@@ -14,6 +14,7 @@ import { Registry } from "./registry";
 import { formatPoolList } from "./pool";
 import { formatAgentsList } from "./agent-manager";
 import { buildModelCatalog, formatModelCatalog, formatSeedList } from "./model-catalog";
+import { PROVIDER_CATALOG } from "./provider/catalog";
 import { evalFailsThreshold, runEval, writeBaseline, type EvalReport } from "./eval/harness";
 import { runBenchmark, type BenchReport } from "./eval/bench";
 import { Metrics, startMetricsServer } from "./metrics";
@@ -1043,7 +1044,12 @@ async function main(argv: string[]): Promise<number> {
     try {
       const effective = loadEffectiveConfig(resolve(o.configPath));
       const models = buildModelCatalog(effective);
-      console.log(o.json ? JSON.stringify(models, null, 2) : formatModelCatalog(models));
+      if (o.json) {
+        // Um único payload JSON: com --seeds, as sementes vão no campo `seeds`.
+        console.log(JSON.stringify(o.seeds ? { models, seeds: PROVIDER_CATALOG } : { models }, null, 2));
+        return 0;
+      }
+      console.log(formatModelCatalog(models));
       if (o.seeds) {
         console.log("");
         console.log(formatSeedList());
