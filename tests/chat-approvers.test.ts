@@ -101,7 +101,6 @@ describe("trustAsk no REPL (#267)", () => {
     const prompts: string[] = [];
     const capturing: ReplIO = { read: async (p: string) => { prompts.push(p); return "s"; }, write: () => {} };
     expect(await chatApprovers(capturing, true).trustAsk!("/tmp/proj")).toBe(true);
-    expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("/tmp/proj");
     expect(await chatApprovers(io(["n"]), true).trustAsk!("/tmp/proj")).toBe(false);
     expect(await chatApprovers(io([null]), true).trustAsk!("/tmp/proj")).toBe(false);

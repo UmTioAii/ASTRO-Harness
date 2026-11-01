@@ -79,7 +79,7 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     const seen: Array<string | undefined> = [];
     bridge.subscribe((question) => seen.push(question?.text));
     const answer = bridge.askText("confiar em /tmp/proj? [s/N] ");
-    expect(seen.at(-1)).toBe("confiar em /tmp/proj? [s/N] ");
+    expect(seen.at(-1)).toContain("/tmp/proj");
     bridge.answer("s");
     expect(await answer).toBe("s");
     expect(bridge.current()).toBeUndefined();

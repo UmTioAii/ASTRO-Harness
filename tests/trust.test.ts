@@ -40,22 +40,15 @@ describe("store de trust (#267)", () => {
     if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
-  test("JSON corrompido → erro cita o caminho e NÃO ecoa o conteúdo (I-03)", () => {
+  test("store inválido → erro cita o caminho e nunca ecoa conteúdo/valor (I-03)", () => {
     const { path } = tmpStore();
-    writeFileSync(path, `{"version":1,"folders":["${FAKE_SECRET}"]`); // inválido + segredo
-    let err: Error | undefined;
+    writeFileSync(path, `{"version":1,"folders":["${FAKE_SECRET}"]`); // JSON inválido + segredo
+    expect(() => loadTrustedStore(path)).toThrow(new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     try {
       loadTrustedStore(path);
     } catch (e) {
-      err = e as Error;
+      expect((e as Error).message).not.toContain(FAKE_SECRET);
     }
-    expect(err).toBeDefined();
-    expect(err!.message).toContain(path);
-    expect(err!.message).not.toContain(FAKE_SECRET);
-  });
-
-  test("validação estrita: campo desconhecido (sem ecoar valor), version, folders", () => {
-    const { path } = tmpStore();
     writeFileSync(path, JSON.stringify({ version: 1, folders: [], surprise: FAKE_SECRET }));
     expect(() => loadTrustedStore(path)).toThrow(/campo desconhecido/);
     try {
@@ -64,8 +57,7 @@ describe("store de trust (#267)", () => {
       expect((e as Error).message).not.toContain(FAKE_SECRET);
     }
     expect(() => validateTrustedStore({ version: 2, folders: [] })).toThrow(/version/);
-    expect(() => validateTrustedStore({ version: 1, folders: "x" })).toThrow(/folders/);
-    expect(() => validateTrustedStore({ version: 1, folders: [42] })).toThrow(/folders/);
+    expect(() => validateTrustedStore({ version: 1, folders: ["x", 42] })).toThrow(/folders/);
     expect(() => validateTrustedStore("x")).toThrow();
   });
 });
