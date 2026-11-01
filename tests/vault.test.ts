@@ -102,6 +102,14 @@ describe("redaction do formato vault (ADR-0019, I-03)", () => {
     expect(out).toContain("[REDACTED]");
   });
 
+  test("valor com aspas escapadas é redacted por completo, sem rabo", () => {
+    const quoted = ["pa", '"', "ss", '"', "word"].join(""); // sentinel em runtime
+    const out = redactSecrets(JSON.stringify({ secret: quoted }));
+    expect(out).not.toContain(quoted);
+    expect(out).not.toContain("ss");
+    expect(out).toContain("[REDACTED]");
+  });
+
   test("store plain grava o valor em claro no arquivo (0600), mas redactSecrets cobre o formato", () => {
     const { path } = tmpVault();
     saveVault({ version: 1, credentials: [{ ...CRED, scheme: "plain", secret: SENTINEL }] }, path);
