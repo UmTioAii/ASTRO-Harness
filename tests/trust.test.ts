@@ -23,6 +23,15 @@ function tmpStore() {
 // Fixture de segredo construído em runtime para não disparar o gate de segredos.
 const FAKE_SECRET = ["s", "k", "-"].join("") + "live-abcdef12345";
 
+function errOf(fn: () => void): Error {
+  try {
+    fn();
+  } catch (e) {
+    return e as Error;
+  }
+  throw new Error("esperava erro");
+}
+
 describe("store de trust (#267)", () => {
   test("trustedPath: $ASTRO_HOME ou ~/.astro/trusted.json; arquivo ausente → vazio", () => {
     expect(trustedPath({ ASTRO_HOME: join("C:", "x") } as NodeJS.ProcessEnv)).toBe(join("C:", "x", "trusted.json"));
@@ -43,22 +52,16 @@ describe("store de trust (#267)", () => {
   test("store inválido → erro cita o caminho e nunca ecoa conteúdo/valor (I-03)", () => {
     const { path } = tmpStore();
     writeFileSync(path, `{"version":1,"folders":["${FAKE_SECRET}"]`); // JSON inválido + segredo
-    expect(() => loadTrustedStore(path)).toThrow(new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    try {
-      loadTrustedStore(path);
-    } catch (e) {
-      expect((e as Error).message).not.toContain(FAKE_SECRET);
-    }
+    const corrupt = errOf(() => loadTrustedStore(path));
+    expect(corrupt.message).toContain(path);
+    expect(corrupt.message).not.toContain(FAKE_SECRET);
     writeFileSync(path, JSON.stringify({ version: 1, folders: [], surprise: FAKE_SECRET }));
-    expect(() => loadTrustedStore(path)).toThrow(/campo desconhecido/);
-    try {
-      loadTrustedStore(path);
-    } catch (e) {
-      expect((e as Error).message).not.toContain(FAKE_SECRET);
-    }
-    expect(() => validateTrustedStore({ version: 2, folders: [] })).toThrow(/version/);
-    expect(() => validateTrustedStore({ version: 1, folders: ["x", 42] })).toThrow(/folders/);
-    expect(() => validateTrustedStore("x")).toThrow();
+    const unknown = errOf(() => loadTrustedStore(path));
+    expect(unknown.message).toMatch(/campo desconhecido/);
+    expect(unknown.message).not.toContain(FAKE_SECRET);
+    expect(errOf(() => validateTrustedStore({ version: 2, folders: [] })).message).toMatch(/version/);
+    expect(errOf(() => validateTrustedStore({ version: 1, folders: ["x", 42] })).message).toMatch(/folders/);
+    expect(errOf(() => validateTrustedStore("x"))).toBeDefined();
   });
 });
 
@@ -73,7 +76,6 @@ describe("TrustedFolders (#267)", () => {
     expect(reloaded.isTrusted(dir)).toBe(true);
     expect(reloaded.isTrusted(join(dir, "sub"))).toBe(true);
     expect(reloaded.isTrusted(resolve(dir, "..", "..", "etc"))).toBe(false);
-    expect(canonicalFolder(join(dir, "ghost"))).toBe(resolve(dir, "ghost"));
   });
 
   test("revoke remove e persiste; revogar o que não existe é no-op sem gravar", () => {

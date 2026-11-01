@@ -76,8 +76,6 @@ export interface RunOptions {
   approveTool?: ToolApprover;
   /** Pergunta de trust da pasta no 1º open (I-11, #267); ausente = não interativo (prossegue sem persistir). */
   trustAsk?: TrustAsk;
-  /** Caminho do store de trust (teste); default `$ASTRO_HOME/trusted.json` ou `~/.astro/trusted.json`. */
-  trustStorePath?: string;
   /** Modo de permissão do run (CLI > config; #269). */
   permissionMode?: PermissionMode;
   /** Decisor TTY do esgotamento de budget (B4); ausente = não interativo (checkpoint e para). */
@@ -562,7 +560,6 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   const run = opts.runId ?? opts.resume ?? randomUUID();
   // Trust por pasta (I-11, #267): 1º open pergunta no TTY e persiste; negar para o run; sem TTY segue sem gravar.
   await ensureTrustedCwd(cwd, {
-    ...(opts.trustStorePath === undefined ? {} : { path: opts.trustStorePath }),
     ask: opts.trustAsk,
     onDecision: (folder, decision) => audit.append({ run, agent: AGENT_NAME, tipo: "trust.decision", payload: { folder, decision } }),
   });
