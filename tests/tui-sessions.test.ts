@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore, sessionSummaryLine } from "../src/chat/store";
@@ -87,9 +87,41 @@ describe("rename de sessão (#64)", () => {
   test("nome com bidi, zero-width ou C1 é recusado (#64)", () => {
     const sessions = store();
     sessions.write(snapshot("abc"));
-    for (const bad of ["a\u202eb", "a\u200bb", "a\u009fb", "a\ufeffb"]) {
+    for (const bad of ["a\u202eb", "a\u200bb", "a\u009fb", "a\ufeffb", "a\u2028b", "a\u2029b", "a\u2060b", "a\u180eb", "a\u061cb", "a\ufff9b"]) {
       expect(() => sessions.rename("abc", bad)).toThrow(/nome da sessão inválido/);
     }
     expect(sessions.list()).toHaveLength(1);
+  });
+
+  test("nome JSON com escape de controle é recusado (sanitiza antes de validar, #64)", () => {
+    const sessions = store();
+    sessions.write(snapshot("abc"));
+    expect(() => sessions.rename("abc", '{"a":"\\u202e"}')).toThrow(/nome da sessão inválido/);
+    expect(sessions.list()).toHaveLength(1);
+  });
+
+  test("rename devolve exatamente o valor gravado (nome JSON é normalizado, #64)", () => {
+    const sessions = store();
+    sessions.write(snapshot("abc"));
+    const renamed = sessions.rename("abc", "[1, 2]");
+    expect(renamed.name).toBe("[1,2]");
+    expect(sessions.list()[0]!.name).toBe("[1,2]");
+  });
+
+  test("tmp plantado como link não é seguido por write/rename (I-11, #64)", () => {
+    const sessions = store();
+    const snap = snapshot("abc");
+    sessions.write(snap);
+    const path = sessions.list()[0]!.path;
+    const outside = join(mkdtempSync(join(tmpdir(), "astro-session-outside-")), "alvo.txt");
+    writeFileSync(outside, "intacto", "utf8");
+    linkSync(outside, `${path}.tmp`); // repositório malicioso planta o irmão do arquivo
+    const renamed = sessions.rename("abc", "parser");
+    expect(renamed.name).toBe("parser");
+    expect(readFileSync(outside, "utf8")).toBe("intacto"); // não escreveu fora do store
+    expect(statSync(outside).ino).not.toBe(statSync(path).ino); // a sessão não virou o link
+    sessions.write(snap); // o write() também ignora o tmp plantado
+    expect(readFileSync(outside, "utf8")).toBe("intacto");
+    expect(sessions.list()[0]!.name).toBe("parser");
   });
 });
