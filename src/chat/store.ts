@@ -40,12 +40,11 @@ export const MAX_SESSION_NAME = 60;
 function normalizeName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const clean = value.trim();
-  // controle C0/C1, DEL, bidi, zero-width e BOM não podem entrar num nome (I-03/spoofing)
-  // eslint-disable-next-line no-control-regex
+  // C0/C1 e DEL (Cc) + formatadores invisíveis (Cf: bidi, zero-width, soft hyphen, tags…)
+  // não podem entrar num nome (I-03/spoofing)
   if (clean === "" || [...clean].length > MAX_SESSION_NAME) return undefined;
-  if (/[\u0000-\u001f\u007f-\u009f\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\ufff9-\ufffb]/.test(clean)) {
-    return undefined;
-  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]|\p{Cf}/u.test(clean)) return undefined;
   return clean;
 }
 
@@ -228,11 +227,17 @@ export class SessionStore {
     if (real !== root && !real.startsWith(root + sep)) throw new Error("caminho de sessão fora do diretório");
     if (statSync(real).size > MAX_SESSION_BYTES) throw new Error("sessão grande demais");
     const raw: unknown = JSON.parse(readFileSync(real, "utf8"));
-    return sanitizeValue(parseRecord(raw)) as SessionRecord;
+    const record = sanitizeValue(parseRecord(raw)) as SessionRecord;
+    // a sanitização pode decodificar escapes JSON e soltar controles no nome:
+    // revalida o valor final (mesma regra do rename) e descarta quando inválido
+    const name = normalizeName(record.name);
+    if (name === undefined) delete record.name;
+    else record.name = name;
+    return record;
   }
 
   /** Grava a sessão sanitizada; nome `<startedAt>-<id>.json`, atômico (tmp+rename). */
-  write(snapshot: Omit<SessionRecord, "schemaVersion">): string {
+  write(snapshot: Omit<SessionRecord, "schemaVersion" | "name">): string {
     const stamp = snapshot.startedAt.replace(/[:.]/g, "-");
     if (!/^[A-Za-z0-9-]+$/.test(snapshot.id) || !/^[A-Za-z0-9-]+$/.test(stamp)) {
       throw new Error("sessão com id/startedAt inválido para o nome do arquivo");

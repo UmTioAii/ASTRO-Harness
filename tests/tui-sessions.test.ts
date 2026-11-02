@@ -23,7 +23,6 @@ describe("rename de sessão (#64)", () => {
     expect(sessionSummaryLine(listed[0]!, 0)).toContain("refatoração do parser");
     expect(sessions.load("abc").record.name).toBe("refatoração do parser");
   });
-
   test("nome vazio, longo, com controle ou invisível é recusado sem tocar no arquivo", () => {
     const sessions = store();
     sessions.write(snapshot("abc"));
@@ -34,7 +33,6 @@ describe("rename de sessão (#64)", () => {
     expect(sessions.list()[0]!.name).toBeUndefined();
     expect(() => sessions.rename("nope", "x")).toThrow(/não encontrada/);
   });
-
   test("persistir de novo depois do rename preserva o nome", () => {
     const sessions = store();
     const snap = snapshot("abc");
@@ -43,7 +41,6 @@ describe("rename de sessão (#64)", () => {
     sessions.write(snap); // auto-save do turno ou persist(false) no exit reescreve o mesmo arquivo
     expect(sessions.list()[0]!.name).toBe("parser");
   });
-
   test("nome inválido no disco não derruba a sessão: vira ausente na leitura", () => {
     const sessions = store();
     sessions.write(snapshot("abc"));
@@ -55,7 +52,6 @@ describe("rename de sessão (#64)", () => {
     expect(sessions.list()[0]!.name).toBeUndefined();
     expect(sessions.load("abc").record.name).toBeUndefined();
   });
-
   test("limite conta code points; nome que cresce na redação falha limpo", () => {
     const sessions = store();
     sessions.write(snapshot("abc"));
@@ -71,7 +67,6 @@ describe("rename de sessão (#64)", () => {
     expect(renamed.name).toBe("login password=[REDACTED]");
     expect(sessions.list()[0]!.name).toBe("login password=[REDACTED]");
   });
-
   test("nome JSON com escape invisível no disco é descartado na leitura (#64)", () => {
     const sessions = store();
     sessions.write(snapshot("abc"));
@@ -83,7 +78,6 @@ describe("rename de sessão (#64)", () => {
     expect(sessions.list()[0]!.name).toBeUndefined();
     expect(sessions.load("abc").record.name).toBeUndefined();
   });
-
   test("sanitiza antes de validar: escape JSON de controle é recusado e o retorno é o gravado", () => {
     const sessions = store();
     sessions.write(snapshot("abc"));
@@ -93,7 +87,6 @@ describe("rename de sessão (#64)", () => {
     expect(renamed.name).toBe("[1,2]");
     expect(sessions.list()[0]!.name).toBe("[1,2]");
   });
-
   test("tmp plantado como link não é seguido por write/rename (I-11)", () => {
     const sessions = store();
     const snap = snapshot("abc");

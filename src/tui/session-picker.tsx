@@ -94,7 +94,7 @@ export function SessionPicker({
       if (chosen !== undefined) onResume(chosen);
       return;
     }
-    if (value === "r" && current() !== undefined) startRename();
+    if (value === "r" && !key.ctrl && !key.meta && current() !== undefined) startRename();
   });
 
   return (
