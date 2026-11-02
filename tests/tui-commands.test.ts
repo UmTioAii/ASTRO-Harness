@@ -117,9 +117,9 @@ describe("comandos da TUI (T2, #63)", () => {
   test("comando desconhecido sugere o mais próximo; exit encerra (#275)", async () => {
     const session = new FakeSession();
     const mod = await runCommand({ kind: "unknown", raw: "mod" }, session, {});
-    expect(mod.entries[0]!.text).toBe("comando desconhecido: /mod — você quis dizer /model?");
+    expect(mod.entries[0]!.text).toBe("comando desconhecido: /mod — você quis dizer /mode?");
     const nope = await runCommand({ kind: "unknown", raw: "nope" }, session, {});
-    expect(nope.entries[0]!.text).toBe("comando desconhecido: /nope (veja /help)");
+    expect(nope.entries[0]!.text).toBe("comando desconhecido: /nope — você quis dizer /mode?"); // dist 2 = threshold de "mode" (#271)
     expect((await runCommand({ kind: "exit" }, session, {})).exit).toBe(true);
   });
 

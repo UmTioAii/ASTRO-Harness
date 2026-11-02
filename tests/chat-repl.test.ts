@@ -97,7 +97,7 @@ describe("REPL do chat (T1, #62)", () => {
     expect(io.outputs).toContain("provider: p/m1");
     expect(io.outputs.some((line) => line.includes("/exit"))).toBe(true);
     expect(io.outputs.some((line) => line.includes("comando desconhecido: /nope"))).toBe(true);
-    expect(io.outputs.some((line) => line.includes("comando desconhecido: /mod") && line.includes("/model"))).toBe(true);
+    expect(io.outputs.some((line) => line.includes("comando desconhecido: /mod") && line.includes("/mode"))).toBe(true);
 
 
 

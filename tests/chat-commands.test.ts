@@ -126,10 +126,10 @@ describe("comandos do chat (T1, #62)", () => {
   });
 
   test("sugestão de comando próximo por distância de edição (#275)", () => {
-    expect(suggestCommand("mod")).toBe("/model");
+    expect(suggestCommand("mod")).toBe("/mode"); // "mod" está a distância 1 de "mode" e 2 de "model" (#271)
     expect(suggestCommand("hepl")).toBe("/help");
     expect(suggestCommand("xyzzy")).toBeUndefined();
-    expect(unknownCommandMessage("mod")).toBe("comando desconhecido: /mod — você quis dizer /model?");
+    expect(unknownCommandMessage("mod")).toBe("comando desconhecido: /mod — você quis dizer /mode?");
     expect(unknownCommandMessage("xyzzy")).toBe("comando desconhecido: /xyzzy (veja /help)");
   });
 });
