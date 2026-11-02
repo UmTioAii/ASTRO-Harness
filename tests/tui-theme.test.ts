@@ -20,7 +20,7 @@ describe("configuração da TUI (T2, #197)", () => {
     saveTuiConfig(cwd, { theme: "light" });
     saveTuiConfig(cwd, { lastModel: "p/m2" });
     expect(loadTuiConfig(cwd)).toEqual({ theme: "light", lastModel: "p/m2" });
-    expect(nextTheme("light")).toBe("dark");
+    expect(nextTheme("light")).toBe("contrast"); // ciclo dark -> light -> contrast (#64)
     expect(getThemeColors("dark").accent).toBe("cyan");
   });
 

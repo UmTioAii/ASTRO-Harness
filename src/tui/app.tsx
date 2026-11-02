@@ -260,6 +260,9 @@ export function TuiApp({ session, cwd, branch, store, approvals, shell, manager,
       return;
     }
     if (command.kind !== "prompt") {
+      // `/theme` precisa do tema vivo e do aplicador que persiste em .astro/tui.json (#64)
+      commandState.current.theme = theme;
+      commandState.current.setTheme = persistTheme;
       const outcome = await runCommand(command, session, commandState.current, store, cwd);
       if (outcome.openProviders !== undefined) {
         if (manager === undefined) {
