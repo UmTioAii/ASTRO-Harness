@@ -403,7 +403,12 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         continue;
       }
       if (command.kind === "usage") {
-        io.write(usageLines(session.snapshot(), session.budgetStatus?.()).join("\n"));
+        try {
+          io.write(usageLines(session.snapshot(), session.budgetStatus?.()).join("\n"));
+        } catch (error) {
+          // ledger corrompido não derruba o REPL: imprime erro redacted e segue
+          io.write(paint(`erro: ${messageOf(error)}`, RED, style));
+        }
         continue;
       }
       try {
