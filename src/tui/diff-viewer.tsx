@@ -1,6 +1,7 @@
 /** Overlay full-screen de diff da TUI (#64): revisa o patch da tool `edit` antes de aprovar. */
 import { Box, Text, useInput } from "ink";
 import { useMemo, useRef, useState, type ReactElement } from "react";
+import { redactSecrets } from "../sanitize-external";
 import { diffLineColor, diffStats, parseDiffLines } from "./diff";
 import type { ThemeColors } from "./theme";
 
@@ -16,7 +17,10 @@ export interface DiffViewerProps {
 const DEFAULT_VIEWPORT = 20;
 
 export function DiffViewer({ path, diff, colors, onClose, viewport = DEFAULT_VIEWPORT }: DiffViewerProps): ReactElement {
-  const lines = useMemo(() => parseDiffLines(diff), [diff]);
+  // I-03: o diff é conteúdo do modelo (não confiável); a redação acontece na
+  // fronteira de render, então nenhum chamador consegue vazar segredo na tela
+  const lines = useMemo(() => parseDiffLines(redactSecrets(diff)), [diff]);
+  const safePath = useMemo(() => redactSecrets(path), [path]);
   const stats = useMemo(() => diffStats(lines), [lines]);
   // Ref espelha o offset: o handler do ink pode rodar antes do estado novo (mesmo padrão do app)
   const offsetRef = useRef(0);
@@ -50,7 +54,7 @@ export function DiffViewer({ path, diff, colors, onClose, viewport = DEFAULT_VIE
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1}>
       <Text bold>
-        {"diff · "}{path}{" · "}
+        {"diff · "}{safePath}{" · "}
         <Text color="green">+{stats.adds}</Text>{" "}
         <Text color={colors.error}>-{stats.removes}</Text>
       </Text>
