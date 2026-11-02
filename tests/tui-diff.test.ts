@@ -51,6 +51,29 @@ describe("parseDiffLines (#64 diff viewer)", () => {
     const lines = parseDiffLines("diff --git a/x b/x\n\n@@ -1 +1 @@\n-a\n+b\n");
     expect(lines[1]).toEqual({ type: "meta", text: "" });
   });
+
+  test("diff multi-arquivo: 'diff --git' reseta o hunk e não infla as estatísticas", () => {
+    const multi = [
+      "diff --git a/x.ts b/x.ts",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "diff --git a/y.ts b/y.ts",
+      "--- a/y.ts",
+      "+++ b/y.ts",
+      "@@ -1 +1 @@",
+      "-c",
+      "+d",
+    ].join("\n") + "\n";
+    const lines = parseDiffLines(multi);
+    expect(lines.map((line) => line.type)).toEqual([
+      "meta", "meta", "meta", "hunk", "remove", "add",
+      "meta", "meta", "meta", "hunk", "remove", "add",
+    ]);
+    expect(diffStats(lines)).toEqual({ adds: 2, removes: 2 });
+  });
 });
 
 describe("diffStats (#64)", () => {

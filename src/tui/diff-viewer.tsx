@@ -68,7 +68,7 @@ export function DiffViewer({ path, diff, colors, onClose, viewport = DEFAULT_VIE
         </Text>
       ))}
       <Text dimColor>
-        {`↑↓/jk rolar · pgup/pgdn página · esc/q voltar · linha ${offset + 1}-${last}/${lines.length}`}
+        {`↑↓/jk rolar · pgup/pgdn página · esc/q voltar · linha ${lines.length === 0 ? 0 : offset + 1}-${last}/${lines.length}`}
       </Text>
     </Box>
   );

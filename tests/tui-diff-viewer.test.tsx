@@ -75,6 +75,24 @@ test("redige segredos do diff e do path no próprio render (I-03) (#64)", async 
   } finally { instance.unmount(); }
 });
 
+test("diff vazio renderiza sem quebrar e j além do fim prende no último lote (#64)", async () => {
+  const empty = render(<DiffViewer path="vazio.ts" diff="" colors={colors} onClose={() => {}} />);
+  try {
+    await waitFor(() => frame(empty).includes("linha 0-0/0"));
+    expect(frame(empty)).toContain("+0");
+    expect(frame(empty)).toContain("-0");
+  } finally { empty.unmount(); }
+
+  const instance = render(
+    <DiffViewer path="big.ts" diff={longDiff(30)} colors={colors} viewport={5} onClose={() => {}} />,
+  );
+  try {
+    await waitFor(() => frame(instance).includes("linha 1-5/31"));
+    for (let i = 0; i < 100; i++) instance.stdin.write("j");
+    await waitFor(() => frame(instance).includes("linha 27-31/31"));
+  } finally { instance.unmount(); }
+});
+
 test("pgdn avança uma página e esc/q fecham o overlay (#64)", async () => {
   let closed = 0;
   const instance = render(

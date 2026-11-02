@@ -21,6 +21,12 @@ export function parseDiffLines(diff: string): DiffLine[] {
   const lines: DiffLine[] = [];
   let inHunk = false;
   for (const line of raw) {
+    if (line.startsWith("diff --git")) {
+      // diff multi-arquivo: cabeçalho novo reseta o hunk (---/+++ do arquivo seguinte são meta)
+      inHunk = false;
+      lines.push({ type: "meta", text: line });
+      continue;
+    }
     if (line.startsWith("@@")) {
       inHunk = true;
       lines.push({ type: "hunk", text: line });
