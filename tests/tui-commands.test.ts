@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatSession } from "../src/chat/repl";
 import type { SessionSnapshot } from "../src/chat/agent-session";
+import type { PermissionMode } from "../src/permissions";
 import { SessionStore } from "../src/chat/store";
 import { runCommand } from "../src/tui/commands";
 
@@ -213,5 +214,55 @@ describe("comandos da TUI (T2, #63)", () => {
 
     expect((await runCommand({ kind: "init" }, session, {}, undefined, cwd)).entries[0]!.text).toContain("AGENTS.md criado");
     expect((await runCommand({ kind: "init" }, session, {}, undefined, cwd)).entries[0]!.text).toContain("já existe");
+  });
+});
+
+class ModeSession extends FakeSession {
+  mode: PermissionMode = "ask";
+  permissionMode(): PermissionMode {
+    return this.mode;
+  }
+  setPermissionMode(mode: PermissionMode): PermissionMode {
+    this.mode = mode;
+    return this.mode;
+  }
+}
+
+describe("/mode na TUI (#271)", () => {
+  test("sem arg lista os modos e marca o ativo", async () => {
+    const session = new ModeSession();
+    const out = await runCommand({ kind: "mode" }, session, {});
+    expect(out.entries[0]).toMatchObject({ kind: "info" });
+    expect(out.entries[0]!.text).toBe("  bypass\n  allow-edits\n→ ask\nativo: ask");
+  });
+
+  test("modo válido troca e reflete na sessão", async () => {
+    const session = new ModeSession();
+    const out = await runCommand({ kind: "mode", mode: "allow-edits" }, session, {});
+    expect(out.entries[0]).toMatchObject({ kind: "info", text: "modo: allow-edits" });
+    expect(session.mode).toBe("allow-edits");
+  });
+
+  test("bypass sem confirm não troca e avisa; com confirm troca", async () => {
+    const session = new ModeSession();
+    const warn = await runCommand({ kind: "mode", mode: "bypass" }, session, {});
+    expect(warn.entries[0]!.kind).toBe("error");
+    expect(warn.entries[0]!.text).toContain("/mode bypass confirm");
+    expect(session.mode).toBe("ask");
+    const ok = await runCommand({ kind: "mode", mode: "bypass", confirm: true }, session, {});
+    expect(ok.entries[0]).toMatchObject({ kind: "info", text: "modo: bypass" });
+    expect(session.mode).toBe("bypass");
+  });
+
+  test("modo inválido lista os válidos; sessão sem setPermissionMode dá erro", async () => {
+    const session = new ModeSession();
+    const bad = await runCommand({ kind: "mode", mode: "yolo" }, session, {});
+    expect(bad.entries[0]!.kind).toBe("error");
+    expect(bad.entries[0]!.text).toContain("bypass, allow-edits, ask");
+    expect(session.mode).toBe("ask");
+    const plain = new FakeSession();
+    const nope = await runCommand({ kind: "mode", mode: "ask" }, plain, {});
+    expect(nope.entries[0]!.kind).toBe("error");
+    expect(nope.entries[0]!.text).toContain("não aceita trocar");
   });
 });
