@@ -30,7 +30,8 @@ export function SessionPicker({
 
   const move = (delta: number): void => {
     if (sessions.length === 0) return;
-    selectedRef.current = (Math.max(index, 0) + delta + sessions.length) % sessions.length;
+    const currentIndex = Math.min(selectedRef.current, Math.max(sessions.length - 1, 0));
+    selectedRef.current = (currentIndex + delta + sessions.length) % sessions.length;
     setSelectedState(selectedRef.current);
   };
   const startRename = (): void => {

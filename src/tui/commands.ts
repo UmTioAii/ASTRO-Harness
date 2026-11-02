@@ -18,7 +18,6 @@ export interface Entry {
 
 export interface CommandState {
   lastFile?: string;
-  sessions?: SessionSummary[];
   /** Tema ativo e aplicador (persiste + troca ao vivo) para `/theme` (#64). */
   theme?: Theme;
   setTheme?(theme: Theme): void;
@@ -159,13 +158,10 @@ export async function runCommand(
       try {
         let chosen: SessionSummary | undefined;
         if (/^\d+$/.test(command.ref)) {
-          if (state.sessions === undefined || state.sessions.length === 0) state.sessions = store.list();
-          chosen = state.sessions[Number(command.ref) - 1];
+          chosen = store.list()[Number(command.ref) - 1]; // sempre relê a lista (#64)
           if (chosen === undefined) {
             return { entries: [{ kind: "info", text: "índice fora da lista; use /sessions" }] };
           }
-        } else {
-          chosen = state.sessions?.find((item) => item.id === command.ref);
         }
         const loaded = chosen === undefined ? store.load(command.ref) : store.load(chosen.id);
         session.resume(loaded.record);
