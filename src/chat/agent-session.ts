@@ -17,6 +17,7 @@ import type { ChatMessage } from "../provider/types";
 import type { FetchLike } from "../provider/types";
 import { Registry, type ModelEntry } from "../registry";
 import { Ledger } from "../ledger";
+import { resolvePermissionMode, type PermissionMode } from "../permissions";
 import { readAgentsMd } from "../spawn";
 import { forceCompaction, recordCompactionSuccess } from "../compaction/breaker";
 import { assertWithinQuota } from "../quota";
@@ -198,6 +199,14 @@ export class AgentSession {
 
   get model(): string {
     return this.#modelRef;
+  }
+
+  /** Modo de permissão ativo (env ASTRO_PERMISSION_MODE > config > ask, D-24) — o mesmo que o run usa; a TUI mostra no footer/banner (#270). */
+  permissionMode(): PermissionMode {
+    return resolvePermissionMode(
+      this.#env?.ASTRO_PERMISSION_MODE ?? process.env.ASTRO_PERMISSION_MODE,
+      this.#config.permissions.mode,
+    );
   }
 
   get providerSource(): ProviderSource {
