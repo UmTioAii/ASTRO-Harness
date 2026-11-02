@@ -54,9 +54,9 @@ describe("createThrottledSink (#64 streaming backpressure)", () => {
     expect(h.emitted).toEqual(["a", "b"]);
     h.advance(100); // timer antigo não deve emitir de novo
     expect(h.emitted).toEqual(["a", "b"]);
-    h.sink.add("c"); // novo ciclo: leading edge (flush abriu a janela? não: lastEmit = flush)
-    expect(h.emitted).toEqual(["a", "b"]);
-    h.advance(40);
+    h.sink.add("c"); // janela passou desde o último emit: leading edge de novo
+    expect(h.emitted).toEqual(["a", "b", "c"]);
+    h.advance(100);
     expect(h.emitted).toEqual(["a", "b", "c"]);
   });
 
