@@ -67,6 +67,20 @@ test("r renomeia; enter salva; erro fica na tela; esc cancela sem fechar (#64)",
   }
 });
 
+test("navegação multi-passo no mesmo chunk usa o estado mais novo (#64)", async () => {
+  const instance = render(
+    <SessionPicker sessions={[summary("a"), summary("b"), summary("c")]} colors={colors}
+      onClose={() => {}} onResume={() => {}} onRename={() => undefined} />,
+  );
+  try {
+    await waitFor(() => frame(instance).includes("Sessões"));
+    instance.stdin.write("\u001b[B\u001b[B"); // dois downs no mesmo chunk
+    await waitFor(() => frame(instance).includes("> 3."));
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("lista vazia avisa e esc fecha (#64)", async () => {
   let closed = 0;
   const instance = render(

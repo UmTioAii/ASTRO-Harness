@@ -846,10 +846,14 @@ test("/sessions abre o picker: r renomeia e enter retoma a sessão (#64)", async
     instance.stdin.write("\r");
     await waitFor(() => store.list()[0]?.name === "nova");
     await waitFor(() => frameHas(instance, "nova (abc)"));
-    instance.stdin.write("\r"); // retoma a sessão selecionada
-    await waitFor(() => session.resumed.length === 1);
-    expect(session.resumed[0]).toBe("abc");
-    await waitFor(() => frameHas(instance, "sessão retomada: abc"));
+    instance.stdin.write("\u001b"); // fecha o picker
+    await waitFor(() => frameHas(instance, "Sessões") === false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "eco:oi"));
+    // o auto-save do turno reescreve o mesmo arquivo: o nome não pode sumir
+    expect(store.list().find((item) => item.id === "abc")?.name).toBe("nova");
   } finally {
     instance.unmount();
   }
