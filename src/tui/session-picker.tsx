@@ -22,6 +22,7 @@ export function SessionPicker({
   const selectedRef = useRef(0);
   const renamingRef = useRef(false);
   const draftRef = useRef("");
+  const resumeRequestedRef = useRef(false); // um enter por sessão: repeat no mesmo chunk não duplica
   const [selected, setSelectedState] = useState(0);
   const [renaming, setRenamingState] = useState(false);
   const [draft, setDraftState] = useState("");
@@ -61,7 +62,7 @@ export function SessionPicker({
       return;
     }
     if (renamingRef.current) {
-      if (key.return) {
+      if (key.return && !key.meta && !key.ctrl) {
         const chosen = current();
         if (chosen === undefined) return;
         const failure = onRename(chosen, draftRef.current);
@@ -91,9 +92,12 @@ export function SessionPicker({
       move(1);
       return;
     }
-    if (key.return) {
+    if (key.return && !key.meta && !key.ctrl) {
       const chosen = current();
-      if (chosen !== undefined) onResume(chosen);
+      if (chosen !== undefined && !resumeRequestedRef.current) {
+        resumeRequestedRef.current = true;
+        onResume(chosen);
+      }
       return;
     }
     if (value === "r" && !key.ctrl && !key.meta && current() !== undefined) startRename();

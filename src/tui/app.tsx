@@ -461,8 +461,9 @@ export function TuiApp({ session, cwd, branch, store, approvals, shell, manager,
         onClose={() => setSessionPicker(false)}
         onExit={finish}
         onResume={(chosen) => {
+          // por path: id numérico não vira índice e ids duplicados não pegam a sessão errada
           void (async () => {
-            const outcome = await runCommand({ kind: "resume", ref: chosen.id }, session, commandState.current, store, cwd);
+            const outcome = await runCommand({ kind: "resume", ref: chosen.path }, session, commandState.current, store, cwd);
             if (outcome.lastFile !== undefined) commandState.current.lastFile = outcome.lastFile ?? undefined;
             const added = [...outcome.entries];
             const failed = added.some((entry) => entry.kind === "error");
@@ -476,7 +477,10 @@ export function TuiApp({ session, cwd, branch, store, approvals, shell, manager,
             setEntries((current) => [...current, ...added]);
             setStatus(statusOf(session.snapshot()));
             setSessionPicker(false);
-          })();
+          })().catch((error: unknown) => {
+            setEntries((current) => [...current, { kind: "error", text: `erro: ${messageOf(error)}` }]);
+            setSessionPicker(false);
+          });
         }}
         onRename={(chosen, name) => {
           if (store === undefined) return "sem persistência configurada";

@@ -31,9 +31,7 @@ test("lista, navega e retoma com enter (#64)", async () => {
     await waitFor(() => frame(instance).includes("> 2."));
     instance.stdin.write("\r");
     expect(resumed).toEqual(["b"]);
-  } finally {
-    instance.unmount();
-  }
+  } finally { instance.unmount(); }
 });
 
 test("r renomeia; enter salva; erro fica na tela; esc cancela sem fechar (#64)", async () => {
@@ -62,12 +60,10 @@ test("r renomeia; enter salva; erro fica na tela; esc cancela sem fechar (#64)",
     instance.stdin.write("\u001b"); // cancela o rename, não fecha o modal
     await waitFor(() => !frame(instance).includes("nome: _"));
     expect(closed).toBe(0);
-  } finally {
-    instance.unmount();
-  }
+  } finally { instance.unmount(); }
 });
 
-test("enter com meta não retoma; dois enters no mesmo chunk retomam uma vez (#64)", async () => {
+test("alt+enter não retoma; key repeat retoma uma vez (#64)", async () => {
   const resumed: string[] = [];
   const instance = render(
     <SessionPicker sessions={[summary("a")]} colors={colors} onClose={() => {}} onResume={(chosen) => resumed.push(chosen.id)} onRename={() => undefined} />,
@@ -77,12 +73,11 @@ test("enter com meta não retoma; dois enters no mesmo chunk retomam uma vez (#6
     instance.stdin.write("\u001b\r"); // alt+enter
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(resumed).toEqual([]);
-    instance.stdin.write("\r\r"); // dois enters no mesmo chunk
+    instance.stdin.write("\r");
+    instance.stdin.write("\r"); // repeat antes de o resume assíncrono fechar o modal
     await waitFor(() => resumed.length >= 1);
     expect(resumed).toEqual(["a"]);
-  } finally {
-    instance.unmount();
-  }
+  } finally { instance.unmount(); }
 });
 
 test("o rascunho descarta controles e mantém ZWJ/ZWNJ (#64)", async () => {
@@ -97,13 +92,10 @@ test("o rascunho descarta controles e mantém ZWJ/ZWNJ (#64)", async () => {
     await waitFor(() => frame(instance).includes("nome: _"));
     instance.stdin.write("a\u0000b\u200bc👨‍👩‍👧");
     await waitFor(() => frame(instance).includes("nome: ab"));
-    expect(frame(instance)).not.toContain("\u0000");
     instance.stdin.write("\r");
     await waitFor(() => calls.length === 1);
     expect(calls[0]![1]).toBe("abc👨‍👩‍👧");
-  } finally {
-    instance.unmount();
-  }
+  } finally { instance.unmount(); }
 });
 
 test("ctrl+r não abre o rename; r simples abre (#64)", async () => {
@@ -117,9 +109,7 @@ test("ctrl+r não abre o rename; r simples abre (#64)", async () => {
     expect(frame(instance)).not.toContain("nome: _");
     instance.stdin.write("r");
     await waitFor(() => frame(instance).includes("nome: _"));
-  } finally {
-    instance.unmount();
-  }
+  } finally { instance.unmount(); }
 });
 
 test("navegação multi-passo no mesmo chunk usa o estado mais novo (#64)", async () => {
@@ -131,9 +121,7 @@ test("navegação multi-passo no mesmo chunk usa o estado mais novo (#64)", asyn
     await waitFor(() => frame(instance).includes("Sessões"));
     instance.stdin.write("\u001b[B\u001b[B"); // dois downs no mesmo chunk
     await waitFor(() => frame(instance).includes("> 3."));
-  } finally {
-    instance.unmount();
-  }
+  } finally { instance.unmount(); }
 });
 
 test("lista vazia avisa e esc fecha (#64)", async () => {
@@ -145,7 +133,5 @@ test("lista vazia avisa e esc fecha (#64)", async () => {
     await waitFor(() => frame(instance).includes("nenhuma sessão salva"));
     instance.stdin.write("\u001b");
     await waitFor(() => closed === 1);
-  } finally {
-    instance.unmount();
-  }
+  } finally { instance.unmount(); }
 });

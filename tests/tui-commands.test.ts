@@ -133,7 +133,7 @@ describe("comandos da TUI (T2, #63)", () => {
       messages: [{ role: "user", content: "velho" }], turns: 1, tokensIn: 10, tokensOut: 5, costUsd: 0.001,
     });
     const session = new FakeSession();
-    const state: { sessions?: unknown; lastFile?: string } = {};
+    const state: { lastFile?: string } = {};
     const list = await runCommand({ kind: "sessions" }, session, state as never, store);
     // na TUI o /sessions abre o modal; a lista não vai mais como texto para o histórico
     expect(list).toMatchObject({ entries: [], openSessions: true });
