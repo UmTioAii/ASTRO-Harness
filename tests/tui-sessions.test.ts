@@ -69,4 +69,27 @@ describe("rename de sessão (#64)", () => {
     expect(sessions.rename("abc", "😀".repeat(31)).name).toBe("😀".repeat(31));
     expect(() => sessions.rename("abc", "😀".repeat(61))).toThrow(/nome da sessão inválido/);
   });
+
+  test("nome que cresce na redação não corrompe a sessão (#64)", () => {
+    const sessions = store();
+    sessions.write(snapshot("abc"));
+    // 54 chars passam no limite, mas a redação expande acima de 60: falha limpa, sem sumir da lista
+    expect(() => sessions.rename("abc", "password=a password=b password=c password=d password=e"))
+      .toThrow(/nome da sessão inválido/);
+    expect(sessions.list()).toHaveLength(1);
+    expect(sessions.list()[0]!.name).toBeUndefined();
+    // nome curto com segredo: grava e devolve o valor redigido, e continua listável
+    const renamed = sessions.rename("abc", "login password=abc");
+    expect(renamed.name).toBe("login password=[REDACTED]");
+    expect(sessions.list()[0]!.name).toBe("login password=[REDACTED]");
+  });
+
+  test("nome com bidi, zero-width ou C1 é recusado (#64)", () => {
+    const sessions = store();
+    sessions.write(snapshot("abc"));
+    for (const bad of ["a\u202eb", "a\u200bb", "a\u009fb", "a\ufeffb"]) {
+      expect(() => sessions.rename("abc", bad)).toThrow(/nome da sessão inválido/);
+    }
+    expect(sessions.list()).toHaveLength(1);
+  });
 });
