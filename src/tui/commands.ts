@@ -99,7 +99,8 @@ export async function runCommand(
         return { entries: [{ kind: "info", text: `${lines.join("\n")}\nativo: ${current}` }] };
       }
       if (!isTheme(command.theme)) {
-        return { entries: [{ kind: "error", text: `tema inválido: ${command.theme} (use ${THEMES.join(", ")})` }] };
+        // não ecoa o argumento: ele pode ser um segredo colado por engano (I-03)
+        return { entries: [{ kind: "error", text: `tema inválido (use ${THEMES.join(", ")})` }] };
       }
       if (state.setTheme === undefined) {
         return { entries: [{ kind: "error", text: "tema indisponível nesta sessão" }] };

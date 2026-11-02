@@ -115,8 +115,9 @@ export function TuiApp({ session, cwd, branch, store, approvals, shell, manager,
   const [theme, setTheme] = useState<Theme>(initialConfig.theme);
   const colors = getThemeColors(theme);
   const persistTheme = (next: Theme): void => {
-    setTheme(next);
+    // persiste antes de aplicar: falha de escrita não deixa a TUI num tema que não sobrevive ao restart
     saveTuiConfig(cwd, { theme: next });
+    setTheme(next);
   };
   const leader = useRef(false);
   const busyRef = useRef(false);

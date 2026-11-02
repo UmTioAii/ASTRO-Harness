@@ -49,7 +49,7 @@ export const HELP_TEXT = [
   "  /export [arquivo]  exporta a conversa em Markdown (default .astro/exports/)",
   "  /init           cria AGENTS.md no cwd se ainda não existir",
   "  /usage          uso da sessão (turnos, tokens, custo) e budget, se houver",
-  "  /theme [tema]   lista ou troca o tema da TUI (dark, light, contrast)",
+  "  /theme [tema]   lista ou troca o tema da TUI (dark, light, contrast; alias /themes)",
   "  /clear | /new   limpa o histórico (mantém o system)",
   "  /exit | /quit | /q  encerra a sessão",
 ].join("\n");

@@ -11,7 +11,7 @@ export const THEMES: readonly Theme[] = ["dark", "light", "contrast"];
 
 /** Guarda de tema para o argumento de `/theme` (puro). */
 export function isTheme(value: string): value is Theme {
-  return (THEMES as readonly string[]).includes(value);
+  return THEMES.some((theme) => theme === value);
 }
 
 export interface TuiConfig {
@@ -56,7 +56,7 @@ export function loadTuiConfig(cwd: string): TuiConfig {
     const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
     if (parsed === null || typeof parsed !== "object") return { ...DEFAULT_CONFIG };
     const record = parsed as Record<string, unknown>;
-    const theme: Theme = record.theme === "light" ? "light" : record.theme === "contrast" ? "contrast" : "dark";
+    const theme: Theme = typeof record.theme === "string" && isTheme(record.theme) ? record.theme : "dark";
     const lastModel = typeof record.lastModel === "string" && record.lastModel !== "" ? record.lastModel : undefined;
     const favoriteModels = normalizeList(record.favoriteModels);
     const recentModels = normalizeList(record.recentModels, 10);
