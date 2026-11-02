@@ -39,8 +39,10 @@ export const MAX_SESSION_NAME = 60;
 function normalizeName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const clean = value.trim();
-  // eslint-disable-next-line no-control-regex -- caracteres de controle não podem entrar num nome
-  if (clean === "" || [...clean].length > MAX_SESSION_NAME || /[\u0000-\u001f\u007f]/.test(clean)) return undefined;
+  // controle C0/C1, DEL, bidi, zero-width e BOM não podem entrar num nome (I-03/spoofing)
+  // eslint-disable-next-line no-control-regex
+  if (clean === "" || [...clean].length > MAX_SESSION_NAME) return undefined;
+  if (/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(clean)) return undefined;
   return clean;
 }
 
@@ -184,8 +186,10 @@ export class SessionStore {
   /** Renomeia a sessão no próprio arquivo (atômico, sem duplicar) e devolve o resumo (#64). */
   rename(ref: string, name: string): SessionSummary {
     const { record, path } = this.load(ref);
-    const clean = requireName(name);
-    const updated: SessionRecord = { ...record, name: clean };
+    // redige antes de validar: a redação pode expandir o texto, e o que vale é o valor gravado
+    const stored = normalizeName(redactSecrets(requireName(name)));
+    if (stored === undefined) throw new Error("nome da sessão inválido");
+    const updated: SessionRecord = { ...record, name: stored };
     const json = JSON.stringify(sanitizeValue(updated), null, 2);
     if (Buffer.byteLength(json, "utf8") > MAX_SESSION_BYTES) {
       throw new Error("sessão grande demais para gravar (máx 5 MB)");
@@ -195,7 +199,7 @@ export class SessionStore {
     renameSync(tmp, path);
     return {
       path, id: record.id, startedAt: record.startedAt, model: record.model,
-      turns: record.turns, costUsd: record.costUsd, name: clean,
+      turns: record.turns, costUsd: record.costUsd, name: stored,
     };
   }
 
