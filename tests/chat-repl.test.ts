@@ -310,6 +310,7 @@ describe("REPL do chat (T1, #62)", () => {
     expect(text).toContain("uso da sessão: 0 turno(s) · in 10 / out 5 tokens · custo US$ 0.001000");
     expect(text).toContain("budget day: gasto US$ 1.000000 / limite US$ 5.000000 (20%) · restante US$ 4.000000 · aviso em 80%");
     expect(session.closed).toBe(1);
+    expect(session.sent).toEqual([]); // /usage nunca cai no send
   });
 
   test("/usage sem budgetStatus imprime só a linha da sessão (#63)", async () => {
@@ -319,5 +320,21 @@ describe("REPL do chat (T1, #62)", () => {
     const text = io.outputs.join("\n");
     expect(text).toContain("uso da sessão: 0 turno(s) · in 10 / out 5 tokens · custo US$ 0.001000");
     expect(text).not.toContain("budget day:");
+    expect(session.sent).toEqual([]);
+  });
+
+  test("/usage com budgetStatus que joga imprime erro redacted e não derruba o REPL (#63)", async () => {
+    class BrokenBudget extends FakeSession {
+      budgetStatus(): BudgetStatus {
+        throw new Error('ledger em "/tmp/x/.astro/ledger.jsonl": linha 3 ilegível');
+      }
+    }
+    const session = new BrokenBudget();
+    const io = new ScriptedIO(["/usage", "/exit"]);
+    await runRepl(session, io); // não deve rejeitar
+    const text = io.outputs.join("\n");
+    expect(text).toContain("erro: ledger em \"/tmp/x/.astro/ledger.jsonl\": linha 3 ilegível");
+    expect(session.closed).toBe(1); // /exit depois do erro ainda funciona
+    expect(session.sent).toEqual([]);
   });
 });

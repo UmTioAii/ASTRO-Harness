@@ -52,6 +52,9 @@ describe("usageLines / budgetLine / budgetSegment (#63)", () => {
     expect(budgetLine(status({ warning: true, ratio: 0.9 }))).toContain("⚠ aviso");
     expect(budgetLine(status({ exhausted: true, ratio: 1, warning: true }))).toContain("ESGOTADO");
     expect(budgetLine(status({ ceilingHit: true, spentUsd: 6, ratio: 1.2, remainingUsd: 0 }))).toContain("TETO ATINGIDO");
+    // ordem combinada das flags
+    expect(budgetLine(status({ warning: true, exhausted: true, ceilingHit: true, ratio: 1 })))
+      .toContain("⚠ aviso · ESGOTADO · TETO ATINGIDO");
     expect(budgetLine(status({ scope: "use-as-you-go", limitUsd: null, ratio: null, remainingUsd: null })))
       .toBe("budget use-as-you-go: gasto US$ 1.000000 (sem limite)");
     // preço desconhecido nunca vira zero
