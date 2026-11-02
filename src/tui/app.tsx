@@ -181,8 +181,9 @@ export function TuiApp({ session, cwd, branch, store, approvals, shell, manager,
   useEffect(() => {
     approvals?.subscribe((pendingQuestion) => {
       setQuestion(pendingQuestion);
-      if (pendingQuestion === undefined) {
-        // resposta dada: o overlay de diff não fica aberto sem pergunta
+      if (pendingQuestion === undefined || pendingQuestion.diff === undefined) {
+        // resposta dada ou pergunta nova sem diff: o overlay não fica aberto
+        // (alinha o guarda do useInput com a condição de render do overlay)
         diffOpenRef.current = false;
         setDiffOpen(false);
       }

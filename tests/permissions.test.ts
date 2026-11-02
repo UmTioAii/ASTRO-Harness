@@ -233,6 +233,27 @@ describe("gate no executor (#259)", () => {
     expect(captured?.diff).toBeUndefined();
   });
 
+  test("edit com input que não é objeto não traz anexo e não quebra o gate (#64 D2)", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-perm-edit-nonobj-"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    let captured: ToolPermissionRequest | undefined;
+    const executor = new ToolExecutor({
+      tools: [editTool],
+      allow: ["edit"],
+      audit,
+      permissionMode: "ask",
+      approveTool: (request) => {
+        captured = request;
+        return false;
+      },
+    });
+    const result = await executor.run({ cwd, run: "r1", agent: "a", env: {} },
+      { id: "c1", name: "edit", arguments: '"só texto"' });
+    expect(result.isError).toBe(true);
+    expect(captured?.name).toBe("edit");
+    expect(captured?.diff).toBeUndefined();
+  });
+
   test("ask sem aprovador falha fechado: bloqueia e audita deny", async () => {
     let ran = false;
     const write: Tool = {

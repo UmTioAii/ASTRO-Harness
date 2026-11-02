@@ -47,8 +47,9 @@ function failure(message: string): ToolResult {
  */
 function editDiffAnnex(call: ToolCall, input: unknown): { path: string; content: string } | undefined {
   if (call.name !== "edit") return undefined;
-  const raw = input as { path?: unknown; diff?: unknown } | null;
-  if (raw === null || typeof raw.path !== "string" || typeof raw.diff !== "string") return undefined;
+  if (typeof input !== "object" || input === null) return undefined;
+  const raw: { path?: unknown; diff?: unknown } = input;
+  if (typeof raw.path !== "string" || typeof raw.diff !== "string") return undefined;
   return { path: redactSecrets(raw.path), content: redactSecrets(raw.diff) };
 }
 
