@@ -374,6 +374,33 @@ test("pergunta de aprovação aparece no painel e libera o turno", async () => {
   }
 });
 
+test("pergunta de aprovação de edit abre o overlay de diff com tab e a resposta segue depois (#64 D2)", async () => {
+  const bridge = createApprovalBridge();
+  const instance = render(<TuiApp session={new FakeSession()} cwd="/tmp/astro" approvals={bridge} />);
+  try {
+    const decision = bridge.approveTool({
+      name: "edit", action: "edit", mode: "ask",
+      diff: { path: "src/a.ts", content: "@@ -1 +1 @@\n-old\n+new\n" },
+    });
+    await waitFor(() => instance.lastFrame()?.includes("tab ver diff") === true);
+    instance.stdin.write("\t");
+    await waitFor(() => instance.lastFrame()?.includes("diff · src/a.ts") === true);
+    expect(instance.lastFrame()).toContain("-old");
+    expect(instance.lastFrame()).toContain("+new");
+    instance.stdin.write("\u001b"); // esc volta para a pergunta
+    await waitFor(() => {
+      const frame = instance.lastFrame() ?? "";
+      return frame.includes("tab ver diff") && !frame.includes("diff · src/a.ts");
+    });
+    instance.stdin.write("s");
+    instance.stdin.write("\r");
+    expect(await decision).toBe(true);
+    await waitFor(() => instance.lastFrame()?.includes("tab ver diff") === false);
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("/exit grava a sessão sanitizada antes de fechar", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-tui-exit-"));
   let exits = 0;
