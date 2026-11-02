@@ -72,6 +72,18 @@ describe("rename de sessão (#64)", () => {
     expect(sessions.list()[0]!.name).toBe("login password=[REDACTED]");
   });
 
+  test("nome JSON com escape invisível no disco é descartado na leitura (#64)", () => {
+    const sessions = store();
+    sessions.write(snapshot("abc"));
+    const path = sessions.list()[0]!.path;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    // escape literal no arquivo: parseRecord aceita, mas a decodificação JSON solta U+009B cru
+    raw.name = '{"a":"\\u009b31mPWNED"}';
+    writeFileSync(path, JSON.stringify(raw), "utf8");
+    expect(sessions.list()[0]!.name).toBeUndefined();
+    expect(sessions.load("abc").record.name).toBeUndefined();
+  });
+
   test("sanitiza antes de validar: escape JSON de controle é recusado e o retorno é o gravado", () => {
     const sessions = store();
     sessions.write(snapshot("abc"));
