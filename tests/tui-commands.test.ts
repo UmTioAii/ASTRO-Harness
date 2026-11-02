@@ -325,10 +325,17 @@ describe("/theme na TUI (#64)", () => {
   test("tema inválido lista os válidos e sessão sem setTheme avisa", async () => {
     const bad = await runCommand({ kind: "theme", theme: "neon" }, new FakeSession(), state("dark", () => {}));
     expect(bad.entries[0]!.kind).toBe("error");
-    expect(bad.entries[0]!.text).toBe("tema inválido: neon (use dark, light, contrast)");
+    expect(bad.entries[0]!.text).toBe("tema inválido (use dark, light, contrast)");
     const plain = await runCommand({ kind: "theme", theme: "light" }, new FakeSession(), state("dark"));
     expect(plain.entries[0]!.kind).toBe("error");
     expect(plain.entries[0]!.text).toContain("tema indisponível");
+  });
+
+  test("argumento inválido com cara de segredo não é ecoado (I-03, #64)", async () => {
+    const out = await runCommand({ kind: "theme", theme: "sk-ant-api03-segredo" }, new FakeSession(), state("dark", () => {}));
+    expect(out.entries[0]!.kind).toBe("error");
+    expect(out.entries[0]!.text).toBe("tema inválido (use dark, light, contrast)");
+    expect(out.entries[0]!.text).not.toContain("sk-ant");
   });
 
   test("falha ao persistir vira erro redacted sem derrubar a TUI", async () => {
