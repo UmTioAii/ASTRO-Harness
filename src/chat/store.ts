@@ -1,5 +1,5 @@
 /** Persistência sanitizada da sessão de chat (T1): schema 1, escrita atômica. */
-import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { ChatMessage } from "../provider/types";
 import { redactSecrets } from "../sanitize-external";
@@ -14,6 +14,8 @@ export interface SessionRecord {
   tokensIn: number;
   tokensOut: number;
   costUsd: number | null;
+  /** Nome dado pelo usuário no picker (`/sessions`, #64). */
+  name?: string;
   /** Origem quando a sessão foi retomada de outra. */
   resumedFrom?: { id: string; startedAt: string };
 }
@@ -27,6 +29,28 @@ export interface SessionSummary {
   model: string;
   turns: number;
   costUsd: number | null;
+  name?: string;
+}
+
+/** Tamanho máximo de um nome de sessão (caracteres). */
+export const MAX_SESSION_NAME = 60;
+
+/** Normaliza um nome; inválido vira `undefined` (leitura tolerante, #64). */
+function normalizeName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = value.trim();
+  // controle C0/C1, DEL, bidi, zero-width e BOM não podem entrar num nome (I-03/spoofing)
+  // eslint-disable-next-line no-control-regex
+  if (clean === "" || [...clean].length > MAX_SESSION_NAME) return undefined;
+  if (/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(clean)) return undefined;
+  return clean;
+}
+
+/** Nome vindo do usuário: inválido é erro (escrita estrita, #64). */
+function requireName(value: string): string {
+  const clean = normalizeName(value);
+  if (clean === undefined) throw new Error("nome da sessão inválido");
+  return clean;
 }
 
 const ROLES = new Set(["system", "user", "assistant", "tool"]);
@@ -73,6 +97,7 @@ function parseRecord(raw: unknown): SessionRecord {
   const costUsd = record.costUsd === null || record.costUsd === undefined
     ? null
     : number(record.costUsd, "custo");
+  const name = normalizeName(record.name);
   return {
     schemaVersion: 1,
     id: record.id,
@@ -83,6 +108,7 @@ function parseRecord(raw: unknown): SessionRecord {
     tokensIn: number(record.tokensIn, "tokens"),
     tokensOut: number(record.tokensOut, "tokens"),
     costUsd,
+    ...(name === undefined ? {} : { name }),
     ...parseResumedFrom(record.resumedFrom),
   };
 }
@@ -140,6 +166,7 @@ export class SessionStore {
         out.push({
           path, id: record.id, startedAt: record.startedAt, model: record.model,
           turns: record.turns, costUsd: record.costUsd,
+          ...(record.name === undefined ? {} : { name: record.name }),
         });
       } catch {
         // arquivo corrompido ou de outro schema: não aparece na lista
@@ -154,6 +181,26 @@ export class SessionStore {
     const path = found?.path ?? (ref.endsWith(".json") ? this.#inside(ref) : undefined);
     if (path === undefined) throw new Error(`sessão "${ref}" não encontrada`);
     return { record: this.#read(path), path };
+  }
+
+  /** Renomeia a sessão no próprio arquivo (atômico, sem duplicar) e devolve o resumo (#64). */
+  rename(ref: string, name: string): SessionSummary {
+    const { record, path } = this.load(ref);
+    // redige antes de validar: a redação pode expandir o texto, e o que vale é o valor gravado
+    const stored = normalizeName(redactSecrets(requireName(name)));
+    if (stored === undefined) throw new Error("nome da sessão inválido");
+    const updated: SessionRecord = { ...record, name: stored };
+    const json = JSON.stringify(sanitizeValue(updated), null, 2);
+    if (Buffer.byteLength(json, "utf8") > MAX_SESSION_BYTES) {
+      throw new Error("sessão grande demais para gravar (máx 5 MB)");
+    }
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, json, { encoding: "utf8", mode: 0o600 });
+    renameSync(tmp, path);
+    return {
+      path, id: record.id, startedAt: record.startedAt, model: record.model,
+      turns: record.turns, costUsd: record.costUsd, name: stored,
+    };
   }
 
   #inside(path: string): string {
@@ -182,8 +229,15 @@ export class SessionStore {
     }
     mkdirSync(this.root, { recursive: true });
     const path = join(this.root, `${stamp}-${snapshot.id}.json`);
+    // o snapshot não carrega `name`: preserva o nome dado por rename no auto-save (#64)
+    let name: string | undefined;
+    try {
+      if (existsSync(path)) name = this.#read(path).name;
+    } catch {
+      name = undefined; // arquivo ilegível não impede o auto-save
+    }
     const tmp = `${path}.tmp`;
-    const record = sanitizeValue({ schemaVersion: 1, ...snapshot }) as SessionRecord;
+    const record = sanitizeValue({ schemaVersion: 1, ...snapshot, ...(name === undefined ? {} : { name }) }) as SessionRecord;
     const json = JSON.stringify(record, null, 2);
     if (Buffer.byteLength(json, "utf8") > MAX_SESSION_BYTES) {
       throw new Error("sessão grande demais para gravar (máx 5 MB)");
@@ -196,5 +250,6 @@ export class SessionStore {
 
 export function sessionSummaryLine(item: SessionSummary, index: number): string {
   const cost = item.costUsd === null ? "n/d" : `US$ ${item.costUsd.toFixed(6)}`;
-  return `${index + 1}. ${item.startedAt} ${item.id} ${item.model} turnos=${item.turns} custo=${cost}`;
+  const label = item.name === undefined ? item.id : `${item.name} (${item.id})`;
+  return `${index + 1}. ${item.startedAt} ${label} ${item.model} turnos=${item.turns} custo=${cost}`;
 }
