@@ -852,8 +852,40 @@ test("/sessions abre o picker: r renomeia e enter retoma a sessão (#64)", async
     instance.stdin.write("oi");
     instance.stdin.write("\r");
     await waitFor(() => frameHas(instance, "eco:oi"));
+    // (verificado abaixo em teste próprio: o picker retoma pelo path)
     // o auto-save do turno reescreve o mesmo arquivo: o nome não pode sumir
     expect(store.list().find((item) => item.id === "abc")?.name).toBe("nova");
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("picker: enter retoma a sessão selecionada pelo path (#64)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-picker-enter-"));
+  const store = new SessionStore(join(cwd, ".astro", "sessions"));
+  const saved = {
+    model: "p/m1", messages: [{ role: "user" as const, content: "x" }],
+    turns: 1, tokensIn: 1, tokensOut: 1, costUsd: null,
+  };
+  // id numérico: um resume por id o trataria como índice da lista
+  store.write({ ...saved, id: "7", startedAt: "2026-10-01T10:00:00.000Z" });
+  store.write({ ...saved, id: "abc", startedAt: "2026-10-03T10:00:00.000Z" });
+  const session = new FakeSession();
+  const instance = render(<TuiApp session={session} cwd={cwd} store={store} />);
+  try {
+    await waitFor(() => frameHas(instance, "turno(s)"));
+    instance.stdin.write("/sessions");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "Sessões"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    instance.stdin.write("\u001b[B"); // segunda linha: id "7"
+    instance.stdin.write("\r");
+    await waitFor(() => session.resumed.length === 1);
+    expect(session.resumed[0]).toBe("7");
+    await waitFor(() => frameHas(instance, "sessão retomada: 7"));
+    const config = JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")) as { lastModel?: string };
+    expect(config.lastModel).toBe("p/m1");
+    expect(frameHas(instance, "Sessões")).toBe(false);
   } finally {
     instance.unmount();
   }

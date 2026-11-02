@@ -67,6 +67,45 @@ test("r renomeia; enter salva; erro fica na tela; esc cancela sem fechar (#64)",
   }
 });
 
+test("enter com meta não retoma; dois enters no mesmo chunk retomam uma vez (#64)", async () => {
+  const resumed: string[] = [];
+  const instance = render(
+    <SessionPicker sessions={[summary("a")]} colors={colors} onClose={() => {}} onResume={(chosen) => resumed.push(chosen.id)} onRename={() => undefined} />,
+  );
+  try {
+    await waitFor(() => frame(instance).includes("Sessões"));
+    instance.stdin.write("\u001b\r"); // alt+enter
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(resumed).toEqual([]);
+    instance.stdin.write("\r\r"); // dois enters no mesmo chunk
+    await waitFor(() => resumed.length >= 1);
+    expect(resumed).toEqual(["a"]);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("o rascunho descarta controles e mantém ZWJ/ZWNJ (#64)", async () => {
+  const calls: Array<[string, string]> = [];
+  const instance = render(
+    <SessionPicker sessions={[summary("a")]} colors={colors} onClose={() => {}} onResume={() => {}}
+      onRename={(chosen, name) => { calls.push([chosen.id, name]); return undefined; }} />,
+  );
+  try {
+    await waitFor(() => frame(instance).includes("Sessões"));
+    instance.stdin.write("r");
+    await waitFor(() => frame(instance).includes("nome: _"));
+    instance.stdin.write("a\u0000b\u200bc👨‍👩‍👧");
+    await waitFor(() => frame(instance).includes("nome: ab"));
+    expect(frame(instance)).not.toContain("\u0000");
+    instance.stdin.write("\r");
+    await waitFor(() => calls.length === 1);
+    expect(calls[0]![1]).toBe("abc👨‍👩‍👧");
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("ctrl+r não abre o rename; r simples abre (#64)", async () => {
   const instance = render(
     <SessionPicker sessions={[summary("a")]} colors={colors} onClose={() => {}} onResume={() => {}} onRename={() => undefined} />,
