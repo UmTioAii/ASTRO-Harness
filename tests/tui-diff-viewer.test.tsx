@@ -48,17 +48,30 @@ test(" rola com j/↓ dentro da viewport e prende nos limites (#64)", async () =
     <DiffViewer path="big.ts" diff={longDiff(30)} colors={colors} viewport={5} onClose={() => {}} />,
   );
   try {
-    await waitFor(() => frame(instance).includes("linha 1-5/30"));
+    await waitFor(() => frame(instance).includes("linha 1-5/31")); // 30 linhas + 1 hunk
     expect(frame(instance)).toContain("line-01");
     expect(frame(instance)).not.toContain("line-06");
     for (let i = 0; i < 10; i++) instance.stdin.write("j");
-    await waitFor(() => frame(instance).includes("linha 11-15/30"));
+    await waitFor(() => frame(instance).includes("linha 11-15/31"));
     expect(frame(instance)).toContain("line-11");
     expect(frame(instance)).not.toContain("line-01");
     instance.stdin.write("\u001b[A"); // up
-    await waitFor(() => frame(instance).includes("linha 10-14/30"));
+    await waitFor(() => frame(instance).includes("linha 10-14/31"));
     for (let i = 0; i < 100; i++) instance.stdin.write("\u001b[A"); // prende no topo
-    await waitFor(() => frame(instance).includes("linha 1-5/30"));
+    await waitFor(() => frame(instance).includes("linha 1-5/31"));
+  } finally { instance.unmount(); }
+});
+
+test("redige segredos do diff e do path no próprio render (I-03) (#64)", async () => {
+  const secret = "sk-live-abcdef12345";
+  const diff = "@@ -1 +1 @@\n-old\n+const k = \"" + secret + "\";\n";
+  const instance = render(
+    <DiffViewer path={"cfg-" + secret + ".ts"} diff={diff} colors={colors} onClose={() => {}} />,
+  );
+  try {
+    await waitFor(() => frame(instance).includes("diff ·"));
+    expect(frame(instance)).toContain("[REDACTED]");
+    expect(frame(instance)).not.toContain(secret);
   } finally { instance.unmount(); }
 });
 
@@ -68,9 +81,9 @@ test("pgdn avança uma página e esc/q fecham o overlay (#64)", async () => {
     <DiffViewer path="big.ts" diff={longDiff(30)} colors={colors} viewport={5} onClose={() => { closed++; }} />,
   );
   try {
-    await waitFor(() => frame(instance).includes("linha 1-5/30"));
+    await waitFor(() => frame(instance).includes("linha 1-5/31"));
     instance.stdin.write("\u001b[6~"); // pageDown
-    await waitFor(() => frame(instance).includes("linha 6-10/30"));
+    await waitFor(() => frame(instance).includes("linha 6-10/31"));
     instance.stdin.write("q");
     await waitFor(() => closed === 1);
   } finally { instance.unmount(); }
@@ -80,7 +93,7 @@ test("pgdn avança uma página e esc/q fecham o overlay (#64)", async () => {
     <DiffViewer path="big.ts" diff={longDiff(30)} colors={colors} viewport={5} onClose={() => { closedByEsc++; }} />,
   );
   try {
-    await waitFor(() => frame(second).includes("linha 1-5/30"));
+    await waitFor(() => frame(second).includes("linha 1-5/31"));
     second.stdin.write("\u001b"); // esc
     await waitFor(() => closedByEsc === 1);
   } finally { second.unmount(); }
