@@ -39,10 +39,6 @@ describe("rename de sessão (#64)", () => {
     expect(() => sessions.rename("abc", "a\u0000b")).toThrow(/nome da sessão inválido/);
     expect(sessions.load("abc").record.name).toBeUndefined();
     expect(sessions.list()[0]!.name).toBeUndefined();
-  });
-
-  test("renomear sessão inexistente falha com mensagem clara", () => {
-    const sessions = store();
     expect(() => sessions.rename("nope", "x")).toThrow(/não encontrada/);
   });
 });

@@ -4,11 +4,11 @@ import { SessionPicker } from "../src/tui/session-picker";
 import type { SessionSummary } from "../src/chat/store";
 
 const colors = { accent: "cyan", warning: "yellow", error: "red" };
-
 const summary = (id: string, name?: string): SessionSummary => ({
   path: `/tmp/${id}.json`, id, startedAt: "2026-10-01T10:00:00.000Z", model: "p/m1", turns: 2, costUsd: 0.001,
   ...(name === undefined ? {} : { name }),
 });
+const frame = (instance: ReturnType<typeof render>): string => instance.lastFrame() ?? "";
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let i = 0; i < 200; i++) {
@@ -18,18 +18,11 @@ async function waitFor(check: () => boolean): Promise<void> {
   throw new Error("timeout esperando o frame");
 }
 
-const frame = (instance: ReturnType<typeof render>): string => instance.lastFrame() ?? "";
-
 test("lista, navega e retoma com enter (#64)", async () => {
   const resumed: string[] = [];
   const instance = render(
-    <SessionPicker
-      sessions={[summary("a"), summary("b", "feature")]}
-      colors={colors}
-      onClose={() => {}}
-      onResume={(chosen) => resumed.push(chosen.id)}
-      onRename={() => undefined}
-    />,
+    <SessionPicker sessions={[summary("a"), summary("b", "feature")]} colors={colors}
+      onClose={() => {}} onResume={(chosen) => resumed.push(chosen.id)} onRename={() => undefined} />,
   );
   try {
     await waitFor(() => frame(instance).includes("Sessões"));
@@ -43,20 +36,13 @@ test("lista, navega e retoma com enter (#64)", async () => {
   }
 });
 
-test("r inicia rename a partir de vazio; enter salva; erro do callback aparece (#64)", async () => {
+test("r renomeia; enter salva; erro fica na tela; esc cancela sem fechar (#64)", async () => {
   const calls: Array<[string, string]> = [];
   let fail = false;
+  let closed = 0;
   const instance = render(
-    <SessionPicker
-      sessions={[summary("a", "antigo")]}
-      colors={colors}
-      onClose={() => {}}
-      onResume={() => {}}
-      onRename={(id, name) => {
-        calls.push([id, name]);
-        return fail ? "erro: nome inválido" : undefined;
-      }}
-    />,
+    <SessionPicker sessions={[summary("a", "antigo")]} colors={colors} onClose={() => { closed++; }}
+      onResume={() => {}} onRename={(id, name) => { calls.push([id, name]); return fail ? "erro: nome inválido" : undefined; }} />,
   );
   try {
     await waitFor(() => frame(instance).includes("Sessões"));
@@ -66,19 +52,22 @@ test("r inicia rename a partir de vazio; enter salva; erro do callback aparece (
     instance.stdin.write("\r");
     await waitFor(() => calls.length === 1);
     expect(calls[0]).toEqual(["a", "novo"]);
-    await waitFor(() => frame(instance).includes("nome: _") === false);
+    await waitFor(() => !frame(instance).includes("nome: _"));
     fail = true;
     instance.stdin.write("r");
     await waitFor(() => frame(instance).includes("nome: _"));
     instance.stdin.write("x");
     instance.stdin.write("\r");
     await waitFor(() => frame(instance).includes("erro: nome inválido"));
+    instance.stdin.write("\u001b"); // cancela o rename, não fecha o modal
+    await waitFor(() => !frame(instance).includes("nome: _"));
+    expect(closed).toBe(0);
   } finally {
     instance.unmount();
   }
 });
 
-test("esc cancela o rename e close só no modo lista; lista vazia avisa (#64)", async () => {
+test("lista vazia avisa e esc fecha (#64)", async () => {
   let closed = 0;
   const instance = render(
     <SessionPicker sessions={[]} colors={colors} onClose={() => { closed++; }} onResume={() => {}} onRename={() => undefined} />,
@@ -89,19 +78,5 @@ test("esc cancela o rename e close só no modo lista; lista vazia avisa (#64)", 
     await waitFor(() => closed === 1);
   } finally {
     instance.unmount();
-  }
-
-  const withSession = render(
-    <SessionPicker sessions={[summary("a")]} colors={colors} onClose={() => { closed++; }} onResume={() => {}} onRename={() => undefined} />,
-  );
-  try {
-    await waitFor(() => frame(withSession).includes("Sessões"));
-    withSession.stdin.write("r");
-    await waitFor(() => frame(withSession).includes("nome: _"));
-    withSession.stdin.write("\u001b"); // cancela o rename, não fecha
-    await waitFor(() => frame(withSession).includes("nome: _") === false);
-    expect(closed).toBe(1);
-  } finally {
-    withSession.unmount();
   }
 });

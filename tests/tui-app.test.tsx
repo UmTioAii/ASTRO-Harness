@@ -411,7 +411,7 @@ test("segundo ctrl+c força a saída mesmo com o provider travado", async () => 
     instance.unmount();
   }
 });
-test("/sessions e /resume no painel compartilham a lista", async () => {
+test("/sessions abre o painel e /resume por id retoma a sessão vista (#64)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-tui-panel-sessions-"));
   const store = new SessionStore(dir);
   store.write({
@@ -425,14 +425,12 @@ test("/sessions e /resume no painel compartilham a lista", async () => {
     instance.stdin.write("/sessions");
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("xyz") === true);
+    await new Promise((resolve) => setTimeout(resolve, 50)); // assenta os hooks do modal
+    instance.stdin.write("\u001b"); // esc fecha o painel
+    await waitFor(() => (instance.lastFrame() ?? "").includes("Sessões") === false);
+    await new Promise((resolve) => setTimeout(resolve, 50)); // assenta o handler do painel principal
 
-    // arquivo novo aparece depois da lista exibida: /resume 1 deve usar a lista vista
-    store.write({
-      id: "zzz", startedAt: "2026-10-03T10:00:00.000Z", model: "p/m1",
-      messages: [{ role: "user", content: "novo" }], turns: 1, tokensIn: 1, tokensOut: 1, costUsd: null,
-    });
-
-    instance.stdin.write("/resume 1");
+    instance.stdin.write("/resume xyz");
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("sessão retomada: xyz") === true);
     expect(session.resumed).toEqual(["xyz"]);
