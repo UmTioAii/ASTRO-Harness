@@ -1,5 +1,6 @@
 /** Persistência sanitizada da sessão de chat (T1): schema 1, escrita atômica. */
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { ChatMessage } from "../provider/types";
 import { redactSecrets } from "../sanitize-external";
@@ -42,7 +43,9 @@ function normalizeName(value: unknown): string | undefined {
   // controle C0/C1, DEL, bidi, zero-width e BOM não podem entrar num nome (I-03/spoofing)
   // eslint-disable-next-line no-control-regex
   if (clean === "" || [...clean].length > MAX_SESSION_NAME) return undefined;
-  if (/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(clean)) return undefined;
+  if (/[\u0000-\u001f\u007f-\u009f\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\ufff9-\ufffb]/.test(clean)) {
+    return undefined;
+  }
   return clean;
 }
 
@@ -186,17 +189,24 @@ export class SessionStore {
   /** Renomeia a sessão no próprio arquivo (atômico, sem duplicar) e devolve o resumo (#64). */
   rename(ref: string, name: string): SessionSummary {
     const { record, path } = this.load(ref);
-    // redige antes de validar: a redação pode expandir o texto, e o que vale é o valor gravado
-    const stored = normalizeName(redactSecrets(requireName(name)));
+    // aplica a sanitização real antes de validar: redação pode expandir o texto e
+    // nomes JSON podem esconder controles/escapes; o que vale é o valor gravado
+    const sanitized = sanitizeValue(requireName(name));
+    const stored = typeof sanitized === "string" ? normalizeName(sanitized) : undefined;
     if (stored === undefined) throw new Error("nome da sessão inválido");
     const updated: SessionRecord = { ...record, name: stored };
     const json = JSON.stringify(sanitizeValue(updated), null, 2);
     if (Buffer.byteLength(json, "utf8") > MAX_SESSION_BYTES) {
       throw new Error("sessão grande demais para gravar (máx 5 MB)");
     }
-    const tmp = `${path}.tmp`;
-    writeFileSync(tmp, json, { encoding: "utf8", mode: 0o600 });
-    renameSync(tmp, path);
+    const tmp = `${path}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(tmp, json, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      renameSync(tmp, path);
+    } catch (error) {
+      rmSync(tmp, { force: true });
+      throw error;
+    }
     return {
       path, id: record.id, startedAt: record.startedAt, model: record.model,
       turns: record.turns, costUsd: record.costUsd, name: stored,
@@ -236,14 +246,20 @@ export class SessionStore {
     } catch {
       name = undefined; // arquivo ilegível não impede o auto-save
     }
-    const tmp = `${path}.tmp`;
     const record = sanitizeValue({ schemaVersion: 1, ...snapshot, ...(name === undefined ? {} : { name }) }) as SessionRecord;
     const json = JSON.stringify(record, null, 2);
     if (Buffer.byteLength(json, "utf8") > MAX_SESSION_BYTES) {
       throw new Error("sessão grande demais para gravar (máx 5 MB)");
     }
-    writeFileSync(tmp, json, { encoding: "utf8", mode: 0o600 });
-    renameSync(tmp, path);
+    // tmp imprevisível + wx: não segue link plantado no irmão do arquivo (I-11)
+    const tmp = `${path}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(tmp, json, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      renameSync(tmp, path);
+    } catch (error) {
+      rmSync(tmp, { force: true });
+      throw error;
+    }
     return path;
   }
 }

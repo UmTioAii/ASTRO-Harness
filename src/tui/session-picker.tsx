@@ -75,7 +75,8 @@ export function SessionPicker({
         return;
       }
       if (!key.ctrl && !key.meta && value !== "") {
-        draftRef.current += value.replace(/[\r\n\t]/g, "");
+        // descarta controles C0/DEL: nada de ESC/CSI ecoado no rascunho
+        draftRef.current += value.replace(/[\u0000-\u001f\u007f]/g, "");
         setDraftState(draftRef.current);
       }
       return;
