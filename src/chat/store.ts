@@ -44,7 +44,9 @@ const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]|\p{Cf}/u;
 function normalizeName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const clean = value.trim();
-  if (clean === "" || [...clean].length > MAX_SESSION_NAME || INVISIBLE.test(clean)) return undefined;
+  // ZWJ/ZWNJ são legítimos (emoji composto, persa/indic); o resto da classe continua barrado
+  const visible = clean.replace(/[\u200c\u200d]/g, "");
+  if (clean === "" || [...clean].length > MAX_SESSION_NAME || visible === "" || INVISIBLE.test(visible)) return undefined;
   return clean;
 }
 
@@ -229,8 +231,9 @@ export class SessionStore {
     const raw: unknown = JSON.parse(readFileSync(real, "utf8"));
     const record = sanitizeValue(parseRecord(raw)) as SessionRecord;
     // a sanitização pode decodificar escapes JSON e soltar controles em campos
-    // renderizados: rejeita o arquivo com model invisível e revalida o nome
+    // renderizados: rejeita o arquivo com model/startedAt invisível e revalida o nome
     if (INVISIBLE.test(record.model)) throw new Error("modelo da sessão inválido");
+    if (INVISIBLE.test(record.startedAt)) throw new Error("início da sessão inválido");
     const name = normalizeName(record.name);
     if (name === undefined) delete record.name;
     else record.name = name;
@@ -256,6 +259,8 @@ export class SessionStore {
     const base = { ...snapshot } as Record<string, unknown>;
     delete base.name;
     const record = sanitizeValue({ schemaVersion: 1, ...base, ...(name === undefined ? {} : { name }) }) as SessionRecord;
+    // nunca grava um arquivo que o #read recusaria (sessão salva mas invisível)
+    if (record.model === "" || INVISIBLE.test(record.model)) throw new Error("modelo da sessão inválido");
     const json = JSON.stringify(record, null, 2);
     if (Buffer.byteLength(json, "utf8") > MAX_SESSION_BYTES) {
       throw new Error("sessão grande demais para gravar (máx 5 MB)");
