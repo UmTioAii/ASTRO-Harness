@@ -38,7 +38,8 @@ describe("rename de sessão (#64)", () => {
     const snap = snapshot("abc");
     sessions.write(snap);
     sessions.rename("abc", "parser");
-    sessions.write(snap); // auto-save do turno ou persist(false) no exit reescreve o mesmo arquivo
+    // auto-save de um turno novo reescreve o mesmo arquivo
+    sessions.write({ ...snap, messages: [...snap.messages, { role: "user", content: "novo" }], turns: 2 });
     expect(sessions.list()[0]!.name).toBe("parser");
   });
   test("nome inválido no disco não derruba a sessão: vira ausente na leitura", () => {
@@ -67,6 +68,39 @@ describe("rename de sessão (#64)", () => {
     expect(renamed.name).toBe("login password=[REDACTED]");
     expect(sessions.list()[0]!.name).toBe("login password=[REDACTED]");
   });
+  test("startedAt com controle no disco descarta a sessão (#64)", () => {
+    const sessions = store();
+    sessions.write(snapshot("abc"));
+    const path = sessions.list()[0]!.path;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    raw.startedAt = "2026-10-01\r"; // Date.parse aceita date-only com controle; o \r volta à coluna 0 na linha
+    writeFileSync(path, JSON.stringify(raw), "utf8");
+    expect(sessions.list()).toHaveLength(0);
+    expect(() => sessions.load("abc")).toThrow(/não encontrada/);
+  });
+
+  test("write recusa model invisível em vez de gravar sessão que a leitura rejeita (#64)", () => {
+    const sessions = store();
+    expect(() => sessions.write({ ...snapshot("abc"), model: "p/gpt-4o\u200b" })).toThrow(/modelo da sessão inválido/);
+    expect(sessions.list()).toHaveLength(0);
+  });
+
+  test("nome com ZWJ/ZWNJ legítimo (emoji composto, persa) é aceito (#64)", () => {
+    const sessions = store();
+    sessions.write(snapshot("abc"));
+    expect(sessions.rename("abc", "👨‍👩‍👧 família").name).toBe("👨‍👩‍👧 família");
+    expect(sessions.rename("abc", "می‌خواهد").name).toBe("می‌خواهد");
+  });
+
+  test("rename recusa ref que escapa do store; write descarta name em runtime (#64)", () => {
+    const sessions = store();
+    sessions.write(snapshot("abc"));
+    expect(() => sessions.rename("../escape.json", "x")).toThrow(/fora do diretório/);
+    sessions.rename("abc", "parser");
+    sessions.write({ ...snapshot("abc"), name: "outro" } as never);
+    expect(sessions.list()[0]!.name).toBe("parser");
+  });
+
   test("model com escape invisível no disco descarta a sessão (#64)", () => {
     const sessions = store();
     sessions.write(snapshot("abc"));
