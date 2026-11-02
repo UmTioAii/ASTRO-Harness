@@ -201,12 +201,14 @@ export class AgentSession {
     return this.#modelRef;
   }
 
-  /** Modo de permissão ativo (env ASTRO_PERMISSION_MODE > config > ask, D-24) — o mesmo que o run usa; a TUI mostra no footer/banner (#270). */
+  /**
+   * Modo de permissão ativo — exatamente o mesmo que o run usa (app.ts lê só
+   * `process.env.ASTRO_PERMISSION_MODE`, nunca o `env` injetado na sessão):
+   * `process.env.ASTRO_PERMISSION_MODE` > config > ask (D-24). A TUI mostra no
+   * footer/banner (#270); divergir aqui mostraria um modo que não é o do run.
+   */
   permissionMode(): PermissionMode {
-    return resolvePermissionMode(
-      this.#env?.ASTRO_PERMISSION_MODE ?? process.env.ASTRO_PERMISSION_MODE,
-      this.#config.permissions.mode,
-    );
+    return resolvePermissionMode(process.env.ASTRO_PERMISSION_MODE, this.#config.permissions.mode);
   }
 
   get providerSource(): ProviderSource {
