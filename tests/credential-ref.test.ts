@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createProvider } from "../src/app";
 import { validateConfig } from "../src/config";
 import { resolveCredentialValue } from "../src/credential-ref";
+import type { ModelEntry } from "../src/registry";
 import { Vault, type VaultBackend } from "../src/vault";
 
 // Sentinelas construídos em runtime para não disparar o gate de segredos.
@@ -26,7 +27,7 @@ const configWith = (credentialRef: string) => validateConfig({
   agent: { model: "p/m1", maxSteps: 2, tools: [] },
   paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
 });
-const model = { provider: "p", id: "m1", tags: [], context: 8192, status: "active" } as const;
+const model: ModelEntry = { provider: "p", id: "m1", tags: [], context: 8192, status: "active" };
 
 describe("resolveCredentialValue (#311 B.2)", () => {
   test("env nomeada continua funcionando", () => {
@@ -67,6 +68,8 @@ describe("createProvider lê do vault (#311 B.2)", () => {
     const setup = createProvider(configWith(ref), model, {}, new Map(), vault);
     expect(setup.credentialRef).toBe(ref);
     expect(setup.credentialRef).not.toContain(SENTINEL);
+    // a config guarda só a referência, nunca o valor (I-03)
+    expect(JSON.stringify(configWith(ref))).not.toContain(SENTINEL);
   });
 
   test("id ausente no provider real vira ConfigError sem vazar o segredo", () => {

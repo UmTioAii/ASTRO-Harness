@@ -39,8 +39,8 @@ describe("config", () => {
       raw.providers.openai.credentialRef = ref;
       return validateConfig(raw);
     };
-    expect(withRef("OPENAI_API_KEY").providers.openai.credentialRef).toBe("OPENAI_API_KEY");
-    expect(withRef("vault:cred-12345678-abcd").providers.openai.credentialRef).toBe("vault:cred-12345678-abcd");
+    expect((withRef("OPENAI_API_KEY").providers.openai as { credentialRef?: string }).credentialRef).toBe("OPENAI_API_KEY");
+    expect((withRef("vault:cred-12345678-abcd").providers.openai as { credentialRef?: string }).credentialRef).toBe("vault:cred-12345678-abcd");
     expect(() => withRef("vault:../etc")).toThrow(/credentialRef/);
   });
   test("tag fora do vocabulário fechado → ConfigError", () => {
