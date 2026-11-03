@@ -974,9 +974,11 @@ test("80x24 e resize encolhem o picker sem quebrar o input (#64)", async () => {
     instance.stdin.write("\r");
     await waitFor(() => frameHas(instance, "Sessões"));
     await new Promise((resolve) => setTimeout(resolve, 50)); // assenta os hooks do modal
+    Object.defineProperty(instance.stdout, "columns", { get: () => 80, configurable: true });
     Object.defineProperty(instance.stdout, "rows", { get: () => 24, configurable: true });
     instance.stdout.emit("resize");
     await waitFor(() => frameHas(instance, "… 18 abaixo")); // 24 - chrome 6 = 12 (cap)
+    Object.defineProperty(instance.stdout, "columns", { get: () => 40, configurable: true });
     Object.defineProperty(instance.stdout, "rows", { get: () => 10, configurable: true });
     instance.stdout.emit("resize");
     await waitFor(() => frameHas(instance, "… 26 abaixo")); // 10 - 6 = 4

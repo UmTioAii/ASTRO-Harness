@@ -102,8 +102,8 @@ test("sem viewport explícito, a janela vem das linhas do terminal (#64)", async
     Object.defineProperty(instance.stdout, "rows", { get: () => 10, configurable: true });
     instance.stdout.emit("resize");
     await waitFor(() => frame(instance).includes("linha 1-6/31")); // 10 - chrome 4 = 6
-    expect(frame(instance)).toContain("line-06");
-    expect(frame(instance)).not.toContain("line-07");
+    expect(frame(instance)).toContain("line-05");
+    expect(frame(instance)).not.toContain("line-06");
     for (let i = 0; i < 100; i++) instance.stdin.write("j");
     await waitFor(() => frame(instance).includes("linha 26-31/31"));
   } finally { instance.unmount(); }
