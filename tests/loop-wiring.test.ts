@@ -237,7 +237,9 @@ describe("wiring no runSession (#135 fatia B)", () => {
     const err = await runSession(s.opts, "loop").catch((e) => e as Error);
     expect(err).toBeInstanceOf(MaxStepsError);
     expect(existsSync(checkpointPath(s.cwd, "r1", "default"))).toBe(true);
-    expect(s.audit.readAll().filter((e) => e.tipo === "loop.checkpoint")).toHaveLength(1);
+    const events = s.audit.readAll().filter((e) => e.tipo === "loop.checkpoint");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toMatchObject({ step: 3, trigger: "turns" });
     const state = s.ledger.lastState("r1");
     expect(state?.state).toBe("interrupted");
     expect(state?.reason).toBe("MaxStepsError"); // razão estável do interruptReason
