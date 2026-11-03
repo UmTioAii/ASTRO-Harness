@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { AgentSession } from "../src/chat/agent-session";
 import { ProfileManager } from "../src/provider/profile-manager";
 import { NoProviderError, resolveEffectiveConfig } from "../src/provider/profiles";
-import { withProviderSetup } from "../src/tui/run";
+import { bootstrapTui, withProviderSetup } from "../src/tui/run";
+import type { ShellRunner } from "../src/tui/shell";
 
 test("config vazia sem env lança NoProviderError", () => {
   expect(() => resolveEffectiveConfig({
@@ -95,4 +96,70 @@ test("perfil adicionado e ativado permite abrir a sessão", () => {
   } finally {
     session.close();
   }
+});
+
+const fakeShell: ShellRunner = {
+  enabled: false,
+  run: async () => ({ output: "", isError: false }),
+};
+
+test("bootstrap só cria o shell depois de o provider existir (#tui)", async () => {
+  let creates = 0;
+  let setups = 0;
+  let shells = 0;
+  const boot = await bootstrapTui({
+    createSession: () => {
+      creates++;
+      if (creates === 1) throw new NoProviderError("nenhum provider");
+      return "session";
+    },
+    setup: async () => {
+      setups++;
+      expect(shells).toBe(0); // shell ainda não foi criado
+      return true;
+    },
+    createShell: () => {
+      shells++;
+      return fakeShell;
+    },
+    allowMissingConfig: true,
+  });
+  expect(boot).toEqual({ session: "session", shell: fakeShell });
+  expect(setups).toBe(1);
+  expect(shells).toBe(1);
+});
+
+test("setup cancelado não cria o shell (#tui)", async () => {
+  let shells = 0;
+  const boot = await bootstrapTui({
+    createSession: () => { throw new NoProviderError("nenhum provider"); },
+    setup: async () => false,
+    createShell: () => {
+      shells++;
+      return fakeShell;
+    },
+    allowMissingConfig: true,
+  });
+  expect(boot).toBeUndefined();
+  expect(shells).toBe(0);
+});
+
+test("com sessão pronta o shell é criado uma vez sem setup (#tui)", async () => {
+  let setups = 0;
+  let shells = 0;
+  const boot = await bootstrapTui({
+    createSession: () => "session",
+    setup: async () => {
+      setups++;
+      return true;
+    },
+    createShell: () => {
+      shells++;
+      return fakeShell;
+    },
+    allowMissingConfig: true,
+  });
+  expect(boot).toEqual({ session: "session", shell: fakeShell });
+  expect(setups).toBe(0);
+  expect(shells).toBe(1);
 });
