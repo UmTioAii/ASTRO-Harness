@@ -7,6 +7,7 @@ import type { ProfileModel } from "../provider/profiles";
 import type { HealthCheck } from "../health";
 import type { CodexLoginStart } from "../provider/codex-login";
 import { redactSecrets } from "../sanitize-external";
+import { looksLikeSecret } from "../secrets";
 import { formatProviderCheck } from "./health";
 import type { ThemeColors } from "./theme";
 
@@ -23,6 +24,8 @@ export interface ProviderScreenProps {
   onTest?: (id: string) => Promise<HealthCheck>;
   /** Login device flow do Codex; ausente desabilita `l`. */
   onLogin?: (id: string, signal?: AbortSignal) => Promise<CodexLoginStart>;
+  /** Salva uma chave digitada no cofre e devolve `vault:<id>`; ausente = cofre indisponível. */
+  onSaveSecret?: (providerId: string, secret: string) => string;
 }
 
 type Step = "catalog" | "name" | "baseUrl" | "models" | "credential" | "confirm";
@@ -30,6 +33,7 @@ type Step = "catalog" | "name" | "baseUrl" | "models" | "credential" | "confirm"
 const STEPS: Step[] = ["catalog", "name", "baseUrl", "models", "credential", "confirm"];
 const CATALOG = ["custom", ...PROVIDER_CATALOG.map((entry) => entry.key)];
 const DEFAULT_CONTEXT = 128_000;
+const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
 function messageOf(error: unknown): string {
   return redactSecrets(error instanceof Error ? error.message : String(error));
@@ -78,7 +82,7 @@ export function listActions(opts: {
 }
 
 export function ProviderScreen({
-  manager, colors, currentModel, initial, onClose, onActivate, onChanged, onTest, onLogin,
+  manager, colors, currentModel, initial, onClose, onActivate, onChanged, onTest, onLogin, onSaveSecret,
 }: ProviderScreenProps): ReactElement {
   const initialList = manager.list();
   const initialTarget = initial?.target === undefined
@@ -110,6 +114,9 @@ export function ProviderScreen({
   const [baseUrl, setBaseUrl] = useState(initialEdit?.baseUrl ?? "");
   const [models, setModels] = useState(initialEdit?.models.map((model) => model.id).join(";") ?? "");
   const [credential, setCredential] = useState(initialEdit?.credentialRef ?? "");
+  // Chave digitada fica só na ref até o save; nunca no estado/render (I-03).
+  const secretRef = useRef<string | undefined>(undefined);
+  const [credentialIsSecret, setCredentialIsSecret] = useState(false);
   const [message, setMessage] = useState<string | undefined>(() => {
     if (initial?.target === undefined) return undefined;
     if (initialTarget === undefined) return `provider "${initial.target}" não encontrado`;
@@ -149,6 +156,8 @@ export function ProviderScreen({
     setBaseUrl("");
     setModels("");
     setCredential("");
+    secretRef.current = undefined;
+    setCredentialIsSecret(false);
     setMessage(undefined);
     setView("form");
   };
@@ -166,6 +175,8 @@ export function ProviderScreen({
     setBaseUrl(profile.baseUrl ?? "");
     setModels(profile.models.map((model) => model.id).join(";"));
     setCredential(profile.credentialRef ?? "");
+    secretRef.current = undefined;
+    setCredentialIsSecret(false);
     setMessage(undefined);
     setView("form");
   };
@@ -177,12 +188,13 @@ export function ProviderScreen({
       setMessage("informe ao menos um modelo");
       return;
     }
+    const secret = secretRef.current;
     const draft: ProfileDraft = {
       name,
       kind: editing?.kind ?? entry?.kind ?? "openai-compat",
       models: parsedModels,
       ...(baseUrl === "" ? {} : { baseUrl }),
-      ...(credential === "" ? {} : { credentialRef: credential }),
+      ...(credential === "" || credentialIsSecret ? {} : { credentialRef: credential }),
       ...(editing?.credentialsPath === undefined && entry?.credentialsPath === undefined
         ? {}
         : { credentialsPath: editing?.credentialsPath ?? entry?.credentialsPath }),
@@ -192,7 +204,30 @@ export function ProviderScreen({
       ...(editing?.headers === undefined ? {} : { headers: editing.headers }),
     };
     try {
-      const saved = editing === undefined ? manager.add(draft) : manager.edit(editing.id, draft);
+      let saved = editing === undefined ? manager.add(draft) : manager.edit(editing.id, draft);
+      if (secret !== undefined) {
+        if (onSaveSecret === undefined) {
+          if (editing === undefined) {
+            try { manager.remove(saved.id); } catch { /* preserva a mensagem */ }
+          }
+          setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
+          return;
+        }
+        try {
+          const ref = onSaveSecret(saved.id, secret);
+          saved = manager.edit(saved.id, { ...draft, credentialRef: ref });
+          secretRef.current = undefined;
+          setCredentialIsSecret(false);
+          setCredential(ref);
+        } catch (error) {
+          // Sem credencial o perfil novo não serve; desfaz a criação.
+          if (editing === undefined) {
+            try { manager.remove(saved.id); } catch { /* preserva o erro */ }
+          }
+          setMessage(messageOf(error));
+          return;
+        }
+      }
       let activationError: string | undefined;
       if (editing === undefined) {
         try {
@@ -456,9 +491,28 @@ export function ProviderScreen({
         setMessage("base url é obrigatória");
         return;
       }
-      if (step === "credential" && credential.trim() !== "" && kind !== "codex-oauth") {
-        const valid = /^[A-Z_][A-Z0-9_]*$/.test(credential.trim());
-        if (!valid) { setMessage("use o nome da variável, ex.: OPENAI_API_KEY"); return; }
+      if (step === "credential" && kind !== "codex-oauth") {
+        const value = credential.trim();
+        if (value === "") {
+          secretRef.current = undefined;
+          setCredentialIsSecret(false);
+          setCredential("");
+        } else if (ENV_NAME.test(value)) {
+          secretRef.current = undefined;
+          setCredentialIsSecret(false);
+          setCredential(value);
+        } else if (!looksLikeSecret(value)) {
+          setMessage("use o nome da variável (ex.: OPENAI_API_KEY) ou cole a chave completa");
+          return;
+        } else if (onSaveSecret === undefined) {
+          setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
+          return;
+        } else {
+          // Chave digitada: sai do estado/render e vai para a ref até o save.
+          secretRef.current = value;
+          setCredentialIsSecret(true);
+          setCredential("");
+        }
       }
       setMessage(undefined);
       setStep(STEPS[index + 1] ?? "confirm");
@@ -537,7 +591,7 @@ export function ProviderScreen({
       name: "Nome",
       baseUrl: "Base URL",
       models: "Modelos (separe com ;)",
-      credential: "Variável da chave (vazio = sem chave)",
+      credential: "Variável da chave ou chave colada (vazio = sem chave)",
       confirm: "Confirmar",
     };
     const value = step === "name" ? name
@@ -561,7 +615,7 @@ export function ProviderScreen({
                   <Text>nome:    {name}</Text>
                   <Text>baseUrl: {baseUrl || "-"}</Text>
                   <Text>modelos: {models}</Text>
-                  <Text>chave:   {credential || "-"}</Text>
+                  <Text>chave:   {credentialIsSecret ? "vault:<novo>" : credential || "-"}</Text>
                   <Text dimColor>enter salvar · esc voltar</Text>
                 </Box>
               )

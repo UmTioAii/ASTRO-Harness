@@ -337,6 +337,7 @@ test("entrada que não é env nem chave reconhecível fica no passo (#350)", asy
   try {
     await fillCredentialsStep(instance);
     instance.stdin.write("minha-chave");
+    await waitFor(() => frame(instance).includes("***********")); // 11 chars
     instance.stdin.write("\r");
     await waitFor(() => frame(instance).includes("cole a chave completa"));
     expect(frame(instance)).toContain("Variável da chave");
