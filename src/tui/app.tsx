@@ -48,6 +48,8 @@ export interface TuiAppProps {
   historyLimit?: number;
   /** Salva uma chave digitada no cofre (#350); ausente desabilita o caminho de segredo. */
   saveSecret?: (providerId: string, secret: string) => string;
+  /** Desfaz uma credencial criada quando o perfil não pôde ser salvo (#350). */
+  discardSecret?: (ref: string) => void;
 }
 
 interface Status {
@@ -108,7 +110,7 @@ export function activateProvider(
   persistLastModel(cwd, session.snapshot().model, onWarning);
 }
 
-export function TuiApp({ session, cwd, branch, store, approvals, shell, manager, onExit, toastTtlMs = TOAST_TTL_MS, streamThrottleMs = STREAM_THROTTLE_MS, historyLimit = HISTORY_LIMIT, saveSecret }: TuiAppProps): ReactElement {
+export function TuiApp({ session, cwd, branch, store, approvals, shell, manager, onExit, toastTtlMs = TOAST_TTL_MS, streamThrottleMs = STREAM_THROTTLE_MS, historyLimit = HISTORY_LIMIT, saveSecret, discardSecret }: TuiAppProps): ReactElement {
   const [entries, setEntries] = useState<Entry[]>([{ kind: "info", text: WELCOME }]);
   const [question, setQuestion] = useState<ApprovalQuestion | undefined>(() => approvals?.current());
   const [files, setFiles] = useState<string[]>([]);
@@ -671,6 +673,7 @@ export function TuiApp({ session, cwd, branch, store, approvals, shell, manager,
         } })}
         {...(session.loginCodex === undefined ? {} : { onLogin: (id: string, signal?: AbortSignal) => session.loginCodex!(id, signal) })}
         {...(saveSecret === undefined ? {} : { onSaveSecret: saveSecret })}
+        {...(discardSecret === undefined ? {} : { onDiscardSecret: discardSecret })}
       />
     );
   }

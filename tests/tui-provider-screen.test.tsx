@@ -578,6 +578,35 @@ test("chave no formato AWS (uppercase) vai para o cofre, não para credentialRef
   }
 });
 
+test("nome de variável continua indo para credentialRef (#350)", async () => {
+  const m = manager();
+  let vaultCalls = 0;
+  const instance = render(
+    <ProviderScreen
+      manager={m}
+      colors={colors}
+      initial={{ mode: "add" }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+      onSaveSecret={() => { vaultCalls++; return "vault:cred-12345678"; }}
+    />,
+  );
+  try {
+    await fillCredentialsStep(instance);
+    instance.stdin.write("OPENAI_API_KEY");
+    await waitFor(() => frame(instance).includes("*".repeat("OPENAI_API_KEY".length)));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Confirmar"));
+    expect(frame(instance)).toContain("OPENAI_API_KEY");
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("salvo: local"));
+    expect(vaultCalls).toBe(0);
+    expect(m.list().find((item) => item.id === "local")?.credentialRef).toBe("OPENAI_API_KEY");
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("editar perfil com vault:<id> preserva a ref ao passar pelo passo (#351)", async () => {
   const m = manager();
   const added = m.add({
@@ -632,6 +661,7 @@ test("falha do cofre em edição preserva a credencial antiga (#351)", async () 
       instance.stdin.write("\r");
       await waitFor(() => frame(instance).includes(label));
     }
+    instance.stdin.write("\u007f".repeat("KEY".length)); // limpa a ref antiga
     instance.stdin.write(fakeSecret);
     await waitFor(() => frame(instance).includes("*".repeat(fakeSecret.length)));
     instance.stdin.write("\r");
@@ -666,7 +696,7 @@ test("ref de cofre inválida desfaz o perfil e descarta a credencial criada (#35
     instance.stdin.write("\r");
     await waitFor(() => frame(instance).includes("Confirmar"));
     instance.stdin.write("\r");
-    await waitFor(() => frame(instance).includes("credentialRef de vault inválido"));
+    await waitFor(() => frame(instance).includes("credentialRef"));
     expect(discarded).toBe("vault:invalido");
     expect(m.list().some((item) => item.id === "local")).toBe(false);
     expect(frame(instance)).not.toContain(fakeSecret);

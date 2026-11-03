@@ -7,7 +7,7 @@ import type { ProfileModel } from "../provider/profiles";
 import type { HealthCheck } from "../health";
 import type { CodexLoginStart } from "../provider/codex-login";
 import { redactSecrets } from "../sanitize-external";
-import { looksLikeSecret } from "../secrets";
+import { isEnvName, isVaultCredentialRef, looksLikeSecret } from "../secrets";
 import { formatProviderCheck } from "./health";
 import type { ThemeColors } from "./theme";
 
@@ -26,6 +26,8 @@ export interface ProviderScreenProps {
   onLogin?: (id: string, signal?: AbortSignal) => Promise<CodexLoginStart>;
   /** Salva uma chave digitada no cofre e devolve `vault:<id>`; ausente = cofre indisponível. */
   onSaveSecret?: (providerId: string, secret: string) => string;
+  /** Desfaz uma credencial recém-criada quando o perfil não pôde ser gravado. */
+  onDiscardSecret?: (ref: string) => void;
 }
 
 type Step = "catalog" | "name" | "baseUrl" | "models" | "credential" | "confirm";
@@ -33,7 +35,6 @@ type Step = "catalog" | "name" | "baseUrl" | "models" | "credential" | "confirm"
 const STEPS: Step[] = ["catalog", "name", "baseUrl", "models", "credential", "confirm"];
 const CATALOG = ["custom", ...PROVIDER_CATALOG.map((entry) => entry.key)];
 const DEFAULT_CONTEXT = 128_000;
-const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
 function messageOf(error: unknown): string {
   return redactSecrets(error instanceof Error ? error.message : String(error));
@@ -82,7 +83,7 @@ export function listActions(opts: {
 }
 
 export function ProviderScreen({
-  manager, colors, currentModel, initial, onClose, onActivate, onChanged, onTest, onLogin, onSaveSecret,
+  manager, colors, currentModel, initial, onClose, onActivate, onChanged, onTest, onLogin, onSaveSecret, onDiscardSecret,
 }: ProviderScreenProps): ReactElement {
   const initialList = manager.list();
   const initialTarget = initial?.target === undefined
@@ -189,7 +190,7 @@ export function ProviderScreen({
       return;
     }
     const secret = secretRef.current;
-    const draft: ProfileDraft = {
+    const baseDraft: ProfileDraft = {
       name,
       kind: editing?.kind ?? entry?.kind ?? "openai-compat",
       models: parsedModels,
@@ -203,52 +204,60 @@ export function ProviderScreen({
         : { quotaDomain: editing?.quotaDomain ?? entry?.quotaDomain ?? entry?.key }),
       ...(editing?.headers === undefined ? {} : { headers: editing.headers }),
     };
-    try {
-      let saved = editing === undefined ? manager.add(draft) : manager.edit(editing.id, draft);
-      if (secret !== undefined) {
-        if (onSaveSecret === undefined) {
-          if (editing === undefined) {
-            try { manager.remove(saved.id); } catch { /* preserva a mensagem */ }
-          }
-          setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
-          return;
-        }
-        try {
-          const ref = onSaveSecret(saved.id, secret);
-          saved = manager.edit(saved.id, { ...draft, credentialRef: ref });
-          secretRef.current = undefined;
-          setCredentialIsSecret(false);
-          setCredential(ref);
-        } catch (error) {
-          // Sem credencial o perfil novo não serve; desfaz a criação.
-          if (editing === undefined) {
-            try { manager.remove(saved.id); } catch { /* preserva o erro */ }
-          }
-          setMessage(messageOf(error));
-          return;
-        }
-      }
-      let activationError: string | undefined;
-      if (editing === undefined) {
-        try {
-          manager.use(saved.id);
-        } catch (error) {
-          activationError = messageOf(error);
-        }
-      }
-      onChanged?.();
-      if (editing === undefined && activationError === undefined) {
-        try {
-          onActivate(saved.id);
-        } catch (error) {
-          activationError = messageOf(error);
-        }
-      }
-      setView("list");
-      setMessage(activationError === undefined ? `salvo: ${saved.id}` : `salvo: ${saved.id} (não ativado: ${activationError})`);
-    } catch (error) {
-      setMessage(messageOf(error));
+    if (secret !== undefined && onSaveSecret === undefined) {
+      setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
+      return;
     }
+    let saved: ProfileView;
+    let addedId: string | undefined;
+    let createdRef: string | undefined;
+    try {
+      if (secret !== undefined && editing !== undefined) {
+        // Edição: cria no cofre ANTES de tocar no perfil; falha preserva a ref antiga.
+        createdRef = onSaveSecret!(editing.id, secret);
+        saved = manager.edit(editing.id, { ...baseDraft, credentialRef: createdRef });
+      } else if (editing === undefined) {
+        saved = manager.add(baseDraft);
+        addedId = saved.id;
+        if (secret !== undefined) {
+          createdRef = onSaveSecret!(saved.id, secret);
+          saved = manager.edit(saved.id, { ...baseDraft, credentialRef: createdRef });
+        }
+      } else {
+        saved = manager.edit(editing.id, baseDraft);
+      }
+    } catch (error) {
+      // Não deixa perfil novo sem a chave pretendida nem credencial órfã.
+      if (createdRef !== undefined) onDiscardSecret?.(createdRef);
+      if (addedId !== undefined) {
+        try { manager.remove(addedId); } catch { /* preserva o erro original */ }
+      }
+      setMessage(messageOf(error));
+      return;
+    }
+    if (createdRef !== undefined) {
+      secretRef.current = undefined;
+      setCredentialIsSecret(false);
+      setCredential(createdRef);
+    }
+    let activationError: string | undefined;
+    if (editing === undefined) {
+      try {
+        manager.use(saved.id);
+      } catch (error) {
+        activationError = messageOf(error);
+      }
+    }
+    onChanged?.();
+    if (editing === undefined && activationError === undefined) {
+      try {
+        onActivate(saved.id);
+      } catch (error) {
+        activationError = messageOf(error);
+      }
+    }
+    setView("list");
+    setMessage(activationError === undefined ? `salvo: ${saved.id}` : `salvo: ${saved.id} (não ativado: ${activationError})`);
   };
 
   const startLogin = (profile: ProfileView): void => {
@@ -497,21 +506,22 @@ export function ProviderScreen({
           secretRef.current = undefined;
           setCredentialIsSecret(false);
           setCredential("");
-        } else if (ENV_NAME.test(value)) {
-          secretRef.current = undefined;
-          setCredentialIsSecret(false);
-          setCredential(value);
-        } else if (!looksLikeSecret(value)) {
-          setMessage("use o nome da variável (ex.: OPENAI_API_KEY) ou cole a chave completa");
-          return;
-        } else if (onSaveSecret === undefined) {
-          setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
-          return;
-        } else {
-          // Chave digitada: sai do estado/render e vai para a ref até o save.
+        } else if (looksLikeSecret(value)) {
+          // Chave tem prioridade sobre "nome de env" (AKIA... também casa ENV_NAME).
+          if (onSaveSecret === undefined) {
+            setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
+            return;
+          }
           secretRef.current = value;
           setCredentialIsSecret(true);
           setCredential("");
+        } else if (isEnvName(value) || isVaultCredentialRef(value)) {
+          secretRef.current = undefined;
+          setCredentialIsSecret(false);
+          setCredential(value);
+        } else {
+          setMessage("use o nome da variável (ex.: OPENAI_API_KEY) ou cole a chave completa");
+          return;
         }
       }
       setMessage(undefined);
