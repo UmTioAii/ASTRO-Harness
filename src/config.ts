@@ -769,7 +769,6 @@ function validatePaths(value: unknown): PathsConfig {
   };
 }
 
-/** Valida um agent nomeado (em `agents`). Usa defaults do agent principal se omitido. */
 /** Perfil de permissão do agent nomeado (#58); vocabulário fechado. */
 function expectAgentPermission(value: unknown, field: string): AgentPermission {
   if (!isAgentPermission(value)) {
@@ -778,6 +777,7 @@ function expectAgentPermission(value: unknown, field: string): AgentPermission {
   return value;
 }
 
+/** Valida um agent nomeado (em `agents`). Usa defaults do agent principal se omitido. */
 function validateNamedAgent(
   name: string,
   value: unknown,

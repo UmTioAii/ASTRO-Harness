@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -7,6 +7,7 @@ import { Ledger } from "../src/ledger";
 import { validateConfig } from "../src/config";
 import {
   AGENT_PERMISSIONS,
+  mostRestrictive,
   permissionAllows,
   requiredPermission,
   type AgentPermission,
@@ -45,6 +46,19 @@ describe("requiredPermission/permissionAllows (#58)", () => {
     expect(requiredPermission(fakeTool("handoff", "read_common", "handoff").manifest)).toBe("full");
     expect(requiredPermission(fakeTool("spawn_agent", "read_common", "spawn_agent").manifest)).toBe("execute");
     expect(requiredPermission(fakeTool("swap", "identity_swap", "swap").manifest)).toBe("full");
+    // sideEffects eleva mesmo com classe read_common (MCP http/sse)
+    expect(requiredPermission({ ...fakeTool("mcp_http", "read_common", "read").manifest, sideEffects: "network" })).toBe("execute");
+    expect(requiredPermission({ ...fakeTool("mcp_write", "read_common", "read").manifest, sideEffects: "filesystem" })).toBe("write");
+    // permission declarada eleva mesmo com classe read_common (plugin)
+    expect(requiredPermission(fakeTool("plugin_exec", "read_common", "execute").manifest)).toBe("execute");
+    // classe desconhecida falha fechada
+    expect(requiredPermission({ ...fakeTool("x", "read_common", "read").manifest, class: "mystery" as ToolClass })).toBe("full");
+  });
+
+  test("mostRestrictive compõe o perfil com a base", () => {
+    expect(mostRestrictive("full", "read-only")).toBe("read-only");
+    expect(mostRestrictive("write", "execute")).toBe("write");
+    expect(mostRestrictive("full", "full")).toBe("full");
   });
 
   test("matriz de permissões é monotônica", () => {
@@ -134,7 +148,10 @@ describe("runMultiAgentSession aplica a permissão do agent (#58)", () => {
     content: "", toolCalls: [], usage: { inputTokens: 10, outputTokens: 5 }, ...p,
   });
 
-  async function run(permission: AgentPermission | undefined): Promise<{ writes: number; shells: number; audit: Auditor; final: string }> {
+  async function run(
+    permission: AgentPermission | undefined,
+    basePermission: AgentPermission = "full",
+  ): Promise<{ writes: number; shells: number; audit: Auditor; final: string }> {
     const cwd = mkdtempSync(join(tmpdir(), "astro-agent-perm-session-"));
     const audit = new Auditor(join(cwd, "audit.jsonl"));
     const ledger = new Ledger(join(cwd, "ledger.jsonl"));
@@ -178,7 +195,7 @@ describe("runMultiAgentSession aplica a permissão do agent (#58)", () => {
       },
       baseModel: model,
       baseExecutor: new ToolExecutor({
-        approveTool: () => true, tools, allow: tools.map((tool) => tool.manifest.name), audit,
+        approveTool: () => true, tools, allow: tools.map((tool) => tool.manifest.name), audit, permission: basePermission,
       }),
       ledger, audit, baseMaxSteps: 5, entryAgent: "plan",
     };
@@ -193,7 +210,12 @@ describe("runMultiAgentSession aplica a permissão do agent (#58)", () => {
     expect(r.shells).toBe(0);
     const denied = r.audit.readAll().filter((event) => event.tipo === "tool.denied");
     expect(denied.map((event) => (event.payload as { name?: string }).name)).toEqual(["write_file", "run_command"]);
-    expect(existsSync(join(tmpdir(), "nao-deve-existir"))).toBe(false);
+  });
+
+  test("base executor mais restritivo vence o perfil do agent", async () => {
+    const r = await run("full", "read-only");
+    expect(r.writes).toBe(0);
+    expect(r.shells).toBe(0);
   });
 
   test("sem permission (default full) as tools executam", async () => {
