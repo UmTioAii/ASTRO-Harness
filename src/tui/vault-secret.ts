@@ -11,29 +11,34 @@ export interface SecretHandlers {
 }
 
 export function createSecretHandlers(vault: Vault): SecretHandlers {
-  const previous = new Map<string, string | undefined>();
+  // Pilha por provider: desfazer saves em sequência devolve a ativa original,
+  // não só a última criada (dois saves antes do rollback).
+  const previous = new Map<string, Array<string | undefined>>();
   return {
     saveSecret(providerId, secret) {
       const active = vault.list().find((item) => item.providerId === providerId && item.active)?.id;
-      previous.set(providerId, active);
+      const stack = previous.get(providerId) ?? [];
+      stack.push(active);
+      previous.set(providerId, stack);
       const created = vault.create({ providerId, label: "tui", secret });
       return `${VAULT_REF_PREFIX}${created.id}`;
     },
     discardSecret(ref) {
       if (!isVaultCredentialRef(ref)) return;
       const id = ref.slice(VAULT_REF_PREFIX.length);
-      const entry = vault.read(id);
       try {
+        // list() traz o providerId sem decifrar o segredo (I-03).
+        const entry = vault.list().find((item) => item.id === id);
+        if (entry === undefined) return;
+        const stack = previous.get(entry.providerId);
+        const active = stack?.at(-1);
         vault.remove(id);
-        if (entry !== undefined) {
-          // Vault.create desativou as demais do provider; devolve a ativa anterior.
-          const active = previous.get(entry.providerId);
-          if (active !== undefined) vault.activate(active);
-        }
+        // Só desempilha depois de restaurar: falha em activate mantém o estado.
+        if (active !== undefined) vault.activate(active);
+        stack?.pop();
       } catch {
         // preserva o erro original da gravação do perfil
       }
-      if (entry !== undefined) previous.delete(entry.providerId);
     },
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSecretHandlers } from "../src/tui/vault-secret";
@@ -24,15 +24,25 @@ describe("createSecretHandlers rollback (#352)", () => {
     expect(vault.list().map((item) => item.id)).toEqual([previous.id]);
   });
 
-  test("dois saves seguidos: descartar o último restaura o penúltimo", () => {
+  test("dois saves seguidos: descartar os dois restaura a credencial original", () => {
     const vault = makeVault();
+    const original = vault.create({ providerId: "p", label: "original", secret: "o" });
     const handlers = createSecretHandlers(vault);
     const first = handlers.saveSecret("p", "um");
     const second = handlers.saveSecret("p", "dois");
     handlers.discardSecret(second);
     expect(vault.resolve("p")?.id).toBe(first.slice("vault:".length));
     handlers.discardSecret(first);
-    expect(vault.resolve("p")).toBeUndefined();
+    expect(vault.resolve("p")?.id).toBe(original.id);
+    expect(vault.list().map((item) => item.id)).toEqual([original.id]);
+  });
+
+  test("cofre corrompido no rollback não lança", () => {
+    const vault = makeVault();
+    const handlers = createSecretHandlers(vault);
+    const ref = handlers.saveSecret("p", "x");
+    writeFileSync(vault.path, "{ inválido");
+    expect(() => handlers.discardSecret(ref)).not.toThrow();
   });
 
   test("ref inválida ou desconhecida é no-op", () => {
