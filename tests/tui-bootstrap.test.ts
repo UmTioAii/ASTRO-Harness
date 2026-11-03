@@ -6,7 +6,7 @@ import { AgentSession } from "../src/chat/agent-session";
 import { ProfileManager } from "../src/provider/profile-manager";
 import { NoProviderError, resolveEffectiveConfig } from "../src/provider/profiles";
 import { bootstrapTui, withProviderSetup } from "../src/tui/run";
-import type { ShellRunner } from "../src/tui/shell";
+import { createShellRunner, type ShellRunner } from "../src/tui/shell";
 
 test("config vazia sem env lança NoProviderError", () => {
   expect(() => resolveEffectiveConfig({
@@ -142,6 +142,49 @@ test("setup cancelado não cria o shell (#tui)", async () => {
   });
   expect(boot).toBeUndefined();
   expect(shells).toBe(0);
+});
+
+test("primeiro run: setup cria o perfil e só então o shell (#348)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "astro-first-run-boot-"));
+  const env = { ASTRO_HOME: join(cwd, "home"), LOCAL_KEY: "x" };
+  const manager = new ProfileManager({ project: undefined, env });
+  let shells = 0;
+  const boot = await bootstrapTui({
+    createSession: () => new AgentSession({
+      configPath: join(cwd, "astro.config.json"),
+      cwd,
+      env,
+      allowMissingConfig: true,
+    }),
+    setup: async () => {
+      expect(shells).toBe(0);
+      manager.add({
+        name: "local",
+        kind: "openai-compat",
+        baseUrl: "http://127.0.0.1:1/v1",
+        credentialRef: "LOCAL_KEY",
+        models: [{ id: "m1", tags: ["writing-code"], context: 8192 }],
+      });
+      manager.use("local");
+      return true;
+    },
+    createShell: () => {
+      shells++;
+      return createShellRunner({
+        configPath: join(cwd, "astro.config.json"),
+        cwd,
+        env,
+        allowMissingConfig: true,
+      });
+    },
+    allowMissingConfig: true,
+  });
+  try {
+    expect(boot?.session.model).toBe("local/m1");
+    expect(shells).toBe(1);
+  } finally {
+    boot?.session.close();
+  }
 });
 
 test("com sessão pronta o shell é criado uma vez sem setup (#tui)", async () => {
