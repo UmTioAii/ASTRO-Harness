@@ -6,7 +6,7 @@ import { Auditor } from "../src/audit";
 import { createTaskTool, type TaskDelegator } from "../src/tools/task";
 import { ToolExecutor } from "../src/tools/executor";
 
-const SENTINEL = ["sentinel", "-", "xyz"].join("");
+const SENTINEL = ["s", "k", "-"].join("") + "live-abcdef12345";
 const PROMPT = "prompt privado do usuario 123";
 
 function setup(delegate?: TaskDelegator) {
