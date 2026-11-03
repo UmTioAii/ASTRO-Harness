@@ -32,3 +32,11 @@ test("providers vault-import é dry-run por default e não vaza o segredo (#311)
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as { providers: { p: { credentialRef: string } } };
   expect(raw.providers.p.credentialRef).toBe("KEY");
 });
+
+test("--apply fora de vault-import é recusado (#311)", async () => {
+  const entry = join(import.meta.dir, "..", "src", "cli.ts");
+  const proc = Bun.spawn([process.execPath, entry, "providers", "list", "--apply"], { stdout: "pipe", stderr: "pipe" });
+  const err = await new Response(proc.stderr).text();
+  expect(await proc.exited).toBe(1);
+  expect(err).toContain("só valem para providers vault-import");
+});

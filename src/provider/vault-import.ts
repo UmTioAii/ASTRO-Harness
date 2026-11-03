@@ -4,7 +4,7 @@
  * profile/config. Dry-run por default; o segredo nunca é impresso (I-03).
  */
 import { ConfigError, updateConfigProviderCredentialRef } from "../config";
-import { isVaultRef } from "../secrets";
+import { isEnvName, isVaultCredentialRef, isVaultRef } from "../secrets";
 import { defaultScheme, Vault, vaultPath } from "../vault";
 import { loadEffectiveConfig, loadProfileStore, profilesPath, providerIdentityFor, saveProfileStore } from "./profiles";
 
@@ -50,7 +50,11 @@ function rewriteProfileRef(path: string, id: string, ref: string): void {
  * nunca o valor; `apply` criar a credencial e trocar a referência.
  */
 export function importVaultCredential(input: VaultImportInput): VaultImportResult {
-  const effective = loadEffectiveConfig(input.configPath, { env: input.env, allowMissing: true });
+  const effective = loadEffectiveConfig(input.configPath, {
+    env: input.env,
+    allowMissing: true,
+    ...(input.storePath === undefined ? {} : { storePath: input.storePath }),
+  });
   const providerConfig = effective.config.providers[input.provider];
   if (providerConfig === undefined) {
     throw new ConfigError(`provider "${input.provider}" não configurado`);
@@ -65,7 +69,15 @@ export function importVaultCredential(input: VaultImportInput): VaultImportResul
     throw new ConfigError(`provider "${input.provider}" não tem credentialRef para migrar`);
   }
   if (isVaultRef(ref)) {
-    throw new ConfigError(`provider "${input.provider}" já usa o cofre (${ref})`);
+    // Só ecoa o ref quando ele é um id de cofre bem formado; ref malformada
+    // pode ser um segredo colado e nunca vai para a mensagem (I-03).
+    if (isVaultCredentialRef(ref)) {
+      throw new ConfigError(`provider "${input.provider}" já usa o cofre (${ref})`);
+    }
+    throw new ConfigError(`provider "${input.provider}" tem referência de vault inválida`);
+  }
+  if (!isEnvName(ref)) {
+    throw new ConfigError(`credentialRef do provider "${input.provider}" não é um nome de variável de ambiente`);
   }
   const secret = input.env[ref];
   if (secret === undefined || secret === "") {
@@ -79,18 +91,21 @@ export function importVaultCredential(input: VaultImportInput): VaultImportResul
   }
   const source = providerSource === "project" ? "project" : "global";
   const scheme = defaultScheme(input.platform ?? process.platform);
-  if (scheme === "plain" && input.allowPlain !== true) {
-    throw new ConfigError('cofre em modo "plain" fora do Windows; use --allow-plain para aceitar o aviso (arquivo 0600)');
-  }
   const warning = scheme === "plain" ? PLAIN_WARNING : undefined;
+  // Dry-run não grava: planeja também em plain e avisa que o apply vai exigir
+  // a confirmação explícita (--allow-plain).
   if (input.apply !== true) {
     return {
       provider: input.provider, envName: ref, source, status: "planned",
       ...(warning === undefined ? {} : { warning }),
     };
   }
+  if (scheme === "plain" && input.allowPlain !== true) {
+    throw new ConfigError('cofre em modo "plain" fora do Windows; use --allow-plain para aceitar o aviso (arquivo 0600)');
+  }
 
   const vault = input.vault ?? new Vault(vaultPath(input.env));
+  const previousActive = vault.list().find((item) => item.providerId === input.provider && item.active)?.id;
   const created = vault.create({ providerId: input.provider, label: ref, secret });
   const vaultRef = `vault:${created.id}`;
   try {
@@ -100,7 +115,13 @@ export function importVaultCredential(input: VaultImportInput): VaultImportResul
       rewriteProfileRef(input.storePath ?? profilesPath(input.env), input.provider, vaultRef);
     }
   } catch (error) {
-    vault.remove(created.id); // rollback: não deixar credencial órfã se a escrita falhar
+    try {
+      vault.remove(created.id);
+      // create desativou as demais do provider; restaura a ativa anterior.
+      if (previousActive !== undefined) vault.activate(previousActive);
+    } catch {
+      // preserva o erro original da escrita
+    }
     throw error;
   }
   return {

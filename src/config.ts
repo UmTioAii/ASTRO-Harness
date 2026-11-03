@@ -1368,6 +1368,10 @@ export function updateConfigProviderCredentialRef(path: string, provider: string
     if (!isPlainObject(providers) || !isPlainObject(providers[provider])) {
       throw new ConfigError(`config inválida: provider "${provider}" não encontrado`);
     }
-    providers[provider].credentialRef = credentialRef;
+    const entry = providers[provider];
+    if (entry.kind !== "openai-compat") {
+      throw new ConfigError(`config inválida: provider "${provider}" não é openai-compat`);
+    }
+    entry.credentialRef = credentialRef;
   });
 }

@@ -59,7 +59,9 @@ describe("vault-import dry-run (#311 B.3)", () => {
 describe("vault-import apply (#311 B.3)", () => {
   test("migra provider do projeto e grava só a referência", () => {
     const s = setup();
-    const result = importVaultCredential({ provider: "p", env: s.env, configPath: s.configPath, vault: s.vault, apply: true });
+    const result = importVaultCredential({
+      provider: "p", env: s.env, configPath: s.configPath, vault: s.vault, apply: true, platform: "win32",
+    });
     expect(result.status).toBe("imported");
     const ref = result.vaultRef!;
     expect(ref).toMatch(/^vault:cred-/);
@@ -68,13 +70,15 @@ describe("vault-import apply (#311 B.3)", () => {
     expect(readFileSync(s.configPath, "utf8")).not.toContain(SENTINEL);
     expect(s.vault.read(ref.slice("vault:".length))?.value).toBe(SENTINEL);
     expect(formatVaultImport(result)).toContain(ref);
+    expect(JSON.stringify(result)).not.toContain(SENTINEL);
+    expect(formatVaultImport(result)).not.toContain(SENTINEL);
   });
 
   test("migra perfil global e mantém a config do projeto intacta", () => {
     const s = setup({ store: true });
     const configBefore = readFileSync(s.configPath, "utf8");
     const result = importVaultCredential({
-      provider: "g", env: s.env, configPath: s.configPath, storePath: s.storePath, vault: s.vault, apply: true,
+      provider: "g", env: s.env, configPath: s.configPath, storePath: s.storePath, vault: s.vault, apply: true, platform: "win32",
     });
     expect(result.source).toBe("global");
     const store = loadProfileStore(s.storePath);
@@ -95,9 +99,11 @@ describe("vault-import recusas (#311 B.3)", () => {
 
   test("provider já migrado é recusado", () => {
     const s = setup();
-    importVaultCredential({ provider: "p", env: s.env, configPath: s.configPath, vault: s.vault, apply: true });
+    importVaultCredential({
+      provider: "p", env: s.env, configPath: s.configPath, vault: s.vault, apply: true, platform: "win32",
+    });
     expect(() => importVaultCredential({
-      provider: "p", env: s.env, configPath: s.configPath, vault: s.vault, apply: true,
+      provider: "p", env: s.env, configPath: s.configPath, vault: s.vault, apply: true, platform: "win32",
     })).toThrow(/já usa o cofre/);
   });
 
@@ -120,5 +126,35 @@ describe("vault-import recusas (#311 B.3)", () => {
       provider: "env", env, configPath: join(dir, "astro.config.json"),
       vault: new Vault(join(dir, "vault.json"), fake), apply: true,
     })).toThrow(/efêmero/);
+  });
+
+  test("ref que não é nome de env não é ecoada (I-03)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-vault-import-ref-"));
+    const configPath = join(dir, "astro.config.json");
+    writeFileSync(configPath, JSON.stringify(projectConfig(SENTINEL)));
+    let message = "";
+    try {
+      importVaultCredential({
+        provider: "p", env: { ASTRO_HOME: dir }, configPath,
+        vault: new Vault(join(dir, "vault.json"), fake), apply: true, platform: "win32",
+      });
+    } catch (error) { message = String(error); }
+    expect(message).toContain("não é um nome de variável de ambiente");
+    expect(message).not.toContain(SENTINEL);
+  });
+
+  test("kind que não lê o cofre é recusado", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-vault-import-codex-"));
+    const configPath = join(dir, "astro.config.json");
+    writeFileSync(configPath, JSON.stringify({
+      providers: { c: { kind: "codex-oauth", credentialsPath: "~/.codex/auth.json" } },
+      models: [{ provider: "c", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "c/m1", maxSteps: 2, tools: [] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    }));
+    expect(() => importVaultCredential({
+      provider: "c", env: { ASTRO_HOME: dir }, configPath,
+      vault: new Vault(join(dir, "vault.json"), fake), apply: true, platform: "win32",
+    })).toThrow(/não lê o cofre/);
   });
 });
