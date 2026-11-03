@@ -9,9 +9,50 @@
  * de segredo ou confinamento no `cwd` — isso é aplicado pelas próprias tools e
  * continua valendo em `bypass`.
  */
-import type { Tool } from "./tools/types";
+import type { Tool, ToolManifest } from "./tools/types";
 
 export type PermissionMode = "bypass" | "allow-edits" | "ask";
+
+/** Perfil de permissão do agente (#58, D-09): compõe com a allowlist (I-01). */
+export type AgentPermission = "read-only" | "write" | "execute" | "full";
+
+export const AGENT_PERMISSIONS: readonly AgentPermission[] = ["read-only", "write", "execute", "full"];
+
+export function isAgentPermission(value: unknown): value is AgentPermission {
+  return typeof value === "string" && (AGENT_PERMISSIONS as readonly string[]).includes(value);
+}
+
+const PERMISSION_RANK: Record<AgentPermission, number> = {
+  "read-only": 0,
+  write: 1,
+  execute: 2,
+  full: 3,
+};
+
+/** Permissão mínima exigida por uma tool (classe + tools especiais). */
+export function requiredPermission(manifest: Pick<ToolManifest, "class" | "permission">): AgentPermission {
+  // handoff troca a identidade do agente; spawn cria trabalho com conta própria.
+  if (manifest.permission === "handoff") return "full";
+  if (manifest.permission === "spawn_agent") return "execute";
+  switch (manifest.class) {
+    case "read_common":
+    case "read_critical":
+      return "read-only";
+    case "edit":
+    case "delete":
+      return "write";
+    case "shell":
+      return "execute";
+    case "identity_swap":
+      return "full";
+  }
+  // Classe desconhecida exige o perfil mais restritivo por segurança.
+  return "full";
+}
+
+export function permissionAllows(granted: AgentPermission, required: AgentPermission): boolean {
+  return PERMISSION_RANK[granted] >= PERMISSION_RANK[required];
+}
 
 /** Classes de ação que o gate distingue (PERM-02 formaliza no manifesto). */
 export type ActionClass =

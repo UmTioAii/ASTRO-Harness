@@ -65,7 +65,7 @@ describe("requiredPermission/permissionAllows (#58)", () => {
 describe("ToolExecutor enforcement por permissão (#58)", () => {
   function executor(granted: AgentPermission, tools: Tool[], audit: Auditor): ToolExecutor {
     return new ToolExecutor({
-      tools, allow: tools.map((tool) => tool.manifest.name), audit, permission: granted,
+      tools, allow: tools.map((tool) => tool.manifest.name), audit, permission: granted, permissionMode: "bypass",
     });
   }
   const names = ["read_file", "write_file", "run_command", "handoff"] as const;
@@ -108,7 +108,7 @@ describe("config agents.permission (#58)", () => {
   };
   const withPlan = (plan: Record<string, unknown>) => validateConfig({
     ...structuredClone(valid),
-    agents: { plan: { model: "openai/gpt-4o-mini", tools: ["read_file"], ...plan } },
+    agents: { maxActive: 1, plan: { model: "openai/gpt-4o-mini", tools: ["read_file"], ...plan } },
   });
 
   test("aceita as quatro permissões e ausência (default full no runtime)", () => {
