@@ -15,9 +15,9 @@
 
 **Turno (L3).** Um turno = uma chamada de modelo + as tool calls que ela pede; completion sem tool calls encerra o loop (semântica atual de `maxSteps` preservada).
 
-**Checkpoint (L5).** A 80% do limite de turnos OU do orçamento restante, grava `{summary, changed files, next step}` sanitizado (I-03) no store do ADR-0010 (PS-2). Bater o limite para em estado seguro (I-19, via S-10); "continue" retoma; subir turnos é grátis, subir orçamento pede aprovação.
+**Checkpoint (L5).** A 80% do limite de turnos OU do orçamento restante, grava `{summary, changed files, next step}` sanitizado (I-03) no store do ADR-0010 (PS-2). Bater o limite para em estado seguro (I-19, via S-10); continuar é `astro resume <run>` com o limite elevado na config — subir turnos não pede aprovação, subir budget segue o decisor B4. O prompt de não-progresso (`onNoProgress`) também é o ponto de "continuar" em runtime.
 
-**Não-progresso (L6).** Sinais por segmento: hash dos arquivos tocados sob `cwd`, testes passando/falhando, tamanho do histórico; 3 segmentos sem mudança → pausa e pergunta.
+**Não-progresso (L6).** Sinais por segmento: hash dos arquivos tocados sob `cwd` + número de falhas de tool (um teste que falha vira erro de tool). O tamanho do histórico não entra no hash porque cresce a cada turno e mascararia o loop. 3 segmentos sem mudança → pausa e pergunta.
 
 **Judge (L4).** Permanece `off` por default; `on`/`auto` ficam documentados sem implementação (v2, guarda-chuva #138).
 
