@@ -237,6 +237,115 @@ test("a abre o formulário e salva um provider custom", async () => {
   instance.unmount();
 });
 
+const fakeSecret = ["s", "k", "-"].join("") + "live-abcdef12345";
+
+const frame = (instance: ReturnType<typeof render>): string => instance.lastFrame() ?? "";
+
+async function fillCredentialsStep(instance: ReturnType<typeof render>): Promise<void> {
+  await waitFor(() => frame(instance).includes("De onde partir?"));
+  instance.stdin.write("\r");
+  await waitFor(() => frame(instance).includes("Nome"));
+  instance.stdin.write("Local");
+  instance.stdin.write("\r");
+  await waitFor(() => frame(instance).includes("Base URL"));
+  instance.stdin.write("http://localhost:1/v1");
+  await waitFor(() => frame(instance).includes("http://localhost:1/v1"));
+  instance.stdin.write("\r");
+  await waitFor(() => frame(instance).includes("Modelos"));
+  instance.stdin.write("m1");
+  await waitFor(() => frame(instance).includes("m1"));
+  instance.stdin.write("\r");
+  await waitFor(() => frame(instance).includes("Variável da chave"));
+}
+
+test("chave colada vai para o cofre e o perfil usa vault:<id> (#350)", async () => {
+  const m = manager();
+  let savedProvider = "";
+  let savedSecret = "";
+  const instance = render(
+    <ProviderScreen
+      manager={m}
+      colors={colors}
+      initial={{ mode: "add" }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+      onSaveSecret={(providerId, secret) => {
+        savedProvider = providerId;
+        savedSecret = secret;
+        return "vault:cred-12345678";
+      }}
+    />,
+  );
+  try {
+    await fillCredentialsStep(instance);
+    instance.stdin.write(fakeSecret);
+    await waitFor(() => frame(instance).includes("******"));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Confirmar"));
+    expect(frame(instance)).toContain("vault:<novo>");
+    expect(frame(instance)).not.toContain(fakeSecret);
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("salvo: local"));
+    expect(savedProvider).toBe("local");
+    expect(savedSecret).toBe(fakeSecret);
+    const stored = m.list().find((item) => item.id === "local");
+    expect(stored?.credentialRef).toBe("vault:cred-12345678");
+    expect(JSON.stringify(m.list())).not.toContain(fakeSecret);
+    expect(frame(instance)).not.toContain(fakeSecret);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("chave sem cofre disponível não grava o perfil nem ecoa o segredo (#350)", async () => {
+  const m = manager();
+  const instance = render(
+    <ProviderScreen
+      manager={m}
+      colors={colors}
+      initial={{ mode: "add" }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+    />,
+  );
+  try {
+    await fillCredentialsStep(instance);
+    instance.stdin.write(fakeSecret);
+    await waitFor(() => frame(instance).includes("******"));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("cofre de credenciais indisponível"));
+    expect(frame(instance)).toContain("Variável da chave");
+    expect(frame(instance)).not.toContain(fakeSecret);
+    expect(m.list().some((item) => item.id === "local")).toBe(false);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("entrada que não é env nem chave reconhecível fica no passo (#350)", async () => {
+  const m = manager();
+  const instance = render(
+    <ProviderScreen
+      manager={m}
+      colors={colors}
+      initial={{ mode: "add" }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+      onSaveSecret={() => "vault:cred-12345678"}
+    />,
+  );
+  try {
+    await fillCredentialsStep(instance);
+    instance.stdin.write("minha-chave");
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("cole a chave completa"));
+    expect(frame(instance)).toContain("Variável da chave");
+    expect(m.list().some((item) => item.id === "local")).toBe(false);
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("edit preserva headers e remove confirma", async () => {
   const m = manager();
   const added = m.add({
