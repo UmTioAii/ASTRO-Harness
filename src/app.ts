@@ -845,8 +845,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     delegate: async ({ agent, prompt, maxSteps, signal, callerAllow, callerPermission }) => {
       const target = registry.requireAgent(agent);
       const targetModel = registry.resolveModel(target);
-      // v1: o filho compartilha a conta já travada pelo pai; trocar de conta é recusado.
-      const parentAccount = providerAccountRefFor(model.provider, config.providers[model.provider]!);
+      // v1: o filho compartilha a conta já travada pelo chamador; trocar de conta é recusado.
+      const parentAccount = currentAccount() ?? providerAccountRefFor(model.provider, config.providers[model.provider]!);
       const targetProvider = config.providers[targetModel.provider];
       if (targetProvider === undefined) {
         throw new Error(`task: provider "${targetModel.provider}" do agent "${agent}" não está configurado`);

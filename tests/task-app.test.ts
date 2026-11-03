@@ -64,9 +64,9 @@ test("runTask: task delega em run próprio sem conflitar o lock da conta (#58)",
     ],
     agent: { model: "p/m1", maxSteps: 4, tools: ["task", "read_file", "run_command"], entryAgent: "plan" },
     agents: {
-      plan: { model: "p/m1", maxSteps: 3, tools: ["task", "run_command"], permission: "write" },
+      plan: { model: "q/m1", maxSteps: 3, tools: ["task", "run_command"], permission: "write" },
       build: {
-        model: "p/m1", maxSteps: 3, tools: ["run_command"], permission: "full", systemPrompt: "build-agent",
+        model: "q/m1", maxSteps: 3, tools: ["run_command"], permission: "full", systemPrompt: "build-agent",
       },
     },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
