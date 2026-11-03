@@ -4,6 +4,7 @@
  * O retorno é conteúdo do subagente (untrusted) e nunca é executado.
  */
 import { createHash } from "node:crypto";
+import { PermissionPendingError, type AgentPermission } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
 import type { AuditLike, Tool, ToolContext, ToolResult } from "./types";
 
@@ -13,6 +14,10 @@ export interface TaskDelegatorInput {
   fromAgent: string;
   maxSteps?: number;
   signal?: AbortSignal;
+  /** Allowlist efetiva do chamador (I-01): teto do filho. */
+  callerAllow?: readonly string[];
+  /** Perfil de permissão do chamador (#58): compõe com o do alvo. */
+  callerPermission?: AgentPermission;
 }
 
 export type TaskDelegator = (input: TaskDelegatorInput) => Promise<string>;
@@ -87,9 +92,13 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           fromAgent: ctx.agent,
           ...(ctx.maxSteps === undefined ? {} : { maxSteps: ctx.maxSteps }),
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+          ...(ctx.allow === undefined ? {} : { callerAllow: ctx.allow }),
+          ...(ctx.permission === undefined ? {} : { callerPermission: ctx.permission }),
         });
         return { output: final };
       } catch (error) {
+        // Aprovação pendente interrompe o run pai em ponto seguro (I-19).
+        if (error instanceof PermissionPendingError) throw error;
         return {
           output: redactSecrets(error instanceof Error ? error.message : String(error)),
           isError: true,

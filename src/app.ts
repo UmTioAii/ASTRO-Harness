@@ -54,7 +54,7 @@ import { lspTool } from "./tools/lsp";
 import { pipelineTool } from "./tools/pipeline";
 import { configureRunCommand, resolveSandboxSetting } from "./tools/run-command";
 import type { Tool } from "./tools/types";
-import { resolvePermissionMode, type ActionClass, type PermissionMode } from "./permissions";
+import { resolvePermissionMode, mostRestrictive, type ActionClass, type PermissionMode } from "./permissions";
 import { ensureTrustedCwd, type TrustAsk } from "./trust";
 import type { NoProgressDecider } from "./loop-guard";
 
@@ -842,11 +842,20 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   toolsByName.set("task", createTaskTool({
     audit,
     knownAgents: () => registry.listAgentNames(),
-    delegate: async ({ agent, prompt, maxSteps, signal }) => {
+    delegate: async ({ agent, prompt, maxSteps, signal, callerAllow, callerPermission }) => {
       const target = registry.requireAgent(agent);
       const targetModel = registry.resolveModel(target);
-      const parentAllow = new Set(config.agent.tools);
-      // Teto = allowlist do pai, sem recursão de task em v1.
+      // v1: o filho compartilha a conta já travada pelo pai; trocar de conta é recusado.
+      const parentAccount = providerAccountRefFor(model.provider, config.providers[model.provider]!);
+      const targetProvider = config.providers[targetModel.provider];
+      if (targetProvider === undefined) {
+        throw new Error(`task: provider "${targetModel.provider}" do agent "${agent}" não está configurado`);
+      }
+      if (providerAccountRefFor(targetModel.provider, targetProvider) !== parentAccount) {
+        throw new Error(`task: agent "${agent}" usa outra conta; delegação entre contas não é suportada em v1`);
+      }
+      const parentAllow = new Set(callerAllow ?? config.agent.tools);
+      // Teto = allowlist efetiva do chamador, sem recursão de task em v1.
       const allow = (target.tools ?? config.agent.tools)
         .filter((name) => parentAllow.has(name) && name !== "task");
       const executor = new ToolExecutor({
@@ -855,7 +864,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ceiling: allow,
         audit,
         permissionMode: taskPermissionMode,
-        permission: target.permission ?? "full",
+        permission: mostRestrictive(callerPermission ?? "full", target.permission ?? "full"),
         ...(opts.approveTool === undefined ? {} : { approveTool: opts.approveTool }),
       });
       // Run própria para o filho: não sobrescreve o estado do run pai no ledger.
@@ -878,6 +887,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         env,
         protectedPaths: [ledgerPath, auditPath],
         secretEnvNames,
+        inheritAgentLock: true,
         ...(signal === undefined ? {} : { signal }),
         ...(quotaLimits === undefined ? {} : { quotaLimits }),
         ...(budget === undefined ? {} : { budget }),

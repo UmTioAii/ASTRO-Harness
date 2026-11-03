@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
+import { PermissionPendingError } from "../src/permissions";
 import { createTaskTool, type TaskDelegator } from "../src/tools/task";
 import { ToolExecutor } from "../src/tools/executor";
 
@@ -50,12 +51,13 @@ describe("task tool manifest/validation (#58)", () => {
     const signal = new AbortController().signal;
     const result = await tool.execute(
       { agent: "build", prompt: PROMPT, context: "contexto explícito" },
-      { ...ctx(cwd), signal },
+      { ...ctx(cwd), signal, allow: ["read_file"], permission: "write" },
     );
     expect(result).toEqual({ output: "final:build" });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       agent: "build", fromAgent: "plan", maxSteps: 7, signal,
+      callerAllow: ["read_file"], callerPermission: "write",
       prompt: `contexto explícito\n\n${PROMPT}`,
     });
   });
@@ -100,5 +102,19 @@ describe("task tool respeita o perfil de permissão (#58)", () => {
     const allowed = await run("write");
     expect(allowed.result.isError).not.toBe(true);
     expect(allowed.calls).toHaveLength(1);
+  });
+
+  test("PermissionPendingError sobe do filho e do executor (I-19)", async () => {
+    const { cwd, tool } = setup(async () => {
+      throw new PermissionPendingError({ name: "read_file", action: "read_common", mode: "ask" });
+    });
+    await expect(tool.execute({ agent: "build", prompt: "x" }, ctx(cwd)))
+      .rejects.toBeInstanceOf(PermissionPendingError);
+    const audit = new Auditor(join(cwd, "audit2.jsonl"));
+    const executor = new ToolExecutor({ tools: [tool], allow: ["task"], audit, permissionMode: "bypass" });
+    await expect(executor.run(
+      { cwd, run: "r1", agent: "plan" },
+      { id: "c1", name: "task", arguments: JSON.stringify({ agent: "build", prompt: "x" }) },
+    )).rejects.toBeInstanceOf(PermissionPendingError);
   });
 });
