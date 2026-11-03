@@ -71,7 +71,7 @@ function dimension(used: number, limit: number): QuotaDimensionStatus {
 }
 
 /**
- * Deriva o status do domínio para `/usage` e toasts (#64). `undefined` quando
+ * Deriva o status do domínio para o toast da TUI (#64). `undefined` quando
  * o domínio não declara limite; aviso/esgotado seguem o uso atual do ledger.
  */
 export function quotaStatus(
