@@ -2,7 +2,7 @@
 import { redactSecrets } from "../sanitize-external";
 import type { AuditLike, Tool, ToolContext, ToolResult } from "./types";
 
-export type WebSearchProvider = "exa";
+export type WebSearchProvider = "exa" | "brave" | "google" | "custom";
 
 /** Configuração `webSearch` (validação em `src/config.ts`). */
 export interface WebSearchConfig {
@@ -17,6 +17,8 @@ export interface WebSearchDeps {
   audit: AuditLike;
   env: Record<string, string | undefined>;
   fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
 }
 
 type SearchResult = { title: string; url: string; snippet: string };
@@ -24,7 +26,16 @@ type SearchResult = { title: string; url: string; snippet: string };
 const DEFAULT_MAX_RESULTS = 5;
 const MAX_RESULTS_LIMIT = 10;
 const MAX_SNIPPET_CHARS = 500;
-const EXA_DEFAULT_BASE = "https://api.exa.ai";
+const MAX_ATTEMPTS = 3;
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_MAX_MS = 8_000;
+const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_BASE: Record<WebSearchProvider, string> = {
+  exa: "https://api.exa.ai",
+  brave: "https://api.search.brave.com",
+  google: "https://www.googleapis.com/customsearch/v1",
+  custom: "",
+};
 
 function failure(message: string): ToolResult {
   return { output: redactSecrets(message), isError: true };
@@ -78,7 +89,46 @@ function result(title: unknown, url: unknown, text: unknown): SearchResult | und
 }
 
 function requestFor(config: WebSearchConfig, input: ParsedInput, key: string): { url: string; init: RequestInit } {
-  const base = (config.baseUrl ?? EXA_DEFAULT_BASE).replace(/\/$/, "");
+  const base = (config.baseUrl ?? DEFAULT_BASE[config.provider]).replace(/\/$/, "");
+  if (config.provider === "brave") {
+    const url = new URL(`${base}/res/v1/web/search`);
+    url.searchParams.set("q", input.query);
+    url.searchParams.set("count", String(input.maxResults));
+    return {
+      url: url.toString(),
+      init: {
+        method: "GET",
+        headers: { accept: "application/json", "x-subscription-token": key },
+        redirect: "error",
+      },
+    };
+  }
+  if (config.provider === "google") {
+    const url = new URL(base);
+    url.searchParams.set("key", key);
+    url.searchParams.set("q", input.query);
+    url.searchParams.set("num", String(input.maxResults));
+    if (input.recencyDays !== undefined) url.searchParams.set("dateRestrict", `d${input.recencyDays}`);
+    return {
+      url: url.toString(),
+      init: { method: "GET", headers: { accept: "application/json" }, redirect: "error" },
+    };
+  }
+  if (config.provider === "custom") {
+    return {
+      url: base,
+      init: {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json", authorization: `Bearer ${key}` },
+        redirect: "error",
+        body: JSON.stringify({
+          query: input.query,
+          maxResults: input.maxResults,
+          ...(input.recencyDays === undefined ? {} : { recencyDays: input.recencyDays }),
+        }),
+      },
+    };
+  }
   return {
     url: `${base}/search`,
     init: {
@@ -97,19 +147,45 @@ function requestFor(config: WebSearchConfig, input: ParsedInput, key: string): {
   };
 }
 
-function parseResponse(body: unknown): SearchResult[] {
+function parseResponse(config: WebSearchConfig, body: unknown): SearchResult[] {
   const raw = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
-  const list = Array.isArray(raw.results) ? raw.results : [];
-  return list.flatMap((item) => {
-    if (item === null || typeof item !== "object") return [];
-    const entry = item as Record<string, unknown>;
-    const parsed = result(
-      entry.title,
-      entry.url,
-      entry.text ?? entry.snippet ?? entry.description,
-    );
-    return parsed === undefined ? [] : [parsed];
-  });
+  if (config.provider === "brave") {
+    const web = (typeof raw.web === "object" && raw.web !== null ? raw.web : {}) as Record<string, unknown>;
+    return list(web.results).flatMap((entry) => one(entry.title, entry.url, entry.description));
+  }
+  if (config.provider === "google") {
+    return list(raw.items).flatMap((entry) => one(entry.title, entry.link, entry.snippet));
+  }
+  return list(raw.results).flatMap((entry) => one(
+    entry.title,
+    entry.url,
+    entry.text ?? entry.snippet ?? entry.description,
+  ));
+}
+
+function list(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => item !== null && typeof item === "object")
+    : [];
+}
+
+function one(title: unknown, url: unknown, text: unknown): SearchResult[] {
+  const parsed = result(title, url, text);
+  return parsed === undefined ? [] : [parsed];
+}
+
+/** `Retry-After` em segundos ou data HTTP; ausente = undefined. */
+export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+  if (value === null) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
+}
+
+function backoffMs(attempt: number, random: () => number): number {
+  const base = Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_MAX_MS);
+  return Math.round(base * (0.75 + random() * 0.5));
 }
 
 /** Nomes de variáveis que o shell e filhos não devem ver (#57, I-03). */
@@ -117,7 +193,10 @@ export function webSearchSecretEnvNames(config: { webSearch?: WebSearchConfig })
   return config.webSearch === undefined ? [] : [config.webSearch.apiKeyEnv];
 }
 
-export function createWebSearchTool(deps: WebSearchDeps): Tool {  const fetchImpl = deps.fetchImpl ?? fetch;
+export function createWebSearchTool(deps: WebSearchDeps): Tool {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const random = deps.random ?? Math.random;
 
   return {
     manifest: {
@@ -174,27 +253,37 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {  const fetchImp
       let status = 0;
       let results: SearchResult[] = [];
       let lastMessage = "";
-      try {
-        const response = await fetchImpl(url, { ...init, signal: ctx.signal });
-        status = response.status;
-        if (response.ok) {
-          let body: unknown;
-          try {
-            body = await response.json();
-          } catch {
-            record(status, 0);
-            return failure(`web_search: resposta inválida do provider (${status})`);
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+        let retryAfter: number | undefined;
+        try {
+          const response = await fetchImpl(url, { ...init, signal: ctx.signal });
+          status = response.status;
+          retryAfter = retryAfterMs(response.headers.get("retry-after"));
+          if (response.ok) {
+            let body: unknown;
+            try {
+              body = await response.json();
+            } catch {
+              record(status, 0);
+              return failure(`web_search: resposta inválida do provider (${status})`);
+            }
+            results = parseResponse(deps.config, body);
+            lastMessage = "";
+            break;
           }
-          results = parseResponse(body);
-        } else {
           lastMessage = redactSecrets((await response.text()).slice(0, 300));
+          if (!RETRYABLE.has(status)) break;
+        } catch (error) {
+          if (ctx.signal?.aborted === true) {
+            record(0, 0);
+            return failure("web_search cancelada");
+          }
+          status = 0;
+          lastMessage = redactSecrets(error instanceof Error ? error.message : String(error));
         }
-      } catch (error) {
-        if (ctx.signal?.aborted === true) {
-          record(0, 0);
-          return failure("web_search cancelada");
+        if (attempt < MAX_ATTEMPTS - 1) {
+          await sleep(retryAfter ?? backoffMs(attempt, random));
         }
-        lastMessage = redactSecrets(error instanceof Error ? error.message : String(error));
       }
 
       record(status, results.length);
