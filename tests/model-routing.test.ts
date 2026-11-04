@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runTask } from "../src/app";
 import { Auditor } from "../src/audit";
 import { validateConfig } from "../src/config";
 import { Ledger } from "../src/ledger";
@@ -19,7 +20,13 @@ const response = (content: string): CompletionResponse => ({
   content, toolCalls: [], usage: { inputTokens: 10, outputTokens: 5 },
 });
 
-const fixture = {
+const fixture: {
+  providers: Record<string, unknown>;
+  models: Array<Record<string, unknown>>;
+  agent: Record<string, unknown>;
+  agents: { plan: Record<string, unknown> } & Record<string, unknown>;
+  paths: Record<string, string>;
+} = {
   providers: {
     p: { kind: "openai-compat", baseUrl: "https://example.test/v1", credentialRef: "P_KEY" },
   },
@@ -167,7 +174,7 @@ describe("sessão marca o resumo de compactação como cheap (#58)", () => {
       history: [
         { role: "system", content: "sys" },
         { role: "user", content: "primeira tarefa" },
-        { role: "assistant", content: "primeira resposta" },
+        { role: "assistant", content: "x".repeat(70_000) },
       ],
     }, "segunda tarefa");
     expect(result.final).toBe("final");
@@ -175,5 +182,54 @@ describe("sessão marca o resumo de compactação como cheap (#58)", () => {
     expect(seen).toContainEqual({ model: "strong" });
     const rows = ledger.byAgent().plan;
     expect(rows?.tokensIn).toBeGreaterThan(0);
+  });
+});
+
+describe("runTask aplica o modelRouting do agent (#58)", () => {
+  test("geração usa o strongModel e o ledger cobra o modelo roteado", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-model-routing-app-"));
+    const seen: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = (await req.json()) as { model: string };
+        seen.push(body.model);
+        return Response.json({
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        });
+      },
+    });
+    const configPath = join(cwd, "astro.config.json");
+    writeFileSync(configPath, JSON.stringify({
+      providers: {
+        p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" },
+        q: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY2" },
+      },
+      models: [
+        { provider: "p", id: "base", tags: ["writing-code"], context: 8192 },
+        { provider: "p", id: "strong", tags: ["writing-code"], context: 8192 },
+      ],
+      agent: { model: "p/base", maxSteps: 4, tools: [], entryAgent: "plan" },
+      agents: {
+        plan: {
+          model: "p/base", maxSteps: 3, tools: [],
+          modelRouting: { strongModel: "p/strong" },
+        },
+      },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    }));
+    try {
+      const result = await runTask({
+        configPath, cwd, task: "tarefa", env: { KEY: "k", KEY2: "k2" },
+        permissionMode: "bypass", approveTool: () => true,
+      });
+      expect(result.final).toBe("ok");
+      expect(seen).toEqual(["strong"]);
+      const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
+      expect(ledger.byAgent().plan?.model).toBe("strong");
+    } finally {
+      server.stop(true);
+    }
   });
 });
