@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { validateConfig } from "../src/config";
-import { createWebSearchTool, type WebSearchConfig, type WebSearchDeps } from "../src/tools/web-search";
+import { createWebSearchTool, webSearchSecretEnvNames, type WebSearchConfig, type WebSearchDeps } from "../src/tools/web-search";
 
 const HOST_SECRET = ["s", "k", "-"].join("") + "host-secret-123456";
 const WEB_SECRET = "web-secret-value";
@@ -104,13 +104,15 @@ describe("web_search exa (#57)", () => {
           body: await req.json(),
         });
         return Response.json({
-          results: [{ title: "A", url: "https://a.test", text: "trecho A", publishedDate: "2026-01-01" }],
+          results: [null, { title: "A", url: "https://a.test", text: "trecho A" }],
         });
       },
     });
     try {
-      const { tool, audit, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY", baseUrl: server.url.origin });
-      const result = await tool.execute({ query: "astro harness", maxResults: 3 }, ctx(cwd));
+      const { tool, audit, cwd } = setup({
+        provider: "exa", apiKeyEnv: "WEB_KEY", baseUrl: server.url.origin, defaultMaxResults: 3,
+      });
+      const result = await tool.execute({ query: "astro harness" }, ctx(cwd));
       expect(result.isError).not.toBe(true);
       const body = parse(result.output);
       expect(body.provider).toBe("exa");
@@ -120,7 +122,11 @@ describe("web_search exa (#57)", () => {
       expect(requests[0]?.method).toBe("POST");
       expect(requests[0]?.url).toBe(`${server.url.origin}/search`);
       expect(requests[0]?.headers["x-api-key"]).toBe(WEB_SECRET);
-      expect(requests[0]?.body).toMatchObject({ query: "astro harness", numResults: 3 });
+      expect(requests[0]?.body).toMatchObject({
+        query: "astro harness",
+        numResults: 3,
+        contents: { text: { maxCharacters: 500 } },
+      });
       expect(JSON.stringify(requests)).not.toContain(HOST_SECRET);
       const event = audit.readAll().find((item) => item.tipo === "web.search");
       expect(event?.payload).toMatchObject({
@@ -142,5 +148,44 @@ describe("web_search exa (#57)", () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  test("não segue redirect e não entrega a chave a outro host", async () => {
+    let leaked = 0;
+    const target = Bun.serve({
+      port: 0,
+      fetch() { leaked += 1; return Response.json({ results: [] }); },
+    });
+    const source = Bun.serve({
+      port: 0,
+      fetch() { return new Response(null, { status: 307, headers: { location: target.url.toString() } }); },
+    });
+    try {
+      const { tool, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY", baseUrl: source.url.origin });
+      const result = await tool.execute({ query: "x" }, ctx(cwd));
+      expect(result.isError).toBe(true);
+      expect(leaked).toBe(0);
+    } finally {
+      source.stop(true);
+      target.stop(true);
+    }
+  });
+
+  test("200 com corpo inválido falha e audita a chamada", async () => {
+    const server = Bun.serve({ port: 0, fetch: () => new Response("not json", { status: 200 }) });
+    try {
+      const { tool, audit, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY", baseUrl: server.url.origin });
+      const result = await tool.execute({ query: "x" }, ctx(cwd));
+      expect(result.isError).toBe(true);
+      expect(audit.readAll().find((item) => item.tipo === "web.search")?.payload)
+        .toMatchObject({ status: 200, resultsCount: 0 });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("webSearchSecretEnvNames entrega o nome da chave ao filtro do shell", () => {
+    expect(webSearchSecretEnvNames({})).toEqual([]);
+    expect(webSearchSecretEnvNames({ webSearch: { provider: "exa", apiKeyEnv: "EXA_KEY" } })).toEqual(["EXA_KEY"]);
   });
 });

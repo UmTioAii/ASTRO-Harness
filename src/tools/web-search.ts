@@ -71,9 +71,9 @@ function snippet(value: unknown): string {
 function result(title: unknown, url: unknown, text: unknown): SearchResult | undefined {
   if (typeof url !== "string" || url === "") return undefined;
   return {
-    title: typeof title === "string" && title !== "" ? title : url,
+    title: redactSecrets(typeof title === "string" && title !== "" ? title : url),
     url,
-    snippet: snippet(text),
+    snippet: redactSecrets(snippet(text)),
   };
 }
 
@@ -84,9 +84,11 @@ function requestFor(config: WebSearchConfig, input: ParsedInput, key: string): {
     init: {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json", "x-api-key": key },
+      redirect: "error",
       body: JSON.stringify({
         query: input.query,
         numResults: input.maxResults,
+        contents: { text: { maxCharacters: MAX_SNIPPET_CHARS } },
         ...(input.recencyDays === undefined
           ? {}
           : { startPublishedDate: new Date(Date.now() - input.recencyDays * 86_400_000).toISOString() }),
@@ -99,6 +101,7 @@ function parseResponse(body: unknown): SearchResult[] {
   const raw = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
   const list = Array.isArray(raw.results) ? raw.results : [];
   return list.flatMap((item) => {
+    if (item === null || typeof item !== "object") return [];
     const entry = item as Record<string, unknown>;
     const parsed = result(
       entry.title,
@@ -109,8 +112,12 @@ function parseResponse(body: unknown): SearchResult[] {
   });
 }
 
-export function createWebSearchTool(deps: WebSearchDeps): Tool {
-  const fetchImpl = deps.fetchImpl ?? fetch;
+/** Nomes de variáveis que o shell e filhos não devem ver (#57, I-03). */
+export function webSearchSecretEnvNames(config: { webSearch?: WebSearchConfig }): string[] {
+  return config.webSearch === undefined ? [] : [config.webSearch.apiKeyEnv];
+}
+
+export function createWebSearchTool(deps: WebSearchDeps): Tool {  const fetchImpl = deps.fetchImpl ?? fetch;
 
   return {
     manifest: {
@@ -150,6 +157,20 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
       }
       const started = Date.now();
       const { url, init } = requestFor(deps.config, parsed, key);
+      const record = (finalStatus: number, count: number): void => {
+        deps.audit.append({
+          run: ctx.run,
+          agent: ctx.agent,
+          tipo: "web.search",
+          payload: {
+            query: redactSecrets(parsed.query),
+            provider: deps.config.provider,
+            resultsCount: count,
+            duration: Date.now() - started,
+            status: finalStatus,
+          },
+        });
+      };
       let status = 0;
       let results: SearchResult[] = [];
       let lastMessage = "";
@@ -161,6 +182,7 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
           try {
             body = await response.json();
           } catch {
+            record(status, 0);
             return failure(`web_search: resposta inválida do provider (${status})`);
           }
           results = parseResponse(body);
@@ -168,22 +190,14 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
           lastMessage = redactSecrets((await response.text()).slice(0, 300));
         }
       } catch (error) {
-        if (ctx.signal?.aborted === true) return failure("web_search cancelada");
+        if (ctx.signal?.aborted === true) {
+          record(0, 0);
+          return failure("web_search cancelada");
+        }
         lastMessage = redactSecrets(error instanceof Error ? error.message : String(error));
       }
 
-      deps.audit.append({
-        run: ctx.run,
-        agent: ctx.agent,
-        tipo: "web.search",
-        payload: {
-          query: redactSecrets(parsed.query),
-          provider: deps.config.provider,
-          resultsCount: results.length,
-          duration: Date.now() - started,
-          status,
-        },
-      });
+      record(status, results.length);
 
       if (status < 200 || status >= 300) {
         return failure(`web_search falhou (${status}): ${lastMessage}`);
