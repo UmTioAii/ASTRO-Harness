@@ -88,7 +88,7 @@ O ledger (F-31d) grava a identidade efetiva que atendeu — `provider`, `model`,
 
 ## Roteamento barato/forte por agente (#58)
 
-`agents.<nome>.modelRouting` declara `cheapModel`/`strongModel` (`provider/id` ativos). A compactação (sumarização) chama com `purpose: "cheap"`; a geração usa `strong` por default, e um lado não declarado cai no `model` do agente. O roteador (`src/provider/model-routing.ts`) resolve o provider guardado do modelo de destino — quota, cache e audit ficam no modelo que atendeu — e o ledger grava a identidade efetiva. `profile` e `modelRouting` não combinam: a pool já roteia.
+`agents.<nome>.modelRouting` declara `cheapModel`/`strongModel` (`provider/id` ativos, no mesmo provider do agente — troca de conta exige aprovação). A compactação (sumarização) chama com `purpose: "cheap"`; a geração usa `strong` por default, e um lado não declarado cai no `model` do agente. O roteador (`src/provider/model-routing.ts`) resolve o provider guardado do modelo de destino — quota, cache e audit ficam no modelo que atendeu — e o ledger grava a identidade efetiva. `profile` e `modelRouting` não combinam: a pool já roteia.
 
 ## Call profile por modelo (E1-E8, ADR-0012)
 

@@ -780,14 +780,16 @@ function expectAgentPermission(value: unknown, field: string): AgentPermission {
   return value;
 }
 
-/** Valida `modelRouting` (#58): chaves `provider/id` declaradas e ativas. */
+/** Valida `modelRouting` (#58): chaves `provider/id` declaradas, ativas e no mesmo provider do agente. */
 function validateModelRouting(
   value: unknown,
   field: string,
   knownModels: Set<string>,
   allModels: ModelConfig[],
+  baseModelKey: string,
 ): ModelRouting {
   const raw = expectObject(value, field);
+  const baseProvider = allModels.find((entry) => `${entry.provider}/${entry.id}` === baseModelKey)?.provider;
   for (const key of Object.keys(raw)) {
     if (key !== "cheapModel" && key !== "strongModel") {
       fail(`config inválida: "${field}.${key}" desconhecido`);
@@ -802,6 +804,10 @@ function validateModelRouting(
     const model = allModels.find((entry) => `${entry.provider}/${entry.id}` === id);
     if (model !== undefined && model.status !== "active") {
       fail(`config inválida: "${field}.${key}" referencia modelo "${id}" que não está active (status: "${model.status}")`);
+    }
+    // I-08/A4: trocar de provider na rota mudaria a conta sem aprovação.
+    if (model !== undefined && baseProvider !== undefined && model.provider !== baseProvider) {
+      fail(`config inválida: "${field}.${key}" deve usar o provider "${baseProvider}" do agente; troca de conta exige aprovação`);
     }
     return id;
   };
@@ -832,9 +838,6 @@ function validateNamedAgent(
   const systemPrompt = raw.systemPrompt === undefined ? undefined : expectString(raw.systemPrompt, `${field}.systemPrompt`);
   const maxSteps = raw.maxSteps === undefined ? baseAgent.maxSteps : expectPositiveInteger(raw.maxSteps, `${field}.maxSteps`);
   const permission = raw.permission === undefined ? undefined : expectAgentPermission(raw.permission, `${field}.permission`);
-  const modelRouting = raw.modelRouting === undefined
-    ? undefined
-    : validateModelRouting(raw.modelRouting, `${field}.modelRouting`, knownModels, allModels);
   let tools = baseAgent.tools;
   if (raw.tools !== undefined) {
     tools = expectStringArray(raw.tools, `${field}.tools`);
@@ -847,7 +850,7 @@ function validateNamedAgent(
 
   // F-27 (ADR-0007): profile substitui model; os dois juntos são ambíguos.
   if (raw.profile !== undefined) {
-    if (modelRouting !== undefined) {
+    if (raw.modelRouting !== undefined) {
       fail(`config inválida: "${field}" não pode combinar profile com modelRouting`);
     }
     const { profile, model } = resolveProfileField(field, raw, modelPool);
@@ -867,6 +870,9 @@ function validateNamedAgent(
   if (modelEntry && modelEntry.status !== "active") {
     fail(`config inválida: agent "${name}" referencia modelo "${model}" que não está active (status: "${modelEntry.status}")`);
   }
+  const modelRouting = raw.modelRouting === undefined
+    ? undefined
+    : validateModelRouting(raw.modelRouting, `${field}.modelRouting`, knownModels, allModels, model);
 
   return {
     model, maxSteps, tools,

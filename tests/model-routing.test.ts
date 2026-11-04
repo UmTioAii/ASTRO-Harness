@@ -29,11 +29,13 @@ const fixture: {
 } = {
   providers: {
     p: { kind: "openai-compat", baseUrl: "https://example.test/v1", credentialRef: "P_KEY" },
+    q: { kind: "openai-compat", baseUrl: "https://example.test/v1", credentialRef: "Q_KEY" },
   },
   models: [
     { provider: "p", id: "base", tags: ["writing-code"], context: 8192 },
     { provider: "p", id: "cheap", tags: ["writing-code"], context: 8192 },
     { provider: "p", id: "strong", tags: ["writing-code"], context: 8192 },
+    { provider: "q", id: "other", tags: ["writing-code"], context: 8192 },
   ],
   agent: { model: "p/base", maxSteps: 4, tools: ["read_file"] },
   agents: {
@@ -78,6 +80,12 @@ describe("modelRouting config (#58)", () => {
     const both = structuredClone(fixture);
     (both.agents.plan as { profile?: string }).profile = "pooled";
     expect(() => validateConfig(both)).toThrow(/profile/);
+  });
+
+  test("recusa rota em outro provider (troca de conta sem aprovação)", () => {
+    const other = structuredClone(fixture);
+    other.agents.plan.modelRouting = { strongModel: "q/other" };
+    expect(() => validateConfig(other)).toThrow(/provider "p"/);
   });
 });
 
