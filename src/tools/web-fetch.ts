@@ -1,4 +1,5 @@
 /** Tool `web_fetch` (#57): baixa uma página e devolve texto sanitizado (untrusted). */
+import { lookup } from "node:dns/promises";
 import { redactSecrets } from "../sanitize-external";
 import { outboundUrlProblem } from "../url-safety";
 import type { AuditLike, Tool, ToolContext, ToolResult } from "./types";
@@ -7,14 +8,66 @@ export type WebFetchFormat = "markdown" | "text";
 
 export interface WebFetchDeps {
   audit: AuditLike;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
   maxRedirects?: number;
 }
 
 const DEFAULT_MAX_LENGTH = 50_000;
 const MAX_LENGTH_LIMIT = 500_000;
 const MAX_REDIRECTS = 3;
-const TEXT_TYPES = /^text\/|application\/(xhtml\+xml|xml|json)/i;
+const READ_BYTES_LIMIT = 1_000_000;
+const TEXT_TYPES = /^(text\/|application\/(xhtml\+xml|xml|json))/i;
+
+/** Valida o literal e todos os endereços resolvidos (SSRF/DNS rebinding). */
+async function urlProblem(url: string): Promise<string | undefined> {
+  const literal = outboundUrlProblem(url);
+  if (literal !== undefined) return literal;
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookup(host, { all: true });
+  } catch {
+    return "não foi possível resolver o host";
+  }
+  if (addresses.length === 0) return "host sem endereço";
+  for (const { address } of addresses) {
+    const blocked = outboundUrlProblem(`http://${address.includes(":") ? `[${address}]` : address}/`);
+    if (blocked !== undefined) return blocked;
+  }
+  return undefined;
+}
+
+/** URL de audit sem query/hash (assinaturas e tokens não vão para o log). */
+function auditUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.search = "";
+    url.hash = "";
+    return redactSecrets(url.toString());
+  } catch {
+    return redactSecrets(raw);
+  }
+}
+
+/** Lê no máximo `limit` bytes; não bufferiza uma resposta gigante antes do corte. */
+async function readCapped(response: Response, limit: number): Promise<string> {
+  if (response.body === null) return (await response.text()).slice(0, limit);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const take = value.subarray(0, limit - total);
+      chunks.push(take);
+      total += take.length;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 function failure(message: string): ToolResult {
   return { output: redactSecrets(message), isError: true };
@@ -44,8 +97,8 @@ function parseInput(input: unknown): ParsedInput {
   return { url: raw.url.trim(), maxLength, format: raw.format ?? "markdown" };
 }
 
-const BLOCKS = /<(script|style|iframe|object|embed|noscript|svg|template|head)\b[\s\S]*?<\/\1>/gi;
-const SELF_CLOSING_BLOCKS = /<(script|style|iframe|object|embed|noscript|svg|template|head)\b[^>]*\/?>/gi;
+const BLOCKS = /<(script|style|iframe|object|embed|noscript|svg|template|head|base)\b[\s\S]*?<\/\1>/gi;
+const SELF_CLOSING_BLOCKS = /<(script|style|iframe|object|embed|noscript|svg|template|head|base)\b[^>]*\/?>/gi;
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
 
 function stripTags(value: string): string {
@@ -57,24 +110,30 @@ function decodeEntities(value: string): string {
     if (code.startsWith("#")) {
       const hex = code[1]?.toLowerCase() === "x";
       const point = Number.parseInt(hex ? code.slice(2) : code.slice(1), hex ? 16 : 10);
-      return Number.isFinite(point) ? String.fromCodePoint(point) : match;
+      return Number.isFinite(point) && point >= 0 && point <= 0x10ffff ? String.fromCodePoint(point) : match;
     }
     return ENTITIES[code.toLowerCase()] ?? match;
   });
 }
 
 function normalize(value: string): string {
-  return value.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return value
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function safeLink(href: string, label: string, format: WebFetchFormat): string {
-  if (/^\s*(javascript|data|vbscript):/i.test(href)) return label;
+  const scheme = href.replace(/[\u0000-\u0020]+/g, "").toLowerCase();
+  if (/^(javascript|data|vbscript):/.test(scheme)) return label;
   return format === "markdown" ? `[${label}](${href})` : label;
 }
 
 /** Remove blocos perigosos e converte a estrutura básica em markdown/texto. */
 export function htmlToText(html: string, format: WebFetchFormat): string {
-  let text = html.replace(/<!doctype[^>]*>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  // Decodifica antes de filtrar: `&lt;script&gt;` precisa virar tag e ser removido.
+  let text = decodeEntities(decodeEntities(html)).replace(/<!doctype[^>]*>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
   text = text.replace(BLOCKS, "").replace(SELF_CLOSING_BLOCKS, "");
   text = text.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level: string, inner: string) => (
     format === "markdown" ? `\n${"#".repeat(Number(level))} ${stripTags(inner).trim()}\n` : `\n${stripTags(inner).trim()}\n`
@@ -89,7 +148,7 @@ export function htmlToText(html: string, format: WebFetchFormat): string {
     format === "markdown" ? `**${stripTags(inner).trim()}**` : stripTags(inner).trim()
   ));
   text = text.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|section|article|ul|ol|li|tr|h[1-6])>/gi, "\n");
-  return normalize(decodeEntities(stripTags(text)));
+  return normalize(stripTags(text));
 }
 
 export function createWebFetchTool(deps: WebFetchDeps): Tool {
@@ -136,7 +195,7 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
       let finalUrl = current;
       try {
         for (let hop = 0; hop <= maxRedirects; hop += 1) {
-          const problem = outboundUrlProblem(current);
+          const problem = await urlProblem(current);
           if (problem !== undefined) return failure(`web_fetch: URL recusada (${problem})`);
           const response = await fetchImpl(current, { redirect: "manual", signal: ctx.signal });
           status = response.status;
@@ -148,13 +207,13 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
             continue;
           }
           contentType = response.headers.get("content-type") ?? "";
-          body = await response.text();
+          body = await readCapped(response, Math.min(parsed.maxLength * 4, READ_BYTES_LIMIT));
           break;
         }
       } catch (error) {
         if (ctx.signal?.aborted === true) {
           deps.audit.append({ run: ctx.run, agent: ctx.agent, tipo: "web.fetch",
-            payload: { url: redactSecrets(parsed.url), status: 0, contentLength: 0, duration: Date.now() - started } });
+            payload: { url: auditUrl(parsed.url), status: 0, contentLength: 0, duration: Date.now() - started } });
           return failure("web_fetch cancelada");
         }
         return failure(`web_fetch falhou: ${error instanceof Error ? error.message : String(error)}`);
@@ -162,7 +221,7 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
 
       const contentLength = body.length;
       deps.audit.append({ run: ctx.run, agent: ctx.agent, tipo: "web.fetch",
-        payload: { url: redactSecrets(finalUrl), status, contentLength, duration: Date.now() - started } });
+        payload: { url: auditUrl(finalUrl), status, contentLength, duration: Date.now() - started } });
 
       if (status < 200 || status >= 300) {
         return failure(`web_fetch falhou (${status})`);
@@ -170,7 +229,8 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
       if (contentType !== "" && !TEXT_TYPES.test(contentType)) {
         return failure(`web_fetch: tipo de conteúdo não suportado (${contentType.split(";")[0]})`);
       }
-      const text = /html|xml/i.test(contentType) ? htmlToText(body, parsed.format) : body;
+      // Sem Content-Type, trata como HTML e sanitiza (não devolve tags cruas).
+      const text = contentType === "" || /html|xml/i.test(contentType) ? htmlToText(body, parsed.format) : body;
       return { output: text.slice(0, parsed.maxLength) };
     },
   };
