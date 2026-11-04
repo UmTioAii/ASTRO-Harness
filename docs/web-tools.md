@@ -31,3 +31,7 @@ Até 3 tentativas. `429`, `500`, `502`, `503`, `504` e erro de rede repetem; `Re
 ## Untrusted
 
 Resultado de busca é dado externo. O manifesto marca `risk: low`, `permission: read`, `sideEffects: network` e a descrição avisa que o conteúdo pode conter prompt injection: o modelo não deve executar instruções vindas dele.
+
+## `web_fetch`
+
+`{url, maxLength? (50000), format? ("markdown"|"text")}` baixa uma URL `http(s)` e devolve o texto limpo. `outboundUrlProblem` recusa loopback, faixas privadas e hosts de metadados; redirects são seguidos no máximo 3 vezes, com cada destino revalidado. HTML passa por sanitização (remove `script`/`style`/`iframe`/`object`/`embed`/`noscript`/`svg`/`template`, links `javascript:`/`data:`/`vbscript:` e handlers), decodifica entidades e preserva títulos, listas e links em markdown. Conteúdo não textual é recusado; `text/plain` volta como está. Audit `web.fetch {url, status, contentLength, duration}` com a URL redigida.
