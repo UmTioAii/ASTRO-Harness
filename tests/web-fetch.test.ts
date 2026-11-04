@@ -1,21 +1,16 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { createWebFetchTool, type WebFetchDeps } from "../src/tools/web-fetch";
 
-const HOST_SECRET = ["s", "k", "-"].join("") + "host-secret-123456";
-
-beforeAll(() => { process.env.ASTRO_ALLOW_PRIVATE_URLS = "1"; });
-afterAll(() => { delete process.env.ASTRO_ALLOW_PRIVATE_URLS; });
-
 let seq = 0;
 function setup(overrides: Partial<WebFetchDeps> = {}) {
   seq += 1;
   const cwd = mkdtempSync(join(tmpdir(), `astro-web-fetch-${seq}-`));
   const audit = new Auditor(join(cwd, "audit.jsonl"));
-  const tool = createWebFetchTool({ audit, ...overrides });
+  const tool = createWebFetchTool({ audit, allowPrivate: true, ...overrides });
   return { tool, audit, cwd };
 }
 
@@ -64,7 +59,6 @@ describe("web_fetch sanitização (#57)", () => {
       expect(result.output).toContain("- um");
       expect(result.output).toContain("Olá **mundo** & cia");
       expect(result.output).not.toContain("alert(1)");
-      expect(result.output).not.toContain("alert(2)");
       expect(result.output).not.toContain("alert(3)");
       expect(result.output).not.toContain("alert(4)");
       expect(result.output).not.toContain("<script");
@@ -122,6 +116,68 @@ describe("web_fetch sanitização (#57)", () => {
     expect(result.output).not.toContain("alert");
     expect(result.output).not.toContain("<script");
   });
+
+  test("texto literal com < > não é apagado", async () => {
+    const { tool, cwd } = setup({
+      fetchImpl: async () => new Response(
+        "<p>Use &lt;div&gt; for layout</p><p>if a &lt; b and c &gt; d then</p><pre>&lt;script&gt;alert(1)&lt;/script&gt;</pre>",
+        { headers: { "content-type": "text/html" } },
+      ),
+    });
+    const result = await tool.execute({ url: "http://127.0.0.1/" }, ctx(cwd));
+    expect(result.output).toContain("Use &lt;div> for layout");
+    expect(result.output).toContain("if a < b and c > d then");
+    expect(result.output).toContain("alert(1)");
+    expect(result.output).not.toContain("<script");
+  });
+
+  test("markup codificado com atributo também fica escapado", async () => {
+    const { tool, cwd } = setup({
+      fetchImpl: async () => new Response(
+        '<p>&lt;a href="javascript:alert(1)"&gt;click&lt;/a&gt;</p>' +
+        '<p>&lt;img src=x onerror=alert(2)&gt;</p>' +
+        '<p>&lt;scr&#x0;ipt&gt;alert(3)&lt;/script&gt;</p>' +
+        '<p>&lt;x &lt;script&gt;alert(4)</p><p>&lt;x &lt;svg onload=alert(5)&gt;</p>' +
+        '<p>&lt;script here',
+        { headers: { "content-type": "text/html" } },
+      ),
+    });
+    const result = await tool.execute({ url: "http://127.0.0.1/" }, ctx(cwd));
+    expect(result.output).not.toContain("<a ");
+    expect(result.output).not.toContain("<img");
+    expect(result.output).not.toContain("<script");
+    expect(result.output).not.toContain("<svg");
+    expect(result.output).toContain("click");
+  });
+
+  test("href double-encoded não vira link perigoso", async () => {
+    const { tool, cwd } = setup({
+      fetchImpl: async () => new Response(
+        '<p><a href="javascript&amp;#58;alert(1)">js</a></p>' +
+        '<p><a href="data&amp;#58;text/html,hi">data</a></p>' +
+        '<p><a href="javascript&amp;amp;#58;alert(2)">js3</a></p>' +
+        '<p><a href="data&amp;amp;#58;text/html,hi">data3</a></p>' +
+        '<p><a href="javascript&#38;&#1;#58;alert(3)">ctrl</a></p>' +
+        '<p><a href="javascript&amp;#38;&amp;#1;#58;alert(4)">ctrl2</a></p>' +
+        '<p><a href="javascript&#38;&#9;#58;alert(5)">tab</a></p>' +
+        '<p><a href="javascript&#38;&#10;#58;alert(6)">lf</a></p>' +
+        '<p><a href="data&#38;&#13;#58;text/html,hi">cr</a></p>',
+        { headers: { "content-type": "text/html" } },
+      ),
+    });
+    const result = await tool.execute({ url: "http://127.0.0.1/" }, ctx(cwd));
+    expect(result.output).toContain("js");
+    expect(result.output).toContain("data");
+    expect(result.output).toContain("js3");
+    expect(result.output).toContain("data3");
+    expect(result.output).toContain("ctrl");
+    expect(result.output).toContain("ctrl2");
+    expect(result.output).toContain("tab");
+    expect(result.output).toContain("lf");
+    expect(result.output).toContain("cr");
+    expect(result.output).not.toContain("javascript:");
+    expect(result.output).not.toContain("data:");
+  });
 });
 
 describe("web_fetch audit e limites (#57)", () => {
@@ -146,17 +202,10 @@ describe("web_fetch audit e limites (#57)", () => {
   });
 
   test("recusa host privado literal sem opt-in", async () => {
-    const previous = process.env.ASTRO_ALLOW_PRIVATE_URLS;
-    delete process.env.ASTRO_ALLOW_PRIVATE_URLS;
-    try {
-      const { tool, cwd } = setup();
-      const result = await tool.execute({ url: "http://localhost.:1234/" }, ctx(cwd));
-      expect(result.isError).toBe(true);
-      expect(result.output).toMatch(/privado|recusada/);
-    } finally {
-      if (previous === undefined) delete process.env.ASTRO_ALLOW_PRIVATE_URLS;
-      else process.env.ASTRO_ALLOW_PRIVATE_URLS = previous;
-    }
+    const { tool, cwd } = setup({ allowPrivate: false });
+    const result = await tool.execute({ url: "http://localhost.:1234/" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.output).toMatch(/privado|recusada/);
   });
 
   test("não segue redirect para host de metadados", async () => {

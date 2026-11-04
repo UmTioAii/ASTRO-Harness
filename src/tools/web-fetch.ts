@@ -1,7 +1,7 @@
 /** Tool `web_fetch` (#57): baixa uma página e devolve texto sanitizado (untrusted). */
 import { lookup } from "node:dns/promises";
 import { redactSecrets } from "../sanitize-external";
-import { outboundUrlProblem } from "../url-safety";
+import { outboundUrlProblem, privateUrlsAllowed } from "../url-safety";
 import type { AuditLike, Tool, ToolContext, ToolResult } from "./types";
 
 export type WebFetchFormat = "markdown" | "text";
@@ -10,6 +10,8 @@ export interface WebFetchDeps {
   audit: AuditLike;
   fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
   maxRedirects?: number;
+  /** Opt-in para destinos privados; default = `ASTRO_ALLOW_PRIVATE_URLS`. */
+  allowPrivate?: boolean;
 }
 
 const DEFAULT_MAX_LENGTH = 50_000;
@@ -19,8 +21,8 @@ const READ_BYTES_LIMIT = 1_000_000;
 const TEXT_TYPES = /^(text\/|application\/(xhtml\+xml|xml|json))/i;
 
 /** Valida o literal e todos os endereços resolvidos (SSRF/DNS rebinding). */
-async function urlProblem(url: string): Promise<string | undefined> {
-  const literal = outboundUrlProblem(url);
+async function urlProblem(url: string, allowPrivate: boolean): Promise<string | undefined> {
+  const literal = outboundUrlProblem(url, { allowPrivate });
   if (literal !== undefined) return literal;
   const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
   let addresses: Array<{ address: string }>;
@@ -31,7 +33,7 @@ async function urlProblem(url: string): Promise<string | undefined> {
   }
   if (addresses.length === 0) return "host sem endereço";
   for (const { address } of addresses) {
-    const blocked = outboundUrlProblem(`http://${address.includes(":") ? `[${address}]` : address}/`);
+    const blocked = outboundUrlProblem(`http://${address.includes(":") ? `[${address}]` : address}/`, { allowPrivate });
     if (blocked !== undefined) return blocked;
   }
   return undefined;
@@ -116,6 +118,32 @@ function decodeEntities(value: string): string {
   });
 }
 
+/** Decodifica até estabilizar; no href, qualquer C0 (tab/LF/CR inclusive) sai. */
+function fullyDecodeHref(value: string): string | undefined {
+  let current = value;
+  for (let pass = 0; pass < 50; pass += 1) {
+    const next = decodeEntities(current).replace(/[\u0000-\u001f]/g, "");
+    if (next === current) return current;
+    current = next;
+  }
+  return undefined;
+}
+
+/** Texto preserva tab/LF/CR; só remove os demais controles. */
+function fullyDecode(value: string): string | undefined {
+  let current = value;
+  for (let pass = 0; pass < 50; pass += 1) {
+    const next = stripControls(decodeEntities(current));
+    if (next === current) return current;
+    current = next;
+  }
+  return undefined;
+}
+
+function escapeAmp(value: string): string {
+  return value.replace(/&/g, "&amp;");
+}
+
 function normalize(value: string): string {
   return value
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
@@ -125,15 +153,18 @@ function normalize(value: string): string {
 }
 
 function safeLink(href: string, label: string, format: WebFetchFormat): string {
-  const scheme = href.replace(/[\u0000-\u0020]+/g, "").toLowerCase();
-  if (/^(javascript|data|vbscript):/.test(scheme)) return label;
-  return format === "markdown" ? `[${label}](${href})` : label;
+  const decoded = fullyDecodeHref(href);
+  if (decoded === undefined) return label;
+  const normalized = decoded.replace(/[\u0020]+/g, "");
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(normalized)?.[1]?.toLowerCase();
+  if (scheme !== undefined && scheme !== "http" && scheme !== "https") return label;
+  const target = escapeAmp(decoded);
+  return format === "markdown" ? `[${label}](${target})` : label;
 }
 
 /** Remove blocos perigosos e converte a estrutura básica em markdown/texto. */
 export function htmlToText(html: string, format: WebFetchFormat): string {
-  // Decodifica antes de filtrar: `&lt;script&gt;` precisa virar tag e ser removido.
-  let text = decodeEntities(decodeEntities(html)).replace(/<!doctype[^>]*>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  let text = html.replace(/<!doctype[^>]*>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
   text = text.replace(BLOCKS, "").replace(SELF_CLOSING_BLOCKS, "");
   text = text.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level: string, inner: string) => (
     format === "markdown" ? `\n${"#".repeat(Number(level))} ${stripTags(inner).trim()}\n` : `\n${stripTags(inner).trim()}\n`
@@ -148,12 +179,25 @@ export function htmlToText(html: string, format: WebFetchFormat): string {
     format === "markdown" ? `**${stripTags(inner).trim()}**` : stripTags(inner).trim()
   ));
   text = text.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|section|article|ul|ol|li|tr|h[1-6])>/gi, "\n");
-  return normalize(stripTags(text));
+  // Tag real é removida antes do decode; depois do decode, qualquer texto que
+  // pareça tag é escapado (não apagado) para não virar markup executável.
+  const decoded = fullyDecode(stripTags(text)) ?? stripTags(text);
+  return normalize(escapeTagLike(stripControls(decoded)));
+}
+
+function stripControls(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
+}
+
+/** `&lt;div&gt;` vira `&lt;div>`; `a < b` (sem letra após `<`) fica intacto. */
+function escapeTagLike(value: string): string {
+  return value.replace(/<(?=[\/!?a-z])/gi, "&lt;");
 }
 
 export function createWebFetchTool(deps: WebFetchDeps): Tool {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const maxRedirects = deps.maxRedirects ?? MAX_REDIRECTS;
+  const allowPrivate = deps.allowPrivate ?? privateUrlsAllowed();
 
   return {
     manifest: {
@@ -195,7 +239,7 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
       let finalUrl = current;
       try {
         for (let hop = 0; hop <= maxRedirects; hop += 1) {
-          const problem = await urlProblem(current);
+          const problem = await urlProblem(current, allowPrivate);
           if (problem !== undefined) return failure(`web_fetch: URL recusada (${problem})`);
           const response = await fetchImpl(current, { redirect: "manual", signal: ctx.signal });
           status = response.status;
