@@ -17,7 +17,8 @@ export interface WebSearchDeps {
   audit: AuditLike;
   env: Record<string, string | undefined>;
   fetchImpl?: typeof fetch;
-  sleep?: (ms: number) => Promise<void>;
+  /** Espera cancelável: o sinal aborta o timer do backoff. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
 }
 
@@ -174,13 +175,27 @@ function one(title: unknown, url: unknown, text: unknown): SearchResult[] {
   return parsed === undefined ? [] : [parsed];
 }
 
-/** `Retry-After` em segundos ou data HTTP; ausente = undefined. */
+/** `Retry-After` em segundos ou data HTTP, limitado ao teto do backoff. */
 export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
   if (value === null) return undefined;
   const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
-  const date = Date.parse(value);
-  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
+  const raw = Number.isFinite(seconds) && seconds >= 0
+    ? Math.round(seconds * 1000)
+    : Number.isNaN(Date.parse(value)) ? undefined : Math.max(0, Date.parse(value) - now);
+  return raw === undefined ? undefined : Math.min(raw, BACKOFF_MAX_MS);
+}
+
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) return resolve();
+    const timer = setTimeout(done, ms);
+    const onAbort = (): void => { clearTimeout(timer); done(); };
+    function done(): void {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function backoffMs(attempt: number, random: () => number): number {
@@ -195,7 +210,7 @@ export function webSearchSecretEnvNames(config: { webSearch?: WebSearchConfig })
 
 export function createWebSearchTool(deps: WebSearchDeps): Tool {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = deps.sleep ?? defaultSleep;
   const random = deps.random ?? Math.random;
 
   return {
@@ -282,7 +297,11 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
           lastMessage = redactSecrets(error instanceof Error ? error.message : String(error));
         }
         if (attempt < MAX_ATTEMPTS - 1) {
-          await sleep(retryAfter ?? backoffMs(attempt, random));
+          await sleep(retryAfter ?? backoffMs(attempt, random), ctx.signal);
+          if (ctx.signal?.aborted === true) {
+            record(0, 0);
+            return failure("web_search cancelada");
+          }
         }
       }
 

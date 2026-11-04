@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { validateConfig } from "../src/config";
-import { createWebSearchTool, type WebSearchConfig, type WebSearchDeps } from "../src/tools/web-search";
+import { createWebSearchTool, retryAfterMs, type WebSearchConfig, type WebSearchDeps } from "../src/tools/web-search";
 
 const HOST_SECRET = ["s", "k", "-"].join("") + "host-secret-123456";
 const WEB_SECRET = "web-secret-value";
@@ -194,6 +194,37 @@ describe("web_search rate limit e backoff (#57)", () => {
       expect(result.isError).toBe(true);
       expect(sleeps).toEqual([]);
       expect(calls).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("Retry-After tem teto e entende data HTTP", () => {
+    expect(retryAfterMs("86400")).toBe(8000);
+    expect(retryAfterMs("-1")).toBe(0);
+    expect(retryAfterMs("not-a-date")).toBeUndefined();
+    expect(retryAfterMs(new Date(Date.now() + 60_000).toUTCString())).toBe(8000);
+  });
+
+  test("abort durante o backoff encerra a espera", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response("limit", { status: 429, headers: { "retry-after": "5" } }),
+    });
+    const controller = new AbortController();
+    try {
+      const { tool, cwd } = setup(
+        { provider: "exa", apiKeyEnv: "WEB_KEY", baseUrl: server.url.origin },
+        {
+          sleep: (_ms, signal) => new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+            setTimeout(() => controller.abort(), 10);
+          }),
+        },
+      );
+      const result = await tool.execute({ query: "x" }, { ...ctx(cwd), signal: controller.signal });
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("cancelada");
     } finally {
       server.stop(true);
     }
