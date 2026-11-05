@@ -3,14 +3,14 @@
  *
  * Classes: `hard-block` (imutável + configurável) > `sensitive` > `normal`,
  * sempre sobre o realpath (symlink resolvido via `canonicalize`), com
- * case-fold em win32/darwin e `~` expandido. Módulo puro: não pluga no
- * executor; os slices seguintes consomem `classifyPath`.
+ * case-fold em win32/darwin e `~` expandido. Faz I/O de FS (realpath/homedir);
+ * não pluga no executor; os slices seguintes consomem `classifyPath`.
  */
-import { statSync } from "node:fs";
-import { homedir } from "node:os";
+import * as fs from "node:fs";
+import { homedir, userInfo } from "node:os";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { CRITICAL_PATH_PATTERN } from "./permissions";
-import { canonicalize, isWithin } from "./tools/paths";
+import { canonicalize, isWithin, realpathPreservingDots } from "./tools/paths";
 
 export type PathClass = "hard-block" | "sensitive" | "normal";
 
@@ -53,10 +53,19 @@ function fold(path: string): string {
   return process.platform === "win32" || process.platform === "darwin" ? path.toLowerCase() : path;
 }
 
-function expandTilde(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
-  return path;
+function expandTilde(path: string): string | null {
+  const user = /^~([^\\/]*)([\\/][\s\S]*)?$/.exec(path);
+  if (!user) return path;
+  if (user[1] === "") return user[2] ? join(homedir(), user[2].slice(1)) : homedir();
+  const info = userInfo();
+  // `~usuario`: só o usuário atual resolve; os demais falham fechados (null)
+  return user[1] === info.username ? join(info.homedir, user[2]?.slice(1) ?? "") : null;
+}
+
+/** Remove ADS NTFS (`arq:stream`) de cada segmento no win32, fail-closed (ADR-0027). */
+function stripAds(p: string): string {
+  if (process.platform !== "win32") return p;
+  return p.split(sep).map((s) => (/^[a-zA-Z]:$/.test(s) ? s : s.split(":")[0])).join(sep);
 }
 
 function segmentsOf(path: string): string[] {
@@ -87,7 +96,7 @@ function isImmutableHardBlock(real: string, ctx: FoldedContext): boolean {
   // Configs nomeados (segmento, como CRITICAL_PATH_NAMES).
   if (NAMED_CONFIG_SEGMENTS.some((name) => segments.includes(name))) return true;
   // Dotfiles da home: ~/.netrc, ~/.npmrc, ~/.docker/config.json, ~/.config/gh/hosts.yml.
-  const home = fold(homedir());
+  const home = fold(canonicalize(homedir()));
   if (real === join(home, ".netrc") || real === join(home, ".npmrc")) return true;
   if (real === join(home, ".docker", "config.json")) return true;
   if (real === join(home, ".config", "gh", "hosts.yml")) return true;
@@ -122,20 +131,22 @@ function resolveAllowCritical(entries: readonly string[], cwd: string, ctx: Fold
   }
   const resolved = new Set<string>();
   for (const entry of entries) {
-    if (typeof entry !== "string" || entry.length === 0 || !isAbsolute(expandTilde(entry))) {
+    if (typeof entry !== "string" || entry.length === 0 || !isAbsolute(expandTilde(entry) ?? "")) {
       throw new AllowlistInvalidError(entry, `entrada de allow-critical sem realpath absoluto: ${entry}`);
     }
     if (GLOB_CHARS.test(entry) || entry.endsWith(sep)) {
       throw new AllowlistInvalidError(entry, `entrada de allow-critical com glob ou diretório não é permitida: ${entry}`);
     }
-    const real = fold(canonicalize(resolve(cwd, expandTilde(entry))));
+    const real = stripAds(fold(realpathPreservingDots(expandTilde(entry) ?? "", resolve(cwd))));
     try {
-      if (statSync(real).isDirectory()) {
+      if (fs.statSync(real).isDirectory()) {
         throw new AllowlistInvalidError(entry, `entrada de allow-critical é um diretório: ${entry}`);
       }
     } catch (error) {
       if (error instanceof AllowlistInvalidError) throw error;
-      // inexistente é aceito (validação é de formato, não de existência)
+      const code = (error as NodeJS.ErrnoException).code;
+      // só ENOENT/ENOTDIR é "inexistente aceito"; outro erro falha fechado (allow_invalid)
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw new AllowlistInvalidError(entry, `entrada de allow-critical não inspecionável: ${entry}`);
     }
     if (isImmutableHardBlock(real, ctx)) {
       throw new AllowlistInvalidError(entry, `entrada de allow-critical casa o tier imutável (sem override): ${entry}`);
@@ -155,10 +166,12 @@ export function classifyPath(input: ClassifyPathInput): PathClass {
     cwd: fold(canonicalize(resolve(input.cwd))),
     astroHome: fold(canonicalize(resolve(input.astroHome))),
     artifactRoot: input.artifactRoot ? fold(canonicalize(resolve(input.artifactRoot))) : null,
-    protected: (input.protectedPaths ?? []).map((path) => fold(canonicalize(resolve(input.cwd, expandTilde(path))))),
+    protected: (input.protectedPaths ?? []).map((path) => fold(canonicalize(resolve(input.cwd, expandTilde(path) ?? path)))),
   };
   const allow = resolveAllowCritical(input.allowCritical ?? [], input.cwd, ctx);
-  const real = fold(canonicalize(resolve(input.cwd, expandTilde(input.realPath))));
+  const expanded = expandTilde(input.realPath);
+  if (expanded === null) return "hard-block"; // `~usuario` não resolvido: fail-closed
+  const real = stripAds(fold(realpathPreservingDots(expanded, resolve(input.cwd))));
 
   if (isImmutableHardBlock(real, ctx)) return "hard-block";
   if (isConfigurableHardBlock(real)) return allow.has(real) ? "normal" : "hard-block";

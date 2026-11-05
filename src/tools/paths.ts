@@ -1,5 +1,5 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { ToolError } from "./types";
 
 const RESERVED_DIR = ".astro";
@@ -46,6 +46,22 @@ export function canonicalize(target: string, seen = new Set<string>()): string {
       current = parent;
     }
   }
+}
+
+/**
+ * Como `canonicalize`, mas preserva `..` até o realpath (I-11): cada segmento
+ * resolve sobre o caminho já real, então `x/../.netrc` com `x` junction para
+ * `$HOME/AppData` cai no `~/.netrc` real, não em `cwd/.netrc`.
+ */
+export function realpathPreservingDots(target: string, cwd: string): string {
+  const raw = isAbsolute(target) ? target : cwd + sep + target;
+  const root = parse(raw).root;
+  let current = root;
+  for (const part of raw.slice(root.length).split(/[\\/]+/)) {
+    if (part === "" || part === ".") continue;
+    current = part === ".." ? dirname(current) : canonicalize(join(current, part));
+  }
+  return current;
 }
 
 export function isWithin(root: string, target: string): boolean {
