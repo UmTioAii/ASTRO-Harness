@@ -1,6 +1,6 @@
 # ADR-0021: event bus — persistência por tipo de evento
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-11-05
 - Issue: #376
 - Decisões relacionadas: ADR-0002, ADR-0010, ADR-0020, ADR-0022, I-03, I-04
