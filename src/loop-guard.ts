@@ -4,8 +4,9 @@
  * store da sessão (ADR-0010) e a parada segura de não-progresso (I-19).
  */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import type { Dirent } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { redactSecrets } from "./sanitize-external";
 import { resolveWithin } from "./tools/paths";
 
@@ -98,6 +99,93 @@ export function checkpointPath(cwd: string, run: string, agent: string): string 
     throw new Error("identificador de run/agent inválido para o checkpoint");
   }
   return join(resolve(cwd), ".astro", "sessions", run, agent, "checkpoint.json");
+}
+
+const MAX_CHECKPOINT_BYTES = 64 * 1024;
+
+/** Valida o checkpoint lido do disco e reaplica a sanitização (defesa em profundidade, I-03). */
+function parseCheckpoint(raw: unknown, cwd: string): CheckpointV1 {
+  if (raw === null || typeof raw !== "object") throw new Error("checkpoint inválido");
+  const checkpoint = raw as Partial<CheckpointV1>;
+  if (checkpoint.schema !== "checkpoint/v1") throw new Error("schema de checkpoint não suportado");
+  if (typeof checkpoint.summary !== "string" || typeof checkpoint.nextStep !== "string") {
+    throw new Error("checkpoint inválido");
+  }
+  if (typeof checkpoint.createdAt !== "string" || Number.isNaN(Date.parse(checkpoint.createdAt))) {
+    throw new Error("checkpoint inválido");
+  }
+  if (!Array.isArray(checkpoint.changedFiles) || checkpoint.changedFiles.some((file) => typeof file !== "string")) {
+    throw new Error("checkpoint inválido");
+  }
+  const changedFiles: string[] = [];
+  for (const file of checkpoint.changedFiles) {
+    // Caminho adulterado para fora do cwd não entra no prompt (I-11).
+    const absolute = resolveWithin(cwd, file);
+    changedFiles.push(redactSecrets(relative(resolve(cwd), absolute)));
+  }
+  return {
+    schema: "checkpoint/v1",
+    summary: redactSecrets(checkpoint.summary),
+    changedFiles,
+    nextStep: redactSecrets(checkpoint.nextStep),
+    createdAt: checkpoint.createdAt,
+  };
+}
+
+/** Monta o prompt de continuação a partir do checkpoint; `task` explícita vence. */
+export function continueTask(checkpoint: CheckpointV1, task?: string): string {
+  const explicit = task?.trim();
+  if (explicit !== undefined && explicit !== "") return explicit;
+  const lines = [
+    "Continue a execução anterior a partir do checkpoint.",
+    "",
+    `Resumo: ${checkpoint.summary}`,
+  ];
+  if (checkpoint.changedFiles.length > 0) {
+    lines.push("", "Arquivos alterados:", ...checkpoint.changedFiles.map((file) => `- ${file}`));
+  }
+  lines.push("", `Próximo passo: ${checkpoint.nextStep}`);
+  return lines.join("\n");
+}
+
+/** Lê o checkpoint do store da sessão, validando o schema e sanitizando o conteúdo (I-03). */
+export function loadCheckpoint(cwd: string, run: string, agent: string): CheckpointV1 {
+  const path = checkpointPath(cwd, run, agent);
+  if (!existsSync(path)) {
+    throw new Error(`checkpoint não encontrado para o run "${run}" (agente "${agent}")`);
+  }
+  const root = realpathSync(join(resolve(cwd), ".astro", "sessions"));
+  const real = realpathSync(path);
+  const rel = relative(root, real);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error("checkpoint fora do store da sessão");
+  }
+  if (statSync(real).size > MAX_CHECKPOINT_BYTES) throw new Error("checkpoint grande demais");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(real, "utf8"));
+  } catch {
+    throw new Error("checkpoint inválido");
+  }
+  return parseCheckpoint(raw, cwd);
+}
+
+/** Lista os agentes com checkpoint no store do run; run inválido é recusado. */
+export function findCheckpointAgents(cwd: string, run: string): string[] {
+  if (!SAFE_ID.test(run)) throw new Error("identificador de run inválido para o checkpoint");
+  const root = join(resolve(cwd), ".astro", "sessions", run);
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && SAFE_ID.test(entry.name))
+    .filter((entry) => existsSync(join(root, entry.name, "checkpoint.json")))
+    .map((entry) => entry.name)
+    .sort();
 }
 
 /** Grava o checkpoint atômico (tmp + rename, modo 0600 no POSIX). */
