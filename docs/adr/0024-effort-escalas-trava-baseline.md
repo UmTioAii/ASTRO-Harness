@@ -1,6 +1,6 @@
 # ADR-0024: effort — duas escalas, trava de salto e baseline
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-11-05
 - Issue: #378
 - Decisões relacionadas: ADR-0012, ADR-0023, I-01, I-03, I-17
