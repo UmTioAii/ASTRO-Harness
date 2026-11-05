@@ -171,22 +171,6 @@ export interface BudgetDecisionContext {
   reserveUsd: number;
 }
 
-/** Parada por budget (I-17/I-19): esgotado, teto físico ou modo não interativo. */
-export class BudgetExceededError extends Error {
-  readonly reason: "limit" | "ceiling" | "non_interactive" | "unknown_price";
-  readonly status: BudgetStatus;
-  /** Motivo da recusa quando o esgotamento veio de um pedido de aumento (D-30). */
-  readonly raiseReason?: BudgetRaiseDenied;
-  constructor(reason: BudgetExceededError["reason"], status: BudgetStatus, raiseReason?: BudgetRaiseDenied) {
-    const suffix = raiseReason === undefined ? "" : `; aumento recusado: ${RAISE_DENIED_LABEL[raiseReason]}`;
-    super(`budget esgotado (${reason}): ${status.estimate}${status.limitUsd === null ? "" : ` / US$ ${status.limitUsd}`}${suffix}`);
-    this.name = "BudgetExceededError";
-    this.reason = reason;
-    this.status = status;
-    this.raiseReason = raiseReason;
-  }
-}
-
 const RAISE_DENIED_LABEL: Record<BudgetRaiseDenied, string> = {
   invalid_number: "valor inválido",
   not_above_spend: "valor não supera o gasto + reserva",
@@ -195,6 +179,27 @@ const RAISE_DENIED_LABEL: Record<BudgetRaiseDenied, string> = {
   ceiling_not_raised: "novo teto não é maior que o atual",
   ceiling_not_confirmed: "teto físico não confirmado",
 };
+
+/** Texto em português para o motivo de recusa (D-30), estável para a UI/testes. */
+export function raiseDeniedLabel(reason: BudgetRaiseDenied): string {
+  return RAISE_DENIED_LABEL[reason] ?? reason;
+}
+
+/** Parada por budget (I-17/I-19): esgotado, teto físico ou modo não interativo. */
+export class BudgetExceededError extends Error {
+  readonly reason: "limit" | "ceiling" | "non_interactive" | "unknown_price";
+  readonly status: BudgetStatus;
+  /** Motivo da recusa quando o esgotamento veio de um pedido de aumento (D-30). */
+  readonly raiseReason?: BudgetRaiseDenied;
+  constructor(reason: BudgetExceededError["reason"], status: BudgetStatus, raiseReason?: BudgetRaiseDenied) {
+    const suffix = raiseReason === undefined ? "" : `; aumento recusado: ${raiseDeniedLabel(raiseReason)}`;
+    super(`budget esgotado (${reason}): ${status.estimate}${status.limitUsd === null ? "" : ` / US$ ${status.limitUsd}`}${suffix}`);
+    this.name = "BudgetExceededError";
+    this.reason = reason;
+    this.status = status;
+    this.raiseReason = raiseReason;
+  }
+}
 
 export interface EnforceBudgetOptions {
   budget: BudgetConfig;
