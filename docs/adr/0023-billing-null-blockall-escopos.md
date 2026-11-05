@@ -1,6 +1,6 @@
 # ADR-0023: billing v4 — null, blockAll, escopos e cache
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-11-05
 - Issue: #368
 - Decisões relacionadas: D-10, D-15, D-20, ADR-0002, ADR-0013, ADR-0014, #372
