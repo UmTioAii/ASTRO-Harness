@@ -40,6 +40,8 @@ Regras:
 | Nunca commitar `.env*`, `astro.config.json` real, `.astro/`, credenciais, saída de teste com segredo | — |
 | Sem menção a ferramenta/sessão no commit/PR (regra do `AGENTS.md`) | — |
 
+> Com o sandbox do ADR-0027, o agente não executa `git`: criar worktree e commitar são do usuário no host. A verificação (`bun test`, `bun run typecheck`) roda na imagem do sandbox, que carrega o toolchain do projeto.
+
 ## 4. PR
 
 | Passo | Ação |
