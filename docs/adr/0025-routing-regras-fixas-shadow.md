@@ -1,6 +1,6 @@
 # ADR-0025: routing — regras fixas, matriz e shadow
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-11-05
 - Issue: #380
 - Decisões relacionadas: ADR-0007, ADR-0011, ADR-0024, I-06, I-21, C5, F-07
