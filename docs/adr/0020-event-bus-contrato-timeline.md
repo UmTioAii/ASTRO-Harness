@@ -1,6 +1,6 @@
 # ADR-0020: event bus — contrato e modelo de eventos da timeline
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-11-05
 - Issue: #369
 - Decisões relacionadas: ADR-0002, ADR-0010, ADR-0014, ADR-0021 (a abrir), ADR-0022 (a abrir), I-03, I-18, I-19
