@@ -4,7 +4,7 @@ import { ToolError } from "./types";
 
 const RESERVED_DIR = ".astro";
 
-function canonicalize(target: string, seen = new Set<string>()): string {
+export function canonicalize(target: string, seen = new Set<string>()): string {
   let current = resolve(target);
   const suffix: string[] = [];
 
@@ -48,7 +48,7 @@ function canonicalize(target: string, seen = new Set<string>()): string {
   }
 }
 
-function isWithin(root: string, target: string): boolean {
+export function isWithin(root: string, target: string): boolean {
   const comparableRoot = process.platform === "win32" ? root.toLowerCase() : root;
   const comparableTarget = process.platform === "win32" ? target.toLowerCase() : target;
   const rel = relative(comparableRoot, comparableTarget);
