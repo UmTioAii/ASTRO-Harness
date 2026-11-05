@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRepl, type ChatSession, type ReplIO } from "../src/chat/repl";
@@ -8,6 +9,7 @@ import type { ConfigSummary } from "../src/chat/config-summary";
 import type { PermissionMode } from "../src/permissions";
 import { BudgetExceededError, type BudgetStatus } from "../src/budget";
 import { SessionStore } from "../src/chat/store";
+import { openSessionApi, SessionApi } from "../src/chat/session-api";
 import { AgentSession } from "../src/chat/agent-session";
 
 class ScriptedIO implements ReplIO {
@@ -65,14 +67,17 @@ class FakeSession implements ChatSession {
     return this.model;
   }
   resumed: SessionSnapshot[] = [];
+  resumedFrom: SessionSnapshot["resumedFrom"];
   resume(snapshot: SessionSnapshot): void {
     this.resumed.push(snapshot);
+    this.resumedFrom = { id: snapshot.id, startedAt: snapshot.startedAt };
   }
   snapshot(): SessionSnapshot {
     return {
       id: "s1", startedAt: "2026-10-28T12:00:00.000Z", model: this.model,
       messages: this.clearedFlag ? [{ role: "system", content: "sys" }] : [{ role: "user", content: "x" }],
       turns: this.sent.length, tokensIn: 10, tokensOut: 5, costUsd: 0.001,
+      ...(this.resumedFrom === undefined ? {} : { resumedFrom: this.resumedFrom }),
     };
   }
   close(): void {
@@ -174,30 +179,134 @@ describe("REPL do chat (T1, #62)", () => {
 
   test("/sessions lista e /resume retoma pelo número", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-chat-resume-"));
-    new SessionStore(dir).write({
+    const astroDir = join(dir, ".astro");
+    new SessionStore(join(astroDir, "sessions")).write({
       id: "abc", startedAt: "2026-10-01T10:00:00.000Z", model: "p/m1",
       messages: [{ role: "user", content: "velho" }], turns: 1, tokensIn: 10, tokensOut: 5, costUsd: 0.001,
     });
+    const sessionApi = new SessionApi(astroDir);
     const session = new FakeSession();
-    const io = new ScriptedIO(["/sessions", "/resume 1", "/exit"]);
-    await runRepl(session, io, { store: new SessionStore(dir) });
-    expect(io.outputs.some((line) => line.includes("abc"))).toBe(true);
-    expect(session.resumed).toHaveLength(1);
-    expect(session.resumed[0]!.messages[0]!.content).toBe("velho");
-    expect(io.outputs).toContain("sessão retomada: abc (1 turnos)");
+    const io = new ScriptedIO(["/sessions", "/resume 1", "/session", "/exit"]);
+    try {
+      await runRepl(session, io, { store: new SessionStore(join(astroDir, "sessions")), sessionApi });
+      expect(io.outputs.some((line) => line.includes("abc"))).toBe(true);
+      expect(session.resumed).toHaveLength(1);
+      expect(session.resumed[0]!.messages[0]!.content).toBe("velho");
+      expect(io.outputs).toContain("sessão retomada: abc (1 turnos)");
+      expect(io.outputs.some((line) => line.includes("arquivo: SessionApi (abc)"))).toBe(true);
+    } finally {
+      sessionApi.close();
+    }
   });
   test("/resume 1 sem /sessions recarrega a lista; índice inválido avisa", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-chat-resume2-"));
-    new SessionStore(dir).write({
+    const astroDir = join(dir, ".astro");
+    new SessionStore(join(astroDir, "sessions")).write({
       id: "xyz", startedAt: "2026-10-02T10:00:00.000Z", model: "p/m1",
       messages: [{ role: "user", content: "guardado" }], turns: 2, tokensIn: 20, tokensOut: 10, costUsd: 0.002,
     });
+    const sessionApi = new SessionApi(astroDir);
     const session = new FakeSession();
     const io = new ScriptedIO(["/resume 1", "/resume 9", "/exit"]);
-    await runRepl(session, io, { store: new SessionStore(dir) });
-    expect(io.outputs).toContain("sessão retomada: xyz (2 turnos)");
-    expect(io.outputs).toContain("índice fora da lista; use /sessions");
-    expect(session.resumed).toHaveLength(1);
+    try {
+      await runRepl(session, io, { store: new SessionStore(join(astroDir, "sessions")), sessionApi });
+      expect(io.outputs).toContain("sessão retomada: xyz (2 turnos)");
+      expect(io.outputs).toContain("índice fora da lista; use /sessions");
+      expect(session.resumed).toHaveLength(1);
+    } finally {
+      sessionApi.close();
+    }
+  });
+  test("/sessions reports SQLite lock errors and keeps the REPL alive", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-chat-sessions-lock-"));
+    const astroDir = join(root, ".astro");
+    const sessionApi = new SessionApi(astroDir);
+    const lock = new Database(sessionApi.databasePath);
+    const session = new FakeSession();
+    const io = new ScriptedIO(["/sessions", "/exit"]);
+    lock.exec("BEGIN EXCLUSIVE");
+
+    try {
+      await expect(runRepl(session, io, { sessionApi })).resolves.toBeUndefined();
+      expect(io.outputs.some((line) => line.startsWith("erro:") && line.includes("locked"))).toBe(true);
+      expect(session.closed).toBe(1);
+    } finally {
+      lock.exec("ROLLBACK");
+      lock.close();
+      sessionApi.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("chat continues accepting /exit when the SQLite database is corrupt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-chat-corrupt-session-db-"));
+    const astroDir = join(root, ".astro");
+    mkdirSync(astroDir, { recursive: true });
+    writeFileSync(join(astroDir, "sessions.db"), "invalid SQLite bytes", "utf8");
+    const warning = spyOn(console, "error").mockImplementation(() => {});
+    const sessionApi = openSessionApi(astroDir);
+    const session = new FakeSession();
+    const io = new ScriptedIO(["/exit"]);
+
+    try {
+      expect(sessionApi).toBeUndefined();
+      await expect(runRepl(session, io, { store: new SessionStore(join(astroDir, "sessions")), sessionApi }))
+        .resolves.toBeUndefined();
+      expect(session.closed).toBe(1);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("/sessions e /resume desativados"));
+    } finally {
+      warning.mockRestore();
+      sessionApi?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("/sessions lista por resumo e /resume carrega o registro migrado pelo id", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-chat-resume-api-"));
+    const astroDir = join(root, ".astro");
+    const initial = new SessionApi(astroDir);
+    initial.close();
+    const legacy = new SessionStore(join(astroDir, "sessions"));
+    legacy.write({
+      id: "session-old", startedAt: "2026-10-01T10:00:00.000Z", model: "p/m1",
+      messages: [{ role: "user", content: "old" }], turns: 1, tokensIn: 1, tokensOut: 1, costUsd: null,
+    });
+
+    legacy.write({
+      id: "session-new", startedAt: "2026-10-02T10:00:00.000Z", model: "p/m2",
+      messages: [
+        { role: "user", content: "new" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call", name: "tool", arguments: "{}" }] },
+        { role: "tool", toolCallId: "call", content: "result" },
+        { role: "assistant", content: "done" },
+      ],
+      turns: 2, tokensIn: 2, tokensOut: 2, costUsd: 0.1,
+      resumedFrom: { id: "session-old", startedAt: "2026-10-01T10:00:00.000Z" },
+    });
+    const api = new SessionApi(astroDir);
+    const session = new FakeSession();
+    const io = new ScriptedIO(["/sessions", "/resume session-new", "/exit"]);
+    try {
+      await runRepl(session, io, {
+        store: new SessionStore(join(root, "unrelated-json-store")),
+        sessionApi: api,
+      });
+      const firstListedSession = io.outputs.find((line) => line.startsWith("1."));
+      expect(firstListedSession).toBeDefined();
+      expect(firstListedSession).toContain("session-new");
+      expect(firstListedSession).not.toContain(".json");
+      expect(session.resumed[0]).toMatchObject({
+        id: "session-new",
+        messages: [
+          { role: "user", content: "new" },
+          { role: "assistant", toolCalls: [{ id: "call" }] },
+          { role: "tool", toolCallId: "call", content: "result" },
+          { role: "assistant", content: "done" },
+        ],
+        resumedFrom: { id: "session-old", startedAt: "2026-10-01T10:00:00.000Z" },
+      });
+    } finally {
+      api.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
   test("/export grava Markdown e /init cria AGENTS.md no cwd", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-repl-export-"));

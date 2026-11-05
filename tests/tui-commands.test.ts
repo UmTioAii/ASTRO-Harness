@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatSession } from "../src/chat/repl";
@@ -7,6 +7,7 @@ import type { SessionSnapshot } from "../src/chat/agent-session";
 import type { PermissionMode } from "../src/permissions";
 import type { BudgetStatus } from "../src/budget";
 import { SessionStore } from "../src/chat/store";
+import { SessionApi } from "../src/chat/session-api";
 import { runCommand, type CommandState } from "../src/tui/commands";
 import type { Theme } from "../src/tui/theme";
 
@@ -82,7 +83,7 @@ describe("comandos da TUI (T2, #63)", () => {
 
   test("session mostra o último arquivo; sem store avisa", async () => {
     const session = new FakeSession();
-    const withFile = await runCommand({ kind: "session" }, session, { lastFile: "/tmp/s.json" }, new SessionStore("/tmp"));
+    const withFile = await runCommand({ kind: "session" }, session, { lastFile: "/tmp/s.json" }, { store: new SessionStore("/tmp") });
     expect(withFile.entries[0]!.text).toContain("arquivo: /tmp/s.json");
     expect(withFile.entries[0]!.text).toContain("turnos 2");
     const without = await runCommand({ kind: "session" }, session, {});
@@ -92,13 +93,13 @@ describe("comandos da TUI (T2, #63)", () => {
   test("save grava sanitizado e devolve o caminho; falha vira erro", async () => {
     const session = new FakeSession();
     const dir = mkdtempSync(join(tmpdir(), "astro-tui-save-"));
-    const ok = await runCommand({ kind: "save" }, session, {}, new SessionStore(dir));
+    const ok = await runCommand({ kind: "save" }, session, {}, { store: new SessionStore(dir) });
     expect(ok.entries[0]!.text).toMatch(/^sessão salva em /);
     expect(ok.lastFile).toBeDefined();
 
     const blocked = join(dir, "blocked");
     await Bun.write(blocked, "arquivo");
-    const failed = await runCommand({ kind: "save" }, session, {}, new SessionStore(blocked));
+    const failed = await runCommand({ kind: "save" }, session, {}, { store: new SessionStore(blocked) });
     expect(failed.entries[0]).toMatchObject({ kind: "error" });
     expect(failed.entries[0]!.text).toMatch(/^erro: /);
     expect(failed.lastFile).toBeNull(); // limpa o caminho anterior
@@ -111,7 +112,9 @@ describe("comandos da TUI (T2, #63)", () => {
         throw new Error("falhou com sk-live-SEGREDO123");
       }
     }
-    const outcome = await runCommand({ kind: "save" }, session, {}, new Leaky(mkdtempSync(join(tmpdir(), "astro-tui-leak-"))));
+    const outcome = await runCommand(
+      { kind: "save" }, session, {}, { store: new Leaky(mkdtempSync(join(tmpdir(), "astro-tui-leak-"))) },
+    );
     expect(outcome.entries[0]!.text).not.toContain("sk-live-SEGREDO123");
     expect(outcome.entries[0]!.text).toMatch(/^erro: /);
   });
@@ -127,26 +130,69 @@ describe("comandos da TUI (T2, #63)", () => {
 
   test("sessions abre o picker e resume carrega a sessão pelo número (#64)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-tui-resume-"));
-    const store = new SessionStore(dir);
+    const astroDir = join(dir, ".astro");
+    const store = new SessionStore(join(astroDir, "sessions"));
     store.write({
       id: "abc", startedAt: "2026-10-01T10:00:00.000Z", model: "p/m1",
       messages: [{ role: "user", content: "velho" }], turns: 1, tokensIn: 10, tokensOut: 5, costUsd: 0.001,
     });
+    const api = new SessionApi(astroDir);
     const session = new FakeSession();
     const state: { lastFile?: string } = {};
-    const list = await runCommand({ kind: "sessions" }, session, state as never, store);
-    // na TUI o /sessions abre o modal; a lista não vai mais como texto para o histórico
-    expect(list).toMatchObject({ entries: [], openSessions: true });
-    const resumed = await runCommand({ kind: "resume", ref: "1" }, session, state as never, store);
-    expect(resumed.entries[0]!.text).toBe("sessão retomada: abc (1 turnos)");
-    expect(resumed.lastFile).toMatch(/\.json$/);
-    expect(session.resumed[0]!.id).toBe("abc");
-    const sessionInfo = await runCommand({ kind: "session" }, session, state as never, store);
-    expect(sessionInfo.entries[0]!.text).toContain("retomada de abc");
+    try {
+      const list = await runCommand({ kind: "sessions" }, session, state as never, { store, sessionApi: api });
+      // na TUI o /sessions abre o modal; a lista não vai mais como texto para o histórico
+      expect(list).toMatchObject({ entries: [], openSessions: true });
+      const resumed = await runCommand({ kind: "resume", ref: "1" }, session, state as never, { store, sessionApi: api });
+      expect(resumed.entries[0]!.text).toBe("sessão retomada: abc (1 turnos)");
+      expect(resumed.lastFile).toBeNull();
+      expect(session.resumed[0]!.id).toBe("abc");
+      const sessionInfo = await runCommand({ kind: "session" }, session, state as never, { store, sessionApi: api });
+      expect(sessionInfo.entries[0]!.text).toContain("retomada de abc");
 
-    await runCommand({ kind: "clear" }, session, state as never, store);
-    const afterClear = await runCommand({ kind: "session" }, session, state as never, store);
-    expect(afterClear.entries[0]!.text).not.toContain("retomada de");
+      await runCommand({ kind: "clear" }, session, state as never, { store, sessionApi: api });
+      const afterClear = await runCommand({ kind: "session" }, session, state as never, { store, sessionApi: api });
+      expect(afterClear.entries[0]!.text).not.toContain("retomada de");
+    } finally {
+      api.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("/resume da TUI carrega pelo resumo da SessionApi sem depender do caminho JSON", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-tui-resume-api-"));
+    const api = new SessionApi(join(root, ".astro"));
+    api.create({
+      schemaVersion: 1, id: "older", startedAt: "2026-10-01T10:00:00.000Z", model: "p/m1",
+      messages: [{ role: "user", content: "old" }], turns: 1, tokensIn: 1, tokensOut: 1, costUsd: null,
+    });
+    api.create({
+      schemaVersion: 1, id: "newer", startedAt: "2026-10-02T10:00:00.000Z", model: "p/m2",
+      messages: [
+        { role: "user", content: "new" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call", name: "tool", arguments: "{}" }] },
+        { role: "tool", toolCallId: "call", content: "result" },
+      ],
+      turns: 2, tokensIn: 2, tokensOut: 2, costUsd: 0.1,
+      resumedFrom: { id: "older", startedAt: "2026-10-01T10:00:00.000Z" },
+    });
+    const session = new FakeSession();
+    try {
+      expect(api.list().map(({ id }) => id)).toEqual(["newer", "older"]);
+      const resumed = await runCommand(
+        { kind: "resume", ref: "1" }, session, {},
+        { store: new SessionStore(join(root, "empty-json-store")), sessionApi: api },
+      );
+      expect(resumed.entries[0]!.text).toBe("sessão retomada: newer (2 turnos)");
+      expect(resumed.lastFile).toBeNull();
+      expect(session.resumed[0]).toMatchObject({
+        id: "newer",
+        messages: [{ role: "user", content: "new" }, { role: "assistant", toolCalls: [{ id: "call" }] }, { role: "tool", content: "result" }],
+        resumedFrom: { id: "older", startedAt: "2026-10-01T10:00:00.000Z" },
+      });
+    } finally {
+      api.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
   test("sem store, /session mantém a origem e avisa sobre a persistência", async () => {
     const session = new FakeSession();
@@ -160,8 +206,8 @@ describe("comandos da TUI (T2, #63)", () => {
     const session = new FakeSession();
     const state = { lastFile: "/tmp/s.json" };
     const store = new SessionStore(mkdtempSync(join(tmpdir(), "astro-tui-details-")));
-    const sessionOut = await runCommand({ kind: "session" }, session, state, store);
-    const detailsOut = await runCommand({ kind: "details" }, session, state, store);
+    const sessionOut = await runCommand({ kind: "session" }, session, state, { store });
+    const detailsOut = await runCommand({ kind: "details" }, session, state, { store });
     expect(detailsOut.entries[0]!.text).toBe(sessionOut.entries[0]!.text);
     expect(detailsOut.entries[0]!.text).toContain("uptime");
     expect(detailsOut.entries[0]!.text).toContain("provider: p");
@@ -181,42 +227,45 @@ describe("comandos da TUI (T2, #63)", () => {
   });
   test("resume sem /sessions recarrega a lista e valida o índice", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-tui-resume2-"));
-    const store = new SessionStore(dir);
+    const astroDir = join(dir, ".astro");
+    const store = new SessionStore(join(astroDir, "sessions"));
     store.write({
       id: "xyz", startedAt: "2026-10-02T10:00:00.000Z", model: "p/m1",
       messages: [{ role: "user", content: "guardado" }], turns: 2, tokensIn: 20, tokensOut: 10, costUsd: 0.002,
     });
+    const api = new SessionApi(astroDir);
     const session = new FakeSession();
-    const ok = await runCommand({ kind: "resume", ref: "1" }, session, {}, store);
+    const ok = await runCommand({ kind: "resume", ref: "1" }, session, {}, { store, sessionApi: api });
     expect(ok.entries[0]!.text).toBe("sessão retomada: xyz (2 turnos)");
-    const bad = await runCommand({ kind: "resume", ref: "9" }, session, {}, store);
+    const bad = await runCommand({ kind: "resume", ref: "9" }, session, {}, { store, sessionApi: api });
     expect(bad.entries[0]!.text).toBe("índice fora da lista; use /sessions");
     expect(session.resumed).toHaveLength(1);
+    api.close();
   });
 
   test("/compact force repassa force=true ao compactar (CMP-6)", async () => {
     const session = new FakeSession();
-    const plain = await runCommand({ kind: "compact" }, session, {}, undefined, process.cwd());
+    const plain = await runCommand({ kind: "compact" }, session, {});
     expect(plain.entries[0]!.text).toBe("compactado");
     expect(session.forced).toBe(false);
 
-    await runCommand({ kind: "compact", force: true }, session, {}, undefined, process.cwd());
+    await runCommand({ kind: "compact", force: true }, session, {});
     expect(session.forced).toBe(true);
   });
 
   test("export e init gravam no cwd e recusam escape", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-tui-export-"));
     const session = new FakeSession();
-    const exported = await runCommand({ kind: "export" }, session, {}, undefined, cwd);
+    const exported = await runCommand({ kind: "export" }, session, {}, { cwd });
     expect(exported.entries[0]!.text).toContain("sessão exportada em");
     expect(existsSync(join(cwd, ".astro", "exports"))).toBe(true);
 
-    const escape = await runCommand({ kind: "export", path: "../fora.md" }, session, {}, undefined, cwd);
+    const escape = await runCommand({ kind: "export", path: "../fora.md" }, session, {}, { cwd });
     expect(escape.entries[0]).toMatchObject({ kind: "error" });
     expect(escape.entries[0]!.text).toContain("fora do cwd");
 
-    expect((await runCommand({ kind: "init" }, session, {}, undefined, cwd)).entries[0]!.text).toContain("AGENTS.md criado");
-    expect((await runCommand({ kind: "init" }, session, {}, undefined, cwd)).entries[0]!.text).toContain("já existe");
+    expect((await runCommand({ kind: "init" }, session, {}, { cwd })).entries[0]!.text).toContain("AGENTS.md criado");
+    expect((await runCommand({ kind: "init" }, session, {}, { cwd })).entries[0]!.text).toContain("já existe");
   });
 });
 

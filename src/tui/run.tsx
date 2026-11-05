@@ -133,10 +133,11 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
     return 1;
   }
   try {
-    const [{ render }, { AgentSession }, { SessionStore }, { TuiApp }] = await Promise.all([
+    const [{ render }, { AgentSession }, { SessionStore }, { openSessionApi }, { TuiApp }] = await Promise.all([
       import("ink"),
       import("../chat/agent-session"),
       import("../chat/store"),
+      import("../chat/session-api"),
       import("./app"),
     ]);
     const cwd = resolve(opts.cwd);
@@ -178,15 +179,18 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
     const { session, shell } = boot;
     for (const warning of session.warnings) console.error(`aviso: ${warning}`);
     const store = new SessionStore(resolve(cwd, ".astro", "sessions"));
+    let sessionApi: ReturnType<typeof openSessionApi>;
     let instance: ReturnType<typeof render> | undefined;
     const branch = gitBranch(cwd);
     try {
+      sessionApi = openSessionApi(resolve(cwd, ".astro"));
       instance = render(
         <TuiApp
           session={session}
           cwd={cwd}
           {...(branch === undefined ? {} : { branch })}
           store={store}
+          {...(sessionApi === undefined ? {} : { sessionApi })}
           approvals={approvals}
           shell={shell}
           manager={manager}
@@ -204,6 +208,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       } catch {
         // turno abortado ainda em curso: o sinal já foi enviado
       }
+      sessionApi?.close();
     }
   } catch (error) {
     console.error(`erro: ${redactSecrets(error instanceof Error ? error.message : String(error))}`);

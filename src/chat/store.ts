@@ -1,6 +1,6 @@
 /** Persistência sanitizada da sessão de chat (T1): schema 1, escrita atômica. */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { ChatMessage } from "../provider/types";
 import { redactSecrets } from "../sanitize-external";
@@ -55,6 +55,14 @@ function requireName(value: string): string {
   const clean = normalizeName(value);
   if (clean === undefined) throw new Error("nome da sessão inválido");
   return clean;
+}
+
+/** Nome de sessão sanitizado para gravação por qualquer backend de sessão. */
+export function sanitizeSessionName(value: string): string {
+  const sanitized = sanitizeValue(requireName(value));
+  const stored = typeof sanitized === "string" ? normalizeName(sanitized) : undefined;
+  if (stored === undefined) throw new Error("nome da sessão inválido");
+  return stored;
 }
 
 const ROLES = new Set(["system", "user", "assistant", "tool"]);
@@ -187,7 +195,8 @@ export class SessionStore {
         // arquivo corrompido ou de outro schema: não aparece na lista
       }
     }
-    return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return out.sort((a, b) =>
+      b.startedAt.localeCompare(a.startedAt) || a.path.localeCompare(b.path));
   }
 
   /** Carrega por id, índice não é aceito aqui; aceita também um nome `.json` relativo. */
@@ -195,17 +204,25 @@ export class SessionStore {
     const found = this.list().find((item) => item.id === ref);
     const path = found?.path ?? (ref.endsWith(".json") ? this.#inside(ref) : undefined);
     if (path === undefined) throw new Error(`sessão "${ref}" não encontrada`);
-    return { record: this.#read(path), path };
+    return { record: this.readByPath(path), path };
+  }
+
+  /** Lê um arquivo conhecido sem listar ou abrir os outros registros. */
+  readByPath(path: string): SessionRecord {
+    return this.#read(this.#inside(path));
+  }
+
+  /** Remove todos os arquivos que representam uma identidade de sessão duplicada. */
+  deleteById(id: string): boolean {
+    const paths = this.list().filter((item) => item.id === id).map((item) => item.path);
+    for (const path of paths) unlinkSync(path);
+    return paths.length > 0;
   }
 
   /** Renomeia a sessão no próprio arquivo (atômico, sem duplicar) e devolve o resumo (#64). */
   rename(ref: string, name: string): SessionSummary {
     const { record, path } = this.load(ref);
-    // aplica a sanitização real antes de validar: redação pode expandir o texto e
-    // nomes JSON podem esconder controles/escapes; o que vale é o valor gravado
-    const sanitized = sanitizeValue(requireName(name));
-    const stored = typeof sanitized === "string" ? normalizeName(sanitized) : undefined;
-    if (stored === undefined) throw new Error("nome da sessão inválido");
+    const stored = sanitizeSessionName(name);
     const updated: SessionRecord = { ...record, name: stored };
     const json = JSON.stringify(sanitizeValue(updated), null, 2);
     if (Buffer.byteLength(json, "utf8") > MAX_SESSION_BYTES) {
@@ -289,7 +306,10 @@ export class SessionStore {
   }
 }
 
-export function sessionSummaryLine(item: SessionSummary, index: number): string {
+export function sessionSummaryLine(
+  item: Pick<SessionSummary, "id" | "startedAt" | "model" | "turns" | "costUsd" | "name">,
+  index: number,
+): string {
   const cost = item.costUsd === null ? "n/d" : `US$ ${item.costUsd.toFixed(6)}`;
   const label = item.name === undefined ? item.id : `${item.name} (${item.id})`;
   return `${index + 1}. ${item.startedAt} ${label} ${item.model} turnos=${item.turns} custo=${cost}`;
