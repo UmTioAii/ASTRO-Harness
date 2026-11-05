@@ -112,9 +112,12 @@ describe("aumento de budget com aprovação (D-30, #372)", () => {
     await expect(enforceBudget(opts)).resolves.toEqual({ choice: "raise", limitUsd: 5, hardCeilingUsd: 8, confirmedCeiling: true });
     expect(cfg.hardCeilingUsd).toBe(8);
     const raised = ledger.readAllEntries().find((e) => e.kind === "budget" && e.event === "raised") as
-      { old_ceiling_usd?: number; new_ceiling_usd?: number } | undefined;
+      { old_ceiling_usd?: number; new_ceiling_usd?: number; confirmed_ceiling?: boolean } | undefined;
     expect(raised?.old_ceiling_usd).toBe(3);
     expect(raised?.new_ceiling_usd).toBe(8);
+    expect(raised?.confirmed_ceiling).toBe(true);
+    const audit = opts.audit.readAll().find((e) => e.tipo === "budget.raised");
+    expect((audit?.payload as { confirmedCeiling?: boolean } | undefined)?.confirmedCeiling).toBe(true);
   });
 
   test("novo teto que não sobe é negado", async () => {
@@ -129,7 +132,10 @@ describe("aumento de budget com aprovação (D-30, #372)", () => {
     const ledger = ledgerWith(2);
     const cfg = budget({ limitUsd: 1, hardCeilingUsd: 3 });
     const opts = base(ledger, { budget: cfg, decide: () => ({ choice: "raise" as const, limitUsd: 5, hardCeilingUsd: 8 }) });
-    await expect(enforceBudget(opts)).rejects.toBeInstanceOf(BudgetExceededError);
+    const error = await enforceBudget(opts).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BudgetExceededError);
+    expect((error as BudgetExceededError & { raiseReason?: string }).raiseReason).toBe("ceiling_not_confirmed");
+    expect((error as Error).message).toContain("não confirmado");
     expect(cfg.hardCeilingUsd).toBe(3);
     expect(opts.audit.readAll().some((e) => e.tipo === "budget.raise_denied"
       && (e.payload as { reason?: string }).reason === "ceiling_not_confirmed")).toBe(true);
