@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -64,6 +64,18 @@ describe("buildCheckpoint (L5, I-03/I-11, #135)", () => {
     );
     expect(cp.changedFiles).toEqual([join("src", "b.ts")]);
   });
+
+  test("limita texto e arquivos para caber no loader", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-checkpoint-"));
+    const cp = buildCheckpoint({
+      summary: "x".repeat(20_000),
+      changedFiles: Array.from({ length: 150 }, (_, index) => `f${index}.ts`),
+      nextStep: "y".repeat(20_000),
+    }, cwd);
+    expect(cp.summary).toHaveLength(8_000);
+    expect(cp.nextStep).toHaveLength(8_000);
+    expect(cp.changedFiles).toHaveLength(100);
+  });
 });
 
 describe("loadCheckpoint (L5, #135)", () => {
@@ -103,14 +115,53 @@ describe("loadCheckpoint (L5, #135)", () => {
     expect(() => loadCheckpoint(cwd, "run-1", "planner")).toThrow(/schema de checkpoint não suportado/);
   });
 
-  test("recusa arquivo alterado para fora do cwd (I-11)", () => {
+  test("descarta arquivo alterado para fora do cwd (I-11)", () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-continue-"));
     const path = checkpointPath(cwd, "run-1", "planner");
+    const fakeKey = ["s", "k", "-"].join("") + "live-abcdef123456";
     saveCheckpoint({
-      schema: "checkpoint/v1", summary: "s", changedFiles: ["../fora.ts"], nextStep: "n",
+      schema: "checkpoint/v1", summary: "s", changedFiles: [`../${fakeKey}.txt`], nextStep: "n",
       createdAt: "2026-11-01T12:00:00.000Z",
     }, path);
-    expect(() => loadCheckpoint(cwd, "run-1", "planner")).toThrow(/fora do diretório/);
+    const cp = loadCheckpoint(cwd, "run-1", "planner");
+    expect(cp.changedFiles).toEqual([]);
+    expect(JSON.stringify(cp)).not.toContain(fakeKey);
+  });
+
+  test("recusa checkpoint cujo caminho real sai do store (symlink/junction)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-continue-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-continue-outside-"));
+    saveCheckpoint({
+      schema: "checkpoint/v1", summary: "s", changedFiles: [], nextStep: "n",
+      createdAt: "2026-11-01T12:00:00.000Z",
+    }, join(outside, "checkpoint.json"));
+    const runDir = join(cwd, ".astro", "sessions", "run-1");
+    mkdirSync(runDir, { recursive: true });
+    try {
+      symlinkSync(outside, join(runDir, "planner"), process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return; // SO sem suporte a link: coberto pelo teste de realpath em CI POSIX
+    }
+    expect(() => loadCheckpoint(cwd, "run-1", "planner")).toThrow(/fora do store/);
+  });
+
+  test("recusa campos com tipo errado", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-continue-"));
+    const path = checkpointPath(cwd, "run-1", "planner");
+    const base = {
+      schema: "checkpoint/v1", summary: "s", changedFiles: [] as unknown[],
+      nextStep: "n", createdAt: "2026-11-01T12:00:00.000Z",
+    };
+    saveCheckpoint({ ...base, schema: "checkpoint/v1" } as unknown as CheckpointV1, path);
+    for (const patch of [
+      { summary: 1 },
+      { nextStep: 1 },
+      { changedFiles: [1] },
+      { createdAt: "não-é-data" },
+    ]) {
+      writeFileSync(path, JSON.stringify({ ...base, ...patch }), "utf8");
+      expect(() => loadCheckpoint(cwd, "run-1", "planner")).toThrow(/checkpoint inválido/);
+    }
   });
 
   test("recusa run/agent com path traversal", () => {
@@ -134,11 +185,14 @@ describe("loadCheckpoint (L5, #135)", () => {
     const path = checkpointPath(cwd, "run-1", "planner");
     const fakeKey = ["s", "k", "-"].join("") + "live-abcdef123456";
     saveCheckpoint({
-      schema: "checkpoint/v1", summary: `chave ${fakeKey}`, changedFiles: [], nextStep: "n",
+      schema: "checkpoint/v1", summary: `chave ${fakeKey}`, changedFiles: [], nextStep: `passo ${fakeKey}`,
       createdAt: "2026-11-01T12:00:00.000Z",
     }, path);
-    expect(loadCheckpoint(cwd, "run-1", "planner").summary).not.toContain(fakeKey);
-    expect(loadCheckpoint(cwd, "run-1", "planner").summary).toContain("[REDACTED]");
+    const cp = loadCheckpoint(cwd, "run-1", "planner");
+    expect(cp.summary).not.toContain(fakeKey);
+    expect(cp.summary).toContain("[REDACTED]");
+    expect(cp.nextStep).not.toContain(fakeKey);
+    expect(cp.nextStep).toContain("[REDACTED]");
   });
 
   test("erro claro quando o checkpoint não existe", () => {
@@ -158,6 +212,8 @@ describe("continueTask (L5, #135)", () => {
 
   test("monta o prompt com resumo, arquivos alterados e próximo passo", () => {
     const prompt = continueTask(checkpoint);
+    expect(prompt).toContain("<checkpoint>");
+    expect(prompt).toContain("</checkpoint>");
     expect(prompt).toContain("Resumo: resumo do progresso");
     expect(prompt).toContain(join("src", "a.ts"));
     expect(prompt).toContain("Próximo passo: rodar os testes");

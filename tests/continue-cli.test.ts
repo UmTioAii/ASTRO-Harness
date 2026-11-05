@@ -34,16 +34,24 @@ function setup() {
   return { cwd, configPath, requests, server };
 }
 
-function seed(cwd: string, agent = "planner"): CheckpointV1 {
+function seed(cwd: string, agent = "planner", summary = "resumo do checkpoint"): CheckpointV1 {
   const checkpoint: CheckpointV1 = {
     schema: "checkpoint/v1",
-    summary: "resumo do checkpoint",
+    summary,
     changedFiles: ["src/a.ts"],
     nextStep: "rodar os testes",
     createdAt: "2026-11-01T12:00:00.000Z",
   };
   saveCheckpoint(checkpoint, checkpointPath(cwd, "r1", agent));
   return checkpoint;
+}
+
+function readJsonl(path: string): Array<Record<string, unknown>> {
+  return readFileSync(path, "utf8")
+    .trim()
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 async function runCli(args: string[], cwd: string) {
@@ -69,15 +77,22 @@ describe("astro continue (#135 slice 1)", () => {
       const result = await runCli(["continue", "r1", "--config", configPath, "--cwd", cwd], cwd);
       expect(result.code).toBe(0);
       expect(result.out).toContain("continuado do run r1 (agente planner)");
+      expect(result.out).toMatch(/em [0-9a-f-]{36}/);
       expect(result.out).toContain("continuado ok");
       expect(requests.join("\n")).toContain("Resumo: resumo do checkpoint");
       expect(requests.join("\n")).toContain("Próximo passo: rodar os testes");
 
-      const ledger = readFileSync(join(cwd, ".astro", "ledger.jsonl"), "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { run?: string });
+      const ledger = readJsonl(join(cwd, ".astro", "ledger.jsonl"));
       expect(ledger.some((entry) => entry.run !== undefined && entry.run !== "r1")).toBe(true);
+      const audit = readJsonl(join(cwd, ".astro", "audit.jsonl"));
+      const started = audit.find((entry) => entry.tipo === "run.started");
+      expect(started).toBeDefined();
+      expect(typeof (started!.payload as Record<string, unknown>).taskHash).toBe("string");
+      expect((started!.payload as Record<string, unknown>).continuedFrom).toEqual({
+        run: "r1",
+        agent: "planner",
+      });
+      expect(JSON.stringify({ audit, ledger })).not.toContain("resumo do checkpoint");
     } finally {
       server.stop(true);
       rmSync(cwd, { recursive: true, force: true });
@@ -95,6 +110,9 @@ describe("astro continue (#135 slice 1)", () => {
       expect(result.code).toBe(0);
       expect(requests.join("\n")).toContain("tarefa nova");
       expect(requests.join("\n")).not.toContain("resumo do checkpoint");
+      const persisted = readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8")
+        + readFileSync(join(cwd, ".astro", "ledger.jsonl"), "utf8");
+      expect(persisted).not.toContain("tarefa nova");
     } finally {
       server.stop(true);
       rmSync(cwd, { recursive: true, force: true });
@@ -114,9 +132,9 @@ describe("astro continue (#135 slice 1)", () => {
   });
 
   test("múltiplos agentes exigem --agent", async () => {
-    const { cwd, configPath, server } = setup();
-    seed(cwd, "planner");
-    seed(cwd, "coder");
+    const { cwd, configPath, requests, server } = setup();
+    seed(cwd, "planner", "resumo planner");
+    seed(cwd, "coder", "resumo coder");
     try {
       const ambiguous = await runCli(["continue", "r1", "--config", configPath, "--cwd", cwd], cwd);
       expect(ambiguous.code).toBe(1);
@@ -128,6 +146,8 @@ describe("astro continue (#135 slice 1)", () => {
       );
       expect(chosen.code).toBe(0);
       expect(chosen.out).toContain("agente planner");
+      expect(requests.join("\n")).toContain("resumo planner");
+      expect(requests.join("\n")).not.toContain("resumo coder");
     } finally {
       server.stop(true);
       rmSync(cwd, { recursive: true, force: true });

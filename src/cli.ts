@@ -1029,19 +1029,20 @@ async function main(argv: string[]): Promise<number> {
         configPath: resolve(o.configPath),
         task: continueTask(checkpoint, o.task),
         cwd: base,
+        continuedFrom: { run: o.runId, agent },
         signal: cancellation.signal,
         ...(process.stdin.isTTY === true ? {} : { approveTool: nonInteractiveApprover() }),
         approveSwap: ttyApprover(), onBudgetExceeded: ttyBudgetDecider(),
         trustAsk: ttyTrustAsk(), onNoProgress: ttyNoProgressDecider(),
       });
-      console.log(`continuado do run ${o.runId} (agente ${agent})`);
+      console.log(`continuado do run ${o.runId} (agente ${agent}) em ${report.runId}`);
       console.log(report.final);
       console.log("");
       console.log(formatSummary(report));
       return 0;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`erro: ${message}`);
+      console.error(`erro: ${redactSecrets(message)}`);
       return 1;
     } finally {
       cancellation.dispose();
