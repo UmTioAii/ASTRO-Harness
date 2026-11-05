@@ -3,42 +3,46 @@
 - Status: aceita
 - Data: 2026-11-05
 - Issue: #386
-- Decisões relacionadas: ADR-0002, ADR-0019, ADR-0023, ADR-0026, ADR-0027, D-24, I-03
+- Decisões relacionadas: ADR-0002, ADR-0019, ADR-0023, ADR-0026, ADR-0027, D-15, I-03, I-19
 
 ## Contexto
 
-`astro.config.json` é config de projeto. `version` é validado como `x.y.z` quando presente, mas não participa de nenhuma decisão de compatibilidade, e chave desconhecida no **topo** é ignorada em silêncio (seções conhecidas já rejeitam). Resultado: config escrito para harness novo roda em harness antigo com ajustes perdidos, e um typo de chave passa despercebido. O ADR-0023 delega a política de migração/deprecação para cá; o ADR-0026/0027 delegam aqui o schema das chaves novas.
+`astro.config.json` é config de projeto. `version` é validado como `x.y.z` quando presente, mas não participa de nenhuma decisão de compatibilidade; chave desconhecida no **topo** é ignorada em silêncio e só algumas seções (`call`, `modelRouting`, `outputLimit`, `compaction`, `webSearch`) rejeitam chave extra. Resultado: config de harness novo roda em harness antigo com ajustes perdidos, e um typo passa despercebido. O ADR-0023 delega a política de migração/deprecação para cá; o ADR-0026/0027 delegam aqui o versionamento das chaves novas.
 
 ## Decisão
 
-**Versão.** `version` é a versão do **schema do documento de config**, semver `x.y.z`, independente da versão do harness em `package.json`. Ausente = `0.0.0` (legado), aceito, e o `doctor` sugere declarar. O harness declara `CONFIG_SCHEMA_MAJOR` (alvo 1 nesta decisão).
+**Versão.** `version` é a versão do **schema do documento**, semver `x.y.z`, independente da versão do harness em `package.json`. Ausente = `0.0.0` (legado), aceito, e o `doctor` sugere declarar. O harness declara `CONFIG_SCHEMA_MAJOR` (alvo 1) e um conjunto runtime `CONFIG_KEYS` por major, fonte de "chave conhecida". O valor declarado é preservado no `AstroConfig`; a migração vive em campo interno (`migratedFrom`).
 
-**Semântica.** major: remove, renomeia ou redefine tipo/default de forma que muda comportamento; minor: chave ou valor novo opcional, retrocompatível; patch: só correção de validação/mensagem, sem mudança de forma. Chave nova entra em `src/config.ts` no mesmo PR do comportamento, com validação, teste e nota do minor.
+**Semântica.** major: remove, renomeia, redefine tipo/default, ou endurece validação a ponto de rejeitar config antes aceita; minor: chave ou valor novo opcional, retrocompatível; patch: só mensagem/correção sem mudar o que é aceito. Chave nova entra em `src/config.ts` no mesmo PR do comportamento, com validação, teste e nota do minor.
 
-**Matriz de compatibilidade.**
+**Ordem (normativa).** (1) Ler o JSON cru e validar só a forma de `version`; (2) se major > `CONFIG_SCHEMA_MAJOR`, recusar `config_ahead_of_harness` **antes** de qualquer checagem de chave; (3) checar chave desconhecida no **documento de origem** contra `CONFIG_KEYS` do major suportado, e de novo no destino; (4) migrar major antigo em memória; (5) validar o resultado. Se minor > suportado e houver chave desconhecida, a mensagem manda atualizar o harness (a chave pode existir no minor novo), nunca sugere apagar.
+
+**Matriz.**
 
 | config | resultado |
 |---|---|
-| major == suportado | aceita |
-| major < suportado | migra em memória, um major por passo (`migrateVnToN+1` puro, cadeia testada por passo); sem caminho → `config_migration_required` cita o major e `astro config migrate` |
-| major > suportado | recusa `config_ahead_of_harness`, mensagem manda atualizar o harness; nunca adivinha |
-| ausente (`0.0.0`) | tratado como major 0 e migrado para o suportado em memória |
+| major == suportado | aceita (minor/patch não são comparados) |
+| major < suportado | migra em memória, um major por passo (`migrateVnToN+1` puro, cadeia testada por passo); sem caminho → `config_migration_required` |
+| major > suportado | recusa `config_ahead_of_harness`; nunca adivinha |
+| ausente (`0.0.0`) | major 0, migra para o suportado em memória |
 
-**Chaves desconhecidas.** No topo, chave desconhecida é `config_unknown_key` (erro), exceto `$schema`. Em seção conhecida continua erro. Forward-compat é responsabilidade da versão, nunca de ignorar chave: ignorar transforma config de harness novo em perda silenciosa.
+**Chaves desconhecidas.** Em major 1, chave desconhecida em **qualquer nível** é `config_unknown_key`. No topo, `$schema` e `provenance` (forma `{registry: string, plugins: boolean}`, do `config pull`, ADR de share) são metadados permitidos: validados, preservados pelas migrações e nunca tratados como config. A migração não pode reconstruir o objeto por whitelist antes da checagem, senão a chave desconhecida some — a perda silenciosa que esta decisão proíbe.
 
-**Migração.** O default é em memória, sem escrever no arquivo. `astro config migrate [--config <path>]` roda a cadeia completa, valida o resultado e grava atômico (temp + rename no mesmo diretório) **só então** atualiza `version`; validação falha deixa o arquivo intacto. O arquivo só migra se todas as chaves forem conhecidas no major de destino; caso contrário recusa e aponta a chave.
+**Guardas de segurança.** O documento contém chave sensível (`permissions.mode`, `tools.run_command.sandbox`, `budget`, `paths`). Nenhum passo de migração pode reduzir o valor efetivo de uma chave de segurança nem injetar default para chave de segurança ausente: preserva o valor ou falha `config_migration_required`. `security.*` e as allowlists (`allow-sensitive`/`allow-critical`) continuam só em flag de CLI (ADR-0027) e nunca são lidas de `astro.config.json`. `astro config migrate` não é alcançável por tool, plugin ou `run_command`: o harness não reescreve o próprio `sandbox`/`permissions.mode`.
 
-**Deprecação.** Chave marcada `@deprecated` no schema continua válida no minor em que é anunciada, emite aviso uma vez por load e no `doctor`; remoção só no próximo major, com entrada no `CHANGELOG`. Mudança de default conta como major, mesmo sem remover chave.
+**Migração.** Default em memória, sem escrita. `astro config migrate [--config <path>]` roda a cadeia, valida origem e destino e grava **uma única vez**, atômico: temporário 0600 criado com `wx` no mesmo diretório, `lstat` sem seguir symlink (recusa destino symlink ou não-regular), `rename` final com o novo `version` já no conteúdo; falha de validação deixa o arquivo intacto. Já no major suportado: não escreve, imprime a versão atual e sai 0.
 
-**Escopo.** Só `astro.config.json` (inclusive via `--config`). Stores de usuário (`providers.json`, `trusted.json`, `vault.json`, flags de segurança) têm formato próprio e ficam fora; se ganharem versão, ADR próprio. Dado persistido continua com inteiro (ADR-0002), não semver.
+**Deprecação.** Registro runtime `DEPRECATED_CONFIG_KEYS` (não JSDoc) alimenta o aviso uma vez por load e o `doctor`; a chave continua válida no minor em que é anunciada e só é removida no próximo major, com entrada no `CHANGELOG`.
 
-**Erros.** `config_ahead_of_harness`, `config_migration_required`, `config_unknown_key` e a validação de `version` são `ConfigError`, com mensagem em português citando chave/versão e nunca valor de segredo (I-03); recusa para o run (I-19).
+**Escopo.** Só `astro.config.json` (inclusive `--config`). Stores de usuário (`providers.json`, `trusted.json`, `vault.json`) têm formato próprio e ficam fora; se ganharem versão, ADR próprio. Dado persistido continua com inteiro (ADR-0002), não semver.
+
+**Erros.** `config_ahead_of_harness`, `config_migration_required`, `config_unknown_key` e a validação de `version` são `ConfigError`, com mensagem em português citando chave/versão no formato esperado (nunca o valor cru) e nenhum segredo (I-03); a recusa sai antes do run, com exit ≠ 0 (não é checkpoint de I-19).
 
 ## Consequências
 
 - Ganho: config incompatível falha alto em vez de perder ajuste; typo visível; migração reprodutível e testável por passo.
-- Custo: harness antigo passa a recusar config novo (intencional); `astro config migrate`; manutenção da cadeia de migração.
-- Invariantes afetadas: I-03 (mensagem), I-19 (parada graciosa); I-11 não se aplica (config é path do usuário).
+- Custo: harness antigo recusa config novo (intencional); validação estrita em todos os níveis é mudança de major 1; `astro config migrate`; manutenção da cadeia.
+- Invariantes afetadas: I-03 (mensagem); I-11 não se aplica (config é path do usuário).
 
 ## Alternativas descartadas
 
