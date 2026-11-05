@@ -66,6 +66,64 @@ describe("enforcement de budget (F-05, #132 parte 3)", () => {
   });
 });
 
+describe("aumento de budget com aprovação (D-30, #372)", () => {
+  test("raise aplica os novos valores e o próximo check continua", async () => {
+    const ledger = ledgerWith(2);
+    const cfg = budget({ limitUsd: 1, hardCeilingUsd: 10 });
+    const opts = base(ledger, { budget: cfg, decide: () => ({ choice: "raise" as const, limitUsd: 3 }) });
+    await expect(enforceBudget(opts)).resolves.toEqual({ choice: "raise", limitUsd: 3 });
+    expect(cfg.limitUsd).toBe(3);
+    await expect(enforceBudget({ ...opts, decide: undefined })).resolves.toBe("continue_same");
+    const raised = ledger.readAllEntries().find((e) => e.kind === "budget" && e.event === "raised");
+    expect(raised?.old_limit_usd).toBe(1);
+    expect(raised?.new_limit_usd).toBe(3);
+    expect(opts.audit.readAll().some((e) => e.tipo === "budget.raised")).toBe(true);
+  });
+
+  test("raise inválido (<= gasto ou <= limite antigo) fica esgotado", async () => {
+    for (const limitUsd of [2, 1] as const) {
+      const ledger = ledgerWith(2);
+      const cfg = budget({ limitUsd: 1, hardCeilingUsd: 10 });
+      const opts = base(ledger, { budget: cfg, decide: () => ({ choice: "raise" as const, limitUsd }) });
+      const error = await enforceBudget(opts).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BudgetExceededError);
+      expect((error as BudgetExceededError).reason).toBe("limit");
+      expect(cfg.limitUsd).toBe(1);
+      expect(ledger.readAllEntries().some((e) => e.kind === "budget" && e.event === "raised")).toBe(false);
+      expect(opts.audit.readAll().some((e) => e.tipo === "budget.raise_denied")).toBe(true);
+    }
+  });
+
+  test("limite acima do teto sem elevar o teto é negado", async () => {
+    const ledger = ledgerWith(2);
+    const cfg = budget({ limitUsd: 1, hardCeilingUsd: 3 });
+    const opts = base(ledger, { budget: cfg, decide: () => ({ choice: "raise" as const, limitUsd: 5 }) });
+    await expect(enforceBudget(opts)).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(cfg.limitUsd).toBe(1);
+    expect(opts.audit.readAll().some((e) => e.tipo === "budget.raise_denied"
+      && (e.payload as { reason?: string }).reason === "ceiling_required")).toBe(true);
+  });
+
+  test("elevar o teto exige o novo teto e ele é aplicado", async () => {
+    const ledger = ledgerWith(2);
+    const cfg = budget({ limitUsd: 1, hardCeilingUsd: 3 });
+    const opts = base(ledger, { budget: cfg, decide: () => ({ choice: "raise" as const, limitUsd: 5, hardCeilingUsd: 8 }) });
+    await expect(enforceBudget(opts)).resolves.toEqual({ choice: "raise", limitUsd: 5, hardCeilingUsd: 8 });
+    expect(cfg.hardCeilingUsd).toBe(8);
+    const raised = ledger.readAllEntries().find((e) => e.kind === "budget" && e.event === "raised");
+    expect(raised?.old_ceiling_usd).toBe(3);
+    expect(raised?.new_ceiling_usd).toBe(8);
+  });
+
+  test("novo teto que não sobe é negado", async () => {
+    const ledger = ledgerWith(2);
+    const cfg = budget({ limitUsd: 1, hardCeilingUsd: 3 });
+    const opts = base(ledger, { budget: cfg, decide: () => ({ choice: "raise" as const, limitUsd: 2, hardCeilingUsd: 3 }) });
+    await expect(enforceBudget(opts)).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(cfg.hardCeilingUsd).toBe(3);
+  });
+});
+
 interface RunOpts { usage?: number; priced?: boolean; final?: boolean; tool?: string; agents?: boolean }
 
 /** Run com provider sintético: tool call (ou resposta final) e custo `usage` por chamada. */
@@ -177,6 +235,24 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
       expect(calls()).toBe(1);
       expect(new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll()
         .some((e) => e.tipo === "budget.exceeded" && (e.payload as { reason?: string }).reason === "unknown_price")).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  test("TTY: raise aplica o novo limite e o run continua (D-30, #372)", async () => {
+    const { cwd, configPath, calls, stop } = await runWithBudget({ scope: "day", limitUsd: 2 });
+    let raised = false;
+    try {
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => {
+        if (raised) return "stop";
+        raised = true;
+        return { choice: "raise", limitUsd: 4 };
+      } })).rejects.toThrow(/excedeu 4 passos/);
+      expect(calls()).toBe(4);
+      const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
+      expect(ledger.readAllEntries().some((e) => e.kind === "budget" && e.event === "raised"
+        && e.old_limit_usd === 2 && e.new_limit_usd === 4)).toBe(true);
     } finally {
       stop();
     }
