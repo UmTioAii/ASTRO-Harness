@@ -101,8 +101,10 @@ export type BudgetChoice = "continue_same" | "lower_effort" | "stop" | BudgetRai
 export interface BudgetRaise {
   choice: "raise";
   limitUsd: number;
-  /** Só presente depois da segunda confirmação explícita do teto (D-30). */
+  /** Novo teto; só é aceito com `confirmedCeiling: true` (segunda confirmação). */
   hardCeilingUsd?: number;
+  /** Segunda confirmação explícita do teto (D-30); o CLI só marca após `CONFIRMAR`. */
+  confirmedCeiling?: boolean;
 }
 
 /** Motivo de recusa de um aumento (D-30); o run continua esgotado. */
@@ -111,7 +113,8 @@ export type BudgetRaiseDenied =
   | "not_above_spend"
   | "not_above_limit"
   | "ceiling_required"
-  | "ceiling_not_raised";
+  | "ceiling_not_raised"
+  | "ceiling_not_confirmed";
 
 /**
  * Valida um pedido de aumento (D-30): valor absoluto acima do gasto e do limite
@@ -133,6 +136,7 @@ export function validateBudgetRaise(
     if (typeof newCeiling !== "number" || !Number.isFinite(newCeiling) || newCeiling <= 0) {
       return { ok: false, reason: "invalid_number" };
     }
+    if (raise.confirmedCeiling !== true) return { ok: false, reason: "ceiling_not_confirmed" };
     if (oldCeiling !== null && newCeiling <= oldCeiling) return { ok: false, reason: "ceiling_not_raised" };
     if (newCeiling <= committedUsd) return { ok: false, reason: "ceiling_not_raised" };
     if (limit > newCeiling) return { ok: false, reason: "ceiling_required" };
@@ -141,7 +145,14 @@ export function validateBudgetRaise(
   if (oldCeiling !== null && limit > oldCeiling) return { ok: false, reason: "ceiling_required" };
   return { ok: true, limitUsd: limit };
 }
-export type BudgetDecider = (status: BudgetStatus) => Promise<BudgetChoice> | BudgetChoice;
+export type BudgetDecider = (status: BudgetStatus, context?: BudgetDecisionContext) => Promise<BudgetChoice> | BudgetChoice;
+
+/** Números efetivos do corte, incluindo a reserva da próxima chamada (B9). */
+export interface BudgetDecisionContext {
+  /** `spentUsd + reserveUsd`; null quando o preço é desconhecido. */
+  committedUsd: number | null;
+  reserveUsd: number;
+}
 
 /** Parada por budget (I-17/I-19): esgotado, teto físico ou modo não interativo. */
 export class BudgetExceededError extends Error {
@@ -210,7 +221,7 @@ export async function enforceBudget(opts: EnforceBudgetOptions): Promise<BudgetC
     throw new BudgetExceededError("limit", status);
   }
 
-  const choice = await opts.decide(status);
+  const choice = await opts.decide(status, { committedUsd, reserveUsd });
   if (typeof choice === "object" && choice !== null) {
     const result = validateBudgetRaise(status, committedUsd, choice);
     if (!result.ok) {

@@ -69,7 +69,7 @@ function ttyApprover(): SwapApprover | undefined {
 /** Decisor interativo de budget (B4, D-30); sem TTY retorna undefined (não interativo). */
 function ttyBudgetDecider(): BudgetDecider | undefined {
   if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) return undefined;
-  return async (status) => {
+  return async (status, context) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
       const limit = status.limitUsd === null ? "sem limite" : `US$ ${status.limitUsd}`;
@@ -78,7 +78,9 @@ function ttyBudgetDecider(): BudgetDecider | undefined {
         rl.question(`budget esgotado (${status.estimate} / ${limit}). [c] continuar, [l] baixar esforço, [a] aumentar limite, [p] parar? `, resolve);
       });
       const choice = answer.trim().toLowerCase();
-      if (choice.startsWith("a")) return askBudgetRaise(rl, status);
+      if (choice.startsWith("a")) {
+        return askBudgetRaise(rl, status, context?.committedUsd ?? status.spentUsd ?? 0);
+      }
       return choice.startsWith("c") ? "continue_same" : choice.startsWith("l") ? "lower_effort" : "stop";
     } finally {
       rl.close();
@@ -98,16 +100,21 @@ function askBudgetLine(rl: ReturnType<typeof createInterface>, question: string)
  * Aumento aprovado (D-30): pede valor absoluto acima do gasto e do limite;
  * acima do teto exige `CONFIRMAR` e um novo teto maior. Inválido repete.
  */
-async function askBudgetRaise(rl: ReturnType<typeof createInterface>, status: BudgetStatus): Promise<BudgetChoice> {
-  const spent = status.spentUsd ?? 0;
+async function askBudgetRaise(
+  rl: ReturnType<typeof createInterface>,
+  status: BudgetStatus,
+  committedUsd: number,
+): Promise<BudgetChoice> {
+  const committed = committedUsd;
   const ceiling = status.hardCeilingUsd ?? null;
   const oldLimit = status.limitUsd === null ? "sem limite" : `US$ ${status.limitUsd}`;
   for (;;) {
-    const raw = (await askBudgetLine(rl, `novo limite absoluto em US$ (gasto atual US$ ${spent.toFixed(6)}, limite atual ${oldLimit}): `)).trim();
+    const raw = (await askBudgetLine(rl,
+      `novo limite absoluto em US$ (gasto + reserva atual US$ ${committed.toFixed(6)}, limite atual ${oldLimit}): `)).trim();
     if (raw === "") return "stop";
     const value = Number(raw.replace(",", "."));
-    if (!Number.isFinite(value) || value <= spent || (status.limitUsd !== null && value <= status.limitUsd)) {
-      process.stdout.write("o valor precisa ser maior que o gasto atual e que o limite atual\n");
+    if (!Number.isFinite(value) || value <= committed || (status.limitUsd !== null && value <= status.limitUsd)) {
+      process.stdout.write("o valor precisa ser maior que o gasto + reserva atual e que o limite atual\n");
       continue;
     }
     if (ceiling === null || value <= ceiling) {
@@ -121,11 +128,11 @@ async function askBudgetRaise(rl: ReturnType<typeof createInterface>, status: Bu
         `novo teto absoluto em US$ (maior que US$ ${ceiling} e >= ao novo limite): `)).trim();
       if (rawCeiling === "") return "stop";
       const nextCeiling = Number(rawCeiling.replace(",", "."));
-      if (!Number.isFinite(nextCeiling) || nextCeiling <= ceiling || nextCeiling < value) {
+      if (!Number.isFinite(nextCeiling) || nextCeiling <= ceiling || nextCeiling < value || nextCeiling <= committed) {
         process.stdout.write("o teto precisa ser maior que o atual e pelo menos o novo limite\n");
         continue;
       }
-      return { choice: "raise", limitUsd: value, hardCeilingUsd: nextCeiling };
+      return { choice: "raise", limitUsd: value, hardCeilingUsd: nextCeiling, confirmedCeiling: true };
     }
   }
 }
