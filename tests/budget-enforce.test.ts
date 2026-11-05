@@ -148,6 +148,13 @@ describe("aumento de budget com aprovação (D-30, #372)", () => {
     expect(cfg.limitUsd).toBe(1); // não muta o config
     expect(effectiveBudget(cfg, ledger, "r3").limitUsd).toBe(1);
   });
+
+  test("effectiveBudget não remove o teto quando o raise só sobe o limite (#389)", () => {
+    const ledger = ledgerWith(0);
+    ledger.recordBudgetRaised({ run: "r1", agent: "a", old_limit_usd: 1, new_limit_usd: 5 });
+    const cfg = budget({ limitUsd: 1, hardCeilingUsd: 3 });
+    expect(effectiveBudget(cfg, ledger, "r1").hardCeilingUsd).toBe(3);
+  });
 });
 
 interface RunOpts { usage?: number; priced?: boolean; final?: boolean; tool?: string; agents?: boolean; maxSteps?: number; finalAfter?: number }

@@ -859,7 +859,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     registry,
     ledger,
     ...(quotaLimits === undefined ? {} : { quotaLimits }),
-    ...(budget === undefined ? {} : { budget }),
+    ...(budget === undefined ? {} : { budget: effectiveBudget(budget, ledger, run) }),
   })));
   toolsByName.set("spawn_agent", createSpawnAgentTool({
     config,
