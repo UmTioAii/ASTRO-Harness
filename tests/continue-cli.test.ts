@@ -119,6 +119,28 @@ describe("astro continue (#135 slice 1)", () => {
     }
   });
 
+  test("não vaza segredo no caminho descartado do checkpoint (I-03)", async () => {
+    const { cwd, configPath, requests, server } = setup();
+    const secret = ["ghp", "_", "continue", "secret", "123456"].join("");
+    saveCheckpoint({
+      schema: "checkpoint/v1",
+      summary: "s",
+      changedFiles: [`../${secret}.txt`],
+      nextStep: "n",
+      createdAt: "2026-11-01T12:00:00.000Z",
+    }, checkpointPath(cwd, "r1", "planner"));
+    try {
+      const result = await runCli(["continue", "r1", "--config", configPath, "--cwd", cwd], cwd);
+      expect(result.code).toBe(0);
+      const persisted = readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8")
+        + readFileSync(join(cwd, ".astro", "ledger.jsonl"), "utf8");
+      expect(result.out + result.err + persisted + requests.join("\n")).not.toContain(secret);
+    } finally {
+      server.stop(true);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("checkpoint ausente termina com erro claro", async () => {
     const { cwd, configPath, server } = setup();
     try {
