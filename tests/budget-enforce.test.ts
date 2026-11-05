@@ -74,7 +74,8 @@ describe("aumento de budget com aprovação (D-30, #372)", () => {
     await expect(enforceBudget(opts)).resolves.toEqual({ choice: "raise", limitUsd: 3 });
     expect(cfg.limitUsd).toBe(3);
     await expect(enforceBudget({ ...opts, decide: undefined })).resolves.toBe("continue_same");
-    const raised = ledger.readAllEntries().find((e) => e.kind === "budget" && e.event === "raised");
+    const raised = ledger.readAllEntries().find((e) => e.kind === "budget" && e.event === "raised") as
+      { old_limit_usd?: number; new_limit_usd?: number } | undefined;
     expect(raised?.old_limit_usd).toBe(1);
     expect(raised?.new_limit_usd).toBe(3);
     expect(opts.audit.readAll().some((e) => e.tipo === "budget.raised")).toBe(true);
@@ -110,7 +111,8 @@ describe("aumento de budget com aprovação (D-30, #372)", () => {
     const opts = base(ledger, { budget: cfg, decide: () => ({ choice: "raise" as const, limitUsd: 5, hardCeilingUsd: 8 }) });
     await expect(enforceBudget(opts)).resolves.toEqual({ choice: "raise", limitUsd: 5, hardCeilingUsd: 8 });
     expect(cfg.hardCeilingUsd).toBe(8);
-    const raised = ledger.readAllEntries().find((e) => e.kind === "budget" && e.event === "raised");
+    const raised = ledger.readAllEntries().find((e) => e.kind === "budget" && e.event === "raised") as
+      { old_ceiling_usd?: number; new_ceiling_usd?: number } | undefined;
     expect(raised?.old_ceiling_usd).toBe(3);
     expect(raised?.new_ceiling_usd).toBe(8);
   });
@@ -247,12 +249,12 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
       await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => {
         if (raised) return "stop";
         raised = true;
-        return { choice: "raise", limitUsd: 4 };
+        return { choice: "raise", limitUsd: 15 };
       } })).rejects.toThrow(/excedeu 4 passos/);
       expect(calls()).toBe(4);
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       expect(ledger.readAllEntries().some((e) => e.kind === "budget" && e.event === "raised"
-        && e.old_limit_usd === 2 && e.new_limit_usd === 4)).toBe(true);
+        && e.old_limit_usd === 2 && e.new_limit_usd === 15)).toBe(true);
     } finally {
       stop();
     }
