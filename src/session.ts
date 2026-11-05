@@ -327,6 +327,8 @@ export async function runSession(
 
   try {
     let effectiveMaxSteps = opts.maxSteps;
+    // Aumento aprovado (D-30) vale só para este run; não vaza para o config compartilhado.
+    const runBudget = opts.budget === undefined ? undefined : { ...opts.budget };
     for (let step = 1; step <= effectiveMaxSteps; step++) {
       throwIfAborted(opts.signal); // ponto seguro: não inicia step após cancelamento (F-06)
       // Quota (F6-3): bloqueia a chamada antes de gastar
@@ -337,7 +339,7 @@ export async function runSession(
       const reserveUsd = opts.budget === undefined ? 0 : (opts.budgetReserve?.(opts.model, opts.agentProfile) ?? 0);
       if (opts.budget !== undefined) {
         const choice = await enforceBudget({
-          budget: opts.budget, ledger: opts.ledger, run: opts.run, agent: opts.agent, audit: opts.audit,
+          budget: runBudget ?? opts.budget, ledger: opts.ledger, run: opts.run, agent: opts.agent, audit: opts.audit,
           reserveUsd,
           ...(opts.budgetDecide === undefined ? {} : { decide: opts.budgetDecide }),
         });
@@ -946,6 +948,8 @@ export async function runMultiAgentSession(
     agentsUsed.push(currentAgentName);
 
     let effectiveBaseMaxSteps = opts.baseMaxSteps;
+    // Aumento aprovado (D-30) vale só para este run; não vaza para o config compartilhado.
+    const runBudget = opts.budget === undefined ? undefined : { ...opts.budget };
     while (step < effectiveBaseMaxSteps) {
       throwIfAborted(opts.signal); // ponto seguro: não inicia step após cancelamento (F-06)
       // Verificar limite do agent atual
@@ -968,7 +972,7 @@ export async function runMultiAgentSession(
       const reserveUsd = opts.budget === undefined ? 0 : (opts.budgetReserve?.(currentModel, currentAgent.profile) ?? 0);
       if (opts.budget !== undefined) {
         const choice = await enforceBudget({
-          budget: opts.budget, ledger: opts.ledger, run: opts.run, agent: currentAgentName, audit: opts.audit,
+          budget: runBudget ?? opts.budget, ledger: opts.ledger, run: opts.run, agent: currentAgentName, audit: opts.audit,
           reserveUsd,
           ...(opts.budgetDecide === undefined ? {} : { decide: opts.budgetDecide }),
         });
