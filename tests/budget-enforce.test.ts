@@ -336,6 +336,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
   });
 
   test("multi-agent: teto elevado vale depois do handoff (D-30, #393)", async () => {
+    // context 100 deixa a reserva da chamada (0,10) abaixo do teto inicial; com o default 8192 a reserva (8,19) já o estouraria.
     const { cwd, configPath, calls, stop } = await runWithBudget(
       { scope: "day", limitUsd: 1, hardCeilingUsd: 3 }, { usage: 2000, context: 100, tool: "handoff", agents: true });
     let raised = false;
@@ -344,14 +345,26 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
         if (raised) return "continue_same";
         raised = true;
         return { choice: "raise", limitUsd: 5, hardCeilingUsd: 8, confirmedCeiling: true };
-      } })).rejects.toBeDefined();
+      } })).rejects.toThrow(/excedeu 2 passos/);
       const entries = new Ledger(join(cwd, ".astro", "ledger.jsonl")).readAllEntries();
       expect(entries.some((e) => e.kind === "budget" && e.event === "ceiling_hit")).toBe(false);
       const raisedEntry = entries.find((e) => e.kind === "budget" && e.event === "raised") as
         { new_ceiling_usd?: number; confirmed_ceiling?: boolean } | undefined;
       expect(raisedEntry?.new_ceiling_usd).toBe(8);
       expect(raisedEntry?.confirmed_ceiling).toBe(true);
-      expect(calls()).toBeGreaterThanOrEqual(2);
+      expect(calls()).toBe(3);
+    } finally {
+      stop();
+    }
+  });
+
+  test("mensagem do runTask explica a recusa do aumento (#393)", async () => {
+    const { cwd, configPath, stop } = await runWithBudget(
+      { scope: "day", limitUsd: 1, hardCeilingUsd: 10 }, { usage: 1000 });
+    try {
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => ({
+        choice: "raise", limitUsd: 20, hardCeilingUsd: 30 }) }))
+        .rejects.toThrow(/teto físico não confirmado/);
     } finally {
       stop();
     }

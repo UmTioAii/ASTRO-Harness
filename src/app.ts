@@ -1118,8 +1118,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     if (error instanceof BudgetExceededError) {
       audit.append({ run, agent: activeAgent.name, tipo: "run.stopped",
         payload: { reason: "budget_exceeded", budget: error.reason } });
-      throw new Error(`budget esgotado (${error.reason}); run parado em ponto seguro${
-        error.raiseReason === undefined ? "" : ` — ${raiseDeniedLabel(error.raiseReason)}`}`, { cause: error });
+      throw new Error(`budget esgotado (${error.reason})${error.raiseReason === undefined ? "" : ` — ${raiseDeniedLabel(error.raiseReason)}`}; run parado em ponto seguro`, { cause: error });
     }
     if (error instanceof SwapDeniedError) {
       audit.append({ run, agent: error.request.agent ?? activeAgent.name, tipo: "run.stopped",
