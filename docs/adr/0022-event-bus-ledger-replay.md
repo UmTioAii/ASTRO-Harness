@@ -15,9 +15,9 @@ O bus entrega deltas ao vivo, mas deltas efêmeros podem cair e o `seq` de entre
 
 **Eventos persistidos são projeções.** Um evento `ledger` carrega `payload.ref` = `ledgerSeq` (ou o id do artefato); um evento `session` carrega `payload.ref` = `messageId`/`toolCallId`. O `id` do envelope é de correlação da UI, não a chave de replay. O mesmo fato não é gravado duas vezes: o ledger é a decisão; o session store é a mensagem.
 
-**O que replay reconstrói.** Runs/agentes/estado (`run_state`, `agent`), uso/custo (`usage`), budget (`budget`), compactação/checkpoint e escolhas de config/system registradas. A timeline é uma projeção: mensagens vêm do session store; eventos de sistema vêm do ledger/audit; deltas e reasoning não são reproduzidos. Gaps/inconsistência viram `replay_incomplete`, nunca replay parcial; `--resume` continua usando a árvore/ledger (ADR-0010/0014).
+**O que replay reconstrói.** Runs/agentes/estado (`run_state`, `agent`), uso/custo (`usage`), budget (`budget`), compactação/checkpoint, `subagent.*` e escolhas de config/system registradas. A timeline é uma projeção: mensagens/tool calls vêm do session store (o "histórico bruto" do plano, ADR-0010); eventos de sistema vêm do ledger/audit; o ledger não duplica mensagens. Reasoning: replay usa só metadados (`reasoningTokens`, duração, `exposed`, HMAC), nunca o texto. Deltas e stream não são reproduzidos. Gaps/inconsistência viram `replay_incomplete`, nunca replay parcial; `--resume` continua usando a árvore/ledger (ADR-0010/0014).
 
-**Segurança.** Replay não lê reasoning nem stream; `file.diff` replay usa a referência/hash/artefato persistido; `config.changed` replay usa o diff não secreto; nenhum path de replay contorna I-03.
+**Segurança.** Replay não lê reasoning nem stream; `file.diff` replay usa o diff redigido/artefato persistido; `config.changed` replay usa o diff não secreto; nenhum path de replay contorna I-03.
 
 ## Consequências
 
