@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir, userInfo } from "node:os";
+import { join, sep } from "node:path";
 import { AllowlistInvalidError, classifyPath } from "../src/path-class";
 import type { ClassifyPathInput } from "../src/path-class";
 
@@ -136,4 +137,52 @@ test("allow-critical acima de 64 entradas → allow_invalid", () => {
   const entries = Array.from({ length: 65 }, (_, i) => join(cwd, `f${i}.txt`));
   expect(() => cls(join(cwd, "ok.txt"), { allowCritical: entries })).toThrow(AllowlistInvalidError);
   expect(cls(join(cwd, "ok.txt"), { allowCritical: entries.slice(0, 64) })).toBe("normal");
+});
+
+test("review blockers: symlink+.., home junction, ADS, ~user fail-closed", () => {
+  const home = dir();
+  writeFileSync(join(home, ".netrc"), "sintetico");
+  const work = dir();
+  const link = process.platform === "win32" ? "junction" : "dir";
+  mkdirSync(join(astroHome, "sub"), { recursive: true });
+  symlinkSync(join(astroHome, "sub"), join(work, "x"), link); // x -> filho de $ASTRO_HOME
+  symlinkSync(home, join(work, "hl"), link);
+  expect(cls(work + sep + "x/../plain.txt", { cwd: work })).toBe("hard-block"); // B1: `..` após realpath (I-11)
+  expect(cls(join(work, "plain.txt"), { cwd: work })).toBe("normal"); // B1: controle
+  const key = process.platform === "win32" ? "USERPROFILE" : "HOME";
+  const saved = process.env[key];
+  process.env[key] = join(work, "hl"); // A1: home via junction
+  expect(cls("~/.netrc")).toBe("hard-block"); // A1
+  if (saved === undefined) delete process.env[key]; else process.env[key] = saved;
+  expect(cls(`~${userInfo().username}/.netrc`)).toBe("hard-block"); // B2: ~usuario atual resolve
+  expect(cls("~nao-existe-xyz/a.txt")).toBe("hard-block"); // B2: inexistente falha fechado
+  if (process.platform === "win32") {
+    writeFileSync(join(work, ".env") + ":hidden", "SEGREDO-SINTETICO");
+    expect(cls(join(work, ".env") + ":hidden", { cwd: work })).toBe("hard-block"); // A2: ADS NTFS
+    expect(() => cls(join(work, "ok.txt"), { cwd: work, allowCritical: [join(work, ".env") + ":hidden"] })).toThrow(AllowlistInvalidError); // A2
+  }
+});
+
+test("review minors: edges, no-leak, stat EACCES fail-closed", () => {
+  expect(cls(join(cwd, "api_token.sample"))).toBe("hard-block"); // B4: configurável > sensitive
+  mkdirSync(join(cwd, "wt"), { recursive: true });
+  writeFileSync(join(cwd, "wt", ".git"), "gitdir: x");
+  expect(cls(join(cwd, "wt", ".git"))).toBe("hard-block"); // B4: .git como arquivo (worktree)
+  if (process.platform === "win32") expect(() => cls("\\\\server\\share\\.git")).toThrow(); else expect(cls("\\\\server\\share\\.git")).toBe("hard-block"); // B4: UNC
+  const segredo = "SEGREDO-SINTETICO-9f8e";
+  writeFileSync(join(cwd, "arq.txt"), segredo);
+  try {
+    cls(join(cwd, "ok.txt"), { allowCritical: [join(cwd, "arq.txt") + "/*"] });
+    expect.unreachable("allow_invalid esperado");
+  } catch (error) {
+    expect((error as Error).message).not.toContain(segredo); // B3: sem vazar conteúdo (I-03)
+  }
+  const spy = spyOn(fs, "statSync").mockImplementation(() => {
+    throw Object.assign(new Error("negado"), { code: "EACCES" });
+  });
+  try {
+    expect(() => cls(join(cwd, "ok.txt"), { allowCritical: [join(cwd, "api_token.txt")] })).toThrow(AllowlistInvalidError); // B5
+  } finally {
+    spy.mockRestore();
+  }
 });
