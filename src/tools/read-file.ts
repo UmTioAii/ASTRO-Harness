@@ -97,10 +97,11 @@ export const readFileTool: Tool = {
     try {
       const { path, offset } = readInput(input);
       const resolved = resolveWithin(ctx.cwd, path);
-      const lines = fileLines(readFileSync(resolved, "utf8"));
-      // Arquivo é conteúdo externo: segredo não entra no contexto mesmo que esteja no disco (I-03).
-      // Só redige: paginação e teto de tokens continuam por conta de `page` (S-16).
-      return { output: redactSecrets(page(lines, offset, ctx.outputLimitTokens)) };
+      // ADR-0027: redige o arquivo INTEIRO antes de paginar — segredo não entra
+      // no contexto mesmo que esteja no disco (I-03), um bloco cortado na borda
+      // da página não vaza, e o teto de tokens de `page` conta o texto redigido.
+      const lines = fileLines(redactSecrets(readFileSync(resolved, "utf8")));
+      return { output: page(lines, offset, ctx.outputLimitTokens) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return failure(`erro ao ler arquivo: ${message}`);

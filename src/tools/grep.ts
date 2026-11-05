@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { redactSecrets } from "../sanitize-external";
 import { resolveWithin } from "./paths";
 import { ToolError, type Tool, type ToolResult } from "./types";
 
@@ -138,7 +139,8 @@ export const grepTool: Tool = {
         for (let i = 0; i < lines.length; i++) {
           if (!regex.test(lines[i]!)) continue;
           if (total >= from && total < to) {
-            results.push({ file: absPath, line: i + 1, match: lines[i]! });
+            // ADR-0027: redige na origem, antes de montar o resultado (I-03).
+            results.push({ file: absPath, line: i + 1, match: redactSecrets(lines[i]!) });
           }
           total++;
         }

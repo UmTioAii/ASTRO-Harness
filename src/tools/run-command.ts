@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
+import { redactSecrets } from "../sanitize-external";
 import { ToolError, type Tool, type ToolResult } from "./types";
 
 const MAX_OUTPUT = 10_000;
@@ -46,7 +47,7 @@ export function sanitizedEnv(
 const DOCKER_IMAGE = "alpine:3";
 
 function failure(message: string): ToolResult {
-  return { output: message, isError: true };
+  return { output: redactSecrets(message), isError: true };
 }
 
 function commandInput(input: unknown): string {
@@ -69,6 +70,14 @@ function shellArgv(command: string): string[] {
 
 function truncate(text: string): string {
   return text.length > MAX_OUTPUT ? text.slice(0, MAX_OUTPUT) : text;
+}
+
+/**
+ * ADR-0027 (redação): toda saída do comando redige padrões de segredo ANTES
+ * de qualquer truncamento — o cap nunca devolve texto cru (I-03).
+ */
+function redactThenTruncate(text: string): string {
+  return truncate(redactSecrets(text));
 }
 
 /** Mata o processo e os filhos (taskkill /T no Windows; grupo no POSIX). */
@@ -263,14 +272,14 @@ async function runInDocker(command: string, ctx: { cwd: string; signal?: AbortSi
   if (exited === timedOut) {
     const note = `timeout de ${timeoutMs}ms excedido no sandbox; container interrompido`;
     output = output.length > 0 ? `${output}\n${note}` : note;
-    return { output: truncate(output), isError: true };
+    return { output: redactThenTruncate(output), isError: true };
   }
   if (exited !== 0) {
     const note = `comando terminou com código ${exited} (sandbox docker)`;
     output = output.length > 0 ? `${output}\n${note}` : note;
-    return { output: truncate(output), isError: true };
+    return { output: redactThenTruncate(output), isError: true };
   }
-  return { output: truncate(output) };
+  return { output: redactThenTruncate(output) };
 }
 
 /** Executa um comando de shell no diretório de trabalho, com timeout do manifesto. */
@@ -385,16 +394,16 @@ export const runCommandTool: Tool = {
       if (exited === timedOut) {
         const note = `timeout de ${runCommandTool.manifest.timeoutMs}ms excedido; comando interrompido`;
         output = output.length > 0 ? `${output}\n${note}` : note;
-        return { output: truncate(output), isError: true };
+        return { output: redactThenTruncate(output), isError: true };
       }
 
       if (exited !== 0) {
         const note = `comando terminou com código ${exited}`;
         output = output.length > 0 ? `${output}\n${note}` : note;
-        return { output: truncate(output), isError: true };
+        return { output: redactThenTruncate(output), isError: true };
       }
 
-      return { output: truncate(output) };
+      return { output: redactThenTruncate(output) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return failure(`erro ao executar comando: ${message}`);

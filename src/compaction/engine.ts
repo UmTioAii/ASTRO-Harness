@@ -4,6 +4,7 @@
  * um callback injetado que NUNCA expõe tools (CMP-4).
  */
 import type { ChatMessage } from "../provider/types";
+import { redactSecrets } from "../sanitize-external";
 import { countMessageTokens } from "../tokens";
 import { buildCompactionArtifact, renderCompactionArtifact, type CompactionArtifactV1 } from "./types";
 
@@ -110,6 +111,20 @@ function clipBoth(value: string): string {
   return `${value.slice(0, CLIP_TOOL_CHARS)}\n[... truncado ...]\n${value.slice(-CLIP_TOOL_CHARS)}`;
 }
 
+/**
+ * ADR-0027 (redação): mensagem redigida por padrões antes de ir ao resumidor
+ * ou ao artefato — segredo nunca entra em prompt de resumo nem em contexto (I-03).
+ */
+function redactMessage(message: ChatMessage): ChatMessage {
+  return {
+    ...message,
+    content: redactSecrets(message.content),
+    ...(message.toolCalls === undefined ? {} : {
+      toolCalls: message.toolCalls.map((call) => ({ ...call, arguments: redactSecrets(call.arguments) })),
+    }),
+  };
+}
+
 /** Aplica um nível de redução (CMP-5) ao histórico antigo. */
 export function applyReduction(older: readonly ChatMessage[], level: 1 | 2 | 3 | 4 | 5): ReducedHistory {
   switch (level) {
@@ -188,7 +203,7 @@ export async function compactSession(input: CompactInput): Promise<CompactResult
     // Nada anterior para substituir: não chama o resumo nem reescreve o contexto.
     return {
       messages: [...input.messages],
-      artifact: buildCompactionArtifact({ run: input.run, older: [], recent, summary: "" }),
+      artifact: buildCompactionArtifact({ run: input.run, older: [], recent: recent.map(redactMessage), summary: "" }),
       reduction: 1,
       originalTokens,
       returnedTokens: originalTokens,
@@ -216,10 +231,17 @@ export async function compactSession(input: CompactInput): Promise<CompactResult
     ? "histórico antigo omitido (redução 5)"
     : await input.summarize([
       { role: "system", content: SUMMARY_PROMPT },
-      ...reduction.messages,
+      // ADR-0027: o resumidor recebe o histórico já redigido (I-03).
+      ...reduction.messages.map(redactMessage),
     ]);
 
-  const artifact = buildCompactionArtifact({ run: input.run, older, recent, summary });
+  // ADR-0027: o artefato montado no contexto sai redigido (resumo também).
+  const artifact = buildCompactionArtifact({
+    run: input.run,
+    older: older.map(redactMessage),
+    recent: recent.map(redactMessage),
+    summary: redactSecrets(summary),
+  });
   const compacted: ChatMessage[] = [
     ...(hasSystem ? [input.messages[0]!] : []),
     { role: "system", content: renderCompactionArtifact(artifact) },
