@@ -189,3 +189,30 @@ describe("web_search exa (#57)", () => {
     expect(webSearchSecretEnvNames({ webSearch: { provider: "exa", apiKeyEnv: "EXA_KEY" } })).toEqual(["EXA_KEY"]);
   });
 });
+
+describe("web_search redação de url/query no output (ADR-0027, I-03)", () => {
+  // Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
+  const SEARCH_SECRET = ["s", "k", "-"].join("") + "slice3a-search-synthetic-77aa88";
+
+  test("redige query e url dos resultados na origem, antes do JSON", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({
+        results: [{ title: "T", url: `https://a.test/p?token=${SEARCH_SECRET}`, text: "trecho" }],
+      }),
+    });
+    try {
+      const { tool, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY", baseUrl: server.url.origin });
+      const result = await tool.execute({ query: `busca ${SEARCH_SECRET}` }, ctx(cwd));
+      expect(result.isError).not.toBe(true);
+      expect(result.output).not.toContain(SEARCH_SECRET);
+      const body = parse(result.output);
+      expect(body.query).toContain("[REDACTED]");
+      expect(body.query).not.toContain(SEARCH_SECRET);
+      expect(body.results[0]!.url).toContain("[REDACTED]");
+      expect(body.results[0]!.url).not.toContain(SEARCH_SECRET);
+    } finally {
+      server.stop(true);
+    }
+  });
+});

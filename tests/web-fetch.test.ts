@@ -239,3 +239,42 @@ describe("web_fetch audit e limites (#57)", () => {
     }
   });
 });
+
+describe("web_fetch redação do corpo (ADR-0027, I-03)", () => {
+  // Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
+  const FETCH_SECRET = ["s", "k", "-"].join("") + "slice3a-fetch-synthetic-a1b2c3";
+
+  test("redige o corpo antes do slice/maxLength", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response(`texto token=${FETCH_SECRET} fim`, { headers: { "content-type": "text/plain" } }),
+    });
+    try {
+      const { tool, cwd } = setup();
+      const result = await tool.execute({ url: `${server.url.origin}/`, maxLength: 500 }, ctx(cwd));
+      expect(result.isError).not.toBe(true);
+      expect(result.output).not.toContain(FETCH_SECRET);
+      expect(result.output).toContain("[REDACTED]");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("redige antes do slice: segredo cortado na borda do maxLength não vaza", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response(`x`.repeat(50) + ` token=${FETCH_SECRET}`, { headers: { "content-type": "text/plain" } }),
+    });
+    try {
+      const { tool, cwd } = setup();
+      // maxLength cai no meio do valor do segredo: sem redação prévia, o
+      // prefixo cru do segredo vaza na borda do slice.
+      const result = await tool.execute({ url: `${server.url.origin}/`, maxLength: 70 }, ctx(cwd));
+      expect(result.isError).not.toBe(true);
+      expect(result.output).not.toContain(FETCH_SECRET);
+      expect(result.output).not.toContain(FETCH_SECRET.slice(0, 10));
+    } finally {
+      server.stop(true);
+    }
+  });
+});

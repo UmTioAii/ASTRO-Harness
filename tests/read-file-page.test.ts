@@ -104,4 +104,39 @@ describe("read_file paginado (S-16, CMP-11)", () => {
     expect(end).toBeLessThanOrEqual(50);
     expect(body(result.output).filter((line) => line.startsWith("linha ")).length).toBe(end);
   });
+
+  // Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
+  const READ_SECRET = ["s", "k", "-"].join("") + "slice3a-read-synthetic-5d6e7f" + "q".repeat(160);
+
+  test("redige antes de paginar: cap conta o texto redigido, não o cru (ADR-0027, I-03)", async () => {
+    // 400 linhas longas por causa do segredo: cruas, 350 linhas estouram o cap;
+    // redigidas, a página cheia cabe inteira.
+    const content = Array.from({ length: 400 }, (_, i) => `linha ${i + 1} token=${READ_SECRET}`).join("\n") + "\n";
+    const cwd = workspace(content);
+    const result = await readFileTool.execute({ path: "file.txt" }, ctx(cwd, 3000));
+    expect(result.isError).toBeFalsy();
+    expect(result.output).not.toContain(READ_SECRET);
+    expect(result.output).toContain("[REDACTED]");
+    expect(result.output.split("\n")[0]).toBe("linhas 1-350 de 400; para continuar, offset 341");
+  });
+
+  test("redige o arquivo inteiro antes de paginar: bloco na borda da página não vaza (ADR-0027)", async () => {
+    // PEM montado em runtime para não expor literal no diff (gate G6).
+    const pemBegin = ["-----BEGIN", "PRIVATE KEY-----"].join(" ");
+    const pemEnd = ["-----END", "PRIVATE KEY-----"].join(" ");
+    const pemBody = "MII" + "B".repeat(60);
+    const lines = [
+      ...Array.from({ length: 348 }, (_, i) => `linha ${i + 1}`),
+      pemBegin,
+      pemBody,
+      pemEnd,
+      ...Array.from({ length: 50 }, (_, i) => `depois ${i + 1}`),
+    ];
+    const cwd = workspace(lines.join("\n") + "\n");
+    const result = await readFileTool.execute({ path: "file.txt" }, ctx(cwd, 8000));
+    expect(result.isError).toBeFalsy();
+    // A página 1 termina no meio do bloco: sem redação prévia, o corpo vazaria.
+    expect(result.output).not.toContain(pemBody);
+    expect(result.output).toContain("[REDACTED]");
+  });
 });
