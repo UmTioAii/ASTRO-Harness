@@ -92,6 +92,8 @@ export interface AuditLike {
 export interface ToolResult {
   output: string;
   isError?: boolean;
+  /** Código estável de erro de política (ADR-0027): path_hard_blocked, allow_invalid, sandbox_required_for_shell. */
+  code?: string;
 }
 
 /** Contrato de uma tool executável pelo agente. */

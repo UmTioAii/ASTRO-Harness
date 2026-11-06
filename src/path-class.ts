@@ -8,7 +8,7 @@
  */
 import * as fs from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, parse, resolve, sep } from "node:path";
 import { CRITICAL_PATH_PATTERN } from "./permissions";
 import { canonicalize, isWithin, realpathPreservingDots } from "./tools/paths";
 
@@ -170,12 +170,25 @@ export interface PathClassifierContext {
 
 export type PathClassifier = (realPath: string) => PathClass;
 
-/** Matcher dos globs de `allow-sensitive`, relativos ao cwd e case-fold nas plataformas do ADR. */
+/** Canonicaliza o prefixo estático do glob (até o primeiro segmento com wildcard). */
+function canonicalGlob(pattern: string, cwd: string): string {
+  const absolute = isAbsolute(pattern) ? pattern : resolve(cwd, pattern);
+  const parts = absolute.split(/[\\/]+/);
+  const first = parts.findIndex((part) => GLOB_CHARS.test(part));
+  const staticPath = first === -1
+    ? absolute
+    : first <= 1
+      ? parse(absolute).root
+      : parts.slice(0, first).join(sep);
+  const rest = first === -1 ? [] : parts.slice(first);
+  return [realpathPreservingDots(staticPath, cwd), ...rest].join("/").replace(/\\/g, "/");
+}
+
+/** Matcher dos globs de `allow-sensitive`, relativos ao cwd real e case-fold nas plataformas do ADR. */
 function createSensitiveMatcher(entries: readonly string[], cwd: string): (real: string) => boolean {
   const globs = entries.map((entry) => {
     const expanded = expandTilde(entry) ?? entry;
-    const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
-    return new Bun.Glob(fold(absolute).replace(/\\/g, "/"));
+    return new Bun.Glob(fold(canonicalGlob(expanded, cwd)));
   });
   return (real) => {
     const candidate = real.replace(/\\/g, "/");
@@ -192,7 +205,7 @@ export function createPathClassifier(input: PathClassifierContext): PathClassifi
     protected: (input.protectedPaths ?? []).map((path) => fold(canonicalize(resolve(input.cwd, expandTilde(path) ?? path)))),
   };
   const allow = resolveAllowCritical(input.allowCritical ?? [], input.cwd, ctx);
-  const isAllowedSensitive = createSensitiveMatcher(input.allowSensitive ?? [], input.cwd);
+  const isAllowedSensitive = createSensitiveMatcher(input.allowSensitive ?? [], canonicalize(resolve(input.cwd)));
   const base = resolve(input.cwd);
   return (realPath: string): PathClass => {
     const expanded = expandTilde(realPath);

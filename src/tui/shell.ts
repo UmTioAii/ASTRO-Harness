@@ -74,6 +74,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
   }
   secretEnvNames.push(...webSearchSecretEnvNames(config));
   const modelEntry = config.models.find((model) => `${model.provider}/${model.id}` === config.agent.model);
+  let loadAudited = false;
   return {
     enabled: true,
     run: async (command, signal) => {
@@ -82,8 +83,11 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       // Auditor novo por execução: o seq é local e não colide com a sessão.
       const runId = randomUUID();
       const audit = new Auditor(auditPath);
-      for (const event of allowlistLoadEvents({ allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }, opts.cwd)) {
-        audit.append({ run: runId, agent: "default", tipo: "security.allowlist_applied", payload: { ...event } });
+      if (!loadAudited) {
+        loadAudited = true;
+        for (const event of allowlistLoadEvents({ allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }, opts.cwd)) {
+          audit.append({ run: runId, agent: "default", tipo: "security.allowlist_applied", payload: { ...event } });
+        }
       }
       const executor = new ToolExecutor({
         tools: [runCommandTool],

@@ -423,7 +423,7 @@ export class ToolExecutor {
             tipo: "tool.denied",
             payload: { name: call.name, reason: error.code, entry: error.entry },
           });
-          return failure(`entrada de allowlist inválida (${error.code}): ${error.entry}`);
+          return { ...failure(`entrada de allowlist inválida (${error.code}): ${error.entry}`), code: error.code };
         }
         // fail-closed: caminho que não classifica não é liberado (ADR-0027)
         this.auditRef.append({
@@ -433,7 +433,8 @@ export class ToolExecutor {
           payload: { name: call.name, reason: PATH_HARD_BLOCKED },
         });
         const display = denyDisplayPath(ctx.cwd, candidate);
-        return failure(new PathHardBlockedError(display, `caminho não classificável; negado por fail-closed (${PATH_HARD_BLOCKED}): ${display}`).message);
+        const blocked = new PathHardBlockedError(display, `caminho não classificável; negado por fail-closed (${PATH_HARD_BLOCKED}): ${display}`);
+        return { ...failure(blocked.message), code: blocked.code };
       }
       if (pathClass === "hard-block") {
         this.auditRef.append({
@@ -442,7 +443,8 @@ export class ToolExecutor {
           tipo: "tool.denied",
           payload: { name: call.name, reason: PATH_HARD_BLOCKED },
         });
-        return failure(new PathHardBlockedError(denyDisplayPath(ctx.cwd, candidate)).message);
+        const blocked = new PathHardBlockedError(denyDisplayPath(ctx.cwd, candidate));
+        return { ...failure(blocked.message), code: blocked.code };
       }
     }
     return undefined;

@@ -4,13 +4,16 @@
  */
 import { statSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { AllowlistInvalidError, classifyPath } from "./path-class";
 import { resolveArtifactRoot, resolveAstroHome } from "./permissions";
 import { realpathPreservingDots } from "./tools/paths";
 /** Teto de entradas por allowlist (ADR-0027). */
 export const MAX_ALLOWLIST_ENTRIES = 64;
 const GLOB_CHARS = /[*?[\]]/;
+const fold = (value: string): string => process.platform === "win32" || process.platform === "darwin" ? value.toLowerCase() : value;
+/** Nomes/folhas do tier imutável usados para invalidar globs amplos de `allow-sensitive` (ADR-0027). */
+const HARD_BLOCK_LEAVES = [".env", ".env.local", ".ssh", ".gnupg", ".git", ".aws", ".kube", ".astro", "id_rsa", "id_ed25519", "vault.json", "auth.json", "astro.config.json", "config.json", "credentials", "hosts.yml", "x.pem", "x.key", "x.p12", "x.pfx", "x.jks", "x.kdbx", ".netrc", ".npmrc"];
 /** Flags cruas coletadas pelo parser de CLI (só run/chat/tui). */
 export interface AllowlistFlags {
   allowCriticalRaw: string[];
@@ -60,8 +63,15 @@ function existsFile(path: string, cwd: string): boolean {
 function criticalResult(real: string, c: Ctx): "applied" | "ignored" {
   return classify(real, c) === "hard-block" ? "applied" : "ignored";
 }
-/** Fail-closed: casa hard-block ou literal inexistente → `ignored`. */
+/** Glob amplo que pode cobrir uma folha do tier imutável invalida a entrada inteira. */
+function globMayHitHardBlock(entry: string): boolean {
+  const glob = new Bun.Glob(fold(basename(entry)));
+  return HARD_BLOCK_LEAVES.some((name) => glob.match(fold(name)));
+}
+
+/** Fail-closed: casa hard-block, glob amplo ou literal inexistente → `ignored`. */
 function sensitiveResult(entry: string, c: Ctx): "applied" | "ignored" {
+  if (GLOB_CHARS.test(entry) && globMayHitHardBlock(entry)) return "ignored";
   if (classify(entry, c) === "hard-block") return "ignored";
   if (!GLOB_CHARS.test(entry) && !existsFile(entry, c.cwd)) return "ignored";
   return "applied";

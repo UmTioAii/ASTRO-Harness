@@ -472,7 +472,10 @@ export const runCommandTool: Tool = {
     }
 
     // Slice 4b (I-19): `sandbox: false` NÃO executa no host — recusa sem spawnar e sem ecoar o comando.
-    if (!sandboxEnabled) return failure(new SandboxRequiredForShellError("sandbox:false").message);
+    if (!sandboxEnabled) {
+      const error = new SandboxRequiredForShellError("sandbox:false");
+      return { ...failure(error.message), code: error.code };
+    }
 
     // Sandbox: container Docker efêmero; sem Docker disponível, recusa (sem downgrade)
     const docker = await detectDockerAvailable();

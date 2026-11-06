@@ -21,7 +21,7 @@ export interface RunTuiOptions {
   allowMissingConfig?: boolean;
   /** `allow-critical` da CLI (ADR-0027 slice 5a): vai à sessão e ao shell `!cmd`. */
   allowCritical?: readonly string[];
-  /** `allow-sensitive` da CLI (slice 5a: validada/auditada; reclassifica no 5b). */
+  /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
 }
 
