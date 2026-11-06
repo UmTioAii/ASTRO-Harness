@@ -81,14 +81,9 @@ test("normal: todo o resto", () => {
 test("createPathClassifier: fábrica reutiliza contexto e mantém a semântica de classifyPath", () => {
   const classify = createPathClassifier({ cwd, astroHome });
   const samples = [
-    join(cwd, ".env"),
-    join(cwd, ".env.example"),
-    join(cwd, ".ssh", "config"),
-    join(cwd, ".git", "HEAD"),
-    join(cwd, "api_token.txt"),
-    join(cwd, "notes.txt"),
-    join(astroHome, "vault", "x"),
-  ];
+    ".env", ".env.example", join(".ssh", "config"), join(".git", "HEAD"),
+    "api_token.txt", "notes.txt",
+  ].map((p) => join(cwd, p)).concat(join(astroHome, "vault", "x"));
   for (const p of samples) expect(classify(p)).toBe(cls(p));
 });
 

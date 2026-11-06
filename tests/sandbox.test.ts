@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { validateConfig, ConfigError } from "../src/config";
@@ -215,11 +215,7 @@ describe("dockerArgv: máscaras do sandbox (ADR-0027, #391 slice 4a)", () => {
     expect(resolveDockerImage({ ASTRO_DOCKER_IMAGE: "img@sha256:abcd" })).toBe("img@sha256:abcd");
     const cwd = argvCwd();
     expect(dockerArgv("sb-test", { cwd }, "echo ok")).toContain("oven/bun:1.4.2");
-    const custom = dockerArgv(
-      "sb-test",
-      { cwd, env: { ASTRO_DOCKER_IMAGE: "img@sha256:abcd" } },
-      "echo ok",
-    );
+    const custom = dockerArgv("sb-test", { cwd, env: { ASTRO_DOCKER_IMAGE: "img@sha256:abcd" } }, "echo ok");
     expect(custom).toContain("img@sha256:abcd");
     expect(custom).not.toContain("oven/bun:1.4.2");
   });
@@ -259,7 +255,6 @@ describe("dockerArgv: máscaras do sandbox (ADR-0027, #391 slice 4a)", () => {
     const gitDir = join(resolve(repoCwd), ".git");
     expect(hasRoMaskFor(argvRepo, gitDir)).toBe(true);
     expect(statSync(maskSourceFor(argvRepo, gitDir)!).isDirectory()).toBe(true);
-
     const wtCwd = argvCwd();
     writeFileSync(join(wtCwd, ".git"), "gitdir: /elsewhere/.git");
     const argvWt = dockerArgv("sb-test", { cwd: wtCwd }, "echo ok");
@@ -290,5 +285,24 @@ describe("dockerArgv: máscaras do sandbox (ADR-0027, #391 slice 4a)", () => {
     const file = join(argvCwd(), "arq.txt");
     writeFileSync(file, "x");
     expect(() => dockerArgv("sb-test", { cwd: file }, "echo ok")).toThrow(ToolError);
+  });
+
+  test("cwd atrás de symlink/junction: .astro, protectedPaths e ASTRO_HOME léxicos viram máscara", () => {
+    const real = mkdtempSync(join(tmpdir(), "astro-sbl-real-"));
+    mkdirSync(join(real, ".astro"));
+    mkdirSync(join(real, "protected"));
+    mkdirSync(join(real, "home"));
+    writeFileSync(join(real, "protected", "x.txt"), "x");
+    const link = join(mkdtempSync(join(tmpdir(), "astro-sbl-")), "proj");
+    if (process.platform === "win32") {
+      expect(Bun.spawnSync(["cmd", "/c", "mklink", "/J", link, real]).exitCode).toBe(0);
+    } else symlinkSync(real, link, "dir");
+    const argv = dockerArgv(
+      "sb",
+      { cwd: link, protectedPaths: ["protected"], env: { ASTRO_HOME: join(link, "home") } },
+      "echo ok",
+    );
+    const root = resolve(link);
+    for (const t of [".astro", "protected", "home"]) expect(hasRoMaskFor(argv, join(root, t))).toBe(true);
   });
 });

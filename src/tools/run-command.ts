@@ -49,15 +49,9 @@ export function sanitizedEnv(
   }
   return env;
 }
-/**
- * Imagem default do sandbox (ADR-0027): carrega só toolchain (`bun`, `tsc`) e
- * dependências — nunca código do projeto nem item do hard-block. Produção deve
- * fixar por digest via env `ASTRO_DOCKER_IMAGE` (`oven/bun:1.4.2@sha256:...`);
- * o digest não é embutido no código de propósito.
- */
+/** Imagem default do sandbox (ADR-0027); override `ASTRO_DOCKER_IMAGE` (produção: fixar por digest). */
 const DEFAULT_DOCKER_IMAGE = "oven/bun:1.4.2";
 
-/** Imagem do container do sandbox; override por env `ASTRO_DOCKER_IMAGE`. */
 export function resolveDockerImage(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.ASTRO_DOCKER_IMAGE?.trim();
   return override === undefined || override === "" ? DEFAULT_DOCKER_IMAGE : override;
@@ -192,11 +186,7 @@ export function resolveSandboxSetting(configured: boolean | undefined): boolean 
   return configured !== false;
 }
 
-/**
- * Teto de entradas da varredura de máscaras (ADR-0027): excedido = recusa
- * fail-closed. Sem cap de profundidade: a varredura é recursiva a qualquer
- * profundidade e o teto de entradas é a única trava.
- */
+/** Teto de entradas da varredura de máscaras (ADR-0027); excedido = recusa fail-closed. */
 const MASK_MAX_ENTRIES = 200_000;
 
 /** Contexto mínimo para montar o argv do sandbox (subconjunto de `ToolContext`). */
@@ -212,10 +202,7 @@ interface MaskTarget {
   isDirectory: boolean;
 }
 
-/**
- * Classificação para máscara (ADR-0027): fail-closed — erro do classificador
- * vira hard-block, então o que não pôde ser inspecionado também é mascarado.
- */
+/** Fail-closed (ADR-0027): erro do classificador vira hard-block (mascara o que não inspecionou). */
 function classifyForMask(classify: PathClassifier, realPath: string): boolean {
   try {
     return classify(realPath) === "hard-block";
@@ -236,21 +223,15 @@ function maskTargetOf(path: string): MaskTarget | null {
 }
 
 /**
- * Alvos de máscara hard-block (ADR-0027): `<cwd>/.git` sempre (arquivo em
- * worktree, árvore em repo — git não roda no sandbox), o `ASTRO_ARTIFACT_ROOT`
- * pelo realpath e todo path hard-block existente dentro do cwd. Varredura
- * recursiva a qualquer profundidade, sem descer em symlink e sem descer em
- * diretório já mascarado (a máscara de árvore já o encobre inteiro); teto
- * `MASK_MAX_ENTRIES` excedido = recusa fail-closed, e `readdir` que falha
- * também recusa (nunca segue sem inspecionar).
+ * Alvos de máscara (ADR-0027): `<cwd>/.git` sempre, o artifactRoot pelo
+ * realpath e todo hard-block existente no cwd. Varredura recursiva sem descer
+ * em symlink nem em diretório já mascarado; teto/readdir falho = recusa fail-closed.
  */
 function collectMaskTargets(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): MaskTarget[] {
   const cwd = resolve(ctx.cwd);
   const astroHome = resolveAstroHome(env);
   const artifactRoot = resolveArtifactRoot(env);
-  // Classificador e prefiltro léxico montados UMA vez (perf: sem recomputar o
-  // contexto por entrada); só symlinks e candidatos léxicos passam pelo
-  // classificador completo — nunca enfraquece a classificação.
+  // Classificador e prefiltro montados UMA vez; só symlink/candidato léxico vai ao classify.
   const classify = createPathClassifier({
     cwd,
     astroHome,
@@ -298,11 +279,7 @@ function collectMaskTargets(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): 
   return [...targets.values()];
 }
 
-/**
- * Fontes vazias das máscaras (ADR-0027): criadas em `os.tmpdir()` (fora do cwd
- * e do artifactRoot) — arquivo vazio para alvo arquivo, diretório vazio para
- * alvo diretório — e montadas `:ro` no mesmo caminho dentro do container.
- */
+/** Fontes vazias das máscaras em `os.tmpdir()`, montadas `:ro` no mesmo caminho no container. */
 function maskMounts(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): string[] {
   const targets = collectMaskTargets(ctx, env);
   if (targets.length === 0) return [];
@@ -327,11 +304,8 @@ function maskMounts(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): string[]
 }
 
 /**
- * Argv do docker run com isolamento (ADR-0027, I-11): rede off, rootfs
- * read-only, `/tmp` em tmpfs rw/noexec/nosuid, cwd read-write, git
- * neutralizado (`GIT_DIR=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `HOME=/tmp`) e
- * máscara read-only para cada hard-block dentro do cwd (mais `.git` e o
- * artifactRoot). Exportado para teste.
+ * Argv do docker run isolado (ADR-0027, I-11): rede off, rootfs read-only,
+ * `/tmp` tmpfs, cwd rw, git neutralizado e máscaras `:ro` dos hard-blocks.
  */
 export function dockerArgv(containerName: string, ctx: DockerSandboxContext, command: string): string[] {
   const workdir = resolve(ctx.cwd);

@@ -167,11 +167,7 @@ export interface PathClassifierContext {
 
 export type PathClassifier = (realPath: string) => PathClass;
 
-/**
- * Fábrica: computa `FoldedContext` + allow UMA vez e devolve o classificador
- * (hoist para varreduras que classificam muitos paths no mesmo contexto).
- * Mesma semântica de `classifyPath`: `hard-block > sensitive > normal`.
- */
+/** Fábrica: hoist do `FoldedContext`+allow; mesma semântica de `classifyPath`. */
 export function createPathClassifier(input: PathClassifierContext): PathClassifier {
   const ctx: FoldedContext = {
     cwd: fold(canonicalize(resolve(input.cwd))),
@@ -193,11 +189,8 @@ export function createPathClassifier(input: PathClassifierContext): PathClassifi
 }
 
 /**
- * Prefiltro léxico conservative de varredura dentro do cwd: true quando o
- * caminho léxico PODE ser hard-block/sensitive/protected e exige classificação
- * completa. A varredura não desce em symlinks, então os segmentos abaixo do
- * cwd mapeiam 1:1 no realpath e o prefiltro nunca perde um hard-block real;
- * falso-positivo só custa uma classificação completa a mais.
+ * Prefiltro léxico da varredura no cwd: true = candidato a hard-block e vai
+ * para a classificação completa (falso-positivo só custa 1 classify a mais).
  */
 export function createLexicalHardBlockPrefilter(
   input: Pick<PathClassifierContext, "cwd" | "astroHome" | "protectedPaths">,
@@ -228,11 +221,7 @@ export function createLexicalHardBlockPrefilter(
   };
 }
 
-/**
- * Classifica `input.realPath` sobre o realpath. Precedência
- * `hard-block > sensitive > normal`; `allow-critical` só reclassifica o
- * tier configurável para `normal`.
- */
+/** Classifica sobre o realpath; `allow-critical` só reclassifica o tier configurável. */
 export function classifyPath(input: ClassifyPathInput): PathClass {
   return createPathClassifier(input)(input.realPath);
 }
