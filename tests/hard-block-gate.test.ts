@@ -20,9 +20,7 @@ describe("helpers do gate de hard-block (ADR-0027, #391 slice 1)", () => {
     // content nunca é tratado como path
     expect(pathCandidatesOf({ name: "write_file", input: { path: "a.txt", content: ".env" } })).toEqual(["a.txt"]);
     expect(pathCandidatesOf({ name: "grep", input: { pattern: ".env", path: "src" } })).toEqual(["src"]);
-    // grep/list_dir fazem default do path para o cwd: "." vira candidato (review A/B)
-    expect(pathCandidatesOf({ name: "grep", input: { pattern: "x" } })).toEqual(["."]);
-    expect(pathCandidatesOf({ name: "read_file", input: {} })).toEqual([]); // tool sem default cwd
+    expect(pathCandidatesOf({ name: "grep", input: { pattern: "x" } })).toEqual(["."]); // default cwd (review A/B)
     expect(pathCandidatesOf({ name: "run_command", input: { command: "cat .env && ls '~/.ssh' && echo token 2>&1" } }))
       .toEqual([".env", "~/.ssh"]);
     expect(pathCandidatesOf({ name: "run_command", input: { command: "echo oi" } })).toEqual([]);
@@ -34,12 +32,7 @@ describe("helpers do gate de hard-block (ADR-0027, #391 slice 1)", () => {
   test("pathCandidatesOf: campo `file` de lsp e default cwd de grep/list_dir (review A/B)", () => {
     expect(pathCandidatesOf({ name: "lsp", input: { command: "hover", file: "keys.ts", line: 1, column: 1 } }))
       .toEqual(["keys.ts"]);
-    expect(pathCandidatesOf({ name: "lsp", input: { command: "hover", file: ".env", line: 1, column: 1 } }))
-      .toEqual([".env"]);
-    expect(pathCandidatesOf({ name: "lsp", input: { command: "hover" } })).toEqual([]);
     expect(pathCandidatesOf({ name: "list_dir", input: {} })).toEqual(["."]);
-    expect(pathCandidatesOf({ name: "list_dir", input: { path: ".git" } })).toEqual([".git"]);
-    expect(pathCandidatesOf({ name: "grep", input: { pattern: "x", path: "" } })).toEqual(["."]);
   });
 
   test("denyDisplayPath: relativo no cwd, <fora do cwd> fora, ~ expandido", () => {

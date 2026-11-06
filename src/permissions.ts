@@ -224,8 +224,7 @@ export interface ToolCallLike {
 
 /** Classe da ação: manifesto (`class`) refinado por caminho crítico (PERM-02/#264). */
 export function actionClassOf(tool: Tool, call: ToolCallLike): ActionClass {
-  const path = (call.input as { path?: unknown } | null)?.path;
-  const critical = typeof path === "string" && isCriticalPath(path);
+  const critical = pathCandidatesOf(call).some((path) => isCriticalPath(path));
   const declared = tool.manifest.class;
 
   if (declared === "read_common" || declared === "read_critical") {
@@ -287,16 +286,20 @@ function isPathLikeToken(token: string): boolean {
   return /\.[A-Za-z0-9]+$/.test(token);
 }
 
-/**
- * Candidatos a path extraídos do input da chamada (ADR-0027, #391 slice 1):
- * `input.path` string (read_file/edit/write_file/list_dir/grep etc.) e, para
- * `run_command`, cada token path-like de `input.command` (split por espaços e aspas).
- */
+/** Campos de path por tool (default `["path"]`; `lsp` declara `file`) e tools com default de `path` para o cwd (`grep`/`list_dir`: "."). */
+const PATH_FIELDS: Record<string, readonly string[]> = { lsp: ["file"] };
+const DEFAULT_PATH_FIELDS: readonly string[] = ["path"];
+const CWD_DEFAULT_TOOLS: ReadonlySet<string> = new Set(["grep", "list_dir"]);
+/** Candidatos a path do input (ADR-0027, #391 slice 1): `PATH_FIELDS` + default `path`; `CWD_DEFAULT_TOOLS` sem `path` ganha "."; `run_command` soma tokens path-like de `command` (token nu: slice 4). */
 export function pathCandidatesOf(call: ToolCallLike): string[] {
   if (typeof call.input !== "object" || call.input === null) return [];
-  const input = call.input as { path?: unknown; command?: unknown };
+  const input = call.input as Record<string, unknown>;
   const candidates: string[] = [];
-  if (typeof input.path === "string" && input.path.length > 0) candidates.push(input.path);
+  for (const field of [...DEFAULT_PATH_FIELDS, ...(PATH_FIELDS[call.name] ?? [])]) {
+    const value = input[field];
+    if (typeof value === "string" && value.length > 0) candidates.push(value);
+  }
+  if (CWD_DEFAULT_TOOLS.has(call.name) && (typeof input.path !== "string" || input.path.length === 0)) candidates.push(".");
   if (call.name === "run_command" && typeof input.command === "string") {
     for (const token of input.command.split(/[\s'"]+/)) {
       if (isPathLikeToken(token)) candidates.push(token);
