@@ -201,6 +201,12 @@ export function createLexicalHardBlockPrefilter(
   const protectedAbs = (input.protectedPaths ?? []).map((path) =>
     fold(canonicalize(resolve(input.cwd, expandTilde(path) ?? path))),
   );
+  // Bases léxicas: a varredura gera paths sob `resolve(cwd)`, que pode ser
+  // symlink/junction — nesse caso as bases reais não casam com os léxicos.
+  const cwdLex = fold(resolve(input.cwd));
+  const astroDirLex = join(cwdLex, ".astro");
+  const astroHomeLex = fold(resolve(input.astroHome));
+  const protectedLex = (input.protectedPaths ?? []).map((path) => fold(resolve(input.cwd, expandTilde(path) ?? path)));
   return (lexicalPath: string): boolean => {
     const p = fold(lexicalPath);
     const base = basename(p);
@@ -216,8 +222,9 @@ export function createLexicalHardBlockPrefilter(
     if (base === ".netrc" || base === ".npmrc") return true;
     if (hasAdjacentPair(segments, ".docker", "config.json")) return true;
     if (segments.includes(".config") && segments.includes("gh") && base === "hosts.yml") return true;
-    if (isWithin(astroDir, p) || isWithin(astroHome, p)) return true;
-    return protectedAbs.some((prot) => isWithin(prot, p));
+    if (isWithin(astroDir, p) || isWithin(astroDirLex, p)) return true;
+    if (isWithin(astroHome, p) || isWithin(astroHomeLex, p)) return true;
+    return protectedAbs.some((prot) => isWithin(prot, p)) || protectedLex.some((prot) => isWithin(prot, p));
   };
 }
 
