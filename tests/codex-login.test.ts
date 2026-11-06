@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { AgentSession } from "../src/chat/agent-session";
 import { readCodexAuth } from "../src/provider/codex-auth";
 import { saveCodexAuth, startCodexLogin } from "../src/provider/codex-login";
+import { testEnv } from "./setup";
 
 const jwt = (claims: Record<string, unknown>): string =>
   `x.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.y`;
@@ -124,7 +125,7 @@ test("cancelar durante o request não altera o auth.json existente", async () =>
     new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
     })) as unknown as typeof fetch;
-  const session = new AgentSession({ configPath, cwd, env: {}, fetchLike });
+  const session = new AgentSession({ configPath, cwd, env: testEnv({}), fetchLike });
   const controller = new AbortController();
   try {
     const pending = session.loginCodex("c", controller.signal);
@@ -145,7 +146,7 @@ test("loginCodex recusa credentialsPath relativo antes de tocar a rede", async (
     agent: { model: "c/gpt-5.5", maxSteps: 1, tools: [] },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
-  const session = new AgentSession({ configPath, cwd: dir, env: {} });
+  const session = new AgentSession({ configPath, cwd: dir, env: testEnv({}) });
   try {
     await expect(session.loginCodex("c")).rejects.toThrow(/absoluto/);
   } finally {

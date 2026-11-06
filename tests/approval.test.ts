@@ -9,6 +9,7 @@ import { Ledger } from "../src/ledger";
 import { FallbackProvider } from "../src/provider/fallback-provider";
 import { ProfileFallbackProvider } from "../src/provider/profile-fallback-provider";
 import type { CompletionResponse, Provider } from "../src/provider/types";
+import { testEnv } from "./setup";
 
 const resp = (content: string): CompletionResponse => ({ content, toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } });
 
@@ -53,7 +54,7 @@ function e2e(priced = false) {
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
   const audit = () => new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll();
-  return { cwd, configPath, state, server, audit, ledger: new Ledger(join(cwd, ".astro", "ledger.jsonl")), env: { KEY_A: "a", KEY_B: "b" } };
+  return { cwd, configPath, state, server, audit, ledger: new Ledger(join(cwd, ".astro", "ledger.jsonl")), env: testEnv({ KEY_A: "a", KEY_B: "b" }) };
 }
 
 describe("gate de aprovação de troca (F-19, #129)", () => {

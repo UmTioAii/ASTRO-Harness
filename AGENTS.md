@@ -45,12 +45,13 @@ Detalhe do fluxo em `docs/workflow.md`; checklist de revisão em `docs/review-ch
 3. TDD obrigatório: RED (`test:`) antes de GREEN (`feat:`/`fix:`), commits separados, RED no corpo do PR.
 4. Commits no formato `tipo: resumo`, com rodapé `Refs #n`.
 5. PR pelo template, com `Closes #n`. Alvo de até 200 linhas alteradas, teto de 400.
-6. Revisão dupla obrigatória antes do merge: revisor A (segurança: I-03/I-01/I-11, bloqueia sempre) + revisor B (correctness/contrato), em paralelo e contexto fresco. Ver `docs/review-checklist.md`.
+6. Revisão dupla obrigatória antes do merge: revisor A (segurança: I-03/I-01/I-11, bloqueia sempre) + revisor B (correctness/contrato), em paralelo e contexto fresco. **Cross-review: quem abre o PR não revisa nem faz merge.** Ver `docs/review-checklist.md`.
 7. Squash merge. `main` nunca recebe commit direto.
 
 ## Revisão de PR (obrigatória)
 
 - Nenhum PR entra em `main` sem veredito registrado no próprio PR: `Revisão: APPROVE` ou `Revisão: REQUEST_CHANGES`.
+- **Cross-review (2 colaboradores):** **Quem abre o PR não revisa nem faz merge.** O outro colaborador deve fazer a revisão (A e/ou B) e o merge.
 - Revisor em contexto novo: subagente ou sessão que recebe o diff e o checklist, não o raciocínio do autor.
 - Achado bloqueante cita `arquivo:linha` e um cenário concreto de falha. Achado sem isso é sugestão e não bloqueia.
 - Achado de segurança (vazamento de segredo, bypass de allowlist, escape de caminho) bloqueia sempre.

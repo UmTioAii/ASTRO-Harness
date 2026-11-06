@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { validateConfig } from "../src/config";
 import { definePlugin, loadPlugins, pluginAllowlistFromEnv } from "../src/plugins";
 import { runTask } from "../src/app";
+import { testEnv } from "./setup";
 
 /** Plugin de teste: tool sql_query + provider factory bigquery. */
 const PLUGIN_SOURCE = `
@@ -103,7 +104,7 @@ describe("plugin system (F7-1)", () => {
       bq: { kind: "bigquery", credentialRef: "BQ_KEY", dataset: "meu" },
     });
 
-    const report = await runTask({ configPath, task: "consulte o banco", cwd: dir, env: { BQ_KEY: "k", BQ_STUB: "stub-ok" } });
+    const report = await runTask({ configPath, task: "consulte o banco", cwd: dir, env: testEnv({ BQ_KEY: "k", BQ_STUB: "stub-ok" }) });
     // provider do plugin respondeu
     expect(report.final).toContain("resposta do bigquery: stub-ok");
     expect(report.tokensIn).toBe(7);
@@ -119,7 +120,7 @@ describe("plugin system (F7-1)", () => {
   test("kind de plugin sem factory registrada → erro claro", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-plugin-"));
     const configPath = writeConfig(dir, [], { bq: { kind: "bigquery" } });
-    const err = (await runTask({ configPath, task: "x", cwd: dir, env: {} }).then(() => null, (e) => e)) as Error;
+    const err = (await runTask({ configPath, task: "x", cwd: dir, env: testEnv({}) }).then(() => null, (e) => e)) as Error;
     expect(String(err!.message)).toContain("sem factory");
   });
 

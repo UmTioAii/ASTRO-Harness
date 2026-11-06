@@ -7,6 +7,7 @@ import { runTask } from "../src/app";
 import { budgetStatus, formatBudgetEstimate, restrictBudget } from "../src/budget";
 import type { BudgetConfig } from "../src/config";
 import { Ledger } from "../src/ledger";
+import { testEnv } from "./setup";
 
 const budget = (extra: Partial<BudgetConfig> = {}): BudgetConfig =>
   ({ scope: "day", limitUsd: 10, warnAt: 0.8, onExceed: "ask", ...extra });
@@ -121,7 +122,7 @@ describe("aviso de budget no run (F-05, #132 parte 2)", () => {
         budget: { scope: "day", limitUsd: 20, warnAt: 0.1 },
         paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
       }));
-      const report = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
+      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       expect(report.final).toBe("fim");
       expect(report.budget?.warning).toBe(true);
       expect(report.budget?.spentUsd).toBeGreaterThan(0);
@@ -148,7 +149,7 @@ describe("aviso de budget no run (F-05, #132 parte 2)", () => {
         budget: { scope: "day", limitUsd: 20, warnAt: 0.1 },
         paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
       }));
-      const report = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
+      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       expect(report.budget?.warning).toBe(true);
       expect(new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll().filter((e) => e.tipo === "budget.warning")).toHaveLength(1);
     } finally {
@@ -170,7 +171,7 @@ describe("aviso de budget no run (F-05, #132 parte 2)", () => {
         budget: { scope: "day", limitUsd: 1 },
         paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
       }));
-      const report = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
+      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       expect(report.budget?.estimate).toBe("n/d");
       expect(report.budget?.spentUsd).toBeNull();
       expect(report.budget?.exhausted).toBe(false);

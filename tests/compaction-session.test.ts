@@ -11,6 +11,7 @@ import type { AgentEntry, ModelEntry } from "../src/registry";
 import { runMultiAgentSession } from "../src/session";
 import { handoffTool } from "../src/tools/handoff";
 import { ToolExecutor } from "../src/tools/executor";
+import { testEnv } from "./setup";
 
 interface Body {
   tools?: unknown[];
@@ -72,7 +73,7 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
         compaction: { buffer: null },
       });
       const report = await runTask({
-        configPath, task: "tarefa", cwd, env: { KEY: "k" },
+        configPath, task: "tarefa", cwd, env: testEnv({ KEY: "k" }),
         history: [
           { role: "user", content: `sk-live-0123456789abcdef ${"a".repeat(40_000)}` },
           { role: "assistant", content: "b".repeat(40_000) },
@@ -122,7 +123,7 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
         compaction: { buffer: null },
       });
       const error = await runTask({
-        configPath, task: "oi", cwd, env: { KEY: "k" }, runId: "r-paused",
+        configPath, task: "oi", cwd, env: testEnv({ KEY: "k" }), runId: "r-paused",
         history: [
           { role: "user", content: "a".repeat(40_000) },
           { role: "assistant", content: "b".repeat(40_000) },
@@ -207,7 +208,7 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
         { role: "user" as const, content: "a".repeat(40_000) },
         { role: "assistant" as const, content: "b".repeat(40_000) },
       ];
-      const report = await runTask({ configPath, task: "oi", cwd, env: { KEY: "k" }, history });
+      const report = await runTask({ configPath, task: "oi", cwd, env: testEnv({ KEY: "k" }), history });
 
       expect(report.final).toBe("concluído");
       expect(mock.calls()).toBe(3);
@@ -233,7 +234,7 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
         { role: "user" as const, content: "a".repeat(40_000) },
         { role: "assistant" as const, content: "b".repeat(40_000) },
       ];
-      const error = await runTask({ configPath, task: "oi", cwd, env: { KEY: "k" }, history })
+      const error = await runTask({ configPath, task: "oi", cwd, env: testEnv({ KEY: "k" }), history })
         .then(() => null, (caught: unknown) => caught);
 
       expect(error).toBeDefined();

@@ -17,6 +17,8 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/decisions.md` | Ao precisar do motivo de uma escolha (D-xx) | ~100 |
 | `docs/adr/` | Decisão arquitetural nova ou revisão de uma antiga | 1 por arquivo |
 | `docs/superpowers/plans/` | Ao executar uma frente do planejamento; roadmap de issues abertas em `2026-11-01-roadmap-execucao-issues-abertas.md` | 1 por frente |
+| `docs/superpowers/plans/2026-11-06-diagnostico-72-falhas-bun-test.md` | Ao investigar as 72 falhas locais de `bun test` e corrigir isolamento da suíte | ~71 |
+| `docs/superpowers/plans/2026-11-06-plano-intervencoes-tui-config-custos.md` | Ao retomar os slices pendentes de #401 e planejar execução/custos | ~59 |
 | `docs/roadmap.md` | Histórico das fases concluídas (F0–F7) | ~70 |
 | `docs/roadmap-complementar.md` | Itens planejados das camadas 0–3 (F-xx, T, C, P) | ~120 |
 | `docs/providers.md` | Ao construir provider, validar credencial ou usar os SDKs | ~90 |

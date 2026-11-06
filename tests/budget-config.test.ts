@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runTask } from "../src/app";
 import { ConfigError, validateConfig } from "../src/config";
 import type { ModelConfig } from "../src/config";
+import { testEnv } from "./setup";
 
 const valid = {
   providers: { openai: { kind: "openai-compat", baseUrl: "https://api.openai.com/v1", credentialRef: "KEY" } },
@@ -122,7 +123,7 @@ describe("run.maxTurns no runtime (F-05, #132 parte 1)", () => {
         providers: { openai: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
         ...extra,
       }));
-      const message = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })
+      const message = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) })
         .then(() => "concluiu", (error: unknown) => (error instanceof Error ? error.message : String(error)));
       return { calls, message };
     } finally {
@@ -173,7 +174,7 @@ describe("run.maxTurns no runtime (F-05, #132 parte 1)", () => {
         agents,
         run: { maxTurns: 2 },
       }));
-      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })).rejects.toThrow(/excedeu 2 passos/);
+      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) })).rejects.toThrow(/excedeu 2 passos/);
       expect(calls).toBe(2);
     } finally {
       server.stop(true);

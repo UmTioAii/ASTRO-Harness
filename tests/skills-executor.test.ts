@@ -6,6 +6,7 @@ import { Auditor } from "../src/audit";
 import { runTask } from "../src/app";
 import { buildSkillRegistry, isSkillCommand, resolveSkillCommand, resolveTaskSkill } from "../src/skills/executor";
 import { loadSkillsFromRoot } from "../src/skills/loader";
+import { testEnv } from "./setup";
 
 const SKILL = `---\nname: commit\ndescription: Cria um commit com a mudança atual\nversion: 1.0.0\npermissions:\n  tools: [read_file, run_command]\n---\nRevise o diff e crie o commit. Argumentos: $ARGUMENTS\n`;
 const SKILL_SCRIPTS = SKILL.replace("---\nRevise", "scripts:\n  - name: check\n    command: git status --short\n---\nRevise");
@@ -123,7 +124,7 @@ test("run via /commit injeta o prompt da skill, audita skill.loaded e não persi
     const cfgPath = writeRunConfig(dir, up.port!, ["read_file", "run_command"]);
     const report = await runTask({ approveTool: () => true,
       configPath: cfgPath, task: "/commit revisar o diff", cwd: dir,
-      env: { KEY_A: "dummy" }, skillsUserRoot: join(dir, "sem-skills"),
+      env: testEnv({ KEY_A: "dummy" }), skillsUserRoot: join(dir, "sem-skills"),
     });
 
     expect(report.final).toBe("pronto");
@@ -166,7 +167,7 @@ test("run dirigido por skill executa read_file e run_command no loop de tools", 
     const cfgPath = writeRunConfig(dir, up.port!, ["read_file", "run_command"]);
     const report = await runTask({ approveTool: () => true,
       configPath: cfgPath, task: "/commit revisar o diff", cwd: dir,
-      env: { KEY_A: "dummy" }, skillsUserRoot: join(dir, "sem-skills"),
+      env: testEnv({ KEY_A: "dummy" }), skillsUserRoot: join(dir, "sem-skills"),
     });
 
     expect(report.final).toBe("pronto");
@@ -189,7 +190,7 @@ test("run com skill pedindo tool fora da allowlist falha fechado", async () => {
   const cfgPath = writeRunConfig(dir, 1, ["read_file"]);
   await expect(runTask({ approveTool: () => true,
     configPath: cfgPath, task: "/deploy agora", cwd: dir,
-    env: { KEY_A: "dummy" }, skillsUserRoot: join(dir, "sem-skills"),
+    env: testEnv({ KEY_A: "dummy" }), skillsUserRoot: join(dir, "sem-skills"),
   })).rejects.toThrow(/allowlist/);
   const auditText = readFileSync(join(dir, ".astro", "audit.jsonl"), "utf8");
   expect(auditText).toContain("run.started");

@@ -6,6 +6,7 @@ import { runTask } from "../src/app";
 import { Auditor } from "../src/audit";
 import type { ChatMessage } from "../src/provider/types";
 import { Ledger } from "../src/ledger";
+import { testEnv } from "./setup";
 
 function setup(agents = false) {
   const cwd = mkdtempSync(join(tmpdir(), "astro-chat-hooks-"));
@@ -40,7 +41,7 @@ describe("hooks de chat no runTask (T1, #62)", () => {
         { role: "user", content: "anterior" },
         { role: "assistant", content: "resposta" },
       ];
-      const report = await runTask({ configPath, task: "novo", cwd, env: { KEY: "k" }, history });
+      const report = await runTask({ configPath, task: "novo", cwd, env: testEnv({ KEY: "k" }), history });
       expect(bodies[0]!.messages?.map((m) => m.content)).toEqual(["sys", "anterior", "resposta", "novo"]);
       expect(report.messages?.map((m) => m.content)).toEqual(["sys", "anterior", "resposta", "novo"]);
       expect(report.final).toBe("ok");
@@ -53,7 +54,7 @@ describe("hooks de chat no runTask (T1, #62)", () => {
     const { cwd, configPath, bodies, stop } = setup();
     try {
       const report = await runTask({
-        configPath, task: "x", cwd, env: { KEY: "k" },
+        configPath, task: "x", cwd, env: testEnv({ KEY: "k" }),
         runId: "chat-run", model: "p/m2", suppressRunEvents: true,
         history: [{ role: "system", content: "sys" }],
       });
@@ -73,7 +74,7 @@ describe("hooks de chat no runTask (T1, #62)", () => {
   test("history vazio usa o prompt padrão e só o user do turno", async () => {
     const { cwd, configPath, bodies, stop } = setup();
     try {
-      await runTask({ configPath, task: "novo", cwd, env: { KEY: "k" }, history: [] });
+      await runTask({ configPath, task: "novo", cwd, env: testEnv({ KEY: "k" }), history: [] });
       expect(bodies[0]!.messages?.map((m) => m.role)).toEqual(["system", "user"]);
       expect(bodies[0]!.messages?.[1]?.content).toBe("novo");
     } finally {
@@ -84,7 +85,7 @@ describe("hooks de chat no runTask (T1, #62)", () => {
   test("prompt com token= é redigido e o run não quebra", async () => {
     const { cwd, configPath, bodies, stop } = setup();
     try {
-      const report = await runTask({ configPath, task: "use token=abc123456789, para autenticar", cwd, env: { KEY: "k" } });
+      const report = await runTask({ configPath, task: "use token=abc123456789, para autenticar", cwd, env: testEnv({ KEY: "k" }) });
       expect(report.final).toBe("ok");
       expect(JSON.stringify(bodies)).not.toContain("abc123456789");
     } finally {
@@ -94,7 +95,7 @@ describe("hooks de chat no runTask (T1, #62)", () => {
   test("history sem system ganha o prompt padrão antes do primeiro turno", async () => {
     const { cwd, configPath, bodies, stop } = setup();
     try {
-      await runTask({ configPath, task: "novo", cwd, env: { KEY: "k" },
+      await runTask({ configPath, task: "novo", cwd, env: testEnv({ KEY: "k" }),
         history: [{ role: "user", content: "antigo" }] });
       expect(bodies[0]!.messages?.[0]?.role).toBe("system");
       expect(bodies[0]!.messages?.map((m) => m.content)).toEqual([
@@ -110,7 +111,7 @@ describe("hooks de chat no runTask (T1, #62)", () => {
   test("model override força single-agent mesmo com agents configurados", async () => {
     const { cwd, configPath, bodies, stop } = setup(true);
     try {
-      const report = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, model: "p/m2" });
+      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), model: "p/m2" });
       expect(bodies[0]!.model).toBe("m2");
       expect(report.model).toBe("p/m2");
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
@@ -125,7 +126,7 @@ describe("hooks de chat no runTask (T1, #62)", () => {
   test("history força single-agent mesmo com agents configurados", async () => {
     const { cwd, configPath, bodies, stop } = setup(true);
     try {
-      const report = await runTask({ configPath, task: "novo", cwd, env: { KEY: "k" },
+      const report = await runTask({ configPath, task: "novo", cwd, env: testEnv({ KEY: "k" }),
         history: [{ role: "system", content: "sys" }, { role: "user", content: "antigo" }, { role: "assistant", content: "r" }] });
       expect(report.agentsUsed).toBeUndefined();
       expect(bodies[0]!.messages?.map((m) => m.content)).toEqual(["sys", "antigo", "r", "novo"]);
@@ -137,10 +138,10 @@ describe("hooks de chat no runTask (T1, #62)", () => {
   test("modelo inexistente e runId+resume falham antes do provider", async () => {
     const { cwd, configPath, bodies, stop } = setup();
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, model: "p/ghost" })).rejects.toBeDefined();
-      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, runId: "a", resume: "b" }))
+      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), model: "p/ghost" })).rejects.toBeDefined();
+      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), runId: "a", resume: "b" }))
         .rejects.toThrow(/mutuamente exclusivos/);
-      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, model: "p/m2", resume: "b" }))
+      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), model: "p/m2", resume: "b" }))
         .rejects.toThrow(/mutuamente exclusivos/);
       expect(bodies).toHaveLength(0);
     } finally {

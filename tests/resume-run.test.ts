@@ -7,6 +7,7 @@ import { Auditor } from "../src/audit";
 import { runTask } from "../src/app";
 import { Ledger, processAlive } from "../src/ledger";
 import { rebuildAgentTree } from "../src/resume";
+import { testEnv } from "./setup";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -66,7 +67,7 @@ describe("execução de resume (F-22, #131)", () => {
     const { cwd, configPath, seen, server } = setup();
     try {
       const ledger = seedInterrupted(cwd);
-      const report = await runTask({ configPath, task: "continue", cwd, env: { TEST_KEY: "x" }, resume: "r1" });
+      const report = await runTask({ configPath, task: "continue", cwd, env: testEnv({ TEST_KEY: "x" }), resume: "r1" });
 
       expect(report.runId).toBe("r1");
       expect(report.resumedFrom).toBe("coder");
@@ -89,7 +90,7 @@ describe("execução de resume (F-22, #131)", () => {
     const { cwd, configPath, seen, server } = setup();
     try {
       const ledger = seedInterrupted(cwd);
-      await runTask({ configPath, task: "continue", cwd, env: { TEST_KEY: "x" }, resume: "r1" });
+      await runTask({ configPath, task: "continue", cwd, env: testEnv({ TEST_KEY: "x" }), resume: "r1" });
 
       const events = ledger
         .readAllEntries()
@@ -128,7 +129,7 @@ describe("execução de resume (F-22, #131)", () => {
       });
       ledger.recordState("r1", "interrupted", { agent: "coder", reason: "cancelled" });
 
-      const report = await runTask({ configPath, task: "continue", cwd, env: { TEST_KEY: "x", BACKUP_KEY: "y" }, resume: "r1" });
+      const report = await runTask({ configPath, task: "continue", cwd, env: testEnv({ TEST_KEY: "x", BACKUP_KEY: "y" }), resume: "r1" });
 
       expect(report.resumedFrom).toBe("coder");
       expect(report.model).toBe("mock/m2");
@@ -146,7 +147,7 @@ describe("execução de resume (F-22, #131)", () => {
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       ledger.recordAgentCreated({ run: "r1", agent_id: "planner", session_id: "r1", model: "m1", pid: deadPid() });
 
-      const report = await runTask({ configPath, task: "continue", cwd, env: { TEST_KEY: "x" }, resume: "r1" });
+      const report = await runTask({ configPath, task: "continue", cwd, env: testEnv({ TEST_KEY: "x" }), resume: "r1" });
 
       expect(report.resumedFrom).toBe("planner");
       expect(seen).toEqual(["m1"]);
@@ -165,7 +166,7 @@ describe("execução de resume (F-22, #131)", () => {
     try {
       const ledger = seedInterrupted(cwd, "r1", "m2", deadPid());
 
-      await expect(runTask({ configPath, task: "continue", cwd, env: { TEST_KEY: "x" }, resume: "r1" }))
+      await expect(runTask({ configPath, task: "continue", cwd, env: testEnv({ TEST_KEY: "x" }), resume: "r1" }))
         .rejects.toThrow(/modelo do agente "coder" mudou/);
 
       const events = ledger.readAllEntries().filter((e) => e.kind === "agent" && e.run === "r1");
@@ -195,11 +196,11 @@ describe("execução de resume (F-22, #131)", () => {
         agent: { model: "mock/m1", maxSteps: 2, tools: [] },
         paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
       }));
-      await expect(runTask({ configPath, task: "x", cwd, env: { TEST_KEY: "x" } })).rejects.toThrow(/provider/);
+      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ TEST_KEY: "x" }) })).rejects.toThrow(/provider/);
 
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       const runId = ledger.readStates()[0]!.run;
-      const report = await runTask({ configPath, task: "x", cwd, env: { TEST_KEY: "x" }, resume: runId });
+      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ TEST_KEY: "x" }), resume: runId });
       expect(report.resumedFrom).toBe("default");
       expect(report.model).toBe("mock/m1");
       expect(seen).toEqual(["m1", "m1"]);
@@ -216,7 +217,7 @@ describe("execução de resume (F-22, #131)", () => {
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       ledger.recordAgentCreated({ run: "r1", agent_id: "coder", session_id: "r1" }); // sem model
       ledger.recordState("r1", "interrupted", { agent: "coder", reason: "cancelled" });
-      await expect(runTask({ configPath, task: "x", cwd, env: { TEST_KEY: "x" }, resume: "r1" })).rejects.toThrow(/sem modelo gravado/);
+      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ TEST_KEY: "x" }), resume: "r1" })).rejects.toThrow(/sem modelo gravado/);
       expect(seen).toEqual([]);
     } finally {
       server.stop(true);
@@ -229,7 +230,7 @@ describe("execução de resume (F-22, #131)", () => {
       const ledger = seedInterrupted(cwd);
       ledger.recordAgentDestroyed({ run: "r1", agent_id: "coder", session_id: "r1", reason: "completed" });
       ledger.recordState("r1", "completed", { agent: "coder" });
-      await expect(runTask({ configPath, task: "x", cwd, env: { TEST_KEY: "x" }, resume: "r1" })).rejects.toThrow(/já concluído/);
+      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ TEST_KEY: "x" }), resume: "r1" })).rejects.toThrow(/já concluído/);
       expect(seen).toEqual([]);
     } finally {
       server.stop(true);
@@ -240,7 +241,7 @@ describe("execução de resume (F-22, #131)", () => {
     const { cwd, configPath, seen, server } = setup("m2");
     try {
       seedInterrupted(cwd, "r1", "m-old");
-      await expect(runTask({ configPath, task: "x", cwd, env: { TEST_KEY: "x" }, resume: "r1" })).rejects.toThrow(/modelo do agente "coder" mudou/);
+      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ TEST_KEY: "x" }), resume: "r1" })).rejects.toThrow(/modelo do agente "coder" mudou/);
       expect(seen).toEqual([]);
     } finally {
       server.stop(true);

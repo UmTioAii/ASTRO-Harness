@@ -10,6 +10,7 @@ import { readFileTool } from "../src/tools/read-file";
 import { writeFileTool } from "../src/tools/write-file";
 import type { ToolContext } from "../src/tools/types";
 import { dockerSandboxModule, type DockerMock, type RunCommandModule } from "./helpers/docker-mock";
+import { testEnv } from "./setup";
 
 // F-00: run_command só roda no sandbox (mock de docker, env mínima do container) — slice 4b (I-03).
 let mod: RunCommandModule;
@@ -190,7 +191,7 @@ describe("segurança F-00", () => {
         configPath,
         task: "x",
         cwd,
-        env: { ASTRO_SEC_KEY: "key-tst" },
+        env: testEnv({ ASTRO_SEC_KEY: "key-tst" }),
       }).then(
         () => null,
         (e) => e,
