@@ -27,6 +27,8 @@ export interface ShellOptions {
   allowMissingConfig?: boolean;
   /** Aprovador do gate no modo ask; ausente = fail-closed (deny). */
   approveTool?: ToolApprover;
+  /** `allow-critical` da CLI (ADR-0027 slice 5a): path liberado não é mascarado no sandbox. */
+  allowCritical?: readonly string[];
 }
 
 /** Variáveis que o shell precisa manter mesmo se um MCP declarar o mesmo nome. */
@@ -86,6 +88,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
           {
             cwd: opts.cwd, run: randomUUID(), agent: "default",
             env: opts.env ?? process.env, secretEnvNames,
+            ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
             // Mesmo cap do run (default quando o agent usa profile de outro modelo).
             outputLimitTokens: effectiveOutputCap(config.outputLimit, modelEntry?.context),
             ...(signal === undefined ? {} : { signal }),

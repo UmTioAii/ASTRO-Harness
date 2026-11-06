@@ -48,6 +48,10 @@ export interface AgentSessionOptions {
   trustAsk?: TrustAsk;
   /** Injeção para testes do login device (sem rede real). */
   fetchLike?: FetchLike;
+  /** `allow-critical` da CLI (ADR-0027 slice 5a): vai a cada runTask da sessão. */
+  allowCritical?: readonly string[];
+  /** `allow-sensitive` da CLI (slice 5a: validada/auditada; reclassifica no 5b). */
+  allowSensitive?: readonly string[];
 }
 
 export interface ProviderInfo {
@@ -136,6 +140,8 @@ export class AgentSession {
   readonly #approveTool: ToolApprover | undefined;
   readonly #trustAsk: TrustAsk | undefined;
   readonly #fetchLike: FetchLike | undefined;
+  readonly #allowCritical: readonly string[] | undefined;
+  readonly #allowSensitive: readonly string[] | undefined;
   #modelRef: string;
   #permissionMode: PermissionMode;
   #messages: ChatMessage[];
@@ -177,6 +183,8 @@ export class AgentSession {
     this.#approveTool = opts.approveTool;
     this.#trustAsk = opts.trustAsk;
     this.#fetchLike = opts.fetchLike;
+    this.#allowCritical = opts.allowCritical;
+    this.#allowSensitive = opts.allowSensitive;
     this.#modelRef = opts.model ?? this.#config.agent.model;
     // Modo inicial idêntico ao do run (app.ts lê só process.env, nunca o env injetado):
     // process.env.ASTRO_PERMISSION_MODE > config > ask (D-24, #270); /mode troca depois (#271).
@@ -546,6 +554,8 @@ export class AgentSession {
           ...(this.#budgetDecider === undefined ? {} : { onBudgetExceeded: this.#budgetDecider }),
           ...(this.#approveTool === undefined ? {} : { approveTool: this.#approveTool }),
           ...(this.#trustAsk === undefined ? {} : { trustAsk: this.#trustAsk }),
+          ...(this.#allowCritical === undefined ? {} : { allowCritical: this.#allowCritical }),
+          ...(this.#allowSensitive === undefined ? {} : { allowSensitive: this.#allowSensitive }),
         });
       } catch (error) {
         // Uso gasto antes da falha fica no ledger: contabiliza no acumulado da sessão
