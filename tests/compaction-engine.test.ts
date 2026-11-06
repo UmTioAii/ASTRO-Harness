@@ -243,4 +243,41 @@ describe("compactSession (S-17, CMP-3/CMP-4)", () => {
     expect(calls).toBe(0);
     expect(result.artifact.importantContext).toContain("omitid");
   });
+
+  // Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
+  const COMPACT_SECRET = ["s", "k", "-"].join("") + "slice3a-compact-synthetic-334455";
+
+  test("redige o histórico antes do summarize e o resumo/artefato antes do contexto (ADR-0027, I-03)", async () => {
+    const messages: ChatMessage[] = [
+      { role: "system", content: "SYS-PROMPT" },
+      user(`tarefa antiga token=${COMPACT_SECRET} ${text(2_000)}`),
+      assistant(`resposta antiga ${text(2_000)}`),
+      { role: "tool", content: `erro: token=${COMPACT_SECRET}`, toolCallId: "c1" },
+      user(`tarefa atual ${text(2_000)}`),
+      assistant(`próximo passo ${text(2_000)}`),
+    ];
+    const seen: string[] = [];
+    const result = await compactSession({
+      run: "r1",
+      messages,
+      window: 1_000,
+      buffer: 900,
+      recentBudget: 1_010,
+      summarize: async (input) => {
+        seen.push(JSON.stringify(input));
+        return `resumo token=${COMPACT_SECRET}`;
+      },
+    });
+
+    // O que vai para o resumidor já sai redigido.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toContain(COMPACT_SECRET);
+    expect(seen[0]).toContain("[REDACTED]");
+    // O artefato (objeto + mensagem renderizada no contexto) também.
+    expect(JSON.stringify(result.artifact)).not.toContain(COMPACT_SECRET);
+    expect(result.artifact.importantContext).toContain("[REDACTED]");
+    const rendered = result.messages[1]!.content;
+    expect(rendered).toContain("CompactionArtifactV1");
+    expect(rendered).not.toContain(COMPACT_SECRET);
+  });
 });

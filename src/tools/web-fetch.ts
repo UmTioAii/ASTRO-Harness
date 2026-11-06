@@ -275,7 +275,8 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
       }
       // Sem Content-Type, trata como HTML e sanitiza (não devolve tags cruas).
       const text = contentType === "" || /html|xml/i.test(contentType) ? htmlToText(body, parsed.format) : body;
-      return { output: text.slice(0, parsed.maxLength) };
+      // ADR-0027: redige o corpo ANTES do slice/cap — segredo cortado na borda não vaza (I-03).
+      return { output: redactSecrets(text).slice(0, parsed.maxLength) };
     },
   };
 }

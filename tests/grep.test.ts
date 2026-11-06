@@ -107,4 +107,23 @@ describe("grep tool (F4-1)", () => {
     const matches = (JSON.parse(result.output) as { results: unknown[] }).results;
     expect(matches).toHaveLength(100); // limitado a 100
   });
+
+  // Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
+  const GREP_SECRET = ["s", "k", "-"].join("") + "slice3a-grep-synthetic-112233";
+
+  test("redige o match na origem, antes de montar o JSON (ADR-0027, I-03)", async () => {
+    const cwd = setupWorkspace();
+    writeFileSync(join(cwd, "src", "leak.ts"), `export const k = "token=${GREP_SECRET}";\n`);
+    const result = await grepTool.execute({ pattern: "token" }, ctx(cwd));
+    expect(result.isError).toBeFalsy();
+    expect(result.output).not.toContain(GREP_SECRET);
+    const matches = (JSON.parse(result.output) as {
+      results: Array<{ file: string; line: number; match: string }>;
+    }).results;
+    const leaked = matches.find((m) => m.file.includes("leak.ts"));
+    expect(leaked).toBeDefined();
+    expect(leaked!.line).toBe(1);
+    expect(leaked!.match).toContain("[REDACTED]");
+    expect(leaked!.match).not.toContain(GREP_SECRET);
+  });
 });

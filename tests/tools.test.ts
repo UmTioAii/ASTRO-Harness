@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Auditor } from "../src/audit";
@@ -63,6 +63,26 @@ test("run_command captura a saída", async () => {
   const r = await ex.run(ctx(cwd), { id: "1", name: "run_command", arguments: JSON.stringify({ command: "bun --version" }) });
   expect(r.isError).toBeFalsy();
   expect(r.output.length).toBeGreaterThan(0);
+});
+
+// Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
+const RUN_SECRET = ["s", "k", "-"].join("") + "slice3a-run-synthetic-9f8e7d6c5b";
+
+test("run_command redige stdout antes de truncar (ADR-0027, I-03)", async () => {
+  const cwd = dir();
+  writeFileSync(
+    join(cwd, "p.js"),
+    `console.log("token=" + ${JSON.stringify(RUN_SECRET)});\n` +
+      `console.log("y".repeat(20_000));\n` +
+      `console.log(${JSON.stringify(RUN_SECRET)});\n`,
+  );
+  const r = await runCommandTool.execute({ command: "bun p.js" }, ctx(cwd));
+  expect(r.isError).toBeFalsy();
+  // O segredo cru não pode aparecer em lugar nenhum da saída truncada…
+  expect(r.output).not.toContain(RUN_SECRET);
+  // …e o que cabe nos primeiros 10k chars sai mascarado, não verbatim.
+  expect(r.output).toContain("[REDACTED]");
+  expect(r.output.length).toBeLessThanOrEqual(10_000);
 });
 
 test("emite tool.call e tool.result na auditoria", async () => {

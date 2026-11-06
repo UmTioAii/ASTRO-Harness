@@ -84,7 +84,8 @@ function result(title: unknown, url: unknown, text: unknown): SearchResult | und
   if (typeof url !== "string" || url === "") return undefined;
   return {
     title: redactSecrets(typeof title === "string" && title !== "" ? title : url),
-    url,
+    // ADR-0027: url também redige na origem (query string pode ter token).
+    url: redactSecrets(url),
     snippet: redactSecrets(snippet(text)),
   };
 }
@@ -311,7 +312,8 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
         return failure(`web_search falhou (${status}): ${lastMessage}`);
       }
       return {
-        output: JSON.stringify({ query: parsed.query, provider: deps.config.provider, results }),
+        // ADR-0027: query redigida no output (a query pode conter segredo colado).
+        output: JSON.stringify({ query: redactSecrets(parsed.query), provider: deps.config.provider, results }),
       };
     },
   };
