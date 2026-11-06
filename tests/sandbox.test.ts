@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { validateConfig, ConfigError } from "../src/config";
+import { realpathPreservingDots } from "../src/tools/paths";
 import {
   runCommandTool,
   configureRunCommand,
   detectDockerAvailable,
+  dockerArgv,
   dockerInfoSupportsLinuxContainers,
+  resolveDockerImage,
   resolveSandboxSetting,
   sanitizedEnv,
 } from "../src/tools/run-command";
@@ -178,4 +181,98 @@ describe("run_command sandbox (F4-6)", () => {
     );
     expect(envProbe.output).toContain("vazio");
   }, 60_000);
+});
+
+describe("dockerArgv: máscaras do sandbox (ADR-0027, #391 slice 4a)", () => {
+  const argvCwd = (): string => mkdtempSync(join(tmpdir(), "astro-sb-argv-"));
+
+  const volumeSpecs = (argv: string[]): string[] =>
+    argv.flatMap((value, i) => (value === "--volume" ? [argv[i + 1]] : []));
+
+  const hasRoMaskFor = (argv: string[], target: string): boolean =>
+    volumeSpecs(argv).some((spec) => spec.endsWith(`:${target}:ro`));
+
+  const maskSourceFor = (argv: string[], target: string): string | undefined => {
+    const spec = volumeSpecs(argv).find((s) => s.endsWith(`:${target}:ro`));
+    return spec?.slice(0, spec.length - `:${target}:ro`.length);
+  };
+
+  test("argv contém --tmpfs /tmp e env GIT_DIR/GIT_CONFIG_NOSYSTEM/HOME", () => {
+    const argv = dockerArgv("sb-test", { cwd: argvCwd() }, "echo ok");
+    const tmpfsAt = argv.indexOf("--tmpfs");
+    expect(tmpfsAt).toBeGreaterThan(-1);
+    expect(argv[tmpfsAt + 1]).toBe("/tmp:rw,noexec,nosuid,size=64m");
+    expect(argv).toContain("--read-only");
+    expect(argv).toContain("GIT_DIR=/dev/null");
+    expect(argv).toContain("GIT_CONFIG_NOSYSTEM=1");
+    expect(argv).toContain("HOME=/tmp");
+  });
+
+  test("imagem default oven/bun:1.4.2; override via ASTRO_DOCKER_IMAGE", () => {
+    expect(resolveDockerImage({})).toBe("oven/bun:1.4.2");
+    expect(resolveDockerImage({ ASTRO_DOCKER_IMAGE: "   " })).toBe("oven/bun:1.4.2");
+    expect(resolveDockerImage({ ASTRO_DOCKER_IMAGE: "img@sha256:abcd" })).toBe("img@sha256:abcd");
+    const cwd = argvCwd();
+    expect(dockerArgv("sb-test", { cwd }, "echo ok")).toContain("oven/bun:1.4.2");
+    const custom = dockerArgv(
+      "sb-test",
+      { cwd, env: { ASTRO_DOCKER_IMAGE: "img@sha256:abcd" } },
+      "echo ok",
+    );
+    expect(custom).toContain("img@sha256:abcd");
+    expect(custom).not.toContain("oven/bun:1.4.2");
+  });
+
+  test(".env hard-block no cwd vira máscara de arquivo vazio :ro fora do cwd", () => {
+    const cwd = argvCwd();
+    writeFileSync(join(cwd, ".env"), "SUPER_SECRET=1");
+    const argv = dockerArgv("sb-test", { cwd }, "echo ok");
+    const root = resolve(cwd);
+    const target = join(root, ".env");
+    expect(hasRoMaskFor(argv, target)).toBe(true);
+    const source = maskSourceFor(argv, target);
+    expect(source).toBeDefined();
+    expect(source!.startsWith(tmpdir())).toBe(true); // fonte fora do cwd
+    const st = statSync(source!);
+    expect(st.isFile()).toBe(true);
+    expect(st.size).toBe(0);
+    // bind do cwd continua read-write (sem :ro)
+    expect(volumeSpecs(argv)).toContain(`${root}:${root}`);
+  });
+
+  test(".env em subdiretório também é mascarado; .env.example (sensitive) não é", () => {
+    const cwd = argvCwd();
+    mkdirSync(join(cwd, "sub"));
+    writeFileSync(join(cwd, "sub", ".env"), "X=1");
+    writeFileSync(join(cwd, ".env.example"), "X=");
+    const argv = dockerArgv("sb-test", { cwd }, "echo ok");
+    const root = resolve(cwd);
+    expect(hasRoMaskFor(argv, join(root, "sub", ".env"))).toBe(true);
+    expect(hasRoMaskFor(argv, join(root, ".env.example"))).toBe(false);
+  });
+
+  test(".git é sempre mascarado: diretório em repo e arquivo em worktree", () => {
+    const repoCwd = argvCwd();
+    mkdirSync(join(repoCwd, ".git"));
+    const argvRepo = dockerArgv("sb-test", { cwd: repoCwd }, "echo ok");
+    const gitDir = join(resolve(repoCwd), ".git");
+    expect(hasRoMaskFor(argvRepo, gitDir)).toBe(true);
+    expect(statSync(maskSourceFor(argvRepo, gitDir)!).isDirectory()).toBe(true);
+
+    const wtCwd = argvCwd();
+    writeFileSync(join(wtCwd, ".git"), "gitdir: /elsewhere/.git");
+    const argvWt = dockerArgv("sb-test", { cwd: wtCwd }, "echo ok");
+    const gitFile = join(resolve(wtCwd), ".git");
+    expect(hasRoMaskFor(argvWt, gitFile)).toBe(true);
+    expect(statSync(maskSourceFor(argvWt, gitFile)!).isFile()).toBe(true);
+  });
+
+  test("ASTRO_ARTIFACT_ROOT é mascarado pelo realpath", () => {
+    const cwd = argvCwd();
+    const art = mkdtempSync(join(tmpdir(), "astro-art-"));
+    const argv = dockerArgv("sb-test", { cwd, env: { ASTRO_ARTIFACT_ROOT: art } }, "echo ok");
+    const target = realpathPreservingDots(art, resolve(cwd));
+    expect(hasRoMaskFor(argv, target)).toBe(true);
+    expect(statSync(maskSourceFor(argv, target)!).isDirectory()).toBe(true);
+  });
 });
