@@ -418,7 +418,7 @@ export class CodexOAuthProvider implements Provider {
     const body: ResponsesRequestBody = { model: req.model, input, stream: true };
 
     if (instructions.length > 0) body.instructions = instructions;
-    if (req.tools !== undefined) {
+    if (req.tools !== undefined && req.tools.length > 0) {
       body.tools = req.tools.map((tool) => ({
         type: "function",
         name: tool.name,
