@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,12 +7,21 @@ import { ProviderError } from "../src/provider/types";
 import { runTask } from "../src/app";
 import { editTool } from "../src/tools/edit";
 import { readFileTool } from "../src/tools/read-file";
-import { runCommandTool, configureRunCommand } from "../src/tools/run-command";
 import { writeFileTool } from "../src/tools/write-file";
 import type { ToolContext } from "../src/tools/types";
+import { installDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
 
-// F-00 testa a sanitização do env no host: opt-out explícito do sandbox.
-beforeEach(() => configureRunCommand({ sandbox: false }));
+// F-00: run_command só roda no sandbox (mock de docker, env mínima do container);
+// slice 4b — o host nunca executa o comando, então o env de lançamento não vaza (I-03).
+let mod: typeof import("../src/tools/run-command");
+let mock: DockerMock;
+let seq = 0;
+beforeEach(async () => {
+  mock = installDockerSpawnMock();
+  mod = await isolatedRunCommand(`f00-${seq++}`);
+  mod.configureRunCommand({ sandbox: true });
+});
+afterEach(() => mock.restore());
 
 const dir = () => mkdtempSync(join(tmpdir(), "astro-sec-"));
 
@@ -53,11 +62,12 @@ describe("segurança F-00", () => {
     process.env.ASTRO_SEC_SECRET = "sec1";
     process.env.ASTRO_SEC_SAFE = "safe1";
     try {
-      const result = await runCommandTool.execute({ command: "bun print-env.js" }, ctx(cwd));
+      const result = await mod.runCommandTool.execute({ command: "bun print-env.js" }, ctx(cwd));
       expect(result.isError).toBeFalsy();
       expect(result.output).toContain("missing-secret");
       expect(result.output).not.toContain("sec1");
-      expect(result.output).toContain("safe1");
+      // no sandbox o env do host não entra no container: nem a variável "segura" chega
+      expect(result.output).toContain("missing-safe");
     } finally {
       if (prevSecret === undefined) delete process.env.ASTRO_SEC_SECRET;
       else process.env.ASTRO_SEC_SECRET = prevSecret;
@@ -76,7 +86,7 @@ describe("segurança F-00", () => {
     // "CRED" não casa com o padrão de nome; só a lista exata remove
     process.env.ASTRO_SEC_CRED = "cred1";
     try {
-      const result = await runCommandTool.execute(
+      const result = await mod.runCommandTool.execute(
         { command: "bun print-cred.js" },
         ctx(cwd, { secretEnvNames: ["ASTRO_SEC_CRED"] }),
       );

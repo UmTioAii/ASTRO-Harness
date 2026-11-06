@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -6,18 +6,28 @@ import { Auditor } from "../src/audit";
 import { ToolExecutor } from "../src/tools/executor";
 import { resolveWithin } from "../src/tools/paths";
 import { readFileTool } from "../src/tools/read-file";
-import { runCommandTool, configureRunCommand } from "../src/tools/run-command";
 import type { Tool, ToolResult } from "../src/tools/types";
 import { writeFileTool } from "../src/tools/write-file";
+import { installDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
 
 const dir = () => mkdtempSync(join(tmpdir(), "astro-tools-"));
 const ctx = (cwd: string) => ({ cwd, run: "r1", agent: "default" });
-const tools = [readFileTool, writeFileTool, runCommandTool];
-const mkExec = (cwd: string) =>
-  new ToolExecutor({ approveTool: () => true, tools, allow: tools.map((t) => t.manifest.name), audit: new Auditor(join(cwd, ".astro", "audit.jsonl")) });
+let mod: typeof import("../src/tools/run-command");
+let mock: DockerMock;
+let seq = 0;
+const mkExec = (cwd: string) => {
+  const tools = [readFileTool, writeFileTool, mod.runCommandTool];
+  return new ToolExecutor({ approveTool: () => true, tools, allow: tools.map((t) => t.manifest.name), audit: new Auditor(join(cwd, ".astro", "audit.jsonl")) });
+};
 
-// Estes testes executam comandos locais de propósito: opt-out explícito do sandbox.
-beforeEach(() => configureRunCommand({ sandbox: false }));
+// Estes testes executam shell só no sandbox (mock de docker, módulo isolado):
+// slice 4b — o host nunca roda o comando.
+beforeEach(async () => {
+  mock = installDockerSpawnMock();
+  mod = await isolatedRunCommand(`tools-${seq++}`);
+  mod.configureRunCommand({ sandbox: true });
+});
+afterEach(() => mock.restore());
 
 test("caminho fora do cwd é recusado; dentro é aceito", () => {
   const cwd = dir();
@@ -76,7 +86,7 @@ test("run_command redige stdout antes de truncar (ADR-0027, I-03)", async () => 
       `console.log("y".repeat(20_000));\n` +
       `console.log(${JSON.stringify(RUN_SECRET)});\n`,
   );
-  const r = await runCommandTool.execute({ command: "bun p.js" }, ctx(cwd));
+  const r = await mod.runCommandTool.execute({ command: "bun p.js" }, ctx(cwd));
   expect(r.isError).toBeFalsy();
   // O segredo cru não pode aparecer em lugar nenhum da saída truncada…
   expect(r.output).not.toContain(RUN_SECRET);

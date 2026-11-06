@@ -1,4 +1,4 @@
-import { describe, beforeEach, expect, test } from "bun:test";
+import { describe, afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,9 +6,9 @@ import { Auditor } from "../src/audit";
 import { ToolExecutor } from "../src/tools/executor";
 import { readFileTool } from "../src/tools/read-file";
 import { writeFileTool } from "../src/tools/write-file";
-import { runCommandTool, configureRunCommand } from "../src/tools/run-command";
 import type { ToolCall } from "../src/provider/types";
 import type { Tool } from "../src/tools/types";
+import { installDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
 
 const call = (name: string, args: Record<string, unknown>): ToolCall => ({
   id: `c-${name}`,
@@ -16,8 +16,16 @@ const call = (name: string, args: Record<string, unknown>): ToolCall => ({
   arguments: JSON.stringify(args),
 });
 
-// Estes testes executam comandos locais de propósito: opt-out explícito do sandbox.
-beforeEach(() => configureRunCommand({ sandbox: false }));
+// Estes testes executam shell só no sandbox (mock de docker, módulo isolado) — slice 4b.
+let mod: typeof import("../src/tools/run-command");
+let mock: DockerMock;
+let seq = 0;
+beforeEach(async () => {
+  mock = installDockerSpawnMock();
+  mod = await isolatedRunCommand(`iso-${seq++}`);
+  mod.configureRunCommand({ sandbox: true });
+});
+afterEach(() => mock.restore());
 
 /** Cria uma tool simples de teste para registro dinâmico. */
 function makeTool(name: string): Tool {
@@ -47,7 +55,7 @@ describe("isolamento de tools por agent (F3-5)", () => {
 
     // Planner só tem read_file; tenta run_command
     const executor = new ToolExecutor({ approveTool: () => true,
-      tools: [readFileTool, writeFileTool, runCommandTool],
+      tools: [readFileTool, writeFileTool, mod.runCommandTool],
       allow: ["read_file"], // planner: só read_file
       audit,
     });
@@ -75,7 +83,7 @@ describe("isolamento de tools por agent (F3-5)", () => {
     const audit = new Auditor(join(cwd, "audit.jsonl"));
 
     const executor = new ToolExecutor({ approveTool: () => true,
-      tools: [readFileTool, writeFileTool, runCommandTool],
+      tools: [readFileTool, writeFileTool, mod.runCommandTool],
       allow: ["read_file", "write_file", "run_command"], // coder: todas
       audit,
     });
@@ -123,12 +131,12 @@ describe("isolamento de tools por agent (F3-5)", () => {
 
     // Dois executores com allowlists diferentes (como runMultiAgentSession cria)
     const plannerExecutor = new ToolExecutor({ approveTool: () => true,
-      tools: [readFileTool, writeFileTool, runCommandTool],
+      tools: [readFileTool, writeFileTool, mod.runCommandTool],
       allow: ["read_file"], // planner: só leitura
       audit,
     });
     const coderExecutor = new ToolExecutor({ approveTool: () => true,
-      tools: [readFileTool, writeFileTool, runCommandTool],
+      tools: [readFileTool, writeFileTool, mod.runCommandTool],
       allow: ["read_file", "write_file", "run_command"], // coder: todas
       audit,
     });
@@ -259,7 +267,7 @@ describe("regressão do tool guard: registro dinâmico e escopo de subagent (S-0
     // Subagent tenta ter run_command (que NÃO está no teto do parent)
     // O teto do subagent deve ser o allowlist do parent
     const subExecutor = new ToolExecutor({ approveTool: () => true,
-      tools: [...parentTools, runCommandTool],
+      tools: [...parentTools, mod.runCommandTool],
       allow: ["read_file", "write_file", "run_command"], // teto maior que o do pai
       ceiling: [...parentExecutor.allow], // mas o teto é o do pai
       audit,
