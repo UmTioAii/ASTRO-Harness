@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join, sep } from "node:path";
-import { AllowlistInvalidError, classifyPath } from "../src/path-class";
+import { AllowlistInvalidError, classifyPath, createPathClassifier } from "../src/path-class";
 import type { ClassifyPathInput } from "../src/path-class";
 
 const dir = () => mkdtempSync(join(tmpdir(), "astro-pathclass-"));
@@ -76,6 +76,20 @@ test("sensitive: .example/.sample/.template/.dist e .env.example", () => {
 
 test("normal: todo o resto", () => {
   expect(cls(join(cwd, "src", "index.ts"))).toBe("normal");
+});
+
+test("createPathClassifier: fábrica reutiliza contexto e mantém a semântica de classifyPath", () => {
+  const classify = createPathClassifier({ cwd, astroHome });
+  const samples = [
+    join(cwd, ".env"),
+    join(cwd, ".env.example"),
+    join(cwd, ".ssh", "config"),
+    join(cwd, ".git", "HEAD"),
+    join(cwd, "api_token.txt"),
+    join(cwd, "notes.txt"),
+    join(astroHome, "vault", "x"),
+  ];
+  for (const p of samples) expect(classify(p)).toBe(cls(p));
 });
 
 test("precedência hard-block > sensitive > normal", () => {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { validateConfig, ConfigError } from "../src/config";
 import { realpathPreservingDots } from "../src/tools/paths";
+import { ToolError } from "../src/tools/types";
 import {
   runCommandTool,
   configureRunCommand,
@@ -274,5 +275,20 @@ describe("dockerArgv: máscaras do sandbox (ADR-0027, #391 slice 4a)", () => {
     const target = realpathPreservingDots(art, resolve(cwd));
     expect(hasRoMaskFor(argv, target)).toBe(true);
     expect(statSync(maskSourceFor(argv, target)!).isDirectory()).toBe(true);
+  });
+
+  test("hard-block em profundidade > 12 é mascarado (recursivo, qualquer profundidade — ADR-0027)", () => {
+    const cwd = argvCwd();
+    const parts = Array.from({ length: 15 }, (_, i) => `n${i}`);
+    mkdirSync(join(cwd, ...parts), { recursive: true });
+    writeFileSync(join(cwd, ...parts, ".env"), "DEEP_SECRET=1");
+    const argv = dockerArgv("sb-test", { cwd }, "echo ok");
+    expect(hasRoMaskFor(argv, join(resolve(cwd), ...parts, ".env"))).toBe(true);
+  });
+
+  test("cwd inválido (arquivo): varredura falha fail-closed com ToolError", () => {
+    const file = join(argvCwd(), "arq.txt");
+    writeFileSync(file, "x");
+    expect(() => dockerArgv("sb-test", { cwd: file }, "echo ok")).toThrow(ToolError);
   });
 });
