@@ -6,15 +6,14 @@ import { validateConfig, ConfigError } from "../src/config";
 import { realpathPreservingDots } from "../src/tools/paths";
 import { ToolError } from "../src/tools/types";
 import {
-  runCommandTool,
   configureRunCommand,
-  detectDockerAvailable,
   dockerArgv,
   dockerInfoSupportsLinuxContainers,
   resolveDockerImage,
   resolveSandboxSetting,
   sanitizedEnv,
 } from "../src/tools/run-command";
+import { expectSandboxRefusal, installDockerSpawnMock, isolatedRunCommand } from "./helpers/docker-mock";
 
 const ctx = (cwd: string) => ({ cwd, run: "r1", agent: "coder" });
 
@@ -113,19 +112,42 @@ describe("run_command sandbox (F4-6)", () => {
     expect(dockerInfoSupportsLinuxContainers("")).toBe(false);
   });
 
-  test("sandbox=false: executa normalmente (comportamento atual)", async () => {
-    configureRunCommand({ sandbox: false });
-    const cwd = mkdtempSync(join(tmpdir(), "astro-sb-"));
-    const result = await runCommandTool.execute({ command: "echo ok" }, ctx(cwd));
-    expect(result.isError).toBeFalsy();
-    expect(result.output).toContain("ok");
+  test("sandbox=false: recusa sandbox_required_for_shell sem spawnar o comando (I-19, slice 4b)", async () => {
+    const mock = installDockerSpawnMock();
+    try {
+      const mod = await isolatedRunCommand("s4b-refuse");
+      mod.configureRunCommand({ sandbox: false });
+      const cwd = mkdtempSync(join(tmpdir(), "astro-sb-"));
+      const result = await mod.runCommandTool.execute({ command: "echo ok" }, ctx(cwd));
+      expectSandboxRefusal(result, mock);
+      expect(result.output).not.toContain("echo ok"); // recusa não traz conteúdo de comando (I-03)
+    } finally {
+      mock.restore();
+    }
+  });
+
+  test("sandbox=true com Docker (mock): executa só via docker run", async () => {
+    const mock = installDockerSpawnMock(() => "ok-docker\n");
+    try {
+      const mod = await isolatedRunCommand("s4b-docker");
+      mod.configureRunCommand({ sandbox: true });
+      const cwd = mkdtempSync(join(tmpdir(), "astro-sb-"));
+      const result = await mod.runCommandTool.execute({ command: "echo ok" }, ctx(cwd));
+      expect(result.isError).toBeFalsy();
+      expect(result.output).toContain("ok-docker");
+      expect(mock.runCalls.length).toBeGreaterThan(0);
+      expect(mock.calls.every((cmd) => cmd[0] === "docker")).toBe(true); // nada fora do docker
+    } finally {
+      mock.restore();
+    }
   });
 
   test("sandbox=true sem Docker → recusa clara (sem downgrade silencioso)", async () => {
-    configureRunCommand({ sandbox: true });
+    const mod = await isolatedRunCommand("s4b-nodocker");
+    mod.configureRunCommand({ sandbox: true });
     const cwd = mkdtempSync(join(tmpdir(), "astro-sb-"));
-    const docker = await detectDockerAvailable();
-    const result = await runCommandTool.execute({ command: "echo ok" }, ctx(cwd));
+    const docker = await mod.detectDockerAvailable();
+    const result = await mod.runCommandTool.execute({ command: "echo ok" }, ctx(cwd));
     if (!docker) {
       expect(result.isError).toBe(true);
       expect(result.output).toContain("Docker");
@@ -138,15 +160,17 @@ describe("run_command sandbox (F4-6)", () => {
   }, 60_000);
 
   test("sandbox=true: detecção de Docker é cacheada", async () => {
-    const first = await detectDockerAvailable();
-    const second = await detectDockerAvailable();
+    const mod = await isolatedRunCommand("s4b-cache");
+    const first = await mod.detectDockerAvailable();
+    const second = await mod.detectDockerAvailable();
     expect(first).toBe(second);
   });
 
   test("sandbox=true com Docker: comando malicioso não escapa", async () => {
-    configureRunCommand({ sandbox: true });
+    const mod = await isolatedRunCommand("s4b-escape");
+    mod.configureRunCommand({ sandbox: true });
     const cwd = mkdtempSync(join(tmpdir(), "astro-sb-"));
-    const docker = await detectDockerAvailable();
+    const docker = await mod.detectDockerAvailable();
     if (!docker) {
       // Windows CI sem Docker: teste de contenção é no-op aqui; coberto no Ubuntu
       expect(true).toBe(true);
@@ -154,21 +178,21 @@ describe("run_command sandbox (F4-6)", () => {
     }
 
     // rede desabilitada: wget falha
-    const net = await runCommandTool.execute(
+    const net = await mod.runCommandTool.execute(
       { command: "wget -T 2 http://example.invalid 2>&1 || echo net-failed" },
       ctx(cwd),
     );
     expect(net.output).toContain("net-failed");
 
     // rootfs read-only: escrever fora do cwd falha
-    const fsEscape = await runCommandTool.execute(
+    const fsEscape = await mod.runCommandTool.execute(
       { command: "touch /etc/astro-evil 2>&1 || echo fs-blocked" },
       ctx(cwd),
     );
     expect(fsEscape.output).toContain("fs-blocked");
 
     // cwd continua gravável
-    const writeOk = await runCommandTool.execute(
+    const writeOk = await mod.runCommandTool.execute(
       { command: "echo dentro > sandbox-ok.txt && cat sandbox-ok.txt" },
       ctx(cwd),
     );
@@ -176,7 +200,7 @@ describe("run_command sandbox (F4-6)", () => {
     expect(writeOk.output).toContain("dentro");
 
     // env do host não vaza para dentro do container
-    const envProbe = await runCommandTool.execute(
+    const envProbe = await mod.runCommandTool.execute(
       { command: "sh -c 'echo KEY=${ASTRO_TEST_SECRET:-vazio}'" },
       ctx(cwd),
     );

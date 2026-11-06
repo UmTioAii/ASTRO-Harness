@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,8 +8,16 @@ import {
   detectDockerAvailable,
   isRunCommandSandboxEnabled,
 } from "../src/tools/run-command";
+import { installDockerSpawnMock, type DockerMock } from "./helpers/docker-mock";
 
-function config(tools: string[], credentialRef = "KEY", sandbox = false, withTools = true) {
+// Slice 4b: os testes rodam só via docker (mock) — o host nunca executa o comando.
+let mock: DockerMock;
+beforeEach(() => {
+  mock = installDockerSpawnMock();
+});
+afterEach(() => mock.restore());
+
+function config(tools: string[], credentialRef = "KEY", sandbox = true, withTools = true) {
   const cwd = mkdtempSync(join(tmpdir(), "astro-shell-"));
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({

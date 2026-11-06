@@ -1,4 +1,4 @@
-import { describe, beforeEach, expect, test } from "bun:test";
+import { describe, afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,23 +6,27 @@ import { Auditor } from "../src/audit";
 import { ToolExecutor } from "../src/tools/executor";
 import { readFileTool } from "../src/tools/read-file";
 import { writeFileTool } from "../src/tools/write-file";
-import { runCommandTool, configureRunCommand } from "../src/tools/run-command";
 import { grepTool } from "../src/tools/grep";
 import { editTool } from "../src/tools/edit";
 import { pipelineTool } from "../src/tools/pipeline";
 import type { Tool } from "../src/tools/types";
+import { dockerSandboxModule, type DockerMock, type RunCommandModule } from "./helpers/docker-mock";
 
-const ALL_TOOLS = [readFileTool, writeFileTool, runCommandTool, grepTool, editTool, pipelineTool];
+let mod: RunCommandModule;
+let mock: DockerMock;
 
-// O pipeline executa comandos locais de propósito: opt-out explícito do sandbox.
-beforeEach(() => configureRunCommand({ sandbox: false }));
+beforeEach(async () => { ({ mod, mock } = await dockerSandboxModule("pipe")); }); // shell só no sandbox (slice 4b)
+afterEach(() => mock.restore());
+
+const allTools = (): Tool[] => [readFileTool, writeFileTool, mod.runCommandTool, grepTool, editTool, pipelineTool];
 
 function setup(content: string): { cwd: string; audit: Auditor; executor: ToolExecutor } {
   const cwd = mkdtempSync(join(tmpdir(), "astro-pipe-"));
   writeFileSync(join(cwd, "target.txt"), content);
   const audit = new Auditor(join(cwd, "audit.jsonl"));
+  const tools = allTools();
   const executor = new ToolExecutor({ approveTool: () => true,
-    tools: ALL_TOOLS,
+    tools,
     allow: ["read_file", "write_file", "run_command", "grep", "edit", "pipeline"],
     audit,
   });
@@ -141,7 +145,7 @@ describe("pipeline tool (F4-5)", () => {
     const audit = new Auditor(join(cwd, "audit.jsonl"));
     // allowlist só tem pipeline e grep; edit NÃO
     const executor = new ToolExecutor({ approveTool: () => true,
-      tools: ALL_TOOLS,
+      tools: allTools(),
       allow: ["pipeline", "grep"],
       audit,
     });
