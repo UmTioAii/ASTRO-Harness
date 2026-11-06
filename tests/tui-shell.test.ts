@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Auditor } from "../src/audit";
 import { createShellRunner } from "../src/tui/shell";
 import {
   configureRunCommand,
@@ -62,6 +63,20 @@ describe("!cmd da TUI (T2, #63)", () => {
     expect(result.isError).toBe(false);
     expect(result.output).toContain("astro-shell");
     expect(existsSync(join(cwd, ".astro", "audit.jsonl"))).toBe(true);
+  });
+
+  test("!cmd emite security.allowlist_applied no load (allow-sensitive)", async () => {
+    const { cwd, configPath } = config(["run_command"]);
+    const shell = createShellRunner({
+      approveTool: () => true, configPath, cwd, env: process.env, allowSensitive: ["*.md"],
+    });
+    const first = await shell.run("echo astro-allow");
+    const second = await shell.run("echo astro-allow-2");
+    expect(first.isError).toBe(false);
+    expect(second.isError).toBe(false);
+    const events = new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll();
+    expect(events.filter((event) => event.tipo === "security.allowlist_applied"
+      && (event.payload as { rule?: string }).rule === "allow-sensitive")).toHaveLength(1);
   });
 
   test("sem allowlist fica desabilitado e não executa nada", async () => {

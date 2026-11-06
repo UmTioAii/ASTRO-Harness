@@ -179,6 +179,24 @@ export function resolveSandboxSetting(configured: boolean | undefined): boolean 
   return configured !== false;
 }
 
+/** Aviso de boot/banner (ADR-0027): `sandbox:false` desliga o shell, sem afetar file tools. */
+export const SANDBOX_DISABLED_WARNING =
+  "run_command desligado (sandbox:false): shell não executa; file tools mantêm hard-block e redação";
+
+/** Erro tipado da recusa de shell sem sandbox (ADR-0027): não ecoa o comando (I-03). */
+export class SandboxRequiredForShellError extends Error {
+  readonly code = "sandbox_required_for_shell";
+  constructor(readonly mode = "sandbox:false") {
+    super(`sandbox_required_for_shell: run_command não executa no host (modo ${mode}); ative tools.run_command.sandbox com Docker`);
+    this.name = "SandboxRequiredForShellError";
+  }
+}
+
+/** Texto do aviso de boot quando o sandbox está desligado. */
+export function sandboxWarning(enabled: boolean): string | undefined {
+  return enabled ? undefined : SANDBOX_DISABLED_WARNING;
+}
+
 /** Teto de entradas da varredura de máscaras (ADR-0027); excedido = recusa fail-closed. */
 const MASK_MAX_ENTRIES = 200_000;
 
@@ -455,9 +473,8 @@ export const runCommandTool: Tool = {
 
     // Slice 4b (I-19): `sandbox: false` NÃO executa no host — recusa sem spawnar e sem ecoar o comando.
     if (!sandboxEnabled) {
-      return failure(
-        "sandbox_required_for_shell: run_command não executa no host; ative tools.run_command.sandbox com Docker",
-      );
+      const error = new SandboxRequiredForShellError("sandbox:false");
+      return { ...failure(error.message), code: error.code };
     }
 
     // Sandbox: container Docker efêmero; sem Docker disponível, recusa (sem downgrade)

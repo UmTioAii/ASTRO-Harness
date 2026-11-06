@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   PATH_HARD_BLOCKED,
+  PathHardBlockedError,
   denyDisplayPath,
   pathCandidatesOf,
   resolveArtifactRoot,
@@ -33,6 +34,18 @@ describe("helpers do gate de hard-block (ADR-0027, #391 slice 1)", () => {
     expect(pathCandidatesOf({ name: "lsp", input: { command: "hover", file: "keys.ts", line: 1, column: 1 } }))
       .toEqual(["keys.ts"]);
     expect(pathCandidatesOf({ name: "list_dir", input: {} })).toEqual(["."]);
+  });
+
+  test("PathHardBlockedError tem code, path exibível e nunca conteúdo", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-hb-err-"));
+    const inside = new PathHardBlockedError(denyDisplayPath(cwd, ".env"));
+    expect(inside.code).toBe(PATH_HARD_BLOCKED);
+    expect(inside.message).toContain(".env");
+    expect(inside.message).toContain("hard-block");
+    expect(inside.message).toContain("bypass");
+    const outside = new PathHardBlockedError(denyDisplayPath(cwd, "~/.ssh/id_rsa"));
+    expect(outside.message).toContain("<fora do cwd>");
+    expect(outside.message).not.toContain("PRIVATE");
   });
 
   test("denyDisplayPath: relativo no cwd, <fora do cwd> fora, ~ expandido", () => {

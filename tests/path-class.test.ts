@@ -87,6 +87,15 @@ test("createPathClassifier: fábrica reutiliza contexto e mantém a semântica d
   for (const p of samples) expect(classify(p)).toBe(cls(p));
 });
 
+test("allow-sensitive promove normal a sensitive, nunca hard-block", () => {
+  mkdirSync(join(cwd, "docs"), { recursive: true });
+  writeFileSync(join(cwd, "docs", "guide.md"), "x");
+  expect(cls(join(cwd, "docs", "guide.md"))).toBe("normal");
+  expect(cls(join(cwd, "docs", "guide.md"), { allowSensitive: ["docs/*.md"] })).toBe("sensitive");
+  expect(cls(join(cwd, ".env"), { allowSensitive: ["*"] })).toBe("hard-block");
+  expect(cls(join(cwd, "src", "a.ts"), { allowSensitive: ["docs/*.md"] })).toBe("normal");
+});
+
 test("precedência hard-block > sensitive > normal", () => {
   expect(cls(join(cwd, "secret_token.pem"))).toBe("hard-block"); // imutável vence o padrão
   expect(cls(join(cwd, ".env.example"))).toBe("sensitive"); // template não é hard-block
