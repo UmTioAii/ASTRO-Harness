@@ -446,7 +446,7 @@ export class OpenAICompatProvider implements Provider {
       model: req.model,
       messages: toWireMessages(req.messages),
     };
-    if (req.tools !== undefined) {
+    if (req.tools !== undefined && req.tools.length > 0) {
       body.tools = req.tools.map((tool) => ({
         type: "function",
         function: {
