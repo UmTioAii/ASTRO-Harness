@@ -42,3 +42,8 @@ Revisão: REQUEST_CHANGES
 ```
 
 Sem item com cenário concreto, o veredito é `APPROVE` com sugestões.
+
+## Cross-review (regra dos 2 colaboradores)
+
+- **Autor do PR não revisa nem faz merge.** O outro colaborador executa a revisão A (segurança) e/ou B (correctness) e faz o merge após 2 `APPROVE`.
+- Se houver 3+ colaboradores, pelo menos 1 revisor deve ser diferente do autor.

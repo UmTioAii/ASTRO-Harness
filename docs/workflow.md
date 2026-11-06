@@ -35,6 +35,7 @@ Resumo obrigatório em `AGENTS.md`. Este arquivo tem o detalhe.
 ## 5. Revisão
 
 - Obrigatória e **dupla** antes do merge: revisor A (segurança) + revisor B (correctness), em paralelo e contexto fresco. Checklist em `docs/review-checklist.md`.
+- **Regra de cross-review (2 colaboradores):** **Quem abre o PR não revisa nem faz merge.** O outro colaborador deve fazer a revisão (A e/ou B) e o merge. Se houver mais de 2 colaboradores, pelo menos 1 revisor deve ser diferente do autor.
 - Revisor não é o autor: subagente ou sessão nova, recebendo o diff e o checklist, sem o raciocínio que produziu o código.
 - Veredito como comentário no PR, na primeira linha: `Revisão: APPROVE` ou `Revisão: REQUEST_CHANGES`, seguido de itens numerados.
 - Item bloqueante exige `arquivo:linha` e um cenário concreto de falha.
