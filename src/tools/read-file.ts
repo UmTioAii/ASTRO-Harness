@@ -1,4 +1,9 @@
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { resolveEntropyThreshold } from "../config";
+import { shannonEntropyBitsPerChar } from "../entropy";
+import { classifyPath } from "../path-class";
 import { redactSecrets } from "../sanitize-external";
 import { estimateTokens } from "../tokens";
 import { resolveWithin } from "./paths";
@@ -64,6 +69,14 @@ function page(lines: string[], offset: number | undefined, capTokens: number | u
   }
 }
 
+/**
+ * Negativa fail-closed do tier `sensitive` (ADR-0027, #391 slice 3b): cita o
+ * path informado e a classe, nunca o conteúdo (I-03).
+ */
+function sensitiveDeny(path: string, reason: string): ToolResult {
+  return failure(`leitura negada (classe sensitive): "${path}" — ${reason}; conteúdo não devolvido (fail-closed, ADR-0027)`);
+}
+
 /** Lê um arquivo de texto confinado ao diretório de trabalho, com paginação. */
 export const readFileTool: Tool = {
   manifest: {
@@ -97,6 +110,35 @@ export const readFileTool: Tool = {
     try {
       const { path, offset } = readInput(input);
       const resolved = resolveWithin(ctx.cwd, path);
+      const env = ctx.env ?? process.env;
+      // ADR-0027: classifica sobre o realpath. Neste slice só o tier
+      // `sensitive` passa pelo gate de entropia (`hard-block` é do slice 1;
+      // `normal` não aplica entropia).
+      const pathClass = classifyPath({
+        realPath: resolved,
+        cwd: ctx.cwd,
+        astroHome: env.ASTRO_HOME?.trim() || join(homedir(), ".astro"),
+        ...(ctx.protectedPaths === undefined ? {} : { protectedPaths: ctx.protectedPaths }),
+      });
+      if (pathClass === "sensitive") {
+        let raw: string;
+        try {
+          raw = readFileSync(resolved, "utf8");
+        } catch {
+          // Sem conteúdo inspecionável a entropia é inconclusiva: nega (fail-closed).
+          return sensitiveDeny(path, "conteúdo ilegível");
+        }
+        // Entropia é calculada no conteúdo CRU, antes de redigir, só para decidir;
+        // a saída devolvida segue sempre redigida (I-03).
+        const threshold = resolveEntropyThreshold({ env });
+        if (threshold === null) {
+          return sensitiveDeny(path, "limiar de entropia configurado inválido");
+        }
+        if (shannonEntropyBitsPerChar(raw) >= threshold) {
+          return sensitiveDeny(path, "entropia do conteúdo acima do limiar (possível segredo)");
+        }
+        return { output: page(fileLines(redactSecrets(raw)), offset, ctx.outputLimitTokens) };
+      }
       // ADR-0027: redige o arquivo INTEIRO antes de paginar — segredo não entra
       // no contexto mesmo que esteja no disco (I-03), um bloco cortado na borda
       // da página não vaza, e o teto de tokens de `page` conta o texto redigido.

@@ -198,6 +198,60 @@ export interface PermissionsConfig {
   mode: PermissionMode;
 }
 
+/** Nome da env que sobrescreve `security.entropyThreshold` (ADR-0027, #391 slice 3b). */
+export const ENTROPY_THRESHOLD_ENV = "ASTRO_ENTROPY_THRESHOLD";
+
+/**
+ * Default conservador do limiar de entropia em bits/char (ADR-0027 slice 3b):
+ * base64 aleatória ~6, hex ~4, texto natural < ~4.2. É só default de config,
+ * nunca bypass do gate — valor inválido falha fechado.
+ */
+export const DEFAULT_ENTROPY_THRESHOLD = 4.5;
+
+/**
+ * Teto do limiar: acima de 8 bits/char o gate seria inefetivo para conteúdo
+ * byte-oriented (equivaleria a desligá-lo), então é inválido e falha fechado.
+ */
+export const MAX_ENTROPY_THRESHOLD = 8;
+
+/** Seção `security` (ADR-0027): configurações de segurança do harness. */
+export interface SecurityConfig {
+  /**
+   * Entropia (bits/char) a partir da qual o conteúdo de um path `sensitive`
+   * é negado no `read_file` (ADR-0027 slice 3b). Opcional; default
+   * `DEFAULT_ENTROPY_THRESHOLD`. A env `ASTRO_ENTROPY_THRESHOLD` vence a config.
+   */
+  entropyThreshold?: number;
+}
+
+function isValidEntropyThreshold(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= MAX_ENTROPY_THRESHOLD;
+}
+
+/**
+ * Resolve o limiar de entropia efetivo (bits/char) para o tier `sensitive`
+ * (ADR-0027, #391 slice 3b). Precedência: env `ASTRO_ENTROPY_THRESHOLD` >
+ * `security.entropyThreshold` da config > `DEFAULT_ENTROPY_THRESHOLD`.
+ *
+ * Devolve `null` quando a fonte vencedora é inválida (fail-closed: o caller
+ * deve negar a leitura em `sensitive`, nunca cair para um valor mais frouxo).
+ */
+export function resolveEntropyThreshold(source?: {
+  config?: SecurityConfig | null;
+  env?: Record<string, string | undefined> | null;
+}): number | null {
+  const rawEnv = source?.env?.[ENTROPY_THRESHOLD_ENV]?.trim();
+  if (rawEnv !== undefined && rawEnv !== "") {
+    const parsed = Number(rawEnv);
+    return isValidEntropyThreshold(parsed) ? parsed : null;
+  }
+  const fromConfig = source?.config?.entropyThreshold;
+  if (fromConfig !== undefined) {
+    return isValidEntropyThreshold(fromConfig) ? fromConfig : null;
+  }
+  return DEFAULT_ENTROPY_THRESHOLD;
+}
+
 /** Servidor MCP (C2, #56): o `command` do stdio é código arbitrário — modelo de confiança na doc. */
 export interface MCPServerConfig {
   transport: "stdio" | "sse" | "http";
@@ -246,6 +300,8 @@ export interface AstroConfig {
   handoff?: HandoffConfig;
   /** Permissões por chamada (PERM-01); default `ask`. */
   permissions: PermissionsConfig;
+  /** Segurança (ADR-0027): limiar de entropia para o tier `sensitive`. */
+  security?: SecurityConfig;
   /** Tabela de preços global (C6): key `provider/model-id` sobrescreve `model.price` para custo. */
   pricing?: Record<string, PriceConfig>;
   /** Servidores MCP (C2, #56): key é o nome usado no namespace mcp__<server>__<tool>. */
@@ -1049,6 +1105,25 @@ function validatePermissions(value: unknown): PermissionsConfig {
   return { mode };
 }
 
+/**
+ * Valida a seção opcional `security` (ADR-0027, #391 slice 3b): vocabulário
+ * fechado; `entropyThreshold` deve ser número finito em (0, 8] bits/char —
+ * fora disso é `ConfigError` no load (fail-closed, nunca valor frouxo).
+ */
+function validateSecurity(value: unknown): SecurityConfig {
+  const raw = expectObject(value, "security");
+  for (const key of Object.keys(raw)) {
+    if (key !== "entropyThreshold") fail(`config inválida: "security.${key}" desconhecido`);
+  }
+  if (raw.entropyThreshold === undefined) return {};
+  if (!isValidEntropyThreshold(raw.entropyThreshold)) {
+    fail(
+      `config inválida: "security.entropyThreshold" deve ser um número finito em (0, ${MAX_ENTROPY_THRESHOLD}] bits/char`,
+    );
+  }
+  return { entropyThreshold: raw.entropyThreshold };
+}
+
 const MCP_TRANSPORTS: readonly MCPServerConfig["transport"][] = ["stdio", "sse", "http"];
 
 /** Valida um registro de strings (env/headers de mcpServers). */
@@ -1403,7 +1478,10 @@ export function validateConfig(raw: unknown): AstroConfig {
 
   const paths = validatePaths(root.paths);
 
-  return { providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  // Segurança (ADR-0027, #391 slice 3b): ausente = sem seção `security`
+  const security = root.security === undefined ? undefined : validateSecurity(root.security);
+
+  return { providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(security === undefined ? {} : { security }), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
 }
 
 /** Lê um arquivo JSON de configuração e o valida. */
