@@ -79,6 +79,15 @@ describe("matriz de permissão (#259)", () => {
     expect(actionClassOf(lspTool, call("lsp", { command: "hover", file: "keys.ts", line: 1, column: 1 }))).toBe("read_critical");
   });
 
+  test("allow-sensitive promove escrita normal para critical_write (ADR-0027)", () => {
+    const call = (name: string, input: unknown) => ({ name, input });
+    const sensitive = () => "sensitive" as const;
+    const normal = () => "normal" as const;
+    expect(actionClassOf(writeFileTool, call("write_file", { path: "notes.md", content: "x" }), sensitive)).toBe("critical_write");
+    expect(actionClassOf(writeFileTool, call("write_file", { path: "notes.md", content: "x" }), normal)).toBe("edit");
+    expect(actionClassOf(readFileTool, call("read_file", { path: "notes.md" }), sensitive)).toBe("read_common");
+  });
+
   test("classe declarada read_critical nunca é rebaixada pelo input (#264)", () => {
     const vault: Tool = {
       manifest: {

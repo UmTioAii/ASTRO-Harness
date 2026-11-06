@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,6 +87,19 @@ describe("gate de hard-block usa ctx.allowCritical (s5a)", () => {
     expect(applied[0]!.payload).toMatchObject({ result: "applied", origin: "cli", rule: "allow-critical", entry: "api_token.txt" });
     expect(JSON.stringify(audit.readAll())).not.toContain(SYNTH); // I-03
   });
+  test("allow-sensitive promove normal a sensitive: entropia nega e o match é auditado", async () => {
+    const { cwd, audit, executor } = gate();
+    writeFileSync(join(cwd, "notes.md"), randomBytes(2048).toString("base64"));
+    const call = read("notes.md");
+    const normal = await executor.run({ cwd, run: "r1", agent: "a" }, call);
+    expect(normal.isError).toBeFalsy();
+    const sensitive = await executor.run({ cwd, run: "r1", agent: "a", allowSensitive: ["*.md"] }, call);
+    expect(sensitive.isError).toBe(true);
+    expect(sensitive.output).toContain("sensitive");
+    const applied = audit.readAll().filter((e) => e.tipo === "security.allowlist_applied");
+    expect(applied.some((e) => e.payload.rule === "allow-sensitive" && e.payload.entry === "notes.md")).toBe(true);
+  });
+
   test("allowCritical em tier imutável (.env) segue allow_invalid no gate (fail-closed)", async () => {
     const { cwd, executor } = gate();
     const r = await executor.run({ cwd, run: "r1", agent: "a", allowCritical: [join(cwd, ".env")] }, read(".env"));
