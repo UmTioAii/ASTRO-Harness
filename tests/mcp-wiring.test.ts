@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "../src/app";
 import { validateConfig } from "../src/config";
+import { testEnv } from "./setup";
 
 /** Config mínima válida; `mcpServers` é o que cada teste varia. */
 function configWith(mcpServers: unknown) {
@@ -98,7 +99,7 @@ test("runTask descobre a tool MCP, expõe pela allowlist e fecha o servidor", as
       mcpServers: { mock: { transport: "stdio", command: "bun", args: [script], env: { PID_FILE: pidFile }, timeoutMs: 3000 } },
     });
 
-    const report = await runTask({ approveTool: () => true, configPath, task: "eco", cwd: dir, env: { TEST_KEY: "test-key" } });
+    const report = await runTask({ approveTool: () => true, configPath, task: "eco", cwd: dir, env: testEnv({ TEST_KEY: "test-key" }) });
 
     expect(report.final).toBe("pronto");
     expect(toolsSeen[0]).toContain("mcp__mock__echo"); // o modelo vê o nome namespaced
@@ -125,7 +126,7 @@ test("servidor MCP indisponível não derruba a sessão; tool sai da allowlist c
       mcpServers: { broken: { transport: "stdio", command: "astro-comando-inexistente-xyz", timeoutMs: 1000 } },
     });
 
-    const report = await runTask({ approveTool: () => true, configPath, task: "siga", cwd: dir, env: { TEST_KEY: "test-key" } });
+    const report = await runTask({ approveTool: () => true, configPath, task: "siga", cwd: dir, env: testEnv({ TEST_KEY: "test-key" }) });
 
     expect(report.final).toBe("pronto"); // falha isolada: o run completa (critério de aceite)
     expect(toolsSeen[0]).not.toContain("mcp__broken__echo");
@@ -152,7 +153,7 @@ test("ledger ilegível falha antes de spawnar servidor MCP", async () => {
     mcpServers: { mock: { transport: "stdio", command: "bun", args: [script], env: { PID_FILE: pidFile }, timeoutMs: 3000 } },
   });
 
-  const error = (await runTask({ approveTool: () => true, configPath, task: "x", cwd: dir, env: { TEST_KEY: "test-key" } }).catch((e) => e)) as Error;
+  const error = (await runTask({ approveTool: () => true, configPath, task: "x", cwd: dir, env: testEnv({ TEST_KEY: "test-key" }) }).catch((e) => e)) as Error;
   expect(error).toBeInstanceOf(Error);
   expect(existsSync(pidFile)).toBe(false); // baseline antes do connect: nada spawnou
 });
@@ -178,7 +179,7 @@ test("env do servidor MCP não chega ao run_command e o PATH sobrevive", async (
 
     const report = await runTask({ approveTool: () => true,
       configPath, task: "env", cwd: dir,
-      env: { PATH: sentinelPath, TEST_KEY: "test-key", MCP_LEAK: "mcp-env-SENTINEL" },
+      env: testEnv({ PATH: sentinelPath, TEST_KEY: "test-key", MCP_LEAK: "mcp-env-SENTINEL" }),
     });
 
     expect(report.final).toBe("pronto");
@@ -206,7 +207,7 @@ test("resolveTools falhando ainda fecha o servidor MCP", async () => {
       mcpServers: { mock: { transport: "stdio", command: "bun", args: [script], env: { PID_FILE: pidFile }, timeoutMs: 3000 } },
     });
 
-    const error = (await runTask({ approveTool: () => true, configPath, task: "x", cwd: dir, env: { TEST_KEY: "test-key" } }).catch((e) => e)) as Error;
+    const error = (await runTask({ approveTool: () => true, configPath, task: "x", cwd: dir, env: testEnv({ TEST_KEY: "test-key" }) }).catch((e) => e)) as Error;
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain("ghost");
     expect(await waitUntilDead(Number(readFileSync(pidFile, "utf8")))).toBe(true); // catch fecha
