@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "../src/app";
+import { testEnv } from "./setup";
 
 /** Servidor que captura o corpo e responde consoante o status. */
 function server(status: number, bodies: Array<Record<string, unknown>>, capture = true) {
@@ -38,7 +39,7 @@ describe("call profile na cadeia e no cache (E1/E3)", () => {
         paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
       }));
 
-      const report = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, approveSwap: () => true });
+      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), approveSwap: () => true });
 
       expect(report.final).toBe("ok");
       expect(primaryBodies).toHaveLength(1);
@@ -54,7 +55,7 @@ describe("call profile na cadeia e no cache (E1/E3)", () => {
       });
       writeFileSync(configPath, JSON.stringify(withDestination));
 
-      await runTask({ configPath, task: "y", cwd, env: { KEY: "k" }, approveSwap: () => true });
+      await runTask({ configPath, task: "y", cwd, env: testEnv({ KEY: "k" }), approveSwap: () => true });
       expect(backupBodies).toHaveLength(2);
       expect(backupBodies[1]!.thinking).toEqual({ type: "disabled" });
     } finally {
@@ -82,7 +83,7 @@ describe("call profile na cadeia e no cache (E1/E3)", () => {
       };
       writeFileSync(configPath, JSON.stringify(config));
 
-      await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
+      await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       expect(bodies).toHaveLength(1);
       expect(bodies[0]!.thinking).toEqual({ type: "enabled" });
 
@@ -90,7 +91,7 @@ describe("call profile na cadeia e no cache (E1/E3)", () => {
       changed.models[0]!.call!.thinking!.on = "disabled";
       writeFileSync(configPath, JSON.stringify(changed));
 
-      await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
+      await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       expect(bodies).toHaveLength(2); // não serviu a entrada antiga
       expect(bodies[1]!.thinking).toEqual({ type: "disabled" });
     } finally {
@@ -122,7 +123,7 @@ describe("call profile na cadeia e no cache (E1/E3)", () => {
       };
       writeFileSync(configPath, JSON.stringify(config));
 
-      await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
+      await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       expect(bodies).toHaveLength(1);
       expect(bodies[0]!.thinking).toEqual({ type: "enabled" });
 
@@ -130,7 +131,7 @@ describe("call profile na cadeia e no cache (E1/E3)", () => {
       changed.models[1]!.call!.thinking!.on = "disabled";
       writeFileSync(configPath, JSON.stringify(changed));
 
-      await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
+      await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       expect(bodies).toHaveLength(2);
       expect(bodies[1]!.thinking).toEqual({ type: "disabled" });
     } finally {

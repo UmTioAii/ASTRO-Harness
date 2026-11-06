@@ -16,6 +16,7 @@ import { handoffTool } from "../src/tools/handoff";
 import { writeFileTool } from "../src/tools/write-file";
 import { ToolExecutor } from "../src/tools/executor";
 import type { Tool } from "../src/tools/types";
+import { testEnv } from "./setup";
 
 const model: ModelEntry = {
   provider: "openai", id: "gpt-4o-mini", tags: ["writing-code"], context: 128000, status: "active",
@@ -104,7 +105,7 @@ describe("cancelamento explícito (F-06, #127)", () => {
       setTimeout(() => controller.abort(), 50);
       let caught: unknown;
       try {
-        await runTask({ configPath: join(cwd, "astro.config.json"), task: "t", cwd, env: { TEST_KEY: "x" }, signal: controller.signal });
+        await runTask({ configPath: join(cwd, "astro.config.json"), task: "t", cwd, env: testEnv({ TEST_KEY: "x" }), signal: controller.signal });
       } catch (error) { caught = error; }
       expect((caught as Error).message).toContain("cancelado");
       const interrupted = new Ledger(join(cwd, "ledger.jsonl")).readStates().filter((s) => s.state === "interrupted");
