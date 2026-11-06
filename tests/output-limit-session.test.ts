@@ -65,9 +65,14 @@ describe("limite de saída no executor e na sessão (CMP-10)", () => {
     expect(result.output).toBe(payload);
   });
 
-  test("sessão sanitiza a saída da tool antes de entrar no contexto (I-03)", async () => {    const cwd = mkdtempSync(join(tmpdir(), "astro-output-session-secret-"));
+  test("sessão sanitiza a saída da tool antes de entrar no contexto (I-03)", async () => {
+    // prefixo sem segmento crítico (ADR-0027): "secret" no nome do cwd deixaria
+    // todo path do teste em hard-block configurável (#391 slice 1)
+    const cwd = mkdtempSync(join(tmpdir(), "astro-output-session-i03-"));
     const secret = "sk-live-0123456789abcdef";
-    writeFileSync(join(cwd, "secret.txt"), `valor: ${secret}\n`);
+    // `notas.txt` é classe normal (ADR-0027): `secret.txt` seria hard-block
+    // configurável e o gate negaria antes da leitura (#391 slice 1).
+    writeFileSync(join(cwd, "notas.txt"), `valor: ${secret}\n`);
     const bodies: Array<{ messages?: Array<{ role?: string; content?: string }> }> = [];
     let calls = 0;
     const server = Bun.serve({
@@ -78,7 +83,7 @@ describe("limite de saída no executor e na sessão (CMP-10)", () => {
         if (calls === 1) {
           return Response.json({
             choices: [{ message: { content: "", tool_calls: [{ id: "c1", type: "function",
-              function: { name: "read_file", arguments: JSON.stringify({ path: "secret.txt" }) } }] } }],
+              function: { name: "read_file", arguments: JSON.stringify({ path: "notas.txt" }) } }] } }],
             usage: { prompt_tokens: 1, completion_tokens: 1 },
           });
         }

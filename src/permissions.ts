@@ -7,8 +7,11 @@
  *
  * Piso fixo: nenhum modo relaxa escrita em `.astro/`/`protectedPaths`, redação
  * de segredo ou confinamento no `cwd` — isso é aplicado pelas próprias tools e
- * continua valendo em `bypass`.
+ * continua valendo em `bypass`. O hard-block de path (ADR-0027, `classifyPath`)
+ * é aplicado no gate de dispatch e também não é relaxado por modo.
  */
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { SideEffects, Tool, ToolClass, ToolManifest } from "./tools/types";
 
 export type PermissionMode = "bypass" | "allow-edits" | "ask";
@@ -221,8 +224,7 @@ export interface ToolCallLike {
 
 /** Classe da ação: manifesto (`class`) refinado por caminho crítico (PERM-02/#264). */
 export function actionClassOf(tool: Tool, call: ToolCallLike): ActionClass {
-  const path = (call.input as { path?: unknown } | null)?.path;
-  const critical = typeof path === "string" && isCriticalPath(path);
+  const critical = pathCandidatesOf(call).some((path) => isCriticalPath(path));
   const declared = tool.manifest.class;
 
   if (declared === "read_common" || declared === "read_critical") {
@@ -233,4 +235,75 @@ export function actionClassOf(tool: Tool, call: ToolCallLike): ActionClass {
   if (declared === "edit") return critical ? "critical_write" : "edit";
   if (declared === "identity_swap") return "identity";
   return declared; // delete | shell
+}
+
+/**
+ * Reason code do hard-block de path no gate (ADR-0027, #391 slice 1): a
+ * classe `hard-block` de `classifyPath` é DENY antes da MATRIX em TODOS os
+ * modos, inclusive `bypass`. A negação cita path + classe, nunca conteúdo (I-03).
+ */
+export const PATH_HARD_BLOCKED = "path_hard_blocked";
+
+/** `$ASTRO_HOME` do processo (ADR-0019/ADR-0027): env `ASTRO_HOME` ou default `~/.astro`. */
+export function resolveAstroHome(env: NodeJS.ProcessEnv = process.env): string {
+  const home = env.ASTRO_HOME?.trim();
+  return home === undefined || home === "" ? join(homedir(), ".astro") : home;
+}
+
+/** Raiz de artefatos, único subtree isento do hard-block em `$ASTRO_HOME` (ADR-0026): env `ASTRO_ARTIFACT_ROOT`. */
+export function resolveArtifactRoot(env: NodeJS.ProcessEnv = process.env): string | null {
+  const root = env.ASTRO_ARTIFACT_ROOT?.trim();
+  return root === undefined || root === "" ? null : root;
+}
+
+/**
+ * Exibição do caminho na negação (ADR-0027 Erros): path relativo dentro do
+ * cwd, `<fora do cwd>` para path externo (`~` expandido); nunca conteúdo (I-03).
+ */
+export function denyDisplayPath(cwd: string, raw: string): string {
+  let abs: string;
+  if (raw === "~" || raw.startsWith("~/") || raw.startsWith("~\\")) {
+    abs = join(homedir(), raw.slice(1));
+  } else if (raw.startsWith("~")) {
+    return "<fora do cwd>"; // `~outro-usuario` não resolve para a home atual
+  } else {
+    abs = raw;
+  }
+  abs = resolve(cwd, abs);
+  const root = resolve(cwd);
+  const rel = relative(root, abs);
+  if (rel === "") return ".";
+  if (rel.startsWith("..") || isAbsolute(rel)) return "<fora do cwd>";
+  return rel;
+}
+
+/** Token path-like de comando shell: separador, `~`/`.` inicial, drive/UNC absoluto ou nome com extensão. */
+function isPathLikeToken(token: string): boolean {
+  if (token.length === 0) return false;
+  if (token.includes("/") || token.includes("\\")) return true;
+  if (token.startsWith("~") || token.startsWith(".")) return true;
+  if (/^[a-zA-Z]:/.test(token) || token.startsWith("\\\\")) return true;
+  return /\.[A-Za-z0-9]+$/.test(token);
+}
+
+/** Campos de path por tool (default `["path"]`; `lsp` declara `file`) e tools com default de `path` para o cwd (`grep`/`list_dir`: "."). */
+const PATH_FIELDS: Record<string, readonly string[]> = { lsp: ["file"] };
+const DEFAULT_PATH_FIELDS: readonly string[] = ["path"];
+const CWD_DEFAULT_TOOLS: ReadonlySet<string> = new Set(["grep", "list_dir"]);
+/** Candidatos a path do input (ADR-0027, #391 slice 1): `PATH_FIELDS` + default `path`; `CWD_DEFAULT_TOOLS` sem `path` ganha "."; `run_command` soma tokens path-like de `command` (token nu: slice 4). */
+export function pathCandidatesOf(call: ToolCallLike): string[] {
+  if (typeof call.input !== "object" || call.input === null) return [];
+  const input = call.input as Record<string, unknown>;
+  const candidates: string[] = [];
+  for (const field of [...DEFAULT_PATH_FIELDS, ...(PATH_FIELDS[call.name] ?? [])]) {
+    const value = input[field];
+    if (typeof value === "string" && value.length > 0) candidates.push(value);
+  }
+  if (CWD_DEFAULT_TOOLS.has(call.name) && (typeof input.path !== "string" || input.path.length === 0)) candidates.push(".");
+  if (call.name === "run_command" && typeof input.command === "string") {
+    for (const token of input.command.split(/[\s'"]+/)) {
+      if (isPathLikeToken(token)) candidates.push(token);
+    }
+  }
+  return candidates;
 }

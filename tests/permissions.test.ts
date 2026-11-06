@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -21,6 +21,9 @@ import {
 } from "../src/permissions";
 import { editTool } from "../src/tools/edit";
 import { ToolExecutor } from "../src/tools/executor";
+import { grepTool } from "../src/tools/grep";
+import { listDirTool } from "../src/tools/list-dir";
+import { lspTool } from "../src/tools/lsp";
 import { readFileTool } from "../src/tools/read-file";
 import { configureRunCommand, runCommandTool } from "../src/tools/run-command";
 import { writeFileTool } from "../src/tools/write-file";
@@ -71,6 +74,9 @@ describe("matriz de permissão (#259)", () => {
     expect(actionClassOf(readFileTool, call("read_file", { path: ".env" }))).toBe("read_critical");
     expect(actionClassOf(writeFileTool, call("write_file", { path: "a.txt", content: "x" }))).toBe("edit");
     expect(actionClassOf(runCommandTool, call("run_command", { command: "echo oi" }))).toBe("shell");
+    // `file` de lsp classifica (review A/B); keys.ts casa CRITICAL_PATH_PATTERN
+    expect(actionClassOf(lspTool, call("lsp", { command: "hover", file: "src/app.ts", line: 1, column: 1 }))).toBe("read_common");
+    expect(actionClassOf(lspTool, call("lsp", { command: "hover", file: "keys.ts", line: 1, column: 1 }))).toBe("read_critical");
   });
 
   test("classe declarada read_critical nunca é rebaixada pelo input (#264)", () => {
@@ -479,5 +485,173 @@ describe("prompt de tool no REPL em modo ask (#265)", () => {
     expect((await executor.run(ctx, call)).isError).toBeFalsy();
     expect(ran).toBe(2);
     expect(prompts).toHaveLength(1); // grant de sessão reaproveitado
+  });
+});
+
+describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
+  // Espelha PATH_HARD_BLOCKED (src/permissions.ts) como literal para o RED
+  // compilar antes da implementação.
+  const HARD_BLOCKED = "path_hard_blocked";
+  // Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
+  const SYNTH = ["s", "k", "-"].join("") + "live-synthetic-9f8e7d6c5b";
+
+  function setup(tools: Tool[], opts: { mode?: PermissionMode; approve?: () => boolean } = {}) {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-hardblock-"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    const executor = new ToolExecutor({
+      tools,
+      allow: tools.map((t) => t.manifest.name),
+      audit,
+      ...(opts.mode === undefined ? {} : { permissionMode: opts.mode }),
+      ...(opts.approve === undefined ? {} : { approveTool: opts.approve }),
+    });
+    return { cwd, audit, executor };
+  }
+
+  test("bypass não lê .env: deny antes da MATRIX, sem vazar conteúdo (I-03)", async () => {
+    const { cwd, audit, executor } = setup([readFileTool], { mode: "bypass" });
+    writeFileSync(join(cwd, ".env"), `CHAVE=${SYNTH}\n`);
+
+    const result = await executor.run({ cwd, run: "r1", agent: "a" },
+      { id: "c1", name: "read_file", arguments: JSON.stringify({ path: ".env" }) });
+
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain(HARD_BLOCKED);
+    expect(result.output).toContain("hard-block");
+    expect(result.output).toContain(".env");
+    expect(result.output).not.toContain(SYNTH);
+    const denied = audit.readAll().filter((e) => e.tipo === "tool.denied");
+    expect(denied).toHaveLength(1);
+    expect(denied[0]!.payload).toMatchObject({ name: "read_file", reason: HARD_BLOCKED });
+    // deny antes da MATRIX: nenhum permission.decision para a chamada
+    expect(audit.readAll().filter((e) => e.tipo === "permission.decision")).toHaveLength(0);
+    expect(JSON.stringify(audit.readAll())).not.toContain(SYNTH);
+  });
+
+  test("bypass não lê ~/.ssh/id_rsa nem .git (fora do cwd / qualquer profundidade)", async () => {
+    const { cwd, executor } = setup([readFileTool], { mode: "bypass" });
+    for (const path of ["~/.ssh/id_rsa", ".git/HEAD", ".git"]) {
+      const result = await executor.run({ cwd, run: "r1", agent: "a" },
+        { id: "c1", name: "read_file", arguments: JSON.stringify({ path }) });
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain(HARD_BLOCKED);
+    }
+    const fora = await executor.run({ cwd, run: "r1", agent: "a" },
+      { id: "c2", name: "read_file", arguments: JSON.stringify({ path: "~/.ssh/id_rsa" }) });
+    expect(fora.output).toContain("<fora do cwd>");
+  });
+
+  test("bypass não escreve .env (hard-block tem precedência sobre critical_write)", async () => {
+    const { cwd, audit, executor } = setup([writeFileTool], { mode: "bypass" });
+    const result = await executor.run({ cwd, run: "r1", agent: "a" }, {
+      id: "c1", name: "write_file",
+      arguments: JSON.stringify({ path: ".env", content: "x" }),
+    });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain(HARD_BLOCKED);
+    expect(existsSync(join(cwd, ".env"))).toBe(false);
+    expect(audit.readAll().some((e) => e.tipo === "tool.denied" && e.payload?.reason === HARD_BLOCKED)).toBe(true);
+  });
+
+  test("bypass não lista .git (list_dir) nem faz grep em caminho hard-block", async () => {
+    const { cwd, executor } = setup([listDirTool, grepTool], { mode: "bypass" });
+    const list = await executor.run({ cwd, run: "r1", agent: "a" },
+      { id: "c1", name: "list_dir", arguments: JSON.stringify({ path: ".git" }) });
+    expect(list.isError).toBe(true);
+    expect(list.output).toContain(HARD_BLOCKED);
+    const grep = await executor.run({ cwd, run: "r1", agent: "a" },
+      { id: "c2", name: "grep", arguments: JSON.stringify({ pattern: "x", path: ".ssh" }) });
+    expect(grep.isError).toBe(true);
+    expect(grep.output).toContain(HARD_BLOCKED);
+  });
+
+  test("ask com aprovador aprovaria, mas hard-block segue deny sem perguntar", async () => {
+    let asked = 0;
+    const { cwd, executor } = setup([readFileTool], { mode: "ask", approve: () => { asked++; return true; } });
+    writeFileSync(join(cwd, ".env"), `CHAVE=${SYNTH}\n`);
+    const result = await executor.run({ cwd, run: "r1", agent: "a" },
+      { id: "c1", name: "read_file", arguments: JSON.stringify({ path: ".env" }) });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain(HARD_BLOCKED);
+    expect(asked).toBe(0); // precedência sobre o ask
+  });
+
+  test("run_command com token hard-block é deny mesmo em bypass", async () => {
+    // opt-out do sandbox (#248): exercita o gate de dispatch, não o sandbox (slice 4)
+    configureRunCommand({ sandbox: false });
+    try {
+      const { cwd, executor } = setup([runCommandTool], { mode: "bypass" });
+      writeFileSync(join(cwd, ".env"), `CHAVE=${SYNTH}\n`);
+      for (const command of ["cat .env", "cat '~/.ssh/id_rsa'", "ls .git && echo fim"]) {
+        const result = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
+          { id: "c1", name: "run_command", arguments: JSON.stringify({ command }) });
+        expect(result.isError).toBe(true);
+        expect(result.output).toContain(HARD_BLOCKED);
+        expect(result.output).not.toContain(SYNTH);
+      }
+    } finally {
+      configureRunCommand({ sandbox: true });
+    }
+  });
+
+  test("caminho não-hard-block continua como antes (bypass lê arquivo e roda shell)", async () => {
+    configureRunCommand({ sandbox: false });
+    try {
+      const { cwd, executor } = setup([readFileTool, runCommandTool], { mode: "bypass" });
+      writeFileSync(join(cwd, "ok.txt"), "conteudo-ok\n");
+      const read = await executor.run({ cwd, run: "r1", agent: "a" },
+        { id: "c1", name: "read_file", arguments: JSON.stringify({ path: "ok.txt" }) });
+      expect(read.isError).toBeFalsy();
+      expect(read.output).toContain("conteudo-ok");
+      // token path-like normal (ok.txt) não é barrado pelo gate
+      const run = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
+        { id: "c2", name: "run_command", arguments: JSON.stringify({ command: "echo ok.txt" }) });
+      expect(run.isError).toBeFalsy();
+      expect(run.output).toContain("ok.txt");
+      expect(run.output).not.toContain(HARD_BLOCKED);
+    } finally {
+      configureRunCommand({ sandbox: true });
+    }
+  });
+
+  test("bypass não faz lsp em caminho hard-block via campo `file` (review A/B)", async () => {
+    const { cwd, audit, executor } = setup([lspTool], { mode: "bypass" });
+    for (const file of ["keys.ts", ".env"]) {
+      const result = await executor.run({ cwd, run: "r1", agent: "a" },
+        { id: "c1", name: "lsp", arguments: JSON.stringify({ command: "hover", file, line: 1, column: 1 }) });
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain(HARD_BLOCKED);
+      expect(result.output).toContain(file); // mensagem cita o path, sem conteúdo (I-03)
+    }
+    expect(audit.readAll().filter((e) => e.tipo === "tool.denied" && e.payload?.reason === HARD_BLOCKED)).toHaveLength(2);
+  });
+  test("grep/list_dir sem path negam quando o próprio cwd é hard-block (review A/B)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-hb-home-"));
+    const savedEnv = { ASTRO_HOME: process.env.ASTRO_HOME, ASTRO_ARTIFACT_ROOT: process.env.ASTRO_ARTIFACT_ROOT };
+    process.env.ASTRO_HOME = home;
+    delete process.env.ASTRO_ARTIFACT_ROOT;
+    try {
+      const cwd = join(home, "projeto"); // dentro de $ASTRO_HOME → hard-block
+      mkdirSync(cwd);
+      const audit = new Auditor(join(cwd, "audit.jsonl"));
+      const executor = new ToolExecutor({
+        tools: [grepTool, listDirTool], allow: ["grep", "list_dir"], audit, permissionMode: "bypass",
+      });
+      for (const [name, args] of [["grep", { pattern: "x" }], ["list_dir", {}]] as const) {
+        const result = await executor.run({ cwd, run: "r1", agent: "a" }, { id: "c1", name, arguments: JSON.stringify(args) });
+        expect(result.isError).toBe(true);
+        expect(result.output).toContain(HARD_BLOCKED);
+      }
+    } finally {
+      for (const [k, v] of Object.entries(savedEnv)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+  test("grep sem path em cwd normal segue liberado (review A/B)", async () => {
+    const { cwd, executor } = setup([grepTool], { mode: "bypass" });
+    const result = await executor.run({ cwd, run: "r1", agent: "a" }, { id: "c1", name: "grep", arguments: JSON.stringify({ pattern: "zzz-sem-match" }) });
+    expect(result.isError).toBeFalsy();
   });
 });

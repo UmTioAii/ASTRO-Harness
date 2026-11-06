@@ -8,8 +8,13 @@ import {
   permissionAllows,
   requiredPermission,
   DEFAULT_PERMISSION_MODE,
+  PATH_HARD_BLOCKED,
   PermissionGrants,
   PermissionPendingError,
+  denyDisplayPath,
+  pathCandidatesOf,
+  resolveArtifactRoot,
+  resolveAstroHome,
   type ActionClass,
   type AgentPermission,
   type PermissionApproval,
@@ -17,6 +22,7 @@ import {
   type PermissionMode,
   type ToolPermissionRequest,
 } from "../permissions";
+import { AllowlistInvalidError, classifyPath, type PathClass } from "../path-class";
 import { join, relative } from "node:path";
 import type { ToolCall, ToolDef } from "../provider/types";
 import type { Tool, ToolContext, ToolResult } from "./types";
@@ -304,7 +310,8 @@ export class ToolExecutor {
    * CLI não interativa, #262) lança `PermissionPendingError`: o gate audita
    * `permission.pending` e relança, e o run para em ponto seguro (I-19).
    * O piso fixo (`.astro/`/`protectedPaths`, redação, confinamento) é aplicado
-   * pelas próprias tools e não depende do modo.
+   * pelas próprias tools e não depende do modo; o hard-block de path (ADR-0027)
+   * roda antes da MATRIX e vale em todos os modos, `bypass` incluso.
    */
   private async permissionGate(
     ctx: ToolContext,
@@ -312,6 +319,11 @@ export class ToolExecutor {
     call: ToolCall,
     input: unknown,
   ): Promise<ToolResult | undefined> {
+    // Hard-block de path (ADR-0027, #391 slice 1): precedência sobre a MATRIX —
+    // `hard-block` é deny em todos os modos, inclusive `bypass`.
+    const hardBlocked = this.hardBlockGate(ctx, call, input);
+    if (hardBlocked !== undefined) return hardBlocked;
+
     const action = actionClassOf(tool, { name: call.name, input });
     const decision = permissionDecision(this.mode, action);
     let effective: PermissionDecision = decision;
@@ -367,6 +379,67 @@ export class ToolExecutor {
       payload: { name: call.name, reason },
     });
     return failure(reason);
+  }
+
+  /**
+   * Gate de hard-block por path (ADR-0027, #391 slice 1): classifica o realpath
+   * de cada candidato do input via `classifyPath`; `hard-block` (imutável ou
+   * configurável) é DENY antes da MATRIX em todos os modos, `bypass` incluso.
+   * A negação cita path + classe, nunca conteúdo (I-03). `allowCritical` vazio
+   * nesta slice (a flag de CLI entra na slice 5); `AllowlistInvalidError` vira
+   * deny tipado `allow_invalid` e erro de classificação falha fechado.
+   */
+  private hardBlockGate(ctx: ToolContext, call: ToolCall, input: unknown): ToolResult | undefined {
+    const candidates = pathCandidatesOf({ name: call.name, input });
+    if (candidates.length === 0) return undefined;
+    const astroHome = resolveAstroHome();
+    const artifactRoot = resolveArtifactRoot();
+    for (const candidate of candidates) {
+      let pathClass: PathClass;
+      try {
+        pathClass = classifyPath({
+          realPath: candidate,
+          cwd: ctx.cwd,
+          astroHome,
+          protectedPaths: ctx.protectedPaths ?? [],
+          artifactRoot,
+          allowCritical: [], // slice 5: allow-critical vem da flag de CLI
+        });
+      } catch (error) {
+        if (error instanceof AllowlistInvalidError) {
+          // deny tipado existente (allow_invalid); cita só a entrada, sem conteúdo (I-03)
+          this.auditRef.append({
+            run: ctx.run,
+            agent: ctx.agent,
+            tipo: "tool.denied",
+            payload: { name: call.name, reason: error.code, entry: error.entry },
+          });
+          return failure(`entrada de allowlist inválida (${error.code}): ${error.entry}`);
+        }
+        // fail-closed: caminho que não classifica não é liberado (ADR-0027)
+        this.auditRef.append({
+          run: ctx.run,
+          agent: ctx.agent,
+          tipo: "tool.denied",
+          payload: { name: call.name, reason: PATH_HARD_BLOCKED },
+        });
+        return failure(
+          `caminho não classificável; negado por fail-closed (${PATH_HARD_BLOCKED}): ${denyDisplayPath(ctx.cwd, candidate)}`,
+        );
+      }
+      if (pathClass === "hard-block") {
+        this.auditRef.append({
+          run: ctx.run,
+          agent: ctx.agent,
+          tipo: "tool.denied",
+          payload: { name: call.name, reason: PATH_HARD_BLOCKED },
+        });
+        return failure(
+          `caminho bloqueado (hard-block): ${denyDisplayPath(ctx.cwd, candidate)} — negado em todos os modos, inclusive bypass (${PATH_HARD_BLOCKED})`,
+        );
+      }
+    }
+    return undefined;
   }
 
   /** Cap de saída por tool (CMP-10): head+tail+origem, artefato em `.astro/outputs`. */
