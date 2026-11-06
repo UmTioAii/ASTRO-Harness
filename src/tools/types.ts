@@ -68,7 +68,7 @@ export interface ToolContext {
   permission?: AgentPermission;
   /** Allowlist `allow-critical` da CLI (ADR-0027, #391 slice 5a): realpaths absolutos que liberam o tier configurável. */
   allowCritical?: readonly string[];
-  /** Allowlist `allow-sensitive` da CLI (slice 5a: só validada/auditada; reclassificação fica no slice 5b). */
+  /** Allowlist `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
 }
 

@@ -176,6 +176,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
         configPath, cwd, env: opts.env ?? process.env,
         allowMissingConfig: opts.allowMissingConfig === true,
         ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
+        ...(opts.allowSensitive === undefined ? {} : { allowSensitive: opts.allowSensitive }),
       }),
       allowMissingConfig: opts.allowMissingConfig === true,
     });

@@ -55,7 +55,7 @@ import { listDirTool } from "./tools/list-dir";
 import { editTool } from "./tools/edit";
 import { lspTool } from "./tools/lsp";
 import { pipelineTool } from "./tools/pipeline";
-import { configureRunCommand, resolveSandboxSetting } from "./tools/run-command";
+import { configureRunCommand, resolveSandboxSetting, sandboxWarning } from "./tools/run-command";
 import { allowlistLoadEvents } from "./allowlists";
 import type { Tool } from "./tools/types";
 import { resolvePermissionMode, mostRestrictive, type ActionClass, type PermissionMode } from "./permissions";
@@ -109,7 +109,7 @@ export interface RunOptions {
   call?: CallSelection;
   /** `allow-critical` da CLI (ADR-0027, #391 slice 5a): realpaths que liberam o tier configurável. */
   allowCritical?: readonly string[];
-  /** `allow-sensitive` da CLI (slice 5a: validada/auditada; reclassifica no 5b). */
+  /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
 }
 
@@ -553,7 +553,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   const loaded = await loadPlugins(config.plugins ?? [], { allowlist: pluginAllowlistFromEnv() });
 
   // Sandbox do run_command (F4-6): configurado antes de qualquer execução
-  configureRunCommand({ sandbox: resolveSandboxSetting(config.tools?.run_command?.sandbox) });
+  const sandboxEnabled = resolveSandboxSetting(config.tools?.run_command?.sandbox);
+  configureRunCommand({ sandbox: sandboxEnabled });
+  const sandboxNotice = sandboxWarning(sandboxEnabled);
+  if (sandboxNotice !== undefined && opts.suppressRunEvents !== true) console.warn(`aviso: ${sandboxNotice}`);
 
   const ledgerPath = resolveFrom(cwd, config.paths.ledger);
   const auditPath = resolveFrom(cwd, config.paths.audit);
@@ -931,6 +934,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         protectedPaths: [ledgerPath, auditPath],
         secretEnvNames,
         inheritAgentLock: true,
+        ...(opts.allowCritical === undefined && opts.allowSensitive === undefined ? {} : { allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }),
         ...(signal === undefined ? {} : { signal }),
         ...(quotaLimits === undefined ? {} : { quotaLimits }),
         ...(budget === undefined ? {} : { budget }),

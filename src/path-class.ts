@@ -24,6 +24,8 @@ export interface ClassifyPathInput {
   artifactRoot?: string | null;
   /** Allowlist literal de `allow-critical`: realpath absoluto exato de arquivo. */
   allowCritical?: readonly string[];
+  /** Globs de `allow-sensitive`: promovem normal para sensitive, nunca hard-block. */
+  allowSensitive?: readonly string[];
 }
 
 /** Entrada de allowlist inválida (formato, glob, diretório, limite, tier imutável). */
@@ -163,9 +165,23 @@ export interface PathClassifierContext {
   protectedPaths?: readonly string[];
   artifactRoot?: string | null;
   allowCritical?: readonly string[];
+  allowSensitive?: readonly string[];
 }
 
 export type PathClassifier = (realPath: string) => PathClass;
+
+/** Matcher dos globs de `allow-sensitive`, relativos ao cwd e case-fold nas plataformas do ADR. */
+function createSensitiveMatcher(entries: readonly string[], cwd: string): (real: string) => boolean {
+  const globs = entries.map((entry) => {
+    const expanded = expandTilde(entry) ?? entry;
+    const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+    return new Bun.Glob(fold(absolute).replace(/\\/g, "/"));
+  });
+  return (real) => {
+    const candidate = real.replace(/\\/g, "/");
+    return globs.some((glob) => glob.match(candidate));
+  };
+}
 
 /** Fábrica: hoist do `FoldedContext`+allow; mesma semântica de `classifyPath`. */
 export function createPathClassifier(input: PathClassifierContext): PathClassifier {
@@ -176,6 +192,7 @@ export function createPathClassifier(input: PathClassifierContext): PathClassifi
     protected: (input.protectedPaths ?? []).map((path) => fold(canonicalize(resolve(input.cwd, expandTilde(path) ?? path)))),
   };
   const allow = resolveAllowCritical(input.allowCritical ?? [], input.cwd, ctx);
+  const isAllowedSensitive = createSensitiveMatcher(input.allowSensitive ?? [], input.cwd);
   const base = resolve(input.cwd);
   return (realPath: string): PathClass => {
     const expanded = expandTilde(realPath);
@@ -183,7 +200,7 @@ export function createPathClassifier(input: PathClassifierContext): PathClassifi
     const real = stripAds(fold(realpathPreservingDots(expanded, base)));
     if (isImmutableHardBlock(real, ctx)) return "hard-block";
     if (isConfigurableHardBlock(real)) return allow.has(real) ? "normal" : "hard-block";
-    if (isSensitivePath(real)) return "sensitive";
+    if (isSensitivePath(real) || isAllowedSensitive(real)) return "sensitive";
     return "normal";
   };
 }
@@ -228,7 +245,7 @@ export function createLexicalHardBlockPrefilter(
   };
 }
 
-/** Classifica sobre o realpath; `allow-critical` só reclassifica o tier configurável. */
+/** Classifica sobre o realpath; `allow-critical` só libera o tier configurável e `allow-sensitive` só promove normal. */
 export function classifyPath(input: ClassifyPathInput): PathClass {
   return createPathClassifier(input)(input.realPath);
 }

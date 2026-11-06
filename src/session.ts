@@ -96,7 +96,7 @@ export interface SessionOptions {
   secretEnvNames?: readonly string[];
   /** `allow-critical` da CLI (ADR-0027 slice 5a): vai ao ToolContext/hard-block gate. */
   allowCritical?: readonly string[];
-  /** `allow-sensitive` da CLI (slice 5a: validada/auditada; reclassifica no 5b). */
+  /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
   agentProfile?: string;
   knownAgents?: readonly string[];
@@ -727,7 +727,7 @@ export interface MultiAgentSessionOptions {
   secretEnvNames?: readonly string[];
   /** `allow-critical` da CLI (ADR-0027 slice 5a): vai ao ToolContext/hard-block gate. */
   allowCritical?: readonly string[];
-  /** `allow-sensitive` da CLI (slice 5a: validada/auditada; reclassifica no 5b). */
+  /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
   /** Timeout do ack de handoff (F-24, D-15); default 30000ms. */
   ackTimeoutMs?: number;

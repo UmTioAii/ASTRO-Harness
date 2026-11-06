@@ -11,6 +11,7 @@ import type { ToolApprover } from "../tools/executor";
 import type { TrustAsk } from "../trust";
 import { updateConfigPermissionsMode } from "../config";
 import type { AstroConfig } from "../config";
+import { SANDBOX_DISABLED_WARNING } from "../tools/run-command";
 import { configSummaryOf, type ConfigSummary } from "./config-summary";
 import type { CodexLoginStart } from "../provider/codex-login";
 import { expandHomePath, saveCodexAuth, startCodexLogin } from "../provider/codex-login";
@@ -50,7 +51,7 @@ export interface AgentSessionOptions {
   fetchLike?: FetchLike;
   /** `allow-critical` da CLI (ADR-0027 slice 5a): vai a cada runTask da sessão. */
   allowCritical?: readonly string[];
-  /** `allow-sensitive` da CLI (slice 5a: validada/auditada; reclassifica no 5b). */
+  /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
 }
 
@@ -185,6 +186,7 @@ export class AgentSession {
     this.#fetchLike = opts.fetchLike;
     this.#allowCritical = opts.allowCritical;
     this.#allowSensitive = opts.allowSensitive;
+    if (this.#config.tools?.run_command?.sandbox === false) this.#warnings.push(SANDBOX_DISABLED_WARNING);
     this.#modelRef = opts.model ?? this.#config.agent.model;
     // Modo inicial idêntico ao do run (app.ts lê só process.env, nunca o env injetado):
     // process.env.ASTRO_PERMISSION_MODE > config > ask (D-24, #270); /mode troca depois (#271).

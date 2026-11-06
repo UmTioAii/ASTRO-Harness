@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { Auditor } from "../audit";
+import { allowlistLoadEvents } from "../allowlists";
 import { headerEnvNames } from "../mcp/headers";
 import { effectiveOutputCap } from "../output-limit";
 import { loadEffectiveConfig } from "../provider/profiles";
@@ -29,6 +30,8 @@ export interface ShellOptions {
   approveTool?: ToolApprover;
   /** `allow-critical` da CLI (ADR-0027 slice 5a): path liberado não é mascarado no sandbox. */
   allowCritical?: readonly string[];
+  /** `allow-sensitive` da CLI (ADR-0027 slice 5b): reclassifica no gate e audita no load. */
+  allowSensitive?: readonly string[];
 }
 
 /** Variáveis que o shell precisa manter mesmo se um MCP declarar o mesmo nome. */
@@ -77,18 +80,24 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       const input = command.trim();
       if (input === "") return { output: "uso: !<comando>", isError: true };
       // Auditor novo por execução: o seq é local e não colide com a sessão.
+      const runId = randomUUID();
+      const audit = new Auditor(auditPath);
+      for (const event of allowlistLoadEvents({ allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }, opts.cwd)) {
+        audit.append({ run: runId, agent: "default", tipo: "security.allowlist_applied", payload: { ...event } });
+      }
       const executor = new ToolExecutor({
         tools: [runCommandTool],
         allow: ["run_command"],
-        audit: new Auditor(auditPath),
+        audit,
         ...(opts.approveTool === undefined ? {} : { approveTool: opts.approveTool }),
       });
       try {
         const result = await executor.run(
           {
-            cwd: opts.cwd, run: randomUUID(), agent: "default",
+            cwd: opts.cwd, run: runId, agent: "default",
             env: opts.env ?? process.env, secretEnvNames,
             ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
+            ...(opts.allowSensitive === undefined ? {} : { allowSensitive: opts.allowSensitive }),
             // Mesmo cap do run (default quando o agent usa profile de outro modelo).
             outputLimitTokens: effectiveOutputCap(config.outputLimit, modelEntry?.context),
             ...(signal === undefined ? {} : { signal }),
