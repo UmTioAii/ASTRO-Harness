@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -23,6 +23,7 @@ import { editTool } from "../src/tools/edit";
 import { ToolExecutor } from "../src/tools/executor";
 import { grepTool } from "../src/tools/grep";
 import { listDirTool } from "../src/tools/list-dir";
+import { lspTool } from "../src/tools/lsp";
 import { readFileTool } from "../src/tools/read-file";
 import { configureRunCommand, runCommandTool } from "../src/tools/run-command";
 import { writeFileTool } from "../src/tools/write-file";
@@ -73,6 +74,13 @@ describe("matriz de permissão (#259)", () => {
     expect(actionClassOf(readFileTool, call("read_file", { path: ".env" }))).toBe("read_critical");
     expect(actionClassOf(writeFileTool, call("write_file", { path: "a.txt", content: "x" }))).toBe("edit");
     expect(actionClassOf(runCommandTool, call("run_command", { command: "echo oi" }))).toBe("shell");
+  });
+
+  test("classe da ação considera o campo `file` de lsp (review A/B)", () => {
+    const lspCall = (file: string) => ({ name: "lsp", input: { command: "hover", file, line: 1, column: 1 } });
+    expect(actionClassOf(lspTool, lspCall("src/app.ts"))).toBe("read_common");
+    expect(actionClassOf(lspTool, lspCall("keys.ts"))).toBe("read_critical"); // casa CRITICAL_PATH_PATTERN
+    expect(actionClassOf(lspTool, lspCall(".env"))).toBe("read_critical");
   });
 
   test("classe declarada read_critical nunca é rebaixada pelo input (#264)", () => {
@@ -608,5 +616,57 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
     } finally {
       configureRunCommand({ sandbox: true });
     }
+  });
+
+  test("bypass não faz lsp em caminho hard-block via campo `file` (review A/B)", async () => {
+    const { cwd, audit, executor } = setup([lspTool], { mode: "bypass" });
+    for (const file of ["keys.ts", ".env"]) {
+      const result = await executor.run({ cwd, run: "r1", agent: "a" }, {
+        id: "c1", name: "lsp",
+        arguments: JSON.stringify({ command: "hover", file, line: 1, column: 1 }),
+      });
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain(HARD_BLOCKED);
+      expect(result.output).toContain(file); // mensagem cita o path, sem conteúdo (I-03)
+    }
+    // deny antes da MATRIX: nenhum permission.decision; audit só traz reason
+    expect(audit.readAll().filter((e) => e.tipo === "permission.decision")).toHaveLength(0);
+    expect(audit.readAll().filter((e) => e.tipo === "tool.denied" && e.payload?.reason === HARD_BLOCKED))
+      .toHaveLength(2);
+  });
+
+  test("grep/list_dir sem path negam quando o próprio cwd é hard-block (review A/B)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-hb-home-"));
+    const savedHome = process.env.ASTRO_HOME;
+    const savedArt = process.env.ASTRO_ARTIFACT_ROOT;
+    process.env.ASTRO_HOME = home;
+    delete process.env.ASTRO_ARTIFACT_ROOT;
+    try {
+      const cwd = join(home, "projeto"); // dentro de $ASTRO_HOME → hard-block
+      mkdirSync(cwd);
+      const audit = new Auditor(join(cwd, "audit.jsonl"));
+      const executor = new ToolExecutor({
+        tools: [grepTool, listDirTool], allow: ["grep", "list_dir"], audit, permissionMode: "bypass",
+      });
+      const ctx = { cwd, run: "r1", agent: "a" };
+      for (const [name, args] of [["grep", { pattern: "x" }], ["list_dir", {}]] as const) {
+        const result = await executor.run(ctx, { id: "c1", name, arguments: JSON.stringify(args) });
+        expect(result.isError).toBe(true);
+        expect(result.output).toContain(HARD_BLOCKED);
+      }
+    } finally {
+      if (savedHome === undefined) delete process.env.ASTRO_HOME;
+      else process.env.ASTRO_HOME = savedHome;
+      if (savedArt === undefined) delete process.env.ASTRO_ARTIFACT_ROOT;
+      else process.env.ASTRO_ARTIFACT_ROOT = savedArt;
+    }
+  });
+
+  test("grep sem path em cwd normal segue liberado (default cwd não quebra caso normal)", async () => {
+    const { cwd, executor } = setup([grepTool], { mode: "bypass" });
+    const result = await executor.run({ cwd, run: "r1", agent: "a" },
+      { id: "c1", name: "grep", arguments: JSON.stringify({ pattern: "zzz-sem-match" }) });
+    expect(result.isError).toBeFalsy();
+    expect(result.output).not.toContain(HARD_BLOCKED);
   });
 });
