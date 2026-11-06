@@ -187,6 +187,8 @@ export interface DockerSandboxContext {
   cwd: string;
   env?: Record<string, string | undefined>;
   protectedPaths?: readonly string[];
+  /** `allow-critical` da CLI (slice 5a): path liberado não vira máscara. */
+  allowCritical?: readonly string[];
 }
 
 interface MaskTarget {
@@ -230,7 +232,7 @@ function collectMaskTargets(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): 
     astroHome,
     artifactRoot,
     protectedPaths: ctx.protectedPaths,
-    allowCritical: [],
+    allowCritical: ctx.allowCritical ?? [],
   });
   const isCandidate = createLexicalHardBlockPrefilter({ cwd, astroHome, protectedPaths: ctx.protectedPaths });
   const targets = new Map<string, MaskTarget>();

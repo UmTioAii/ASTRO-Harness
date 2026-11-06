@@ -94,6 +94,10 @@ export interface SessionOptions {
   protectedPaths?: readonly string[];
   /** Nomes exatos de variáveis removidos do shell (ex.: credentialRef). */
   secretEnvNames?: readonly string[];
+  /** `allow-critical` da CLI (ADR-0027 slice 5a): vai ao ToolContext/hard-block gate. */
+  allowCritical?: readonly string[];
+  /** `allow-sensitive` da CLI (slice 5a: validada/auditada; reclassifica no 5b). */
+  allowSensitive?: readonly string[];
   agentProfile?: string;
   knownAgents?: readonly string[];
   /** Resolve a identidade efetiva quando o fallback troca provider/model (F-31d). */
@@ -493,6 +497,7 @@ export async function runSession(
             ...(opts.env === undefined ? {} : { env: opts.env }),
             ...(opts.protectedPaths === undefined ? {} : { protectedPaths: opts.protectedPaths }),
             ...(opts.secretEnvNames === undefined ? {} : { secretEnvNames: opts.secretEnvNames }),
+            ...(opts.allowCritical === undefined && opts.allowSensitive === undefined ? {} : { allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }),
           },
           call,
         );
@@ -720,6 +725,10 @@ export interface MultiAgentSessionOptions {
   protectedPaths?: readonly string[];
   /** Nomes exatos de variáveis removidos do shell (ex.: credentialRef). */
   secretEnvNames?: readonly string[];
+  /** `allow-critical` da CLI (ADR-0027 slice 5a): vai ao ToolContext/hard-block gate. */
+  allowCritical?: readonly string[];
+  /** `allow-sensitive` da CLI (slice 5a: validada/auditada; reclassifica no 5b). */
+  allowSensitive?: readonly string[];
   /** Timeout do ack de handoff (F-24, D-15); default 30000ms. */
   ackTimeoutMs?: number;
   /** Ack do receptor (F-24); default lê o artefato do ledger e grava received. */
@@ -1116,6 +1125,7 @@ export async function runMultiAgentSession(
             ...(opts.env === undefined ? {} : { env: opts.env }),
             ...(opts.protectedPaths === undefined ? {} : { protectedPaths: opts.protectedPaths }),
             ...(opts.secretEnvNames === undefined ? {} : { secretEnvNames: opts.secretEnvNames }),
+            ...(opts.allowCritical === undefined && opts.allowSensitive === undefined ? {} : { allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }),
           },
           call,
         );

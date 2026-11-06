@@ -385,15 +385,14 @@ export class ToolExecutor {
    * Gate de hard-block por path (ADR-0027, #391 slice 1): classifica o realpath
    * de cada candidato do input via `classifyPath`; `hard-block` (imutável ou
    * configurável) é DENY antes da MATRIX em todos os modos, `bypass` incluso.
-   * A negação cita path + classe, nunca conteúdo (I-03). `allowCritical` vazio
-   * nesta slice (a flag de CLI entra na slice 5); `AllowlistInvalidError` vira
-   * deny tipado `allow_invalid` e erro de classificação falha fechado.
+   * A negação cita path + classe, nunca conteúdo (I-03). `allowCritical` vem da flag de CLI (s5a) via `ctx.allowCritical`.
    */
   private hardBlockGate(ctx: ToolContext, call: ToolCall, input: unknown): ToolResult | undefined {
     const candidates = pathCandidatesOf({ name: call.name, input });
     if (candidates.length === 0) return undefined;
     const astroHome = resolveAstroHome();
     const artifactRoot = resolveArtifactRoot();
+    const allowCritical = ctx.allowCritical ?? [];
     for (const candidate of candidates) {
       let pathClass: PathClass;
       try {
@@ -403,8 +402,13 @@ export class ToolExecutor {
           astroHome,
           protectedPaths: ctx.protectedPaths ?? [],
           artifactRoot,
-          allowCritical: [], // slice 5: allow-critical vem da flag de CLI
+          allowCritical,
         });
+        // Audit por match (ADR-0027): classe `normal` só POR allow (sem allow seria hard-block); path via denyDisplayPath (I-03).
+        if (pathClass === "normal" && allowCritical.length > 0 && classifyPath({ realPath: candidate, cwd: ctx.cwd, astroHome, protectedPaths: ctx.protectedPaths ?? [], artifactRoot, allowCritical: [] }) === "hard-block") {
+          this.auditRef.append({ run: ctx.run, agent: ctx.agent, tipo: "security.allowlist_applied",
+            payload: { name: call.name, entry: denyDisplayPath(ctx.cwd, candidate), result: "applied", origin: "cli", rule: "allow-critical", class: pathClass } });
+        }
       } catch (error) {
         if (error instanceof AllowlistInvalidError) {
           // deny tipado existente (allow_invalid); cita só a entrada, sem conteúdo (I-03)

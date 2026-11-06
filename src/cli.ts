@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 import { runTask, type RunReport, createProvider } from "./app";
 import { installCancellation } from "./signal";
-import { isPermissionMode, nonInteractiveApprover, type PermissionMode } from "./permissions";
+import { validateAllowlistFlags, type AllowlistFlags, type CliAllowlists } from "./allowlists";
+import { AllowlistInvalidError } from "./path-class";
+import { denyDisplayPath, isPermissionMode, nonInteractiveApprover, type PermissionMode } from "./permissions";
 import { defaultArgs, isInteractive } from "./cli-default";
 import { existsSync } from "node:fs";
 import { loadConfig, validateConfig } from "./config";
@@ -209,6 +211,9 @@ Opções:
   --provider <name> provider ativo (default: store/env/agent.model)
   --cwd <dir>      diretório de trabalho do agente (default: diretório atual)
   --permission-mode <bypass|allow-edits|ask>  modo do gate de tool (vence permissions.mode)
+  --allow-critical <path>   libera path do hard-block configurável (repete, máx 64; exige --i-understand; só em run/chat/tui)
+  --allow-sensitive <glob>  declara glob como sensitive (repete, máx 64; só em run/chat/tui)
+  --i-understand            confirma a leitura de --allow-critical (obrigatório na mesma invocação)
   --help           mostra este texto
 
 Eval:
@@ -237,6 +242,8 @@ interface RunCommand {
   provider?: string;
   /** `--permission-mode`: vence a config (CLI > config > ask). */
   permissionMode?: PermissionMode;
+  /** Flags de allowlist (ADR-0027 slice 5a); validadas antes do run. */
+  allowlistFlags?: AllowlistFlags;
 }
 
 interface EvalCommand {
@@ -281,6 +288,8 @@ interface ChatCommand {
   provider?: string;
   configExplicit: boolean;
   permissionMode?: PermissionMode;
+  /** Flags de allowlist (ADR-0027 slice 5a); validadas antes do run. */
+  allowlistFlags?: AllowlistFlags;
 }
 
 interface TuiCommand {
@@ -289,6 +298,8 @@ interface TuiCommand {
   provider?: string;
   configExplicit: boolean;
   permissionMode?: PermissionMode;
+  /** Flags de allowlist (ADR-0027 slice 5a); validadas antes do run. */
+  allowlistFlags?: AllowlistFlags;
 }
 
 interface HealthCommand {
@@ -434,6 +445,28 @@ function permissionModeValue(arg: string, value: string | undefined): Permission
     throw new UsageError(`--permission-mode aceita "bypass", "allow-edits" ou "ask"`);
   }
   return value;
+}
+
+/** Coleta flags de allowlist repetíveis (ADR-0027 s5a); só run/chat/tui chegam aqui — nos demais caem em "opção desconhecida". */
+function collectAllowlistArg(arg: string, rest: string[], i: number, flags: AllowlistFlags): number | undefined {
+  if (arg === "--allow-critical" || arg === "--allow-sensitive") {
+    const value = rest.at(i + 1);
+    if (value === undefined || value.startsWith("-")) throw new UsageError(`falta o valor de ${arg}`);
+    (arg === "--allow-critical" ? flags.allowCriticalRaw : flags.allowSensitiveRaw).push(value);
+    return i + 1;
+  }
+  if (arg === "--i-understand") {
+    flags.iUnderstand = true;
+    return i;
+  }
+  return undefined;
+}
+
+/** `--i-understand` sem `--allow-critical` na mesma invocação é erro de uso. */
+function checkAllowlistPairing(flags: AllowlistFlags): void {
+  if (flags.iUnderstand && flags.allowCriticalRaw.length === 0) {
+    throw new UsageError("--i-understand só vale junto de --allow-critical na mesma invocação");
+  }
 }
 
 function parseArgs(argv: string[]): ParsedCommand {
@@ -751,6 +784,7 @@ function parseArgs(argv: string[]): ParsedCommand {
     let provider: string | undefined;
     let permissionMode: PermissionMode | undefined;
     let configExplicit = false;
+    const allowlistFlags: AllowlistFlags = { allowCriticalRaw: [], allowSensitiveRaw: [], iUnderstand: false };
     for (let i = 0; i < rest.length; i++) {
       const arg = rest[i] as string;
       if (arg === "--config" || arg === "--cwd" || arg === "--provider" || arg === "--permission-mode") {
@@ -763,14 +797,18 @@ function parseArgs(argv: string[]): ParsedCommand {
         else provider = value;
         continue;
       }
+      const next = collectAllowlistArg(arg, rest, i, allowlistFlags);
+      if (next !== undefined) { i = next; continue; }
       throw new UsageError(`opção desconhecida: "${arg}"`);
     }
+    checkAllowlistPairing(allowlistFlags);
     const options = {
       configPath,
       configExplicit,
       ...(cwd === undefined ? {} : { cwd }),
       ...(provider === undefined ? {} : { provider }),
       ...(permissionMode === undefined ? {} : { permissionMode }),
+      ...(allowlistFlags.allowCriticalRaw.length > 0 || allowlistFlags.allowSensitiveRaw.length > 0 || allowlistFlags.iUnderstand ? { allowlistFlags } : {}),
     };
     return command === "chat" ? { kind: "chat", options } : { kind: "tui", options };
   }
@@ -832,6 +870,7 @@ function parseArgs(argv: string[]): ParsedCommand {
   let task: string | undefined;
   let provider: string | undefined;
   let permissionMode: PermissionMode | undefined;
+  const allowlistFlags: AllowlistFlags = { allowCriticalRaw: [], allowSensitiveRaw: [], iUnderstand: false };
 
   if (command === "eval") {
     let threshold = 0.85;
@@ -895,6 +934,9 @@ function parseArgs(argv: string[]): ParsedCommand {
       continue;
     }
 
+    const next = collectAllowlistArg(arg, rest, i, allowlistFlags);
+    if (next !== undefined) { i = next; continue; }
+
     if (arg.startsWith("-")) {
       throw new UsageError(`opção desconhecida: "${arg}"`);
     }
@@ -908,6 +950,7 @@ function parseArgs(argv: string[]): ParsedCommand {
   if (task === undefined) {
     throw new UsageError('falta o pedido; use: run "<pedido>"');
   }
+  checkAllowlistPairing(allowlistFlags);
 
   return {
     kind: "run",
@@ -917,6 +960,7 @@ function parseArgs(argv: string[]): ParsedCommand {
       ...(cwd === undefined ? {} : { cwd }),
       ...(provider === undefined ? {} : { provider }),
       ...(permissionMode === undefined ? {} : { permissionMode }),
+      ...(allowlistFlags.allowCriticalRaw.length > 0 || allowlistFlags.allowSensitiveRaw.length > 0 || allowlistFlags.iUnderstand ? { allowlistFlags } : {}),
     },
   };
 }
@@ -974,6 +1018,26 @@ async function main(argv: string[]): Promise<number> {
     console.error(USAGE);
     return 1;
   }
+
+  // Allowlists SÓ de flag de CLI (ADR-0027 slice 5a), fail-closed antes do run.
+  let allowlists: CliAllowlists | undefined;
+  if (parsed.kind === "run" || parsed.kind === "chat" || parsed.kind === "tui") {
+    const flags = parsed.options.allowlistFlags;
+    if (flags !== undefined) {
+      const base = parsed.options.cwd ?? process.cwd();
+      try {
+        allowlists = validateAllowlistFlags(flags, base);
+      } catch (error) {
+        if (!(error instanceof AllowlistInvalidError)) throw error;
+        console.error(`erro: ${error.code}: ${redactSecrets(error.message)}`);
+        return 1;
+      }
+      for (const ev of allowlists.events) {
+        if (ev.result === "ignored") console.error(`aviso: entrada de allowlist ignorada (fail-closed) [${ev.rule}]: ${denyDisplayPath(base, ev.entry)}`);
+      }
+    }
+  }
+  const allowlistOpts = allowlists === undefined ? {} : { allowCritical: allowlists.allowCritical, allowSensitive: allowlists.allowSensitive };
 
   // CLI > config (CLI-01): chat/tui leem o modo do ambiente do processo.
   const modeOption = parsed.kind === "run" || parsed.kind === "chat" || parsed.kind === "tui"
@@ -1140,6 +1204,7 @@ async function main(argv: string[]): Promise<number> {
       cwd: o.cwd ?? process.cwd(),
       ...(o.provider === undefined ? {} : { provider: o.provider }),
       allowMissingConfig: !o.configExplicit,
+      ...allowlistOpts,
     });
   }
 
@@ -1160,6 +1225,7 @@ async function main(argv: string[]): Promise<number> {
         configPath, cwd: base, env: process.env,
         ...(o.provider === undefined ? {} : { provider: o.provider }),
         allowMissingConfig: !o.configExplicit,
+        ...allowlistOpts,
         ...chatApprovers(io, interactive),
       });
       for (const warning of session.warnings) console.error(`aviso: ${warning}`);
@@ -1360,6 +1426,7 @@ async function main(argv: string[]): Promise<number> {
   try {
     const report = await runTask({
       ...parsed.options,
+      ...allowlistOpts,
       signal: cancellation.signal,
       // Sem TTY não há como perguntar: `ask` nega e para (I-08/I-19).
       ...(process.stdin.isTTY === true ? {} : { approveTool: nonInteractiveApprover() }),
