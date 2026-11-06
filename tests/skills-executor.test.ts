@@ -141,13 +141,13 @@ test("run via /commit injeta o prompt da skill, audita skill.loaded e não persi
   }
 });
 
-test("run dirigido por skill executa read_file e run_command no loop de tools", async () => {
-  const seen: { messages: { role: string }[] }[] = [];
+test("run dirigido por skill chama read_file e run_command no loop de tools (run_command recusa no host, slice 4)", async () => {
+  const seen: { messages: { role: string; content?: string }[] }[] = [];
   let requests = 0;
   const up = Bun.serve({
     port: 0,
     fetch: async (req) => {
-      const body = (await req.json()) as { messages: { role: string }[] };
+      const body = (await req.json()) as { messages: { role: string; content?: string }[] };
       seen.push(body);
       requests += 1;
       if (requests === 1) {
@@ -172,11 +172,20 @@ test("run dirigido por skill executa read_file e run_command no loop de tools", 
     expect(report.final).toBe("pronto");
     expect(requests).toBe(2);
     expect(seen[1]!.messages.map((message) => message.role)).toContain("tool");
-    const audit = readFileSync(join(dir, ".astro", "audit.jsonl"), "utf8");
-    expect(audit).toContain("skill.loaded");
-    expect(audit).toContain("\"name\":\"read_file\"");
-    expect(audit).toContain("\"name\":\"run_command\"");
-    expect(audit).not.toContain("\"isError\":true");
+    const auditText = readFileSync(join(dir, ".astro", "audit.jsonl"), "utf8");
+    expect(auditText).toContain("skill.loaded");
+    expect(auditText).toContain("\"name\":\"read_file\"");
+    expect(auditText).toContain("\"name\":\"run_command\"");
+    // read_file executou ok; run_command chegou no loop e recusou no host (sandbox:false → slice 4)
+    const results = auditText.trim().split("\n").map((line) => JSON.parse(line) as {
+      tipo: string; payload: { name: string; isError: boolean };
+    }).filter((event) => event.tipo === "tool.result");
+    const isErrorByTool = new Map(results.map((event) => [event.payload.name, event.payload.isError]));
+    expect(isErrorByTool.get("read_file")).toBe(false);
+    expect(isErrorByTool.get("run_command")).toBe(true);
+    // o resultado do run_command devolvido ao modelo é a recusa do sandbox
+    const toolMessages = seen[1]!.messages.filter((message) => message.role === "tool");
+    expect(toolMessages.some((message) => (message.content ?? "").includes("sandbox_required_for_shell"))).toBe(true);
   } finally {
     up.stop(true);
   }

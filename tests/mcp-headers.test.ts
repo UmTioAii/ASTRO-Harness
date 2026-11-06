@@ -205,7 +205,7 @@ test("runTask envia o header resolvido e não grava o valor no audit", async () 
   }
 });
 
-test("runTask não entrega ao run_command a variável referenciada por header", async () => {
+test("runTask não entrega ao run_command a variável referenciada por header (shell recusa com sandbox:false; I-03)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcp-header-shell-"));
   const probePath = join(dir, "probe.js");
   writeFileSync(probePath, "console.log(process.env.MCP_HEADER ?? 'VAZIO');");
@@ -238,8 +238,12 @@ test("runTask não entrega ao run_command a variável referenciada por header", 
     expect(report.final).toBe("pronto");
     const last = bodies.at(-1)?.messages.at(-1);
     expect(last?.role).toBe("tool");
-    expect(last?.content).toContain("VAZIO");
+    // slice 4 (ADR-0027): com sandbox:false o shell recusa no host (sandbox_required_for_shell)
+    expect(last?.content).toContain("sandbox_required_for_shell");
+    // I-03: a variável referenciada pelo header nunca chega ao resultado do shell
     expect(last?.content).not.toContain("tok-123");
+    const audit = readFileSync(join(dir, ".astro", "audit.jsonl"), "utf8");
+    expect(audit).not.toContain("tok-123");
   } finally {
     provider.stop(true);
   }

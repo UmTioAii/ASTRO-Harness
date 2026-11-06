@@ -14,7 +14,10 @@ import type { Tool } from "../src/tools/types";
 
 const ALL_TOOLS = [readFileTool, writeFileTool, runCommandTool, grepTool, editTool, pipelineTool];
 
-// O pipeline executa comandos locais de propósito: opt-out explícito do sandbox.
+// ADR-0027 slice 4: no módulo compartilhado fica sandbox:false — run_command
+// recusa no host (sandbox_required_for_shell). O teste que exercita run_command
+// dentro do pipeline usa instância isolada do módulo com Docker mockado (ver
+// freshRunCommand/installDockerMock abaixo).
 beforeEach(() => configureRunCommand({ sandbox: false }));
 
 function setup(content: string): { cwd: string; audit: Auditor; executor: ToolExecutor } {
@@ -37,6 +40,109 @@ const call = (name: string, args: Record<string, unknown>) => ({
   arguments: JSON.stringify(args),
 });
 
+// --- Sandbox com Docker mockado (ADR-0027 slice 4) ---
+// Query string quebra o cache ESM: instância ISOLADA de run-command por teste,
+// com sandbox ligado e Bun.spawn/Bun.spawnSync mockados (probe = engine Linux,
+// `docker run` devolve saída pronta). Nada executa de verdade e o módulo
+// compartilhado não é contaminado.
+type RunCommandModule = typeof import("../src/tools/run-command");
+
+async function freshRunCommand(tag: string): Promise<RunCommandModule> {
+  return (await import(`../src/tools/run-command.ts?sandbox-mock=${tag}`)) as RunCommandModule;
+}
+
+interface SpawnCall {
+  cmd: string[];
+  opts: Record<string, unknown>;
+}
+
+interface FakeProc {
+  pid: number;
+  exited: Promise<number>;
+  stdout: ReadableStream<Uint8Array>;
+  stderr: ReadableStream<Uint8Array>;
+  kill: () => void;
+  killed: boolean;
+}
+
+function streamOf(text: string): ReadableStream<Uint8Array> {
+  const bytes = new TextEncoder().encode(text);
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
+function fakeProc(stdout: string, code: number, pid: number, hang = false): FakeProc {
+  const proc: FakeProc = {
+    pid,
+    exited: hang ? new Promise<number>(() => {}) : Promise.resolve(code),
+    stdout: streamOf(stdout),
+    stderr: streamOf(""),
+    kill: () => {
+      proc.killed = true;
+    },
+    killed: false,
+  };
+  return proc;
+}
+
+type DockerRunReply = { stdout: string; code?: number; pid?: number } | "hang";
+
+interface DockerMock {
+  calls: SpawnCall[];
+  syncCalls: SpawnCall[];
+  procs: FakeProc[];
+  restore: () => void;
+}
+
+/** Mocka o docker CLI: `docker info` responde engine Linux; `docker run` chama onRun. Nada executa de verdade. */
+function installDockerMock(onRun: (argv: string[]) => DockerRunReply): DockerMock {
+  const bun = Bun as unknown as { spawn: unknown; spawnSync: unknown };
+  const originalSpawn = bun.spawn;
+  const originalSpawnSync = bun.spawnSync;
+  const calls: SpawnCall[] = [];
+  const syncCalls: SpawnCall[] = [];
+  const procs: FakeProc[] = [];
+  const cmdOf = (opts: unknown): string[] =>
+    (Array.isArray(opts) ? opts : (opts as { cmd: string[] }).cmd) as string[];
+  bun.spawn = (opts: unknown) => {
+    const cmd = cmdOf(opts);
+    calls.push({ cmd, opts: (opts ?? {}) as Record<string, unknown> });
+    if (cmd[0] === "docker" && cmd[1] === "info") {
+      const proc = fakeProc("27.0.0|linux\n", 0, 4100);
+      procs.push(proc);
+      return proc;
+    }
+    if (cmd[0] === "docker" && cmd[1] === "run") {
+      const reply = onRun(cmd);
+      const proc =
+        reply === "hang"
+          ? fakeProc("", 0, 4242, true)
+          : fakeProc(reply.stdout, reply.code ?? 0, reply.pid ?? 4242);
+      procs.push(proc);
+      return proc;
+    }
+    throw new Error(`spawn não mockado neste teste: ${cmd.join(" ")}`);
+  };
+  bun.spawnSync = (opts: unknown) => {
+    const cmd = cmdOf(opts);
+    syncCalls.push({ cmd, opts: (opts ?? {}) as Record<string, unknown> });
+    return { exitCode: 0, success: true, signal: null, stdout: streamOf(""), stderr: streamOf("") };
+  };
+  return {
+    calls,
+    syncCalls,
+    procs,
+    restore: () => {
+      bun.spawn = originalSpawn;
+      bun.spawnSync = originalSpawnSync;
+    },
+  };
+}
+
 describe("pipeline tool (F4-5)", () => {
   test("manifesto correto", () => {
     expect(pipelineTool.manifest.name).toBe("pipeline");
@@ -49,30 +155,47 @@ describe("pipeline tool (F4-5)", () => {
     expect(params.required).toContain("steps");
   });
 
-  test("pipeline de 3 steps (grep → edit → run_command) executa em sequência", async () => {
-    const { cwd, audit, executor } = setup("valor original\nvalor x\n");
-    // step 1: grep encontra a linha; step 2: edit troca; step 3: run_command valida
-    const result = await pipelineTool.execute(
-      {
-        steps: [
-          { tool: "grep", input: { pattern: "valor original", path: "." } },
-          {
-            tool: "edit",
-            input: {
-              path: "target.txt",
-              diff: "--- a/target.txt\n+++ b/target.txt\n@@ -1,1 +1,1 @@\n-valor original\n+valor alterado\n",
+  test("pipeline de 3 steps (grep → edit → run_command) executa em sequência (run_command no sandbox mockado)", async () => {
+    const { cwd, audit } = setup("valor original\nvalor x\n");
+    const rc = await freshRunCommand("pipeline-run");
+    rc.configureRunCommand({ sandbox: true });
+    const mock = installDockerMock(() => ({ stdout: "pipeline-ok\n", code: 0 }));
+    try {
+      // executor com a tool run_command da instância isolada (sandbox ligado)
+      const executor = new ToolExecutor({
+        approveTool: () => true,
+        tools: [readFileTool, writeFileTool, rc.runCommandTool, grepTool, editTool, pipelineTool],
+        allow: ["read_file", "write_file", "run_command", "grep", "edit", "pipeline"],
+        audit,
+      });
+      // step 1: grep encontra a linha; step 2: edit troca; step 3: run_command valida
+      const result = await pipelineTool.execute(
+        {
+          steps: [
+            { tool: "grep", input: { pattern: "valor original", path: "." } },
+            {
+              tool: "edit",
+              input: {
+                path: "target.txt",
+                diff: "--- a/target.txt\n+++ b/target.txt\n@@ -1,1 +1,1 @@\n-valor original\n+valor alterado\n",
+              },
             },
-          },
-          { tool: "run_command", input: { command: "echo pipeline-ok" } },
-        ],
-      },
-      { ...ctx(cwd), executor },
-    );
-    expect(result.isError).toBeFalsy();
-    // último step vira output final
-    expect(result.output).toContain("pipeline-ok");
-    // edit aplicou
-    expect(readFileSync(join(cwd, "target.txt"), "utf8")).toContain("valor alterado");
+            { tool: "run_command", input: { command: "echo pipeline-ok" } },
+          ],
+        },
+        { ...ctx(cwd), executor },
+      );
+      expect(result.isError).toBeFalsy();
+      // último step vira output final
+      expect(result.output).toContain("pipeline-ok");
+      // edit aplicou
+      expect(readFileSync(join(cwd, "target.txt"), "utf8")).toContain("valor alterado");
+      // run_command foi despachado para o docker (mock), nunca para o host
+      expect(mock.calls.filter((c) => c.cmd[0] === "docker" && c.cmd[1] === "run")).toHaveLength(1);
+      expect(mock.calls.every((c) => c.cmd[0] === "docker")).toBe(true);
+    } finally {
+      mock.restore();
+    }
   });
 
   test("output de step N vira stdin de step N+1", async () => {
