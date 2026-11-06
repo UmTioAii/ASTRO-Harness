@@ -527,6 +527,7 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
 
     expect(result.isError).toBe(true);
     expect(result.output).toContain(HARD_BLOCKED);
+    expect(result.code).toBe(HARD_BLOCKED);
     expect(result.output).toContain("hard-block");
     expect(result.output).toContain(".env");
     expect(result.output).not.toContain(SYNTH);

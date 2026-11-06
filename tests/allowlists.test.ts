@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_ALLOWLIST_ENTRIES, allowlistLoadEvents, validateAllowlistFlags, type AllowlistLoadEvent } from "../src/allowlists";
@@ -87,6 +87,33 @@ describe("gate de hard-block usa ctx.allowCritical (s5a)", () => {
     expect(applied[0]!.payload).toMatchObject({ result: "applied", origin: "cli", rule: "allow-critical", entry: "api_token.txt" });
     expect(JSON.stringify(audit.readAll())).not.toContain(SYNTH); // I-03
   });
+  test("allow-sensitive casa cwd via junction/symlink e aplica entropia + audit (review A/B F1)", async () => {
+    const real = dir();
+    mkdirSync(join(real, "docs"));
+    writeFileSync(join(real, "docs", "notes.md"), randomBytes(2048).toString("base64"));
+    const link = join(dir(), "proj");
+    symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
+    const audit = new Auditor(join(real, "audit.jsonl"));
+    const executor = new ToolExecutor({ tools: [readFileTool], allow: ["read_file"], audit, permissionMode: "bypass" });
+    const call = { id: "c1", name: "read_file", arguments: JSON.stringify({ path: "docs/notes.md" }) };
+    for (const allowSensitive of [["docs/*.md"], [join(link, "docs", "*.md")]]) {
+      const result = await executor.run({ cwd: link, run: "r1", agent: "a", allowSensitive }, call);
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("sensitive");
+    }
+    expect(audit.readAll().some((e) => e.tipo === "security.allowlist_applied"
+      && (e.payload as { rule?: string }).rule === "allow-sensitive")).toBe(true);
+  });
+
+  test("allow-sensitive: glob amplo que alcança hard-block é ignorado (review B F2)", () => {
+    const cwd = dir();
+    writeFileSync(join(cwd, ".env"), "X=1");
+    const entries = ["*", "**/*", "docs/*", "*.json"];
+    const out = validateAllowlistFlags(flags([], false, entries), cwd);
+    expect(out.allowSensitive).toEqual([]);
+    for (const entry of entries) expect(out.events).toContainEqual(ev(entry, "ignored", "allow-sensitive"));
+  });
+
   test("allow-sensitive promove normal a sensitive: entropia nega e o match é auditado", async () => {
     const { cwd, audit, executor } = gate();
     writeFileSync(join(cwd, "notes.md"), randomBytes(2048).toString("base64"));
@@ -104,6 +131,7 @@ describe("gate de hard-block usa ctx.allowCritical (s5a)", () => {
     const { cwd, executor } = gate();
     const r = await executor.run({ cwd, run: "r1", agent: "a", allowCritical: [join(cwd, ".env")] }, read(".env"));
     expect(r.isError).toBe(true);
+    expect(r.code).toBe("allow_invalid");
     expect(r.output).toContain("allow_invalid");
     expect(r.output).not.toContain(SYNTH);
   });

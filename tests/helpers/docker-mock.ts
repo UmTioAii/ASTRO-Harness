@@ -106,6 +106,7 @@ export async function dockerSandboxModule(prefix: string): Promise<{ mod: RunCom
 /** Slice 4b (I-19): `sandbox: false` recusa com o código e sem nenhum spawn fora do docker. */
 export function expectSandboxRefusal(result: ToolResult, mock?: DockerMock): void {
   expect(result.isError).toBe(true);
+  expect(result.code).toBe("sandbox_required_for_shell");
   expect(result.output).toContain("sandbox_required_for_shell");
   if (mock !== undefined) expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
 }

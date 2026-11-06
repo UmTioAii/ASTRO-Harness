@@ -70,12 +70,13 @@ describe("!cmd da TUI (T2, #63)", () => {
     const shell = createShellRunner({
       approveTool: () => true, configPath, cwd, env: process.env, allowSensitive: ["*.md"],
     });
-    const result = await shell.run("echo astro-allow");
-    expect(result.isError).toBe(false);
+    const first = await shell.run("echo astro-allow");
+    const second = await shell.run("echo astro-allow-2");
+    expect(first.isError).toBe(false);
+    expect(second.isError).toBe(false);
     const events = new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll();
-    expect(events.some((event) => event.tipo === "security.allowlist_applied"
-      && (event.payload as { rule?: string; result?: string }).rule === "allow-sensitive"
-      && (event.payload as { result?: string }).result === "applied")).toBe(true);
+    expect(events.filter((event) => event.tipo === "security.allowlist_applied"
+      && (event.payload as { rule?: string }).rule === "allow-sensitive")).toHaveLength(1);
   });
 
   test("sem allowlist fica desabilitado e não executa nada", async () => {

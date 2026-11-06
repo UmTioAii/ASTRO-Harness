@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { runTask } from "../src/app";
 import { validateConfig, ConfigError } from "../src/config";
 import { realpathPreservingDots } from "../src/tools/paths";
 import { ToolError } from "../src/tools/types";
@@ -75,6 +76,25 @@ describe("erros e aviso do sandbox (ADR-0027, #391 slice 5b)", () => {
     expect(sandboxWarning(false)).toBe(SANDBOX_DISABLED_WARNING);
     expect(SANDBOX_DISABLED_WARNING).toContain("sandbox:false");
     expect(SANDBOX_DISABLED_WARNING).toContain("run_command");
+  });
+
+  test("runTask emite o aviso de sandbox:false no boot (review B F5)", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-sb-warn-"));
+    const configPath = join(cwd, "astro.config.json");
+    writeFileSync(configPath, JSON.stringify({
+      ...baseConfig,
+      providers: { ...baseConfig.providers, openai: { ...baseConfig.providers.openai, baseUrl: "https://invalid.example/v1" } },
+      tools: { run_command: { sandbox: false } },
+    }));
+    const original = console.warn;
+    const warnings: string[] = [];
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+    try {
+      await runTask({ configPath, cwd, task: "x", env: { OPENAI_API_KEY: "k" } }).catch(() => {});
+    } finally {
+      console.warn = original;
+    }
+    expect(warnings.some((message) => message.includes("sandbox:false"))).toBe(true);
   });
 });
 
