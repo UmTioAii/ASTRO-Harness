@@ -156,12 +156,23 @@ function resolveAllowCritical(entries: readonly string[], cwd: string, ctx: Fold
   return resolved;
 }
 
+/** Contexto de classificação reutilizável (sem `realPath`). */
+export interface PathClassifierContext {
+  cwd: string;
+  astroHome: string;
+  protectedPaths?: readonly string[];
+  artifactRoot?: string | null;
+  allowCritical?: readonly string[];
+}
+
+export type PathClassifier = (realPath: string) => PathClass;
+
 /**
- * Classifica `input.realPath` sobre o realpath. Precedência
- * `hard-block > sensitive > normal`; `allow-critical` só reclassifica o
- * tier configurável para `normal`.
+ * Fábrica: computa `FoldedContext` + allow UMA vez e devolve o classificador
+ * (hoist para varreduras que classificam muitos paths no mesmo contexto).
+ * Mesma semântica de `classifyPath`: `hard-block > sensitive > normal`.
  */
-export function classifyPath(input: ClassifyPathInput): PathClass {
+export function createPathClassifier(input: PathClassifierContext): PathClassifier {
   const ctx: FoldedContext = {
     cwd: fold(canonicalize(resolve(input.cwd))),
     astroHome: fold(canonicalize(resolve(input.astroHome))),
@@ -169,12 +180,59 @@ export function classifyPath(input: ClassifyPathInput): PathClass {
     protected: (input.protectedPaths ?? []).map((path) => fold(canonicalize(resolve(input.cwd, expandTilde(path) ?? path)))),
   };
   const allow = resolveAllowCritical(input.allowCritical ?? [], input.cwd, ctx);
-  const expanded = expandTilde(input.realPath);
-  if (expanded === null) return "hard-block"; // `~usuario` não resolvido: fail-closed
-  const real = stripAds(fold(realpathPreservingDots(expanded, resolve(input.cwd))));
+  const base = resolve(input.cwd);
+  return (realPath: string): PathClass => {
+    const expanded = expandTilde(realPath);
+    if (expanded === null) return "hard-block"; // `~usuario` não resolvido: fail-closed
+    const real = stripAds(fold(realpathPreservingDots(expanded, base)));
+    if (isImmutableHardBlock(real, ctx)) return "hard-block";
+    if (isConfigurableHardBlock(real)) return allow.has(real) ? "normal" : "hard-block";
+    if (isSensitivePath(real)) return "sensitive";
+    return "normal";
+  };
+}
 
-  if (isImmutableHardBlock(real, ctx)) return "hard-block";
-  if (isConfigurableHardBlock(real)) return allow.has(real) ? "normal" : "hard-block";
-  if (isSensitivePath(real)) return "sensitive";
-  return "normal";
+/**
+ * Prefiltro léxico conservative de varredura dentro do cwd: true quando o
+ * caminho léxico PODE ser hard-block/sensitive/protected e exige classificação
+ * completa. A varredura não desce em symlinks, então os segmentos abaixo do
+ * cwd mapeiam 1:1 no realpath e o prefiltro nunca perde um hard-block real;
+ * falso-positivo só custa uma classificação completa a mais.
+ */
+export function createLexicalHardBlockPrefilter(
+  input: Pick<PathClassifierContext, "cwd" | "astroHome" | "protectedPaths">,
+): (lexicalPath: string) => boolean {
+  const cwd = fold(canonicalize(resolve(input.cwd)));
+  const astroHome = fold(canonicalize(resolve(input.astroHome)));
+  const astroDir = join(cwd, ".astro");
+  const protectedAbs = (input.protectedPaths ?? []).map((path) =>
+    fold(canonicalize(resolve(input.cwd, expandTilde(path) ?? path))),
+  );
+  return (lexicalPath: string): boolean => {
+    const p = fold(lexicalPath);
+    const base = basename(p);
+    const segments = segmentsOf(p);
+    if (base === ".env" || (base.startsWith(".env.") && !SENSITIVE_SUFFIXES.some((s) => base.endsWith(s)))) return true;
+    if (base === ".env.example" || SENSITIVE_SUFFIXES.some((s) => base.endsWith(s))) return true;
+    if (segments.includes(".ssh") || segments.includes(".gnupg") || segments.includes(".git")) return true;
+    if (base === "id_rsa" || base === "id_ed25519") return true;
+    if (KEY_SUFFIXES.some((s) => base.endsWith(s))) return true;
+    if (hasAdjacentPair(segments, ".aws", "credentials") || hasAdjacentPair(segments, ".kube", "config")) return true;
+    if (NAMED_CONFIG_SEGMENTS.some((name) => segments.includes(name))) return true;
+    if (segments.some((segment) => CRITICAL_PATH_PATTERN.test(segment))) return true;
+    if (base === ".netrc" || base === ".npmrc") return true;
+    if (hasAdjacentPair(segments, ".docker", "config.json")) return true;
+    if (segments.includes(".config") && segments.includes("gh") && base === "hosts.yml") return true;
+    if (isWithin(astroDir, p) || isWithin(astroHome, p)) return true;
+    return protectedAbs.some((prot) => isWithin(prot, p));
+  };
+}
+
+/**
+ * Classifica `input.realPath` sobre o realpath. Precedência
+ * `hard-block > sensitive > normal`; `allow-critical` só reclassifica o
+ * tier configurável para `normal`.
+ */
+export function classifyPath(input: ClassifyPathInput): PathClass {
+  return createPathClassifier(input)(input.realPath);
 }

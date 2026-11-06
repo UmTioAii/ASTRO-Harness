@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { classifyPath } from "../path-class";
+import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
 import { resolveArtifactRoot, resolveAstroHome } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
 import { realpathPreservingDots } from "./paths";
@@ -192,9 +192,12 @@ export function resolveSandboxSetting(configured: boolean | undefined): boolean 
   return configured !== false;
 }
 
-/** Limites da varredura de máscaras (ADR-0027): profundidade máxima e teto de entradas. */
-const MASK_MAX_DEPTH = 12;
-const MASK_MAX_ENTRIES = 20_000;
+/**
+ * Teto de entradas da varredura de máscaras (ADR-0027): excedido = recusa
+ * fail-closed. Sem cap de profundidade: a varredura é recursiva a qualquer
+ * profundidade e o teto de entradas é a única trava.
+ */
+const MASK_MAX_ENTRIES = 200_000;
 
 /** Contexto mínimo para montar o argv do sandbox (subconjunto de `ToolContext`). */
 export interface DockerSandboxContext {
@@ -210,18 +213,12 @@ interface MaskTarget {
 }
 
 /**
- * Classificação para máscara (ADR-0027): fail-closed — erro de `classifyPath`
+ * Classificação para máscara (ADR-0027): fail-closed — erro do classificador
  * vira hard-block, então o que não pôde ser inspecionado também é mascarado.
  */
-function classifyForMask(
-  realPath: string,
-  cwd: string,
-  astroHome: string,
-  artifactRoot: string | null,
-  protectedPaths: readonly string[] | undefined,
-): boolean {
+function classifyForMask(classify: PathClassifier, realPath: string): boolean {
   try {
-    return classifyPath({ realPath, cwd, astroHome, artifactRoot, protectedPaths, allowCritical: [] }) === "hard-block";
+    return classify(realPath) === "hard-block";
   } catch {
     return true; // fail-closed
   }
@@ -241,15 +238,27 @@ function maskTargetOf(path: string): MaskTarget | null {
 /**
  * Alvos de máscara hard-block (ADR-0027): `<cwd>/.git` sempre (arquivo em
  * worktree, árvore em repo — git não roda no sandbox), o `ASTRO_ARTIFACT_ROOT`
- * pelo realpath e todo path hard-block existente dentro do cwd. Varredura com
- * limites: profundidade máx `MASK_MAX_DEPTH`, teto `MASK_MAX_ENTRIES` (excedido
- * = recusa fail-closed), sem descer em symlink e sem descer em diretório já
- * mascarado (a máscara de árvore já o encobre inteiro).
+ * pelo realpath e todo path hard-block existente dentro do cwd. Varredura
+ * recursiva a qualquer profundidade, sem descer em symlink e sem descer em
+ * diretório já mascarado (a máscara de árvore já o encobre inteiro); teto
+ * `MASK_MAX_ENTRIES` excedido = recusa fail-closed, e `readdir` que falha
+ * também recusa (nunca segue sem inspecionar).
  */
 function collectMaskTargets(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): MaskTarget[] {
   const cwd = resolve(ctx.cwd);
   const astroHome = resolveAstroHome(env);
   const artifactRoot = resolveArtifactRoot(env);
+  // Classificador e prefiltro léxico montados UMA vez (perf: sem recomputar o
+  // contexto por entrada); só symlinks e candidatos léxicos passam pelo
+  // classificador completo — nunca enfraquece a classificação.
+  const classify = createPathClassifier({
+    cwd,
+    astroHome,
+    artifactRoot,
+    protectedPaths: ctx.protectedPaths,
+    allowCritical: [],
+  });
+  const isCandidate = createLexicalHardBlockPrefilter({ cwd, astroHome, protectedPaths: ctx.protectedPaths });
   const targets = new Map<string, MaskTarget>();
   const add = (path: string): void => {
     const target = maskTargetOf(path);
@@ -260,28 +269,29 @@ function collectMaskTargets(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): 
   if (artifactRoot !== null) add(realpathPreservingDots(artifactRoot, cwd));
 
   let entries = 0;
-  const pending: Array<{ dir: string; depth: number }> = [{ dir: cwd, depth: 0 }];
+  const pending: string[] = [cwd];
   while (pending.length > 0) {
-    const current = pending.pop();
-    if (current === undefined) break;
+    const dir = pending.pop() as string;
     let names: Dirent[];
     try {
-      names = readdirSync(current.dir, { withFileTypes: true });
+      names = readdirSync(dir, { withFileTypes: true });
     } catch {
-      continue; // diretório ilegível: não desce; os itens acima já foram classificados
+      throw new ToolError("sandbox: falha ao varrer o diretório de trabalho para máscaras de hard-block");
     }
     for (const entry of names) {
       entries += 1;
       if (entries > MASK_MAX_ENTRIES) {
         throw new ToolError(`sandbox: varredura de máscaras excedeu o teto de ${MASK_MAX_ENTRIES} entradas`);
       }
-      const full = join(current.dir, entry.name);
-      if (classifyForMask(full, cwd, astroHome, artifactRoot, ctx.protectedPaths)) {
-        add(full);
-        continue;
+      const full = join(dir, entry.name);
+      if (entry.isSymbolicLink() || isCandidate(full)) {
+        if (classifyForMask(classify, full)) {
+          add(full);
+          continue;
+        }
       }
-      if (!entry.isSymbolicLink() && entry.isDirectory() && current.depth < MASK_MAX_DEPTH) {
-        pending.push({ dir: full, depth: current.depth + 1 });
+      if (!entry.isSymbolicLink() && entry.isDirectory()) {
+        pending.push(full);
       }
     }
   }
