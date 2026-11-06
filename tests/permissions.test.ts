@@ -134,15 +134,17 @@ describe("gate no executor (#259)", () => {
     return { cwd, audit, executor };
   }
 
-  test("bypass libera shell", async () => {
-    // opt-out do sandbox (#248 default-on): este teste exercita o gate, não o sandbox
+  test("bypass não bloqueia shell no gate; com sandbox:false a tool recusa (sandbox_required_for_shell, slice 4)", async () => {
+    // opt-out do sandbox (#248): o gate de permissão deixa passar, mas a tool recusa (ADR-0027 slice 4)
     configureRunCommand({ sandbox: false });
     try {
       const { cwd, executor } = setup([runCommandTool], { mode: "bypass" });
       const result = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
         { id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo oi" }) });
-      expect(result.isError).toBeFalsy();
-      expect(result.output).toContain("oi");
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("sandbox_required_for_shell");
+      // o bloqueio veio da política de sandbox, não do gate de permissão
+      expect(result.output).not.toContain("permissão negada");
     } finally {
       configureRunCommand({ sandbox: true });
     }
@@ -594,7 +596,7 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
     }
   });
 
-  test("caminho não-hard-block continua como antes (bypass lê arquivo e roda shell)", async () => {
+  test("caminho não-hard-block continua como antes (bypass lê arquivo; shell com sandbox:false recusa)", async () => {
     configureRunCommand({ sandbox: false });
     try {
       const { cwd, executor } = setup([readFileTool, runCommandTool], { mode: "bypass" });
@@ -603,11 +605,12 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
         { id: "c1", name: "read_file", arguments: JSON.stringify({ path: "ok.txt" }) });
       expect(read.isError).toBeFalsy();
       expect(read.output).toContain("conteudo-ok");
-      // token path-like normal (ok.txt) não é barrado pelo gate
+      // token path-like normal (ok.txt) não é barrado pelo gate...
       const run = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
         { id: "c2", name: "run_command", arguments: JSON.stringify({ command: "echo ok.txt" }) });
-      expect(run.isError).toBeFalsy();
-      expect(run.output).toContain("ok.txt");
+      // ...mas slice 4 recusa o shell com sandbox:false (não é hard-block do gate)
+      expect(run.isError).toBe(true);
+      expect(run.output).toContain("sandbox_required_for_shell");
       expect(run.output).not.toContain(HARD_BLOCKED);
     } finally {
       configureRunCommand({ sandbox: true });
