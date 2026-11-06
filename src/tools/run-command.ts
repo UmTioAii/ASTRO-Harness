@@ -72,13 +72,6 @@ function commandInput(input: unknown): string {
   return command;
 }
 
-function shellArgv(command: string): string[] {
-  if (process.platform === "win32") {
-    return ["cmd.exe", "/d", "/s", "/c", command];
-  }
-  return ["/bin/sh", "-c", command];
-}
-
 function truncate(text: string): string {
   return text.length > MAX_OUTPUT ? text.slice(0, MAX_OUTPUT) : text;
 }
@@ -179,8 +172,8 @@ export function isRunCommandSandboxEnabled(): boolean {
 }
 
 /**
- * Sandbox ligado salvo opt-out explícito (`sandbox: false`). Sem Docker,
- * `run_command` recusa em vez de rodar sem isolamento (I-11).
+ * Sandbox ligado salvo opt-out explícito (`sandbox: false`), que NÃO roda no host:
+ * recusa com `sandbox_required_for_shell` (I-19, slice 4b). Sem Docker, recusa (I-11).
  */
 export function resolveSandboxSetting(configured: boolean | undefined): boolean {
   return configured !== false;
@@ -429,8 +422,7 @@ export const runCommandTool: Tool = {
     name: "run_command",
     description:
       "Executa um comando de shell no diretório de trabalho e devolve a saída. " +
-      "Com tools.run_command.sandbox ativo, executa em container Docker efêmero " +
-      "isolado (sem rede, rootfs read-only, cwd read-write).",
+      "Só em container Docker efêmero isolado; sem sandbox recusa (sandbox_required_for_shell).",
     parameters: {
       type: "object",
       properties: {
@@ -459,95 +451,25 @@ export const runCommandTool: Tool = {
       return failure(message);
     }
 
-    // Sandbox: container Docker efêmero; sem Docker disponível, recusa (sem downgrade)
-    if (sandboxEnabled) {
-      const docker = await detectDockerAvailable();
-      if (!docker) {
-        return failure(
-          "sandbox ativo (tools.run_command.sandbox) mas Docker não está disponível; " +
-            "instale e inicie o Docker ou desative o sandbox na configuração",
-        );
-      }
-      try {
-        return await runInDocker(command, ctx, runCommandTool.manifest.timeoutMs);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return failure(`erro no sandbox docker: ${message}`);
-      }
+    // Slice 4b (I-19): `sandbox: false` NÃO executa no host — recusa sem spawnar e sem ecoar o comando.
+    if (!sandboxEnabled) {
+      return failure(
+        "sandbox_required_for_shell: run_command não executa no host; ative tools.run_command.sandbox com Docker",
+      );
     }
 
+    // Sandbox: container Docker efêmero; sem Docker disponível, recusa (sem downgrade)
+    const docker = await detectDockerAvailable();
+    if (!docker) {
+      return failure(
+        "sandbox ativo (tools.run_command.sandbox) mas Docker não está disponível; instale e inicie o Docker",
+      );
+    }
     try {
-      const proc = Bun.spawn({
-        cmd: shellArgv(command),
-        cwd: ctx.cwd,
-        env: sanitizedEnv(ctx.env ?? process.env, ctx.secretEnvNames ?? []),
-        stdout: "pipe",
-        stderr: "pipe",
-        detached: ctx.signal !== undefined && process.platform !== "win32",
-      });
-
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timedOut = Symbol("timeout");
-      const aborted = Symbol("aborted");
-      const timeout = new Promise<typeof timedOut>((resolve) => {
-        timer = setTimeout(() => {
-          killProcessTree(proc);
-          resolve(timedOut);
-        }, runCommandTool.manifest.timeoutMs);
-      });
-      const onAbort = (): void => {
-        killProcessTree(proc);
-      };
-      let onCancel: (() => void) | undefined;
-      const cancellation = new Promise<typeof aborted>((resolve) => {
-        if (ctx.signal === undefined) return;
-        if (ctx.signal.aborted) {
-          killProcessTree(proc);
-          resolve(aborted);
-          return;
-        }
-        onCancel = (): void => resolve(aborted);
-        ctx.signal.addEventListener("abort", onCancel, { once: true });
-        ctx.signal.addEventListener("abort", onAbort, { once: true });
-      });
-
-      let exited: typeof timedOut | typeof aborted | number;
-      try {
-        exited = await Promise.race([proc.exited, timeout, cancellation]);
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-        ctx.signal?.removeEventListener("abort", onAbort);
-        if (onCancel !== undefined) ctx.signal?.removeEventListener("abort", onCancel);
-      }
-
-      if (exited === aborted) {
-        return { output: "comando cancelado", isError: true };
-      }
-
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-
-      const chunks = [stdout.trimEnd(), stderr.trimEnd()].filter((part) => part.length > 0);
-      let output = chunks.join("\n");
-
-      if (exited === timedOut) {
-        const note = `timeout de ${runCommandTool.manifest.timeoutMs}ms excedido; comando interrompido`;
-        output = output.length > 0 ? `${output}\n${note}` : note;
-        return { output: redactThenTruncate(output), isError: true };
-      }
-
-      if (exited !== 0) {
-        const note = `comando terminou com código ${exited}`;
-        output = output.length > 0 ? `${output}\n${note}` : note;
-        return { output: redactThenTruncate(output), isError: true };
-      }
-
-      return { output: redactThenTruncate(output) };
+      return await runInDocker(command, ctx, runCommandTool.manifest.timeoutMs);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return failure(`erro ao executar comando: ${message}`);
+      return failure(`erro no sandbox docker: ${message}`);
     }
   },
 };

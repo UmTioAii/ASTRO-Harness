@@ -8,7 +8,7 @@ import { readFileTool } from "../src/tools/read-file";
 import { writeFileTool } from "../src/tools/write-file";
 import type { ToolCall } from "../src/provider/types";
 import type { Tool } from "../src/tools/types";
-import { installDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
+import { dockerSandboxModule, type DockerMock, type RunCommandModule } from "./helpers/docker-mock";
 
 const call = (name: string, args: Record<string, unknown>): ToolCall => ({
   id: `c-${name}`,
@@ -16,15 +16,9 @@ const call = (name: string, args: Record<string, unknown>): ToolCall => ({
   arguments: JSON.stringify(args),
 });
 
-// Estes testes executam shell só no sandbox (mock de docker, módulo isolado) — slice 4b.
-let mod: typeof import("../src/tools/run-command");
+let mod: RunCommandModule;
 let mock: DockerMock;
-let seq = 0;
-beforeEach(async () => {
-  mock = installDockerSpawnMock();
-  mod = await isolatedRunCommand(`iso-${seq++}`);
-  mod.configureRunCommand({ sandbox: true });
-});
+beforeEach(async () => { ({ mod, mock } = await dockerSandboxModule("iso")); }); // shell só no sandbox (slice 4b)
 afterEach(() => mock.restore());
 
 /** Cria uma tool simples de teste para registro dinâmico. */

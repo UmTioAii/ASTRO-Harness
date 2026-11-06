@@ -10,18 +10,12 @@ import { grepTool } from "../src/tools/grep";
 import { editTool } from "../src/tools/edit";
 import { pipelineTool } from "../src/tools/pipeline";
 import type { Tool } from "../src/tools/types";
-import { installDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
+import { dockerSandboxModule, type DockerMock, type RunCommandModule } from "./helpers/docker-mock";
 
-let mod: typeof import("../src/tools/run-command");
+let mod: RunCommandModule;
 let mock: DockerMock;
-let seq = 0;
 
-// O pipeline roda run_command só no sandbox (mock de docker, módulo isolado) — slice 4b.
-beforeEach(async () => {
-  mock = installDockerSpawnMock();
-  mod = await isolatedRunCommand(`pipe-${seq++}`);
-  mod.configureRunCommand({ sandbox: true });
-});
+beforeEach(async () => { ({ mod, mock } = await dockerSandboxModule("pipe")); }); // shell só no sandbox (slice 4b)
 afterEach(() => mock.restore());
 
 const allTools = (): Tool[] => [readFileTool, writeFileTool, mod.runCommandTool, grepTool, editTool, pipelineTool];

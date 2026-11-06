@@ -10,7 +10,7 @@ import {
 } from "../src/tools/run-command";
 import { installDockerSpawnMock, type DockerMock } from "./helpers/docker-mock";
 
-// Slice 4b: o host nunca executa o comando; os testes rodam só via docker (mock).
+// Slice 4b: os testes rodam só via docker (mock) — o host nunca executa o comando.
 let mock: DockerMock;
 beforeEach(() => {
   mock = installDockerSpawnMock();

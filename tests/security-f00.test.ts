@@ -9,18 +9,12 @@ import { editTool } from "../src/tools/edit";
 import { readFileTool } from "../src/tools/read-file";
 import { writeFileTool } from "../src/tools/write-file";
 import type { ToolContext } from "../src/tools/types";
-import { installDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
+import { dockerSandboxModule, type DockerMock, type RunCommandModule } from "./helpers/docker-mock";
 
-// F-00: run_command só roda no sandbox (mock de docker, env mínima do container);
-// slice 4b — o host nunca executa o comando, então o env de lançamento não vaza (I-03).
-let mod: typeof import("../src/tools/run-command");
+// F-00: run_command só roda no sandbox (mock de docker, env mínima do container) — slice 4b (I-03).
+let mod: RunCommandModule;
 let mock: DockerMock;
-let seq = 0;
-beforeEach(async () => {
-  mock = installDockerSpawnMock();
-  mod = await isolatedRunCommand(`f00-${seq++}`);
-  mod.configureRunCommand({ sandbox: true });
-});
+beforeEach(async () => { ({ mod, mock } = await dockerSandboxModule("f00")); });
 afterEach(() => mock.restore());
 
 const dir = () => mkdtempSync(join(tmpdir(), "astro-sec-"));

@@ -141,8 +141,7 @@ describe("gate no executor (#259)", () => {
       const { cwd, executor } = setup([runCommandTool], { mode: "bypass" });
       const result = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
         { id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo oi" }) });
-      // o gate bypass liberou; a recusa vem do sandbox, não de permissão
-      expect(result.isError).toBe(true);
+      expect(result.isError).toBe(true); // recusa do sandbox, não de permissão
       expect(result.output).toContain("sandbox_required_for_shell");
       expect(result.output).not.toContain("permissão negada");
     } finally {
@@ -605,7 +604,6 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
         { id: "c1", name: "read_file", arguments: JSON.stringify({ path: "ok.txt" }) });
       expect(read.isError).toBeFalsy();
       expect(read.output).toContain("conteudo-ok");
-      // token path-like normal (ok.txt) não é barrado pelo gate; quem recusa é o sandbox
       const run = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
         { id: "c2", name: "run_command", arguments: JSON.stringify({ command: "echo ok.txt" }) });
       expect(run.isError).toBe(true);

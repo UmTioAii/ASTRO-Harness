@@ -8,25 +8,18 @@ import { resolveWithin } from "../src/tools/paths";
 import { readFileTool } from "../src/tools/read-file";
 import type { Tool, ToolResult } from "../src/tools/types";
 import { writeFileTool } from "../src/tools/write-file";
-import { installDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
+import { dockerSandboxModule, type DockerMock, type RunCommandModule } from "./helpers/docker-mock";
 
 const dir = () => mkdtempSync(join(tmpdir(), "astro-tools-"));
 const ctx = (cwd: string) => ({ cwd, run: "r1", agent: "default" });
-let mod: typeof import("../src/tools/run-command");
+let mod: RunCommandModule;
 let mock: DockerMock;
-let seq = 0;
 const mkExec = (cwd: string) => {
   const tools = [readFileTool, writeFileTool, mod.runCommandTool];
   return new ToolExecutor({ approveTool: () => true, tools, allow: tools.map((t) => t.manifest.name), audit: new Auditor(join(cwd, ".astro", "audit.jsonl")) });
 };
 
-// Estes testes executam shell só no sandbox (mock de docker, módulo isolado):
-// slice 4b — o host nunca roda o comando.
-beforeEach(async () => {
-  mock = installDockerSpawnMock();
-  mod = await isolatedRunCommand(`tools-${seq++}`);
-  mod.configureRunCommand({ sandbox: true });
-});
+beforeEach(async () => { ({ mod, mock } = await dockerSandboxModule("tools")); }); // shell só no sandbox (slice 4b)
 afterEach(() => mock.restore());
 
 test("caminho fora do cwd é recusado; dentro é aceito", () => {

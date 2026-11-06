@@ -176,8 +176,7 @@ test("run dirigido por skill executa read_file e run_command no loop de tools", 
     expect(audit).toContain("skill.loaded");
     expect(audit).toContain("\"name\":\"read_file\"");
     expect(audit).toContain("\"name\":\"run_command\"");
-    // slice 4b (I-19): a skill chamou run_command, mas sandbox:false recusa sem executar no host
-    const toolMsg = JSON.stringify(seen[1]!.messages.find((message) => message.role === "tool"));
+    const toolMsg = JSON.stringify(seen[1]!.messages.filter((message) => message.role === "tool")); // slice 4b (I-19)
     expect(toolMsg).toContain("sandbox_required_for_shell");
   } finally {
     up.stop(true);
