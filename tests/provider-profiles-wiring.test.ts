@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { saveProfileStore } from "../src/provider/profiles";
+import { runTask } from "../src/app";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -64,12 +65,17 @@ test("chat sem config usa o perfil global e audita a origem", async () => {
 });
 
 test("primeiro turno sem config expõe tools padrão com aprovação", async () => {
+  let sentTools: string[] = [];
   const server = Bun.serve({
     port: 0,
-    fetch: () => Response.json({
-      choices: [{ message: { content: "ok da baseline" } }],
-      usage: { prompt_tokens: 1, completion_tokens: 1 },
-    }),
+    fetch: async (req) => {
+      const body = (await req.json()) as { tools?: Array<{ function: { name: string } }> };
+      sentTools = (body.tools ?? []).map((tool) => tool.function.name);
+      return Response.json({
+        choices: [{ message: { content: "ok da baseline" } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    },
   });
   try {
     const cwd = mkdtempSync(join(tmpdir(), "astro-wire-baseline-"));
@@ -87,6 +93,67 @@ test("primeiro turno sem config expõe tools padrão com aprovação", async () 
     expect(result.exit).toBe(0);
     expect(result.stdout).toContain("ok da baseline");
     expect(result.stderr).toContain("escrita e shell pedem aprovação");
+    expect(sentTools).toEqual([
+      "read_file",
+      "write_file",
+      "edit",
+      "grep",
+      "list_dir",
+      "run_command",
+    ]);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("sem config, write_file pede aprovação antes de gravar", async () => {
+  let call = 0;
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => {
+      call++;
+      return Response.json(call === 1
+        ? {
+            choices: [{
+              message: {
+                content: "",
+                tool_calls: [{
+                  id: "c1",
+                  type: "function",
+                  function: {
+                    name: "write_file",
+                    arguments: JSON.stringify({ path: "hello.txt", content: "oi" }),
+                  },
+                }],
+              },
+            }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }
+        : { choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    },
+  });
+  try {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-wire-approval-"));
+    const home = mkdtempSync(join(tmpdir(), "astro-wire-approval-home-"));
+    const approvals: string[] = [];
+    await runTask({
+      configPath: join(cwd, "astro.config.json"),
+      cwd,
+      allowMissingConfig: true,
+      task: "crie hello.txt",
+      env: {
+        ASTRO_HOME: home,
+        OPENAI_API_KEY: "k",
+        OPENAI_MODEL: "gpt-4o",
+        OPENAI_BASE_URL: `http://127.0.0.1:${server.port}/v1`,
+      },
+      approveTool: (request) => {
+        approvals.push(`${request.name}:${request.action}:${request.mode}`);
+        return true;
+      },
+    });
+    expect(approvals).toContain("write_file:edit:ask");
+    expect(readFileSync(join(cwd, "hello.txt"), "utf8")).toBe("oi");
   } finally {
     server.stop(true);
   }
