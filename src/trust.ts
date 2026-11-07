@@ -3,10 +3,11 @@
  * persiste em `$ASTRO_HOME/trusted.json` / `~/.astro/trusted.json`; sem canal
  * interativo (eval/CI) prossegue sem gravar. Store sem segredo.
  */
-import { mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { statePath } from "./astro-home";
+import { loadHomeState, saveHomeState } from "./home-state";
 import { looksLikeSecret } from "./secrets";
 export interface TrustedStore {
   version: 1;
@@ -17,11 +18,9 @@ const ROOT_KEYS = new Set(["version", "folders"]);
 function fail(message: string): never {
   throw new Error(message);
 }
-/** Caminho do store: `$ASTRO_HOME/trusted.json` ou `~/.astro/trusted.json`. */
+/** Caminho do estado global: `$ASTRO_HOME/state.json` ou `~/.astro/state.json`. */
 export function trustedPath(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.ASTRO_HOME?.trim();
-  const base = home === undefined || home === "" ? join(homedir(), ".astro") : home;
-  return join(base, "trusted.json");
+  return statePath(env);
 }
 /** Valida o store inteiro; campo desconhecido é erro, nunca ignorado. */
 export function validateTrustedStore(raw: unknown): TrustedStore {
@@ -43,7 +42,7 @@ export function validateTrustedStore(raw: unknown): TrustedStore {
   return { version: 1, folders };
 }
 /** Store ausente é vazio; corrompido/inválido é erro só com o caminho (I-03). */
-export function loadTrustedStore(path: string = trustedPath()): TrustedStore {
+function loadTrustedFile(path: string): TrustedStore {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -66,14 +65,46 @@ export function loadTrustedStore(path: string = trustedPath()): TrustedStore {
     throw new Error(`store de trust inválido em "${path}": ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+
+function isStatePath(path: string | undefined): boolean {
+  return path === undefined || basename(path) === "state.json";
+}
+
+export function loadTrustedStore(path?: string): TrustedStore {
+  if (!isStatePath(path)) return loadTrustedFile(path!);
+  const statePathValue = path ?? trustedPath();
+  const state = loadHomeState(statePathValue);
+  if (!state.migrations.trust) {
+    const legacyPath = join(dirname(statePathValue), "trusted.json");
+    if (existsSync(legacyPath)) {
+      const legacy = loadTrustedFile(legacyPath);
+      const folders = [...new Set([...state.trust.folders, ...legacy.folders])];
+      saveHomeState({
+        ...state,
+        trust: { folders },
+        migrations: { ...state.migrations, trust: true },
+      }, statePathValue);
+      return { version: 1, folders };
+    }
+  }
+  return { version: 1, folders: state.trust.folders };
+}
+
 /** Valida antes de gravar; escrita atômica (tmp + rename) com modo 0600 no POSIX. */
-export function saveTrustedStore(store: TrustedStore, path: string = trustedPath()): void {
+export function saveTrustedStore(store: TrustedStore, path?: string): void {
   const valid = validateTrustedStore(store);
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${randomUUID()}.tmp`;
+  if (isStatePath(path)) {
+    const statePathValue = path ?? trustedPath();
+    const state = loadHomeState(statePathValue);
+    saveHomeState({ ...state, trust: { folders: valid.folders } }, statePathValue);
+    return;
+  }
+  const targetPath = path!;
+  mkdirSync(dirname(targetPath), { recursive: true });
+  const tmp = `${targetPath}.${randomUUID()}.tmp`;
   try {
     writeFileSync(tmp, `${JSON.stringify(valid, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    renameSync(tmp, path);
+    renameSync(tmp, targetPath);
   } catch (error) {
     try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
     throw error;
@@ -98,8 +129,8 @@ function withinFolder(folder: string, target: string): boolean {
 export class TrustedFolders {
   readonly #path: string;
   #store: TrustedStore;
-  constructor(path: string = trustedPath()) {
-    this.#path = path;
+  constructor(path?: string) {
+    this.#path = path ?? trustedPath();
     this.#store = loadTrustedStore(path);
   }
   list(): string[] {
