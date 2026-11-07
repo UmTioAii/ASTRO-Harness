@@ -37,7 +37,7 @@ export interface AgentSessionOptions {
   model?: string;
   /** Provider ativo (`--provider`); ausente usa store/env/agent.model. */
   provider?: string;
-  /** Tolerar config ausente e usar a baseline somente leitura (primeiro run). */
+  /** Tolerar config ausente e usar as tools padrão sob `ask` (primeiro run). */
   allowMissingConfig?: boolean;
   systemPrompt?: string;
   /** Decisores interativos (TTY); ausentes mantêm pending/non-interactive. */
@@ -286,7 +286,7 @@ export class AgentSession {
     return this.#providerSelection;
   }
 
-  /** Avisos do load efetivo (ex.: baseline somente leitura). */
+  /** Avisos do load efetivo (ex.: config ausente). */
   get warnings(): readonly string[] {
     return this.#warnings;
   }

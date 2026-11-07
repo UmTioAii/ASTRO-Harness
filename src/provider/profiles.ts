@@ -277,7 +277,7 @@ export function providerIdentityFor(
   return { providerSource, providerSelection };
 }
 
-/** Sem config, expõe file tools + shell; o gate `ask` pede aprovação em escrita/shell (I-01). */
+/** Sem config, expõe file tools + shell; a allowlist segue I-01 e o gate `ask` (D-24) pede aprovação. */
 const BASELINE_TOOLS = ["read_file", "write_file", "edit", "grep", "list_dir", "run_command"];
 const BASELINE_PATHS = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
 const ENV_MODEL_CONTEXT = 128_000;
