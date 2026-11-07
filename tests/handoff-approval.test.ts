@@ -13,6 +13,7 @@ import type { AgentEntry, ModelEntry } from "../src/registry";
 import { runMultiAgentSession, type MultiAgentSessionOptions } from "../src/session";
 import { ToolExecutor } from "../src/tools/executor";
 import { handoffTool } from "../src/tools/handoff";
+import { testEnv } from "./setup";
 
 interface Seen { provider: string; model: string }
 
@@ -60,7 +61,7 @@ function setup(handoffTo = "coder", bFails = false) {
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
   return {
-    cwd, configPath, seen, env: { KEY_A: "a", KEY_B: "b", KEY_C: "c" },
+    cwd, configPath, seen, env: testEnv({ KEY_A: "a", KEY_B: "b", KEY_C: "c" }),
     stop: () => { a.stop(true); b.stop(true); c.stop(true); },
     audit: () => new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll(),
     ledger: () => new Ledger(join(cwd, ".astro", "ledger.jsonl")),

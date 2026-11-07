@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "../src/app";
 import { Ledger } from "../src/ledger";
+import { testEnv } from "./setup";
 
 const REASONING = "texto de raciocínio que não pode ser persistido";
 
@@ -38,7 +39,7 @@ describe("call profile ponta a ponta (E1–E8)", () => {
       }));
 
       const report = await runTask({
-        configPath, task: "x", cwd, env: { KEY: "k" }, call: { lvl: 3, thinking: "off" },
+        configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), call: { lvl: 3, thinking: "off" },
       });
       expect(report.final).toBe("ok");
       expect(body).toMatchObject({ thinking: { type: "disabled" } });

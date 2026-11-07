@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "../src/app";
 import { resetCandidateSnapshots } from "../src/model-choice";
+import { testEnv } from "./setup";
 
 beforeEach(() => resetCandidateSnapshots());
 
@@ -43,7 +44,7 @@ describe("tool list_model_candidates no run (S-09)", () => {
         paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
       }));
 
-      const report = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
+      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
 
       expect(report.final).toBe("done");
       const toolMessage = bodies[1]!.messages?.find((message) => message.role === "tool");
