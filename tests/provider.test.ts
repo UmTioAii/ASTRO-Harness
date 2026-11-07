@@ -140,6 +140,17 @@ test("normaliza papel developer → system no request", async () => {
   expect(seenBody.messages).toEqual([{ role: "system", content: "seja breve" }]);
 });
 
+test("omite tools quando array vazio (não serializa 'tools':[])", async () => {
+  let seenBody: Record<string, unknown> = {};
+  const fetchFn = async (_url: string, init?: RequestInit) => {
+    seenBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return ok({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  };
+  const p = new OpenAICompatProvider({ baseUrl: "http://x/v1", apiKey: "k", fetchFn });
+  await p.complete({ model: "m", messages: [{ role: "user", content: "x" }], tools: [] });
+  expect(Object.hasOwn(seenBody, "tools")).toBe(false);
+});
+
 test("falha de rede e JSON inválido → outage", async () => {
   const network = new OpenAICompatProvider({
     baseUrl: "http://x/v1",

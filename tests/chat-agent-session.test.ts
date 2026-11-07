@@ -8,6 +8,7 @@ import { loadConfig } from "../src/config";
 import type { PermissionMode } from "../src/permissions";
 import type { ChatMessage } from "../src/provider/types";
 import { Ledger } from "../src/ledger";
+import { testEnv } from "./setup";
 
 interface Body { model?: string; messages?: ChatMessage[] }
 
@@ -45,7 +46,7 @@ function setup(opts: {
   }));
   return {
     cwd, configPath, bodies,
-    session: (extra: Record<string, unknown> = {}) => new AgentSession({ configPath, cwd, env: { KEY: "k" }, systemPrompt: "sys", ...extra }),
+    session: (extra: Record<string, unknown> = {}) => new AgentSession({ configPath, cwd, env: testEnv({ KEY: "k" }), systemPrompt: "sys", ...extra }),
     stop: () => server.stop(true),
   };
 }
@@ -158,7 +159,7 @@ describe("AgentSession (T1, #62)", () => {
     }));
     let asked = 0;
     const chat = new AgentSession({
-      configPath, cwd, env: { KEY_A: "ka", KEY_B: "kb" },
+      configPath, cwd, env: testEnv({ KEY_A: "ka", KEY_B: "kb" }),
       approveSwap: () => { asked++; return true; },
     });
     try {
@@ -379,7 +380,7 @@ describe("AgentSession.permissionMode (#270)", () => {
       expect(session().permissionMode()).toBe("bypass");
       // RED da revisão: env injetado na sessao NAO pode mudar o modo exibido —
       // o run (app.ts) le so process.env, entao o indicador deve seguir o mesmo
-      expect(session({ env: { KEY: "k", ASTRO_PERMISSION_MODE: "ask" } }).permissionMode()).toBe("bypass");
+      expect(session({ env: testEnv({ KEY: "k", ASTRO_PERMISSION_MODE: "ask" }) }).permissionMode()).toBe("bypass");
       delete process.env.ASTRO_PERMISSION_MODE;
       expect(session().permissionMode()).toBe("allow-edits");
     } finally {

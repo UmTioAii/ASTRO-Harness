@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runTask } from "../src/app";
 import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
+import { testEnv } from "./setup";
 
 const final = (content: string): Response =>
   Response.json({ choices: [{ message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
@@ -72,7 +73,7 @@ test("runTask: plan → task(build) → handoff(reviewer) completa a cadeia (#58
   }));
   try {
     const result = await runTask({
-      configPath, cwd, task: "planeje e entregue", env: { KEY: "k", KEY2: "k2" },
+      configPath, cwd, task: "planeje e entregue", env: testEnv({ KEY: "k", KEY2: "k2" }),
       permissionMode: "bypass", approveTool: () => true,
     });
     expect(result.final).toBe("review-final");

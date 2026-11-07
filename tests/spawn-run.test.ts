@@ -6,6 +6,7 @@ import { activeLocks } from "../src/agent-lock";
 import { runTask } from "../src/app";
 import { Ledger } from "../src/ledger";
 import { rebuildAgentTree } from "../src/resume";
+import { testEnv } from "./setup";
 
 interface Body {
   model?: string;
@@ -55,7 +56,7 @@ describe("spawn_agent ponta a ponta (S-11, C4a)", () => {
       }));
 
       const report = await runTask({
-        configPath, task: "tarefa do orchestrator", cwd, env: { KEY1: "1", KEY2: "2" }, approveSwap: () => true,
+        configPath, task: "tarefa do orchestrator", cwd, env: testEnv({ KEY1: "1", KEY2: "2" }), approveSwap: () => true,
       });
 
       expect(report.final).toBe("sub done");
@@ -124,7 +125,7 @@ describe("spawn_agent ponta a ponta (S-11, C4a)", () => {
       }));
 
       const report = await runTask({
-        configPath, task: "orquestrar", cwd, env: { KEY1: "1", KEY2: "2", KEY3: "3" }, approveSwap: () => true,
+        configPath, task: "orquestrar", cwd, env: testEnv({ KEY1: "1", KEY2: "2", KEY3: "3" }), approveSwap: () => true,
       });
 
       expect(report.final).toBe("done both");
@@ -200,7 +201,7 @@ describe("spawn_agent ponta a ponta (S-11, C4a)", () => {
       }));
 
       const report = await runTask({
-        configPath, task: "orquestrar", cwd, env: { KEY1: "1", KEY2: "2" }, approveSwap: () => true,
+        configPath, task: "orquestrar", cwd, env: testEnv({ KEY1: "1", KEY2: "2" }), approveSwap: () => true,
       });
       expect(report.final).toBe("skip ok");
       // O filho não recebe a tool pulada do handoff do pai.
@@ -252,7 +253,7 @@ describe("spawn_agent ponta a ponta (S-11, C4a)", () => {
       }));
 
       const report = await runTask({
-        configPath, task: "oi", cwd, env: { KEY1: "1", KEY2: "2" },
+        configPath, task: "oi", cwd, env: testEnv({ KEY1: "1", KEY2: "2" }),
         history: [{ role: "user", content: "oi" }],
       });
       expect(report.final).toBe("chat ok");

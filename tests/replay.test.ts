@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "../src/app";
 import { findRunMetrics, replayRun } from "../src/replay";
+import { testEnv } from "./setup";
 
 function writeConfig(dir: string, baseUrl: string): string {
   const path = join(dir, "astro.config.json");
@@ -42,7 +43,7 @@ function mockServer() {
 }
 
 async function runOnce(dir: string, baseUrl: string) {
-  return runTask({ configPath: writeConfig(dir, baseUrl), task: "crie hello.txt", cwd: dir, env: { TEST_KEY: "test-key" } });
+  return runTask({ configPath: writeConfig(dir, baseUrl), task: "crie hello.txt", cwd: dir, env: testEnv({ TEST_KEY: "test-key" }) });
 }
 
 describe("replay (F6-5)", () => {
@@ -78,7 +79,7 @@ describe("replay (F6-5)", () => {
         runId: original.runId,
         task: "crie hello.txt",
         cwd: dir,
-        env: { TEST_KEY: "test-key" },
+        env: testEnv({ TEST_KEY: "test-key" }),
       });
 
       expect(result.original.steps).toBe(original.steps);
@@ -123,7 +124,7 @@ describe("replay (F6-5)", () => {
         runId: original.runId,
         task: "crie hello.txt",
         cwd: dir,
-        env: { TEST_KEY: "test-key" },
+        env: testEnv({ TEST_KEY: "test-key" }),
       });
       expect(result.identical).toBe(false);
       expect(result.replay.tokensIn).not.toBe(original.tokensIn);
@@ -140,7 +141,7 @@ describe("replay (F6-5)", () => {
       runId: "fantasma",
       task: "x",
       cwd: dir,
-      env: { TEST_KEY: "k" },
+      env: testEnv({ TEST_KEY: "k" }),
     }).then(() => null, (e) => e as Error);
     expect(err).toBeInstanceOf(Error);
     expect(err!.message).toContain("fantasma");
