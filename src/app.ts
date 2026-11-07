@@ -69,7 +69,7 @@ export interface RunOptions {
   env?: Record<string, string | undefined>;
   /** Provider ativo (`--provider`); ausente usa store/env/agent.model. */
   provider?: string;
-  /** Tolerar config ausente (baseline somente leitura) — chat/TUI. */
+  /** Tolerar config ausente (tools padrão sob `ask`) - chat/TUI. */
   allowMissingConfig?: boolean;
   /** Resume/replay: não trocar provider por store/env sem pedido explícito. */
   ignoreStoredSelection?: boolean;

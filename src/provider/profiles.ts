@@ -277,8 +277,8 @@ export function providerIdentityFor(
   return { providerSource, providerSelection };
 }
 
-/** Primeiro run sem config é somente leitura; escrita/shell exigem config explícita. */
-const BASELINE_TOOLS = ["read_file", "list_dir", "grep"];
+/** Sem config, expõe file tools + shell; a allowlist segue I-01 e o gate `ask` (D-24) pede aprovação. */
+const BASELINE_TOOLS = ["read_file", "write_file", "edit", "grep", "list_dir", "run_command"];
 const BASELINE_PATHS = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
 const ENV_MODEL_CONTEXT = 128_000;
 
@@ -451,7 +451,7 @@ export function resolveEffectiveConfig(input: {
   };
   if (project === undefined) {
     warnings.push(
-      "usando configuração padrão somente leitura (sem astro.config.json); crie o arquivo para liberar escrita",
+      "sem astro.config.json: usando tools padrão; escrita e shell pedem aprovação",
     );
   }
 
