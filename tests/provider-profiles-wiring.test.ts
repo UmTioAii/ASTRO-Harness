@@ -63,7 +63,7 @@ test("chat sem config usa o perfil global e audita a origem", async () => {
   expect((started.payload as Record<string, unknown>).providerSelection).toBe("store");
 });
 
-test("primeiro turno sem config usa a baseline somente leitura", async () => {
+test("primeiro turno sem config expõe tools padrão com aprovação", async () => {
   const server = Bun.serve({
     port: 0,
     fetch: () => Response.json({
@@ -86,7 +86,7 @@ test("primeiro turno sem config usa a baseline somente leitura", async () => {
     });
     expect(result.exit).toBe(0);
     expect(result.stdout).toContain("ok da baseline");
-    expect(result.stderr).toContain("somente leitura");
+    expect(result.stderr).toContain("escrita e shell pedem aprovação");
   } finally {
     server.stop(true);
   }
