@@ -24,6 +24,9 @@ export type ReplCommand =
   | { kind: "init" }
   | { kind: "usage" }
   | { kind: "theme"; theme?: string }
+  | { kind: "attach"; path?: string; range?: string }
+  | { kind: "paste" }
+  | { kind: "detach"; target?: string }
   | { kind: "unknown"; raw: string };
 
 export const HELP_TEXT = [
@@ -50,6 +53,9 @@ export const HELP_TEXT = [
   "  /init           cria AGENTS.md no cwd se ainda não existir",
   "  /usage          uso da sessão (turnos, tokens, custo) e budget, se houver",
   "  /theme [tema]   lista ou troca o tema da TUI (dark, light, contrast; alias /themes)",
+  "  /attach <path> [ini:fim]  anexa arquivo ou diretório (fora do cwd pede confirmação)",
+  "  /paste          anexa o texto do clipboard",
+  "  /detach [n|all] lista ou remove anexos pendentes",
   "  /clear | /new   limpa o histórico (mantém o system)",
   "  /exit | /quit | /q  encerra a sessão",
 ].join("\n");
@@ -57,7 +63,8 @@ export const HELP_TEXT = [
 /** Nomes de comando (sem a barra), com aliases, na ordem do /help. */
 export const COMMAND_NAMES = [
   "help", "model", "mode", "config", "providers", "provider", "session", "details", "compact", "summarize",
-  "save", "sessions", "resume", "export", "init", "usage", "theme", "clear", "new", "exit", "quit", "q",
+  "save", "sessions", "resume", "export", "init", "usage", "theme", "attach", "paste", "detach",
+  "clear", "new", "exit", "quit", "q",
 ] as const;
 
 /** O que o comando `/mode` manda fazer (puro; compartilhado por REPL e TUI, #271). */
@@ -148,6 +155,17 @@ function parseProvider(arg: string): ReplCommand {
   }
 }
 
+function parseAttach(arg: string): ReplCommand {
+  if (arg === "") return { kind: "attach" };
+  const parts = arg.split(/\s+/);
+  const last = parts[parts.length - 1]!;
+  // `ini:fim` só é range quando há path antes; um path numérico sozinho continua sendo path.
+  if (parts.length > 1 && /^\d+(?::\d+)?$/.test(last)) {
+    return { kind: "attach", path: parts.slice(0, -1).join(" "), range: last };
+  }
+  return { kind: "attach", path: arg };
+}
+
 export function parseCommand(line: string): ReplCommand {
   const text = line.trim();
   if (text === "") return { kind: "empty" };
@@ -204,6 +222,12 @@ export function parseCommand(line: string): ReplCommand {
     case "theme":
     case "themes":
       return { kind: "theme", ...(arg === "" ? {} : { theme: arg.toLowerCase() }) };
+    case "attach":
+      return parseAttach(arg);
+    case "paste":
+      return { kind: "paste" };
+    case "detach":
+      return { kind: "detach", ...(arg === "" ? {} : { target: arg.toLowerCase() }) };
     default:
       return { kind: "unknown", raw: name ?? "" };
   }
