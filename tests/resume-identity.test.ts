@@ -6,6 +6,7 @@ import { Auditor } from "../src/audit";
 import { runTask } from "../src/app";
 import { Ledger } from "../src/ledger";
 import { assertResumeIdentity, rebuildAgentTree, ReplayIncompleteError } from "../src/resume";
+import { testEnv } from "./setup";
 
 function setup(provider = "a", credentialRef: string | null = "KEY_A", seedProvider = provider, seedCredential: string | null = credentialRef) {
   const cwd = mkdtempSync(join(tmpdir(), "astro-resume-identity-"));
@@ -51,7 +52,7 @@ describe("identidade efetiva no resume (I-08, #163)", () => {
     const { cwd, configPath, seen, server } = setup("b", "KEY_B", "a", "KEY_A");
     try {
       await expect(runTask({
-        configPath, task: "continue", cwd, env: { KEY_A: "1", KEY_B: "2" }, resume: "r1",
+        configPath, task: "continue", cwd, env: testEnv({ KEY_A: "1", KEY_B: "2" }), resume: "r1",
       })).rejects.toBeInstanceOf(ReplayIncompleteError);
       expect(seen).toEqual([]);
     } finally {
@@ -63,7 +64,7 @@ describe("identidade efetiva no resume (I-08, #163)", () => {
     const { cwd, configPath, seen, server } = setup("a", "KEY_B", "a", "KEY_A");
     try {
       await expect(runTask({
-        configPath, task: "continue", cwd, env: { KEY_B: "2" }, resume: "r1",
+        configPath, task: "continue", cwd, env: testEnv({ KEY_B: "2" }), resume: "r1",
       })).rejects.toThrow(/credencial do agente/);
       expect(seen).toEqual([]);
     } finally {
@@ -76,7 +77,7 @@ describe("identidade efetiva no resume (I-08, #163)", () => {
     try {
       expect(rebuildAgentTree(ledger, "r1").active?.credentialRef).toBe("KEY_A");
       await expect(runTask({
-        configPath, task: "continue", cwd, env: { KEY_A: "1" }, resume: "r1",
+        configPath, task: "continue", cwd, env: testEnv({ KEY_A: "1" }), resume: "r1",
       })).rejects.toThrow(/credencial do agente/);
       expect(seen).toEqual([]);
     } finally {
@@ -88,7 +89,7 @@ describe("identidade efetiva no resume (I-08, #163)", () => {
     const { cwd, configPath, seen, server } = setup("a", "KEY_A", "a", null);
     try {
       await expect(runTask({
-        configPath, task: "continue", cwd, env: { KEY_A: "1" }, resume: "r1",
+        configPath, task: "continue", cwd, env: testEnv({ KEY_A: "1" }), resume: "r1",
       })).rejects.toThrow(/credencial do agente/);
       expect(seen).toEqual([]);
     } finally {
@@ -113,7 +114,7 @@ describe("identidade efetiva no resume (I-08, #163)", () => {
       writeFileSync(path, `${cleaned.join("\n")}\n`);
       const fresh = new Ledger(path);
 
-      await runTask({ configPath, task: "continue", cwd, env: { KEY_A: "1" }, resume: "r1" });
+      await runTask({ configPath, task: "continue", cwd, env: testEnv({ KEY_A: "1" }), resume: "r1" });
       expect(seen).toEqual(["m1"]);
       const identity = fresh.readAllEntries().find((e) => e.kind === "agent" && e.event === "identity");
       expect(identity).toMatchObject({ provider: "a", credentialRef: "KEY_A", model: "m1" });
