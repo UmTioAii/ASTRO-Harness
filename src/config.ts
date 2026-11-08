@@ -178,6 +178,16 @@ export interface RunConfig {
   judge: "off";
 }
 
+/** Seção `attachments` (ADR-0026, #392): imagem, diretório e artifact store. */
+export interface AttachmentsConfig {
+  image: { autoResize: boolean };
+  directory: { showHidden: boolean };
+  /** TTL do artifact store em dias; default 7. */
+  artifactTtlDays: number;
+  /** Teto do artifact store em bytes; default 1 GiB. */
+  artifactMaxBytes: number;
+}
+
 /** Team features (F7-5): budget do projeto, quotas por agent, webhook de auditoria. */
 export interface TeamSectionConfig {
   projectBudgetUsd?: number;
@@ -289,6 +299,8 @@ export interface AstroConfig {
   budget?: BudgetConfig;
   /** Seção `run` (Q-01): `maxTurns` numérico ou "unlimited". */
   run?: RunConfig;
+  /** Seção `attachments` (ADR-0026, #392): limites e comportamento de anexos. */
+  attachments: AttachmentsConfig;
   cache?: CacheConfig;
   /** Caminhos ou pacotes de plugins a carregar (F7-1). */
   plugins?: string[];
@@ -1084,6 +1096,54 @@ function validateRun(value: unknown): RunConfig {
   };
 }
 
+/** Defaults da seção `attachments` (ADR-0026, #392). */
+export const DEFAULT_ATTACHMENTS: AttachmentsConfig = Object.freeze({
+  image: Object.freeze({ autoResize: false }),
+  directory: Object.freeze({ showHidden: false }),
+  artifactTtlDays: 7,
+  artifactMaxBytes: 1024 ** 3,
+});
+
+/** Valida a seção `attachments` (ADR-0026, #392) com vocabulário fechado e defaults. */
+function validateAttachments(value: unknown): AttachmentsConfig {
+  const raw = value === undefined ? {} : expectObject(value, "attachments");
+  for (const key of Object.keys(raw)) {
+    if (key !== "image" && key !== "directory" && key !== "artifactTtlDays" && key !== "artifactMaxBytes") {
+      fail(`config inválida: "attachments.${key}" desconhecido`);
+    }
+  }
+  const imageRaw = raw.image === undefined ? {} : expectObject(raw.image, "attachments.image");
+  for (const key of Object.keys(imageRaw)) {
+    if (key !== "autoResize") fail(`config inválida: "attachments.image.${key}" desconhecido`);
+  }
+  const directoryRaw = raw.directory === undefined ? {} : expectObject(raw.directory, "attachments.directory");
+  for (const key of Object.keys(directoryRaw)) {
+    if (key !== "showHidden") fail(`config inválida: "attachments.directory.${key}" desconhecido`);
+  }
+  return {
+    image: {
+      autoResize:
+        imageRaw.autoResize === undefined
+          ? DEFAULT_ATTACHMENTS.image.autoResize
+          : expectBoolean(imageRaw.autoResize, "attachments.image.autoResize"),
+    },
+    directory: {
+      showHidden:
+        directoryRaw.showHidden === undefined
+          ? DEFAULT_ATTACHMENTS.directory.showHidden
+          : expectBoolean(directoryRaw.showHidden, "attachments.directory.showHidden"),
+    },
+    artifactTtlDays:
+      raw.artifactTtlDays === undefined
+        ? DEFAULT_ATTACHMENTS.artifactTtlDays
+        : expectPositiveInteger(raw.artifactTtlDays, "attachments.artifactTtlDays"),
+    artifactMaxBytes:
+      raw.artifactMaxBytes === undefined
+        ? DEFAULT_ATTACHMENTS.artifactMaxBytes
+        : expectPositiveInteger(raw.artifactMaxBytes, "attachments.artifactMaxBytes"),
+  };
+}
+
 /** Valida a seção `handoff` (F-24); ausente aplica o default 30000ms (D-15). */
 function validateHandoff(value: unknown): HandoffConfig {
   const raw = value === undefined ? {} : expectObject(value, "handoff");
@@ -1481,7 +1541,7 @@ export function validateConfig(raw: unknown): AstroConfig {
   // Segurança (ADR-0027, #391 slice 3b): ausente = sem seção `security`
   const security = root.security === undefined ? undefined : validateSecurity(root.security);
 
-  return { providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(security === undefined ? {} : { security }), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  return { providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(security === undefined ? {} : { security }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
 }
 
 /** Lê um arquivo JSON de configuração e o valida. */

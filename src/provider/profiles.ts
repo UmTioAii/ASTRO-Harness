@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { ConfigError, loadConfig, validateConfig, type AstroConfig, type ModelConfig, type ProviderConfig } from "../config";
+import { ConfigError, DEFAULT_ATTACHMENTS, loadConfig, validateConfig, type AstroConfig, type ModelConfig, type ProviderConfig } from "../config";
 import { isKnownTag } from "../tags";
 import { isAuthHeader, isVaultCredentialRef, looksLikeSecret } from "../secrets";
 import { outboundUrlProblem } from "../url-safety";
@@ -447,6 +447,7 @@ export function resolveEffectiveConfig(input: {
     models,
     agent: { model: modelRef, maxSteps: 12, tools: [...BASELINE_TOOLS] },
     permissions: { mode: "ask" as const },
+    attachments: DEFAULT_ATTACHMENTS,
     paths: { ...BASELINE_PATHS },
   };
   if (project === undefined) {
