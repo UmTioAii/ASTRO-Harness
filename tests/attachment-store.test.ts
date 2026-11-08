@@ -1,0 +1,131 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  ArtifactStore,
+  resolveArtifactRoot,
+  validateArtifactRoot,
+} from "../src/attachments/store";
+
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function sandbox(): { root: string; cwd: string; astroHome: string } {
+  const base = mkdtempSync(join(tmpdir(), "astro-art-"));
+  dirs.push(base);
+  const cwd = join(base, "work");
+  const astroHome = join(base, "home");
+  const root = join(astroHome, "attachments");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(astroHome, { recursive: true });
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  return { root, cwd, astroHome };
+}
+
+const context = (cwd: string, astroHome: string) => ({
+  cwd,
+  astroHome,
+  checkPrivate: () => true,
+});
+
+describe("resolveArtifactRoot", () => {
+  test("flag > env > default do ASTRO_HOME", () => {
+    expect(resolveArtifactRoot({ flag: "/f", env: { ASTRO_ARTIFACT_ROOT: "/e" }, astroHome: "/h" })).toBe("/f");
+    expect(resolveArtifactRoot({ env: { ASTRO_ARTIFACT_ROOT: "/e" }, astroHome: "/h" })).toBe("/e");
+    expect(resolveArtifactRoot({ env: { ASTRO_ARTIFACT_ROOT: "   " }, astroHome: "/h" })).toBe(join("/h", "attachments"));
+    expect(resolveArtifactRoot({ env: {}, astroHome: "/h" })).toBe(join("/h", "attachments"));
+  });
+
+  test("expande ~", () => {
+    expect(resolveArtifactRoot({ flag: "~/att", env: {}, astroHome: "/h" })).toContain("att");
+  });
+});
+
+describe("validateArtifactRoot", () => {
+  test("aceita raiz dedicada fora do cwd", () => {
+    const { root, cwd, astroHome } = sandbox();
+    expect(() => validateArtifactRoot(root, context(cwd, astroHome))).not.toThrow();
+  });
+
+  test("rejeita o próprio ASTRO_HOME e a raiz dentro do cwd", () => {
+    const { cwd, astroHome, root } = sandbox();
+    expect(() => validateArtifactRoot(astroHome, context(cwd, astroHome))).toThrow(/attachment_root_invalid|raiz/i);
+    const inside = join(cwd, "attachments");
+    mkdirSync(inside, { recursive: true });
+    expect(() => validateArtifactRoot(inside, context(cwd, astroHome))).toThrow(/attachment_root_invalid|fora do cwd/i);
+    expect(astroHome).not.toBe(root);
+  });
+
+  test("rejeita raiz que contém estado do harness", () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(astroHome, "vault.json"), "{}");
+    expect(() => validateArtifactRoot(astroHome, context(cwd, astroHome))).toThrow();
+  });
+
+  test("rejeita quando a checagem de privacidade falha", () => {
+    const { root, cwd, astroHome } = sandbox();
+    expect(() => validateArtifactRoot(root, { ...context(cwd, astroHome), checkPrivate: () => false })).toThrow(/privad/i);
+  });
+});
+
+describe("ArtifactStore", () => {
+  const owner = { sessionId: "s1", runId: "r1", lineage: ["s0"] };
+
+  test("save/read round-trip com hash no nome e metadado da sessão", () => {
+    const { root, cwd, astroHome } = sandbox();
+    const store = new ArtifactStore(root, context(cwd, astroHome));
+    const bytes = new TextEncoder().encode("imagem");
+    const saved = store.save(owner, bytes, "image/png");
+    expect(saved.hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(saved.ref.startsWith("session-")).toBe(true);
+    expect(Array.from(store.read(saved.ref))).toEqual(Array.from(bytes));
+    const meta = JSON.parse(readFileSync(join(root, saved.ref.split("/")[0]!, `${saved.hash}.json`), "utf8"));
+    expect(meta).toMatchObject({ sessionId: "s1", lineage: ["s0"], mediaType: "image/png" });
+    if (process.platform !== "win32") {
+      expect(statSync(join(root, saved.ref.split("/")[0]!, saved.hash)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  test("read de ref ausente ou adulterado falha tipado", () => {
+    const { root, cwd, astroHome } = sandbox();
+    const store = new ArtifactStore(root, context(cwd, astroHome));
+    expect(() => store.read("session-abc/def")).toThrow(/attachment_image_invalid|ref/i);
+    const saved = store.save(owner, new TextEncoder().encode("x"), "image/png");
+    const [dir, file] = saved.ref.split("/");
+    writeFileSync(join(root, dir!, file!), "adulterado");
+    expect(() => store.read(saved.ref)).toThrow(/attachment_image_invalid|hash/i);
+  });
+
+  test("rejeita ref com traversal", () => {
+    const { root, cwd, astroHome } = sandbox();
+    const store = new ArtifactStore(root, context(cwd, astroHome));
+    for (const ref of ["../x", "/abs/path", "session-abc/../../x", "outro/abc"]) {
+      expect(() => store.read(ref)).toThrow();
+    }
+  });
+
+  test("teto de bytes rejeita o novo anexo", () => {
+    const { root, cwd, astroHome } = sandbox();
+    const store = new ArtifactStore(root, { ...context(cwd, astroHome), maxBytes: 4 });
+    expect(() => store.save(owner, new TextEncoder().encode("12345"), "image/png")).toThrow(/attachment_too_large|teto/i);
+  });
+
+  test("gc remove expirado do harness e preserva o ref atual e arquivo alheio", () => {
+    const { root, cwd, astroHome } = sandbox();
+    let now = 1_000_000_000_000;
+    const store = new ArtifactStore(root, { ...context(cwd, astroHome), ttlDays: 7, now: () => now });
+    const old = store.save({ sessionId: "s-old", runId: "r1" }, new TextEncoder().encode("a"), "image/png");
+    const current = store.save(owner, new TextEncoder().encode("b"), "image/png");
+    const [oldDir, oldFile] = old.ref.split("/");
+    const oldPath = join(root, oldDir!, oldFile!);
+    utimesSync(oldPath, new Date(now - 8 * 24 * 60 * 60 * 1000), new Date(now - 8 * 24 * 24 * 60 * 60 * 1000));
+    writeFileSync(join(root, "alheio.txt"), "x");
+    const removed = store.gc([current.ref]);
+    expect(removed).toEqual([old.ref]);
+    expect(() => store.read(old.ref)).toThrow();
+    expect(() => store.read(current.ref)).not.toThrow();
+  });
+});
