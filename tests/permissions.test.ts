@@ -79,6 +79,15 @@ describe("matriz de permissão (#259)", () => {
     expect(actionClassOf(lspTool, call("lsp", { command: "hover", file: "keys.ts", line: 1, column: 1 }))).toBe("read_critical");
   });
 
+  test("allow-sensitive promove escrita normal para critical_write (ADR-0027)", () => {
+    const call = (name: string, input: unknown) => ({ name, input });
+    const sensitive = () => "sensitive" as const;
+    const normal = () => "normal" as const;
+    expect(actionClassOf(writeFileTool, call("write_file", { path: "notes.md", content: "x" }), sensitive)).toBe("critical_write");
+    expect(actionClassOf(writeFileTool, call("write_file", { path: "notes.md", content: "x" }), normal)).toBe("edit");
+    expect(actionClassOf(readFileTool, call("read_file", { path: "notes.md" }), sensitive)).toBe("read_common");
+  });
+
   test("classe declarada read_critical nunca é rebaixada pelo input (#264)", () => {
     const vault: Tool = {
       manifest: {
@@ -134,15 +143,16 @@ describe("gate no executor (#259)", () => {
     return { cwd, audit, executor };
   }
 
-  test("bypass libera shell", async () => {
-    // opt-out do sandbox (#248 default-on): este teste exercita o gate, não o sandbox
+  test("bypass libera shell no gate; sem sandbox a tool recusa (sandbox_required_for_shell, I-19)", async () => {
+    // opt-out do sandbox (#248 default-on): exercita o gate, não a execução no host (slice 4b)
     configureRunCommand({ sandbox: false });
     try {
       const { cwd, executor } = setup([runCommandTool], { mode: "bypass" });
       const result = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
         { id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo oi" }) });
-      expect(result.isError).toBeFalsy();
-      expect(result.output).toContain("oi");
+      expect(result.isError).toBe(true); // recusa do sandbox, não de permissão
+      expect(result.output).toContain("sandbox_required_for_shell");
+      expect(result.output).not.toContain("permissão negada");
     } finally {
       configureRunCommand({ sandbox: true });
     }
@@ -517,6 +527,7 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
 
     expect(result.isError).toBe(true);
     expect(result.output).toContain(HARD_BLOCKED);
+    expect(result.code).toBe(HARD_BLOCKED);
     expect(result.output).toContain("hard-block");
     expect(result.output).toContain(".env");
     expect(result.output).not.toContain(SYNTH);
@@ -594,7 +605,7 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
     }
   });
 
-  test("caminho não-hard-block continua como antes (bypass lê arquivo e roda shell)", async () => {
+  test("caminho não-hard-block não é barrado pelo gate; o shell recusa por sandbox (I-19)", async () => {
     configureRunCommand({ sandbox: false });
     try {
       const { cwd, executor } = setup([readFileTool, runCommandTool], { mode: "bypass" });
@@ -603,11 +614,10 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
         { id: "c1", name: "read_file", arguments: JSON.stringify({ path: "ok.txt" }) });
       expect(read.isError).toBeFalsy();
       expect(read.output).toContain("conteudo-ok");
-      // token path-like normal (ok.txt) não é barrado pelo gate
       const run = await executor.run({ cwd, run: "r1", agent: "a", env: { ...process.env } },
         { id: "c2", name: "run_command", arguments: JSON.stringify({ command: "echo ok.txt" }) });
-      expect(run.isError).toBeFalsy();
-      expect(run.output).toContain("ok.txt");
+      expect(run.isError).toBe(true);
+      expect(run.output).toContain("sandbox_required_for_shell");
       expect(run.output).not.toContain(HARD_BLOCKED);
     } finally {
       configureRunCommand({ sandbox: true });

@@ -138,15 +138,28 @@ test("profileFromEnv monta o perfil efêmero", () => {
   expect(env?.models[0]?.id).toBe("gpt-4o");
 });
 
-test("sem projeto, um perfil global basta e usa baseline somente leitura", () => {
+test("sem projeto, um perfil global basta e usa tools padrão com aprovação", () => {
   const result = resolveEffectiveConfig({ store: store(profile()), env: {} });
   expect(result.activeProvider).toBe("openai-work");
   expect(result.config.agent.model).toBe("openai-work/gpt-4o");
   expect(result.config.agent.maxSteps).toBe(12);
-  expect(result.config.agent.tools).toEqual(["read_file", "list_dir", "grep"]);
+  expect(result.config.agent.tools).toEqual([
+    "read_file",
+    "write_file",
+    "edit",
+    "grep",
+    "list_dir",
+    "run_command",
+  ]);
+  expect(result.config.permissions.mode).toBe("ask");
   expect(result.config.tools?.run_command).toBeUndefined();
   expect(result.providerSelection).toBe("store");
-  expect(result.warnings.join(" ")).toMatch(/somente leitura/);
+  expect(result.warnings.join(" ")).toMatch(/tools padrão/);
+});
+
+test("config de projeto continua sendo allowlist que estreita", () => {
+  const result = resolveEffectiveConfig({ project: project(), store: store(profile()), env: {} });
+  expect(result.config.agent.tools).toEqual(["read_file"]);
 });
 
 test("env efêmero é usado sem escrever nada", () => {

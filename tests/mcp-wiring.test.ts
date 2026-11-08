@@ -184,9 +184,9 @@ test("env do servidor MCP não chega ao run_command e o PATH sobrevive", async (
     expect(report.final).toBe("pronto");
     const last = (bodies.at(-1) as { messages: { role: string; content: string }[] }).messages.at(-1);
     expect(last?.role).toBe("tool");
-    expect(last?.content).toContain("VAZIO"); // MCP_LEAK removido do shell
-    expect(last?.content).toContain("PATH-SENTINEL-OK"); // PATH do MCP não vira "segredo"
+    expect(last?.content).toContain("sandbox_required_for_shell"); // slice 4b (I-19); I-03: nada vaza
     expect(last?.content).not.toContain("mcp-env-SENTINEL");
+    expect(last?.content).not.toContain("astro-mcp-path-sentinel");
     expect(await waitUntilDead(Number(readFileSync(pidFile, "utf8")))).toBe(true);
   } finally {
     server.stop(true);

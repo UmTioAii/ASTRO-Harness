@@ -238,7 +238,7 @@ test("runTask não entrega ao run_command a variável referenciada por header", 
     expect(report.final).toBe("pronto");
     const last = bodies.at(-1)?.messages.at(-1);
     expect(last?.role).toBe("tool");
-    expect(last?.content).toContain("VAZIO");
+    expect(last?.content).toContain("sandbox_required_for_shell"); // slice 4b (I-19): recusa sem executar no host
     expect(last?.content).not.toContain("tok-123");
   } finally {
     provider.stop(true);

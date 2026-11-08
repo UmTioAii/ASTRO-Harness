@@ -19,6 +19,10 @@ export interface RunTuiOptions {
   env?: NodeJS.ProcessEnv;
   provider?: string;
   allowMissingConfig?: boolean;
+  /** `allow-critical` da CLI (ADR-0027 slice 5a): vai à sessão e ao shell `!cmd`. */
+  allowCritical?: readonly string[];
+  /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
+  allowSensitive?: readonly string[];
 }
 
 /** Ink desmontaria no ctrl+c antes do handler da app; a app decide a saída. */
@@ -160,6 +164,8 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       onBudgetExceeded: approvals.onBudgetExceeded,
       approveTool: approvals.approveTool,
       trustAsk: async (dir) => trustChoice(await approvals.askText(trustPrompt(dir))),
+      ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
+      ...(opts.allowSensitive === undefined ? {} : { allowSensitive: opts.allowSensitive }),
       ...(model === undefined ? {} : { model }),
     });
     // `--provider` explícito vence o último modelo salvo em .astro/tui.json.
@@ -169,6 +175,8 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       createShell: () => createShellRunner({
         configPath, cwd, env: opts.env ?? process.env,
         allowMissingConfig: opts.allowMissingConfig === true,
+        ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
+        ...(opts.allowSensitive === undefined ? {} : { allowSensitive: opts.allowSensitive }),
       }),
       allowMissingConfig: opts.allowMissingConfig === true,
     });

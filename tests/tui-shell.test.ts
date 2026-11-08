@@ -1,15 +1,24 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Auditor } from "../src/audit";
 import { createShellRunner } from "../src/tui/shell";
 import {
   configureRunCommand,
   detectDockerAvailable,
   isRunCommandSandboxEnabled,
 } from "../src/tools/run-command";
+import { installDockerSpawnMock, type DockerMock } from "./helpers/docker-mock";
 
-function config(tools: string[], credentialRef = "KEY", sandbox = false, withTools = true) {
+// Slice 4b: os testes rodam só via docker (mock) — o host nunca executa o comando.
+let mock: DockerMock;
+beforeEach(() => {
+  mock = installDockerSpawnMock();
+});
+afterEach(() => mock.restore());
+
+function config(tools: string[], credentialRef = "KEY", sandbox = true, withTools = true) {
   const cwd = mkdtempSync(join(tmpdir(), "astro-shell-"));
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
@@ -54,6 +63,20 @@ describe("!cmd da TUI (T2, #63)", () => {
     expect(result.isError).toBe(false);
     expect(result.output).toContain("astro-shell");
     expect(existsSync(join(cwd, ".astro", "audit.jsonl"))).toBe(true);
+  });
+
+  test("!cmd emite security.allowlist_applied no load (allow-sensitive)", async () => {
+    const { cwd, configPath } = config(["run_command"]);
+    const shell = createShellRunner({
+      approveTool: () => true, configPath, cwd, env: process.env, allowSensitive: ["*.md"],
+    });
+    const first = await shell.run("echo astro-allow");
+    const second = await shell.run("echo astro-allow-2");
+    expect(first.isError).toBe(false);
+    expect(second.isError).toBe(false);
+    const events = new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll();
+    expect(events.filter((event) => event.tipo === "security.allowlist_applied"
+      && (event.payload as { rule?: string }).rule === "allow-sensitive")).toHaveLength(1);
   });
 
   test("sem allowlist fica desabilitado e não executa nada", async () => {

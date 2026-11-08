@@ -11,6 +11,7 @@ import type { ToolApprover } from "../tools/executor";
 import type { TrustAsk } from "../trust";
 import { updateConfigPermissionsMode } from "../config";
 import type { AstroConfig } from "../config";
+import { SANDBOX_DISABLED_WARNING } from "../tools/run-command";
 import { configSummaryOf, type ConfigSummary } from "./config-summary";
 import type { CodexLoginStart } from "../provider/codex-login";
 import { expandHomePath, saveCodexAuth, startCodexLogin } from "../provider/codex-login";
@@ -36,7 +37,7 @@ export interface AgentSessionOptions {
   model?: string;
   /** Provider ativo (`--provider`); ausente usa store/env/agent.model. */
   provider?: string;
-  /** Tolerar config ausente e usar a baseline somente leitura (primeiro run). */
+  /** Tolerar config ausente e usar as tools padrão sob `ask` (primeiro run). */
   allowMissingConfig?: boolean;
   systemPrompt?: string;
   /** Decisores interativos (TTY); ausentes mantêm pending/non-interactive. */
@@ -48,6 +49,10 @@ export interface AgentSessionOptions {
   trustAsk?: TrustAsk;
   /** Injeção para testes do login device (sem rede real). */
   fetchLike?: FetchLike;
+  /** `allow-critical` da CLI (ADR-0027 slice 5a): vai a cada runTask da sessão. */
+  allowCritical?: readonly string[];
+  /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
+  allowSensitive?: readonly string[];
 }
 
 export interface ProviderInfo {
@@ -136,6 +141,8 @@ export class AgentSession {
   readonly #approveTool: ToolApprover | undefined;
   readonly #trustAsk: TrustAsk | undefined;
   readonly #fetchLike: FetchLike | undefined;
+  readonly #allowCritical: readonly string[] | undefined;
+  readonly #allowSensitive: readonly string[] | undefined;
   #modelRef: string;
   #permissionMode: PermissionMode;
   #messages: ChatMessage[];
@@ -177,6 +184,9 @@ export class AgentSession {
     this.#approveTool = opts.approveTool;
     this.#trustAsk = opts.trustAsk;
     this.#fetchLike = opts.fetchLike;
+    this.#allowCritical = opts.allowCritical;
+    this.#allowSensitive = opts.allowSensitive;
+    if (this.#config.tools?.run_command?.sandbox === false) this.#warnings.push(SANDBOX_DISABLED_WARNING);
     this.#modelRef = opts.model ?? this.#config.agent.model;
     // Modo inicial idêntico ao do run (app.ts lê só process.env, nunca o env injetado):
     // process.env.ASTRO_PERMISSION_MODE > config > ask (D-24, #270); /mode troca depois (#271).
@@ -276,7 +286,7 @@ export class AgentSession {
     return this.#providerSelection;
   }
 
-  /** Avisos do load efetivo (ex.: baseline somente leitura). */
+  /** Avisos do load efetivo (ex.: config ausente). */
   get warnings(): readonly string[] {
     return this.#warnings;
   }
@@ -546,6 +556,8 @@ export class AgentSession {
           ...(this.#budgetDecider === undefined ? {} : { onBudgetExceeded: this.#budgetDecider }),
           ...(this.#approveTool === undefined ? {} : { approveTool: this.#approveTool }),
           ...(this.#trustAsk === undefined ? {} : { trustAsk: this.#trustAsk }),
+          ...(this.#allowCritical === undefined ? {} : { allowCritical: this.#allowCritical }),
+          ...(this.#allowSensitive === undefined ? {} : { allowSensitive: this.#allowSensitive }),
         });
       } catch (error) {
         // Uso gasto antes da falha fica no ledger: contabiliza no acumulado da sessão

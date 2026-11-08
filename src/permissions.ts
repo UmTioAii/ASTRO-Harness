@@ -222,9 +222,14 @@ export interface ToolCallLike {
   input: unknown;
 }
 
-/** Classe da ação: manifesto (`class`) refinado por caminho crítico (PERM-02/#264). */
-export function actionClassOf(tool: Tool, call: ToolCallLike): ActionClass {
-  const critical = pathCandidatesOf(call).some((path) => isCriticalPath(path));
+/** Classe da ação: manifesto (`class`) refinado por caminho crítico (PERM-02/#264); `sensitive` eleva escrita. */
+export function actionClassOf(
+  tool: Tool,
+  call: ToolCallLike,
+  pathClassOf?: (path: string) => "hard-block" | "sensitive" | "normal",
+): ActionClass {
+  const candidates = pathCandidatesOf(call);
+  const critical = candidates.some((path) => isCriticalPath(path));
   const declared = tool.manifest.class;
 
   if (declared === "read_common" || declared === "read_critical") {
@@ -232,7 +237,10 @@ export function actionClassOf(tool: Tool, call: ToolCallLike): ActionClass {
     // permanece read_critical mesmo sem `path` no input.
     return declared === "read_critical" || critical ? "read_critical" : "read_common";
   }
-  if (declared === "edit") return critical ? "critical_write" : "edit";
+  if (declared === "edit") {
+    const sensitive = pathClassOf !== undefined && candidates.some((path) => pathClassOf(path) === "sensitive");
+    return critical || sensitive ? "critical_write" : "edit";
+  }
   if (declared === "identity_swap") return "identity";
   return declared; // delete | shell
 }
@@ -243,6 +251,15 @@ export function actionClassOf(tool: Tool, call: ToolCallLike): ActionClass {
  * modos, inclusive `bypass`. A negação cita path + classe, nunca conteúdo (I-03).
  */
 export const PATH_HARD_BLOCKED = "path_hard_blocked";
+
+/** Erro tipado do hard-block (ADR-0027): mensagem cita path/classe, nunca conteúdo (I-03). */
+export class PathHardBlockedError extends Error {
+  readonly code = PATH_HARD_BLOCKED;
+  constructor(readonly displayPath: string, detail?: string) {
+    super(detail ?? `caminho bloqueado (hard-block): ${displayPath} — negado em todos os modos, inclusive bypass (${PATH_HARD_BLOCKED})`);
+    this.name = "PathHardBlockedError";
+  }
+}
 
 /** `$ASTRO_HOME` do processo (ADR-0019/ADR-0027): env `ASTRO_HOME` ou default `~/.astro`. */
 export function resolveAstroHome(env: NodeJS.ProcessEnv = process.env): string {

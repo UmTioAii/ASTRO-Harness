@@ -9,6 +9,7 @@ import {
   requiredPermission,
   DEFAULT_PERMISSION_MODE,
   PATH_HARD_BLOCKED,
+  PathHardBlockedError,
   PermissionGrants,
   PermissionPendingError,
   denyDisplayPath,
@@ -324,7 +325,8 @@ export class ToolExecutor {
     const hardBlocked = this.hardBlockGate(ctx, call, input);
     if (hardBlocked !== undefined) return hardBlocked;
 
-    const action = actionClassOf(tool, { name: call.name, input });
+    const action = actionClassOf(tool, { name: call.name, input }, (path) =>
+      classifyPath({ realPath: path, cwd: ctx.cwd, astroHome: resolveAstroHome(), protectedPaths: ctx.protectedPaths ?? [], artifactRoot: resolveArtifactRoot(), allowCritical: ctx.allowCritical ?? [], allowSensitive: ctx.allowSensitive ?? [] }));
     const decision = permissionDecision(this.mode, action);
     let effective: PermissionDecision = decision;
     const grantKey = PermissionGrants.key(action, call.name);
@@ -385,26 +387,33 @@ export class ToolExecutor {
    * Gate de hard-block por path (ADR-0027, #391 slice 1): classifica o realpath
    * de cada candidato do input via `classifyPath`; `hard-block` (imutável ou
    * configurável) é DENY antes da MATRIX em todos os modos, `bypass` incluso.
-   * A negação cita path + classe, nunca conteúdo (I-03). `allowCritical` vazio
-   * nesta slice (a flag de CLI entra na slice 5); `AllowlistInvalidError` vira
-   * deny tipado `allow_invalid` e erro de classificação falha fechado.
+   * A negação cita path + classe, nunca conteúdo (I-03). `allowCritical` vem da flag de CLI (s5a) via `ctx.allowCritical`.
    */
   private hardBlockGate(ctx: ToolContext, call: ToolCall, input: unknown): ToolResult | undefined {
     const candidates = pathCandidatesOf({ name: call.name, input });
     if (candidates.length === 0) return undefined;
     const astroHome = resolveAstroHome();
     const artifactRoot = resolveArtifactRoot();
+    const allowCritical = ctx.allowCritical ?? [];
+    const allowSensitive = ctx.allowSensitive ?? [];
+    const classify = (realPath: string, critical: readonly string[], sensitive: readonly string[]): PathClass =>
+      classifyPath({ realPath, cwd: ctx.cwd, astroHome, protectedPaths: ctx.protectedPaths ?? [], artifactRoot, allowCritical: critical, allowSensitive: sensitive });
     for (const candidate of candidates) {
       let pathClass: PathClass;
       try {
-        pathClass = classifyPath({
-          realPath: candidate,
-          cwd: ctx.cwd,
-          astroHome,
-          protectedPaths: ctx.protectedPaths ?? [],
-          artifactRoot,
-          allowCritical: [], // slice 5: allow-critical vem da flag de CLI
-        });
+        pathClass = classify(candidate, allowCritical, allowSensitive);
+        const onlyAllow = allowCritical.length > 0 || allowSensitive.length > 0
+          ? classify(candidate, [], [])
+          : pathClass;
+        const display = denyDisplayPath(ctx.cwd, candidate);
+        // Audit por match (ADR-0027): classe só POR allow; path via denyDisplayPath (I-03).
+        if (pathClass === "normal" && allowCritical.length > 0 && onlyAllow === "hard-block") {
+          this.auditRef.append({ run: ctx.run, agent: ctx.agent, tipo: "security.allowlist_applied",
+            payload: { name: call.name, entry: display, result: "applied", origin: "cli", rule: "allow-critical", class: pathClass } });
+        } else if (pathClass === "sensitive" && allowSensitive.length > 0 && onlyAllow === "normal") {
+          this.auditRef.append({ run: ctx.run, agent: ctx.agent, tipo: "security.allowlist_applied",
+            payload: { name: call.name, entry: display, result: "applied", origin: "cli", rule: "allow-sensitive", class: pathClass } });
+        }
       } catch (error) {
         if (error instanceof AllowlistInvalidError) {
           // deny tipado existente (allow_invalid); cita só a entrada, sem conteúdo (I-03)
@@ -414,7 +423,7 @@ export class ToolExecutor {
             tipo: "tool.denied",
             payload: { name: call.name, reason: error.code, entry: error.entry },
           });
-          return failure(`entrada de allowlist inválida (${error.code}): ${error.entry}`);
+          return { ...failure(`entrada de allowlist inválida (${error.code}): ${error.entry}`), code: error.code };
         }
         // fail-closed: caminho que não classifica não é liberado (ADR-0027)
         this.auditRef.append({
@@ -423,9 +432,9 @@ export class ToolExecutor {
           tipo: "tool.denied",
           payload: { name: call.name, reason: PATH_HARD_BLOCKED },
         });
-        return failure(
-          `caminho não classificável; negado por fail-closed (${PATH_HARD_BLOCKED}): ${denyDisplayPath(ctx.cwd, candidate)}`,
-        );
+        const display = denyDisplayPath(ctx.cwd, candidate);
+        const blocked = new PathHardBlockedError(display, `caminho não classificável; negado por fail-closed (${PATH_HARD_BLOCKED}): ${display}`);
+        return { ...failure(blocked.message), code: blocked.code };
       }
       if (pathClass === "hard-block") {
         this.auditRef.append({
@@ -434,9 +443,8 @@ export class ToolExecutor {
           tipo: "tool.denied",
           payload: { name: call.name, reason: PATH_HARD_BLOCKED },
         });
-        return failure(
-          `caminho bloqueado (hard-block): ${denyDisplayPath(ctx.cwd, candidate)} — negado em todos os modos, inclusive bypass (${PATH_HARD_BLOCKED})`,
-        );
+        const blocked = new PathHardBlockedError(denyDisplayPath(ctx.cwd, candidate));
+        return { ...failure(blocked.message), code: blocked.code };
       }
     }
     return undefined;

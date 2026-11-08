@@ -66,6 +66,10 @@ export interface ToolContext {
   outputLimitTokens?: number;
   /** Perfil de permissão do executor que está chamando a tool (#58). */
   permission?: AgentPermission;
+  /** Allowlist `allow-critical` da CLI (ADR-0027, #391 slice 5a): realpaths absolutos que liberam o tier configurável. */
+  allowCritical?: readonly string[];
+  /** Allowlist `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
+  allowSensitive?: readonly string[];
 }
 
 /**
@@ -88,6 +92,8 @@ export interface AuditLike {
 export interface ToolResult {
   output: string;
   isError?: boolean;
+  /** Código estável de erro de política (ADR-0027): path_hard_blocked, allow_invalid, sandbox_required_for_shell. */
+  code?: string;
 }
 
 /** Contrato de uma tool executável pelo agente. */

@@ -119,6 +119,8 @@ export const readFileTool: Tool = {
         cwd: ctx.cwd,
         astroHome: env.ASTRO_HOME?.trim() || join(homedir(), ".astro"),
         ...(ctx.protectedPaths === undefined ? {} : { protectedPaths: ctx.protectedPaths }),
+        ...(ctx.allowCritical === undefined ? {} : { allowCritical: ctx.allowCritical }),
+        ...(ctx.allowSensitive === undefined ? {} : { allowSensitive: ctx.allowSensitive }),
       });
       if (pathClass === "sensitive") {
         let raw: string;

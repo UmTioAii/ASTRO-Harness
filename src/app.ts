@@ -55,7 +55,8 @@ import { listDirTool } from "./tools/list-dir";
 import { editTool } from "./tools/edit";
 import { lspTool } from "./tools/lsp";
 import { pipelineTool } from "./tools/pipeline";
-import { configureRunCommand, resolveSandboxSetting } from "./tools/run-command";
+import { configureRunCommand, resolveSandboxSetting, sandboxWarning } from "./tools/run-command";
+import { allowlistLoadEvents } from "./allowlists";
 import type { Tool } from "./tools/types";
 import { resolvePermissionMode, mostRestrictive, type ActionClass, type PermissionMode } from "./permissions";
 import { ensureTrustedCwd, type TrustAsk } from "./trust";
@@ -68,7 +69,7 @@ export interface RunOptions {
   env?: Record<string, string | undefined>;
   /** Provider ativo (`--provider`); ausente usa store/env/agent.model. */
   provider?: string;
-  /** Tolerar config ausente (baseline somente leitura) — chat/TUI. */
+  /** Tolerar config ausente (tools padrão sob `ask`) - chat/TUI. */
   allowMissingConfig?: boolean;
   /** Resume/replay: não trocar provider por store/env sem pedido explícito. */
   ignoreStoredSelection?: boolean;
@@ -106,6 +107,10 @@ export interface RunOptions {
   onToken?: (text: string) => void;
   /** Escolha do call profile (E1–E5); ausente = defaults do modelo. */
   call?: CallSelection;
+  /** `allow-critical` da CLI (ADR-0027, #391 slice 5a): realpaths que liberam o tier configurável. */
+  allowCritical?: readonly string[];
+  /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
+  allowSensitive?: readonly string[];
 }
 
 export interface RunReport {
@@ -548,7 +553,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   const loaded = await loadPlugins(config.plugins ?? [], { allowlist: pluginAllowlistFromEnv() });
 
   // Sandbox do run_command (F4-6): configurado antes de qualquer execução
-  configureRunCommand({ sandbox: resolveSandboxSetting(config.tools?.run_command?.sandbox) });
+  const sandboxEnabled = resolveSandboxSetting(config.tools?.run_command?.sandbox);
+  configureRunCommand({ sandbox: sandboxEnabled });
+  const sandboxNotice = sandboxWarning(sandboxEnabled);
+  if (sandboxNotice !== undefined && opts.suppressRunEvents !== true) console.warn(`aviso: ${sandboxNotice}`);
 
   const ledgerPath = resolveFrom(cwd, config.paths.ledger);
   const auditPath = resolveFrom(cwd, config.paths.audit);
@@ -577,6 +585,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     throw new ConfigError("model e resume são mutuamente exclusivos");
   }
   const run = opts.runId ?? opts.resume ?? randomUUID();
+  // Allowlists da CLI (ADR-0027 slice 5a): audit de load por entrada, sem conteúdo (I-03).
+  for (const ev of allowlistLoadEvents({ allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }, cwd)) {
+    audit.append({ run, agent: AGENT_NAME, tipo: "security.allowlist_applied", payload: { ...ev } });
+  }
   // Trust por pasta (I-11, #267): 1º open pergunta no TTY e persiste; negar para o run; sem TTY segue sem gravar.
   await ensureTrustedCwd(cwd, {
     ask: opts.trustAsk,
@@ -922,6 +934,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         protectedPaths: [ledgerPath, auditPath],
         secretEnvNames,
         inheritAgentLock: true,
+        ...(opts.allowCritical === undefined && opts.allowSensitive === undefined ? {} : { allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }),
         ...(signal === undefined ? {} : { signal }),
         ...(quotaLimits === undefined ? {} : { quotaLimits }),
         ...(budget === undefined ? {} : { budget }),
@@ -1028,6 +1041,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         env,
         protectedPaths: [ledgerPath, auditPath],
         secretEnvNames,
+        ...(opts.allowCritical === undefined && opts.allowSensitive === undefined ? {} : { allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }),
         // Handoff (F-24): timeout do ack; default 30000ms (D-15)
         ...(config.handoff === undefined ? {} : { ackTimeoutMs: config.handoff.ackTimeoutMs }),
         signal,
@@ -1080,6 +1094,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           env,
           protectedPaths: [ledgerPath, auditPath],
           secretEnvNames,
+          ...(opts.allowCritical === undefined && opts.allowSensitive === undefined ? {} : { allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }),
           signal,
           ...(opts.call === undefined ? {} : { call: opts.call }),
           ...(config.outputLimit === undefined ? {} : { outputLimit: config.outputLimit }),
