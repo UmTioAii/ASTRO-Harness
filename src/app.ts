@@ -14,6 +14,7 @@ import { FallbackProvider, DEFAULT_PRIORITY } from "./provider/fallback-provider
 import { ProfileFallbackProvider, type ProfileChainEntry } from "./provider/profile-fallback-provider";
 import { createRoutedProvider, type ModelRouting } from "./provider/model-routing";
 import type { ChatMessage, CompletionRequest, Provider } from "./provider/types";
+import type { AttachmentMeta } from "./attachments/model";
 import { Registry, type ModelEntry } from "./registry";
 import { sendTelemetry } from "./telemetry";
 import { tracerFromEnv } from "./tracing";
@@ -97,6 +98,8 @@ export interface RunOptions {
   continuedFrom?: { run: string; agent: string };
   /** Histórico de conversa (T1): system + turnos anteriores; o `task` é o user do turno. */
   history?: ChatMessage[];
+  /** Metadado dos anexos do turno (ADR-0026); vai na mensagem `user` gerada de `task`. */
+  attachments?: AttachmentMeta[];
   /** Reusa um run-id (sessão de chat): mesmo run no ledger/audit por vários turnos. */
   runId?: string;
   /** Modelo do turno (`provider/id`); ausente usa `agent.model`. */
@@ -1071,6 +1074,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
             : { checkpointAt: config.run.checkpointAt, noProgressSegments: config.run.noProgressSegments }),
           ...(opts.onNoProgress === undefined ? {} : { onNoProgress: opts.onNoProgress }),
           ...(opts.history === undefined ? {} : { history: opts.history }),
+          ...(opts.attachments === undefined ? {} : { attachments: opts.attachments }),
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
           ...(baseProfile === undefined ? {} : { agentProfile: baseProfile }),
           ...(projectSystemPrompt(config, cwd) === undefined ? {} : { systemPrompt: projectSystemPrompt(config, cwd) }),

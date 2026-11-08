@@ -1,9 +1,12 @@
+import type { AttachmentMeta } from "../attachments/model";
 import type { AppliedCallProfile, CallSelection } from "../call-profile";
 
 /** Mensagem no formato de chat do protocolo OpenAI. */
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Metadado de anexo (ADR-0026): persistível; nunca carrega o payload. */
+  attachments?: AttachmentMeta[];
   toolCallId?: string;
   toolCalls?: ToolCall[];
 }
