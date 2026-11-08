@@ -68,6 +68,10 @@ export async function runCommand(
       return { entries: [], exit: true };
     case "unknown":
       return { entries: [{ kind: "info", text: unknownCommandMessage(command.raw) }] };
+    case "attach":
+    case "paste":
+    case "detach":
+      return { entries: [{ kind: "info", text: "anexos: /attach, /paste e /detach chegam à TUI na fatia 2c; use o REPL" }] };
     case "model": {
       if (command.model === undefined) {
         return { entries: [{ kind: "info", text: session.listModels().join("\n") }] };

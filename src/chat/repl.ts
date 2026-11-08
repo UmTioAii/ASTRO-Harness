@@ -2,7 +2,11 @@
 import { HELP_TEXT, modeListText, parseCommand, resolveModeCommand, unknownCommandMessage } from "./commands";
 import { runProviderWizard } from "./provider-wizard";
 import { configLines, type ConfigSummary } from "./config-summary";
-import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, type PermissionMode } from "../permissions";
+import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, resolveAstroHome, type PermissionMode } from "../permissions";
+import { loadAttachment, loadPastedText } from "../attachments/load";
+import { materializePrompt, toMeta } from "../attachments/render";
+import { readClipboardText } from "../attachments/clipboard";
+import type { AttachmentMeta, LoadedAttachment } from "../attachments/model";
 import { loadTrustedStore, trustStatePath } from "../trust";
 import type { ProfileManager, ProfileView } from "../provider/profile-manager";
 import type { ModelInfo, ProviderInfo, SessionSnapshot, TurnResult } from "./agent-session";
@@ -28,7 +32,7 @@ export interface ReplIO {
 
 export interface ChatSession {
   readonly model: string;
-  send(prompt: string, signal?: AbortSignal, onToken?: (text: string) => void): Promise<TurnResult>;
+  send(prompt: string, signal?: AbortSignal, onToken?: (text: string) => void, attachments?: AttachmentMeta[]): Promise<TurnResult>;
   compact(force?: boolean): Promise<string>;
   clear(): void;
   resume(snapshot: SessionSnapshot): void;
@@ -74,6 +78,8 @@ export interface ReplOptions {
   cwd?: string;
   /** Gerenciador de perfis globais; ausente mantém só a lista da config. */
   manager?: ProfileManager;
+  /** Leitor do clipboard para `/paste` (teste/injeção); ausente usa o comando nativo. */
+  clipboard?: () => string;
 }
 
 function messageOf(error: unknown): string {
@@ -172,6 +178,16 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
     }
   };
   io.write(paint("astro chat - /help para comandos, /exit para sair", DIM, style));
+  const astroHome = resolveAstroHome();
+  const pending: LoadedAttachment[] = [];
+  const listPending = (): string =>
+    pending.length === 0
+      ? "nenhum anexo pendente"
+      : pending.map((attachment, index) => `${index + 1}. ${attachment.name} (${attachment.sizeBytes} bytes)`).join("\n");
+  const confirmOutside = async (absolute: string): Promise<boolean> => {
+    const answer = await (io.readFresh ?? io.read)(`anexo fora do cwd: ${absolute} — aprovar? [s/N] `);
+    return answer !== null && /^(s|sim|y|yes)/i.test(answer.trim());
+  };
   try {
     for (;;) {
       const line = await io.read("astro> ");
@@ -426,8 +442,61 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         io.write("tema: disponível só na TUI (astro tui · /theme)");
         continue;
       }
+      if (command.kind === "attach") {
+        if (command.path === undefined) {
+          io.write(listPending());
+          continue;
+        }
+        try {
+          pending.push(
+            await loadAttachment({
+              path: command.path,
+              ...(command.range === undefined ? {} : { range: command.range }),
+              cwd,
+              astroHome,
+              confirmOutsideCwd: confirmOutside,
+            }),
+          );
+          io.write(`anexo adicionado: ${command.path}\n${listPending()}`);
+        } catch (error) {
+          io.write(paint(`erro: ${messageOf(error)}`, RED, style));
+        }
+        continue;
+      }
+      if (command.kind === "paste") {
+        try {
+          const text = opts.clipboard === undefined ? readClipboardText() : opts.clipboard();
+          pending.push(loadPastedText(text));
+          io.write(`anexo adicionado: clipboard\n${listPending()}`);
+        } catch (error) {
+          io.write(paint(`erro: ${messageOf(error)}`, RED, style));
+        }
+        continue;
+      }
+      if (command.kind === "detach") {
+        if (command.target === undefined) {
+          io.write(listPending());
+          continue;
+        }
+        if (command.target === "all") {
+          pending.length = 0;
+          io.write("anexos removidos");
+          continue;
+        }
+        const index = Number(command.target);
+        if (!Number.isInteger(index) || index < 1 || index > pending.length) {
+          io.write(`anexo inválido: ${command.target}`);
+          continue;
+        }
+        pending.splice(index - 1, 1);
+        io.write(listPending());
+        continue;
+      }
       try {
-        const result = await session.send(command.text, opts.signal);
+        const prompt = materializePrompt(command.text, pending);
+        const metas = pending.map(toMeta);
+        const result = await session.send(prompt, opts.signal, undefined, metas.length === 0 ? undefined : metas);
+        pending.length = 0;
         io.write(result.final);
         io.write(paint(statusLine(result), DIM, style));
       } catch (error) {
