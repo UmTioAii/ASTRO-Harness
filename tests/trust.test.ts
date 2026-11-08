@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -9,7 +9,7 @@ import {
   saveTrustedStore,
   TrustedFolders,
   TrustDeniedError,
-  trustedPath,
+  trustStatePath,
   trustChoice,
   trustPrompt,
   validateTrustedStore,
@@ -29,13 +29,43 @@ function errOf(fn: () => void): Error {
   throw new Error("esperava erro");
 }
 describe("store de trust (#267)", () => {
-  test("trustedPath: $ASTRO_HOME ou ~/.astro/trusted.json; arquivo ausente → vazio", () => {
-    expect(trustedPath({ ASTRO_HOME: join("C:", "x") } as NodeJS.ProcessEnv)).toBe(join("C:", "x", "trusted.json"));
+  test("trustStatePath: $ASTRO_HOME ou ~/.astro/state.json; arquivo ausente → vazio", () => {
+    expect(trustStatePath({ ASTRO_HOME: join("C:", "x") } as NodeJS.ProcessEnv)).toBe(join("C:", "x", "state.json"));
     const env = { ...process.env } as NodeJS.ProcessEnv;
     delete env.ASTRO_HOME;
-    expect(trustedPath(env)).toBe(join(homedir(), ".astro", "trusted.json"));
+    expect(trustStatePath(env)).toBe(join(homedir(), ".astro", "state.json"));
     const { path } = tmpStore();
     expect(loadTrustedStore(path)).toEqual({ version: 1, folders: [] });
+  });
+  test("migrates trusted.json into state.json and preserves the legacy file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-trust-migration-"));
+    const path = join(dir, "state.json");
+    const legacy = join(dir, "trusted.json");
+    writeFileSync(legacy, JSON.stringify({ version: 1, folders: ["/legacy/project"] }));
+
+    expect(loadTrustedStore(path)).toEqual({ version: 1, folders: ["/legacy/project"] });
+    expect(existsSync(legacy)).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      version: 1,
+      trust: { folders: ["/legacy/project"] },
+      migrations: { providers: false, trust: true },
+    });
+  });
+  test("caminho injetado: basename state.json usa o home state; trusted.json usa o store legado", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-trust-kind-"));
+    const stateFile = join(dir, "state.json");
+    const legacyFile = join(dir, "trusted.json");
+
+    saveTrustedStore({ version: 1, folders: ["/novo"] }, stateFile);
+    expect(JSON.parse(readFileSync(stateFile, "utf8"))).toEqual({
+      version: 1,
+      trust: { folders: ["/novo"] },
+      migrations: { providers: false, trust: false },
+    });
+
+    saveTrustedStore({ version: 1, folders: ["/legado"] }, legacyFile);
+    expect(JSON.parse(readFileSync(legacyFile, "utf8"))).toEqual({ version: 1, folders: ["/legado"] });
+    expect(loadTrustedStore(legacyFile)).toEqual({ version: 1, folders: ["/legado"] });
   });
   test("roundtrip: grava atômico (0600 no POSIX) e relê igual", () => {
     const { path } = tmpStore();
