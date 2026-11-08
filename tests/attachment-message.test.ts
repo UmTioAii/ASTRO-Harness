@@ -97,7 +97,8 @@ describe("mensagem de anexo (ADR-0026, #392)", () => {
       tokensOut: 0,
       costUsd: 0,
     };
-    writeFileSync(join(dir, "2026-11-08T12-00-00-000Z-s1.json"), JSON.stringify(record));
-    expect(() => new SessionStore(dir).load("s1")).toThrow(/anexo/);
+    const fileName = "2026-11-08T12-00-00-000Z-s1.json";
+    writeFileSync(join(dir, fileName), JSON.stringify(record));
+    expect(() => new SessionStore(dir).readByPath(join(dir, fileName))).toThrow(/anexo/);
   });
 });
