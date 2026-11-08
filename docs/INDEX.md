@@ -18,6 +18,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/adr/` | Decisão arquitetural nova ou revisão de uma antiga | 1 por arquivo |
 | `docs/adr/0029-config-global-home.md` | Configuração global, precedência e migração de `$ASTRO_HOME` (#401) | S1 |
 | `docs/superpowers/plans/` | Ao executar uma frente do planejamento; roadmap de issues abertas em `2026-11-01-roadmap-execucao-issues-abertas.md` | 1 por frente |
+| `docs/superpowers/specs/` | Antes de implementar uma frente aprovada; anexos em `2026-11-08-anexos-attachments-design.md` (#392) | 1 por frente |
 | `docs/roadmap.md` | Histórico das fases concluídas (F0–F7) | ~70 |
 | `docs/roadmap-complementar.md` | Itens planejados das camadas 0–3 (F-xx, T, C, P) | ~120 |
 | `docs/providers.md` | Ao construir provider, validar credencial ou usar os SDKs | ~90 |
