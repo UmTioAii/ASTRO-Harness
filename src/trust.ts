@@ -18,8 +18,8 @@ const ROOT_KEYS = new Set(["version", "folders"]);
 function fail(message: string): never {
   throw new Error(message);
 }
-/** Caminho do estado global: `$ASTRO_HOME/state.json` ou `~/.astro/state.json`. */
-export function trustedPath(env: NodeJS.ProcessEnv = process.env): string {
+/** Caminho do estado global de trust: `$ASTRO_HOME/state.json` ou `~/.astro/state.json`. */
+export function trustStatePath(env: NodeJS.ProcessEnv = process.env): string {
   return statePath(env);
 }
 /** Valida o store inteiro; campo desconhecido é erro, nunca ignorado. */
@@ -66,13 +66,18 @@ function loadTrustedFile(path: string): TrustedStore {
   }
 }
 
+/**
+ * `path` é o arquivo de estado global quando omitido ou quando o basename é `state.json`;
+ * qualquer outro caminho é tratado como store legado (`trusted.json`). A heurística é
+ * intencional: permite injetar um diretório temporário nos testes sem perder a migração.
+ */
 function isStatePath(path: string | undefined): boolean {
   return path === undefined || basename(path) === "state.json";
 }
 
 export function loadTrustedStore(path?: string): TrustedStore {
   if (!isStatePath(path)) return loadTrustedFile(path!);
-  const statePathValue = path ?? trustedPath();
+  const statePathValue = path ?? trustStatePath();
   const state = loadHomeState(statePathValue);
   if (!state.migrations.trust) {
     const legacyPath = join(dirname(statePathValue), "trusted.json");
@@ -94,7 +99,7 @@ export function loadTrustedStore(path?: string): TrustedStore {
 export function saveTrustedStore(store: TrustedStore, path?: string): void {
   const valid = validateTrustedStore(store);
   if (isStatePath(path)) {
-    const statePathValue = path ?? trustedPath();
+    const statePathValue = path ?? trustStatePath();
     const state = loadHomeState(statePathValue);
     saveHomeState({ ...state, trust: { folders: valid.folders } }, statePathValue);
     return;
@@ -127,10 +132,10 @@ function withinFolder(folder: string, target: string): boolean {
   return !isAbsolute(rel) && rel.split(/[\\/]/)[0] !== "..";
 }
 export class TrustedFolders {
-  readonly #path: string;
+  readonly #storePath: string;
   #store: TrustedStore;
   constructor(path?: string) {
-    this.#path = path ?? trustedPath();
+    this.#storePath = path ?? trustStatePath();
     this.#store = loadTrustedStore(path);
   }
   list(): string[] {
@@ -145,7 +150,7 @@ export class TrustedFolders {
     const folder = canonicalFolder(dir);
     if (this.#store.folders.includes(folder)) return;
     this.#store = { version: 1, folders: [...this.#store.folders, folder] };
-    saveTrustedStore(this.#store, this.#path);
+    saveTrustedStore(this.#store, this.#storePath);
   }
   /** Remove a pasta exata da lista; retorna false se ela não estava lá. */
   revoke(dir: string): boolean {
@@ -153,7 +158,7 @@ export class TrustedFolders {
     const next = this.#store.folders.filter((entry) => entry !== folder);
     if (next.length === this.#store.folders.length) return false;
     this.#store = { version: 1, folders: next };
-    saveTrustedStore(this.#store, this.#path);
+    saveTrustedStore(this.#store, this.#storePath);
     return true;
   }
 }
@@ -175,7 +180,7 @@ export function trustChoice(answer: string | null | undefined): boolean {
   return answer != null && /^(s|sim|y|yes)$/i.test(answer.trim());
 }
 export interface EnsureTrustedOptions {
-  /** Caminho do store (teste); default `trustedPath()`. Ausente em `ask` = não-TTY (prossegue sem persistir). */
+  /** Caminho do store (teste); default `trustStatePath()`. Ausente em `ask` = não-TTY (prossegue sem persistir). */
   path?: string;
   ask?: TrustAsk;
   /** Audit hook da decisão tomada (`trust.decision`). */

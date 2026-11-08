@@ -26,7 +26,7 @@ import { TOAST_TICK_MS, TOAST_TTL_MS, pruneToasts, pushToast, toastLine, type To
 import { ProviderScreen } from "./provider-screen";
 import { SessionPicker } from "./session-picker";
 import { ConfigScreen } from "./config-screen";
-import { loadTrustedStore, trustedPath } from "../trust";
+import { loadTrustedStore, trustStatePath } from "../trust";
 import type { ProfileManager } from "../provider/profile-manager";
 import { budgetSegment, quotaSegment } from "../chat/usage";
 import { createThrottledSink, STREAM_THROTTLE_MS } from "./stream";
@@ -625,7 +625,7 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
     }
     let trusted: readonly string[] = [];
     try {
-      trusted = loadTrustedStore(trustedPath()).folders;
+      trusted = loadTrustedStore(trustStatePath()).folders;
     } catch {
       trusted = []; // store de trust inválido não impede ver a config
     }
