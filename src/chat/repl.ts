@@ -3,7 +3,7 @@ import { HELP_TEXT, modeListText, parseCommand, resolveModeCommand, unknownComma
 import { runProviderWizard } from "./provider-wizard";
 import { configLines, type ConfigSummary } from "./config-summary";
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, type PermissionMode } from "../permissions";
-import { loadTrustedStore, trustedPath } from "../trust";
+import { loadTrustedStore, trustStatePath } from "../trust";
 import type { ProfileManager, ProfileView } from "../provider/profile-manager";
 import type { ModelInfo, ProviderInfo, SessionSnapshot, TurnResult } from "./agent-session";
 import type { HealthCheck, HealthReport } from "../health";
@@ -405,7 +405,7 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         } else {
           let trusted: readonly string[] = [];
           try {
-            trusted = loadTrustedStore(trustedPath()).folders;
+            trusted = loadTrustedStore(trustStatePath()).folders;
           } catch (error) {
             io.write(`erro: ${messageOf(error)}`); // store de trust inválido não derruba o /config
           }

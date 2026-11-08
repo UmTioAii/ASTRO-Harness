@@ -7,8 +7,8 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { astroHomePath } from "./astro-home";
 import { isVaultId, looksLikeSecret } from "./secrets";
 
 export type VaultScheme = "dpapi" | "plain";
@@ -36,9 +36,7 @@ export interface VaultStore {
 }
 
 export function vaultPath(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.ASTRO_HOME?.trim();
-  const base = home === undefined || home === "" ? join(homedir(), ".astro") : home;
-  return join(base, "vault.json");
+  return join(astroHomePath(env), "vault.json");
 }
 
 export function defaultScheme(platform: NodeJS.Platform = process.platform): VaultScheme {
