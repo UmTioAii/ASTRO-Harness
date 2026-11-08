@@ -49,9 +49,13 @@ interface WireToolCall {
   function: { name: string; arguments: string };
 }
 
+type WireContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 interface WireMessage {
   role: string;
-  content: string;
+  content: string | WireContentPart[];
   tool_call_id?: string;
   tool_calls?: WireToolCall[];
 }
@@ -89,11 +93,22 @@ function toWireToolCalls(toolCalls: ToolCall[]): WireToolCall[] {
   }));
 }
 
+function toWireContent(message: ChatMessage): string | WireContentPart[] {
+  if (message.images === undefined || message.images.length === 0) return message.content;
+  return [
+    ...(message.content === "" ? [] : [{ type: "text" as const, text: message.content }]),
+    ...message.images.map((image) => ({
+      type: "image_url" as const,
+      image_url: { url: `data:${image.mediaType};base64,${image.dataBase64}` },
+    })),
+  ];
+}
+
 function toWireMessages(messages: ChatMessage[]): WireMessage[] {
   return messages.map((message) => {
     // O NIM pode devolver/usar "developer"; o protocolo OpenAI usa "system".
     const role = (message.role as string) === "developer" ? "system" : message.role;
-    const wire: WireMessage = { role, content: message.content };
+    const wire: WireMessage = { role, content: toWireContent(message) };
     if (message.toolCallId !== undefined) wire.tool_call_id = message.toolCallId;
     if (message.toolCalls !== undefined) wire.tool_calls = toWireToolCalls(message.toolCalls);
     return wire;

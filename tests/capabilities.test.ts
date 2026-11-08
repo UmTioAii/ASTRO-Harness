@@ -24,12 +24,12 @@ const baseConfig = (models: unknown[]): unknown => ({
 });
 
 describe("vocabulário de capabilities (F-07)", () => {
-  test("chaves fechadas: tools, streaming, jsonMode", () => {
-    expect([...CAPABILITY_KEYS].sort()).toEqual(["jsonMode", "streaming", "tools"]);
+  test("chaves fechadas: tools, streaming, jsonMode, vision", () => {
+    expect([...CAPABILITY_KEYS].sort()).toEqual(["jsonMode", "streaming", "tools", "vision"]);
     expect(isKnownCapability("tools")).toBe(true);
     expect(isKnownCapability("jsonMode")).toBe(true);
     expect(isKnownCapability("streaming")).toBe(true);
-    expect(isKnownCapability("vision")).toBe(false);
+    expect(isKnownCapability("vision")).toBe(true);
     expect(isKnownCapability("")).toBe(false);
   });
 
@@ -61,11 +61,11 @@ describe("capabilities no config (F-07)", () => {
   test("chave desconhecida é rejeitada citando as conhecidas", () => {
     let msg = "";
     try {
-      validateConfig(baseConfig([baseModel({ capabilities: { vision: true } })]));
+      validateConfig(baseConfig([baseModel({ capabilities: { audio: true } })]));
     } catch (e) {
       msg = (e as Error).message;
     }
-    expect(msg).toContain("vision");
+    expect(msg).toContain("audio");
     expect(msg).toContain("tools");
   });
 

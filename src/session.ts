@@ -11,7 +11,8 @@ import { compactDraft, digestArtifacts } from "./handoff/compact";
 import { DEFAULT_ACK_TIMEOUT_MS } from "./config";
 import type { BudgetConfig, PriceConfig } from "./config";
 import { budgetStatus, budgetWarningPayload, enforceBudget, BudgetExceededError, type BudgetDecider } from "./budget";
-import type { ChatMessage, CompletionResponse, Provider } from "./provider/types";
+import type { ChatMessage, CompletionResponse, ImagePart, Provider } from "./provider/types";
+import { VisionUnsupportedError } from "./provider/types";
 import type { ModelEntry } from "./registry";
 import { ToolExecutor } from "./tools/executor";
 import type { AgentEntry } from "./registry";
@@ -109,6 +110,8 @@ export interface SessionOptions {
   history?: ChatMessage[];
   /** Metadado dos anexos do turno (ADR-0026); vai na mensagem `user` gerada de `task`. */
   attachments?: AttachmentMeta[];
+  /** Imagens do turno (ADR-0026), só runtime; vai na mensagem `user`. */
+  images?: ImagePart[];
   /** Fração do limite de turnos/orçamento em que o checkpoint é gravado (L5, #135); ausente = sem checkpoint. */
   checkpointAt?: number;
   /** Segmentos consecutivos sem mudança que disparam a pausa (L6, #135); ausente = sem guarda. */
@@ -282,6 +285,7 @@ export async function runSession(
     role: "user",
     content: task,
     ...(opts.attachments === undefined ? {} : { attachments: opts.attachments }),
+    ...(opts.images === undefined ? {} : { images: opts.images }),
   };
   const messages: ChatMessage[] = history === undefined
     ? [
@@ -289,6 +293,15 @@ export async function runSession(
         userMessage,
       ]
     : [...history, userMessage];
+  if (
+    messages.some((message) => (message.images?.length ?? 0) > 0) &&
+    opts.model.capabilities?.vision !== true
+  ) {
+    throw new VisionUnsupportedError(
+      `modelo "${opts.model.provider}/${opts.model.id}" não declara capabilities.vision; ` +
+        "anexos de imagem exigem um modelo com vision",
+    );
+  }
   /** Journal por sessão (F-03): dedup de calls idênticos no mesmo step. */
   const journal = new CallJournal();
   const knownAgents = opts.knownAgents ?? [];
