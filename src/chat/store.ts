@@ -100,6 +100,31 @@ function parseRecord(raw: unknown): SessionRecord {
         }
       }
     }
+    if (item.attachments !== undefined) {
+      if (!Array.isArray(item.attachments)) throw new Error("anexos de sessão inválidos");
+      for (const attachment of item.attachments) {
+        if (attachment === null || typeof attachment !== "object") throw new Error("anexo de sessão inválido");
+        const meta = attachment as Record<string, unknown>;
+        if (meta.kind !== "text" && meta.kind !== "image" && meta.kind !== "directory") {
+          throw new Error("anexo de sessão inválido: kind");
+        }
+        if (typeof meta.name !== "string" || typeof meta.mediaType !== "string") {
+          throw new Error("anexo de sessão inválido: name/mediaType");
+        }
+        if (typeof meta.sizeBytes !== "number" || !Number.isFinite(meta.sizeBytes) || meta.sizeBytes < 0) {
+          throw new Error("anexo de sessão inválido: sizeBytes");
+        }
+        if (meta.range !== undefined) {
+          if (meta.range === null || typeof meta.range !== "object") throw new Error("anexo de sessão inválido: range");
+          const range = meta.range as Record<string, unknown>;
+          if (typeof range.start !== "number" || typeof range.end !== "number") {
+            throw new Error("anexo de sessão inválido: range");
+          }
+        }
+        if (meta.ref !== undefined && typeof meta.ref !== "string") throw new Error("anexo de sessão inválido: ref");
+        if (meta.hash !== undefined && typeof meta.hash !== "string") throw new Error("anexo de sessão inválido: hash");
+      }
+    }
     return item as ChatMessage;
   });
   const number = (value: unknown, name: string): number => {

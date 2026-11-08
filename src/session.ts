@@ -1,5 +1,6 @@
 import type { Auditor } from "./audit";
 import { isAbortError, throwIfAborted } from "./abort";
+import type { AttachmentMeta } from "./attachments/model";
 import { SwapDeniedError, type SwapApprover, type SwapRequest } from "./approval";
 import { CallJournal } from "./call-id";
 import { hashToolCalls, type HandoffEventKind, type Ledger } from "./ledger";
@@ -106,6 +107,8 @@ export interface SessionOptions {
   signal?: AbortSignal;
   /** Histórico de conversa (T1): system + turnos anteriores; o user do turno é `task`. */
   history?: ChatMessage[];
+  /** Metadado dos anexos do turno (ADR-0026); vai na mensagem `user` gerada de `task`. */
+  attachments?: AttachmentMeta[];
   /** Fração do limite de turnos/orçamento em que o checkpoint é gravado (L5, #135); ausente = sem checkpoint. */
   checkpointAt?: number;
   /** Segmentos consecutivos sem mudança que disparam a pausa (L6, #135); ausente = sem guarda. */
@@ -275,12 +278,17 @@ export async function runSession(
     : opts.history[0]?.role === "system"
       ? opts.history
       : [{ role: "system" as const, content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT }, ...opts.history];
+  const userMessage: ChatMessage = {
+    role: "user",
+    content: task,
+    ...(opts.attachments === undefined ? {} : { attachments: opts.attachments }),
+  };
   const messages: ChatMessage[] = history === undefined
     ? [
         { role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
-        { role: "user", content: task },
+        userMessage,
       ]
-    : [...history, { role: "user", content: task }];
+    : [...history, userMessage];
   /** Journal por sessão (F-03): dedup de calls idênticos no mesmo step. */
   const journal = new CallJournal();
   const knownAgents = opts.knownAgents ?? [];
