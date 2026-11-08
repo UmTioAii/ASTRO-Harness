@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { runTask } from "../src/app";
 import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
+import { testEnv } from "./setup";
 
 const final = (content: string): Response =>
   Response.json({ choices: [{ message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
@@ -77,7 +78,7 @@ test("runTask: task delega em run próprio sem conflitar o lock da conta (#58)",
       configPath,
       cwd,
       task: "tarefa do pai",
-      env: { KEY: "k", KEY2: "k2" },
+      env: testEnv({ KEY: "k", KEY2: "k2" }),
       permissionMode: "bypass",
       approveTool: () => true,
     });
@@ -156,7 +157,7 @@ test("runTask: task filho herda allow-sensitive e aplica entropia (ADR-0027 slic
   }));
   try {
     const result = await runTask({
-      configPath, cwd, task: "pai", env: { KEY: "k", KEY2: "k2" },
+      configPath, cwd, task: "pai", env: testEnv({ KEY: "k", KEY2: "k2" }),
       permissionMode: "bypass", approveTool: () => true, allowSensitive: ["*.md"],
     });
     expect(result.final).toBe("parent-final");

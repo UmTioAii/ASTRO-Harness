@@ -6,6 +6,7 @@ import { Auditor } from "../src/audit";
 import { runTask } from "../src/app";
 import { ToolExecutor } from "../src/tools/executor";
 import type { Tool, ToolResult } from "../src/tools/types";
+import { testEnv } from "./setup";
 
 const big = (): string => Array.from({ length: 400 }, (_, index) => `linha ${index + 1} ${"y".repeat(80)}`).join("\n");
 
@@ -99,7 +100,7 @@ describe("limite de saída no executor e na sessão (CMP-10)", () => {
         paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
       }));
 
-      await runTask({ approveTool: () => true, configPath, task: "x", cwd, env: { KEY: "k" } });
+      await runTask({ approveTool: () => true, configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       const toolMessage = bodies[1]!.messages?.find((message) => message.role === "tool")?.content ?? "";
       expect(toolMessage).toContain("[REDACTED]");
       expect(toolMessage).not.toContain(secret);
@@ -139,7 +140,7 @@ describe("limite de saída no executor e na sessão (CMP-10)", () => {
         paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
       }));
 
-      const report = await runTask({ approveTool: () => true, configPath, task: "x", cwd, env: { KEY: "k" } });
+      const report = await runTask({ approveTool: () => true, configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
       expect(report.final).toBe("ok");
 
       const toolMessage = bodies[1]!.messages?.find((message) => message.role === "tool")?.content ?? "";

@@ -11,6 +11,7 @@ import { ProviderError, type CompletionRequest, type CompletionResponse, type Pr
 import type { ModelEntry } from "../src/registry";
 import { runSession } from "../src/session";
 import { ToolExecutor } from "../src/tools/executor";
+import { testEnv } from "./setup";
 
 const entry = (id: string): ModelEntry => ({
   provider: "p", id, tags: ["writing-code"], context: 8192, status: "active",
@@ -229,7 +230,7 @@ describe("runTask aplica o modelRouting do agent (#58)", () => {
     }));
     try {
       const result = await runTask({
-        configPath, cwd, task: "tarefa", env: { KEY: "k", KEY2: "k2" },
+        configPath, cwd, task: "tarefa", env: testEnv({ KEY: "k", KEY2: "k2" }),
         permissionMode: "bypass", approveTool: () => true,
       });
       expect(result.final).toBe("ok");

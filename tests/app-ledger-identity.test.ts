@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "../src/app";
 import { Ledger } from "../src/ledger";
+import { testEnv } from "./setup";
 
 interface AuditRow { run: string; tipo: string; payload: Record<string, unknown> }
 interface UsageRow {
@@ -83,7 +84,7 @@ test("fallback de profile grava trilha e identidade efetiva no ledger", async ()
         b: provider(baseUrl(up), "KEY_B", { quotaDomain: "dom-b" }),
       },
     });
-    const report = await runTask({ approveSwap: () => true, configPath: cfgPath, task: "x", cwd: dir, env: { KEY_B: "secret-b" } });
+    const report = await runTask({ approveSwap: () => true, configPath: cfgPath, task: "x", cwd: dir, env: testEnv({ KEY_B: "secret-b" }) });
 
     expect(report.final).toBe("do-b");
     expect(seen).toEqual(["m2"]);
@@ -126,7 +127,7 @@ test("quota esgotada no profile de origem não impede o fallback para domínio s
       quota: { "dom-a": { dailyTokens: 100 } },
     });
     const report = await runTask({ approveSwap: () => true,
-      configPath: cfgPath, task: "x", cwd: dir, env: { KEY_A: "secret-a", KEY_B: "secret-b" },
+      configPath: cfgPath, task: "x", cwd: dir, env: testEnv({ KEY_A: "secret-a", KEY_B: "secret-b" }),
     });
 
     expect(report.final).toBe("do-b");
@@ -156,7 +157,7 @@ test("quota esgotada no domínio de destino bloqueia antes de chamar o provider"
       quota: { "dom-b": { dailyTokens: 100 } },
     });
     const err = (await runTask({ approveSwap: () => true,
-      configPath: cfgPath, task: "x", cwd: dir, env: { KEY_A: "secret-a", KEY_B: "secret-b" },
+      configPath: cfgPath, task: "x", cwd: dir, env: testEnv({ KEY_A: "secret-a", KEY_B: "secret-b" }),
     }).then(() => null, (e) => e)) as { errClass?: string; message?: string };
 
     expect(err?.errClass).toBe("hard_quota");
