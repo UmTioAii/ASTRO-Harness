@@ -33,7 +33,8 @@ const MAX_ERROR_DETAIL_LENGTH = 300;
 
 type ResponsesContentPart =
   | { type: "input_text"; text: string }
-  | { type: "output_text"; text: string };
+  | { type: "output_text"; text: string }
+  | { type: "input_image"; image_url: string };
 
 interface ResponsesMessageItem {
   type: "message";
@@ -122,7 +123,13 @@ function toInput(messages: ChatMessage[]): { instructions: string; input: Respon
     input.push({
       type: "message",
       role: "user",
-      content: [{ type: "input_text", text: message.content }],
+      content: [
+        ...(message.content.length === 0 ? [] : [{ type: "input_text" as const, text: message.content }]),
+        ...(message.images ?? []).map((image) => ({
+          type: "input_image" as const,
+          image_url: `data:${image.mediaType};base64,${image.dataBase64}`,
+        })),
+      ],
     });
   }
 

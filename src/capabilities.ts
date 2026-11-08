@@ -11,7 +11,7 @@
  */
 
 /** Vocabulário fechado de capabilities conhecidas. */
-export const CAPABILITY_KEYS = ["tools", "streaming", "jsonMode"] as const;
+export const CAPABILITY_KEYS = ["tools", "streaming", "jsonMode", "vision"] as const;
 
 /** Capability do vocabulário fechado. */
 export type Capability = (typeof CAPABILITY_KEYS)[number];
