@@ -71,7 +71,7 @@ export async function runCommand(
     case "attach":
     case "paste":
     case "detach":
-      return { entries: [{ kind: "info", text: "anexos: /attach, /paste e /detach chegam à TUI na fatia 2c; use o REPL" }] };
+      return { entries: [{ kind: "info", text: "anexos: use /attach, /paste ou /detach" }] };
     case "model": {
       if (command.model === undefined) {
         return { entries: [{ kind: "info", text: session.listModels().join("\n") }] };

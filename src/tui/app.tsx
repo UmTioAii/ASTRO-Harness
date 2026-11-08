@@ -7,7 +7,12 @@ import type { SessionStore } from "../chat/store";
 import type { SessionApi, SessionSummary } from "../chat/session-api";
 import type { SessionSnapshot } from "../chat/agent-session";
 import { isFatalSessionError } from "../chat/session-errors";
-import { DEFAULT_PERMISSION_MODE } from "../permissions";
+import { DEFAULT_PERMISSION_MODE, resolveAstroHome } from "../permissions";
+import { isYes } from "../chat/approvers";
+import { loadAttachment, loadPastedText } from "../attachments/load";
+import { materializePrompt, toMeta } from "../attachments/render";
+import { readClipboardText } from "../attachments/clipboard";
+import type { LoadedAttachment } from "../attachments/model";
 import { redactSecrets } from "../sanitize-external";
 import { runCommand, type CommandState, type Entry } from "./commands";
 import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
@@ -164,6 +169,7 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
   const [favorites, setFavorites] = useState<string[]>(initialConfig.favoriteModels ?? []);
   const [recents, setRecents] = useState<string[]>(initialConfig.recentModels ?? []);
   const commandState = useRef<CommandState>({});
+  const pendingAttachments = useRef<LoadedAttachment[]>([]);
   const exited = useRef(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const addToast = (toast: { kind: Toast["kind"]; text: string }): void => {
@@ -256,6 +262,72 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
     });
   };
 
+  const listPending = (): string =>
+    pendingAttachments.current.length === 0
+      ? "nenhum anexo pendente"
+      : pendingAttachments.current
+          .map((attachment, index) => `${index + 1}. ${attachment.name} (${attachment.sizeBytes} bytes)`)
+          .join("\n");
+
+  const handleAttachmentCommand = async (command: ReplCommand): Promise<void> => {
+    if (command.kind === "attach") {
+      if (command.path === undefined) {
+        setEntries((current) => [...current, { kind: "info", text: listPending() }]);
+        return;
+      }
+      try {
+        const loaded = await loadAttachment({
+          path: command.path,
+          ...(command.range === undefined ? {} : { range: command.range }),
+          cwd,
+          astroHome: resolveAstroHome(),
+          confirmOutsideCwd: async (absolute) =>
+            approvals === undefined
+              ? false
+              : isYes(await approvals.askText(`anexo fora do cwd: ${absolute} — aprovar? (s/n)`)),
+        });
+        pendingAttachments.current.push(loaded);
+        setEntries((current) => [
+          ...current,
+          { kind: "info", text: `anexo adicionado: ${command.path}\n${listPending()}` },
+        ]);
+      } catch (error) {
+        setEntries((current) => [...current, { kind: "error", text: `erro: ${messageOf(error)}` }]);
+      }
+      return;
+    }
+    if (command.kind === "paste") {
+      try {
+        pendingAttachments.current.push(loadPastedText(readClipboardText()));
+        setEntries((current) => [
+          ...current,
+          { kind: "info", text: `anexo adicionado: clipboard\n${listPending()}` },
+        ]);
+      } catch (error) {
+        setEntries((current) => [...current, { kind: "error", text: `erro: ${messageOf(error)}` }]);
+      }
+      return;
+    }
+    if (command.kind === "detach") {
+      if (command.target === undefined) {
+        setEntries((current) => [...current, { kind: "info", text: listPending() }]);
+        return;
+      }
+      if (command.target === "all") {
+        pendingAttachments.current = [];
+        setEntries((current) => [...current, { kind: "info", text: "anexos removidos" }]);
+        return;
+      }
+      const index = Number(command.target);
+      if (!Number.isInteger(index) || index < 1 || index > pendingAttachments.current.length) {
+        setEntries((current) => [...current, { kind: "error", text: `anexo inválido: ${command.target}` }]);
+        return;
+      }
+      pendingAttachments.current.splice(index - 1, 1);
+      setEntries((current) => [...current, { kind: "info", text: listPending() }]);
+    }
+  };
+
   const submit = async (): Promise<void> => {
     const text = inputRef.current.trim();
     if (text === "") return;
@@ -290,6 +362,10 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
     if (command.kind === "empty") return;
     if (command.kind === "exit") {
       finish();
+      return;
+    }
+    if (command.kind === "attach" || command.kind === "paste" || command.kind === "detach") {
+      await handleAttachmentCommand(command);
       return;
     }
     if (command.kind === "model" && command.model === undefined) {
@@ -358,7 +434,15 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
       emit: (text) => setPartial((current) => (current ?? "") + text),
     });
     try {
-      const result = await session.send(command.text, controller.signal, (delta) => sink.add(delta));
+      const prompt = materializePrompt(command.text, pendingAttachments.current);
+      const metas = pendingAttachments.current.map(toMeta);
+      const result = await session.send(
+        prompt,
+        controller.signal,
+        (delta) => sink.add(delta),
+        metas.length === 0 ? undefined : metas,
+      );
+      pendingAttachments.current = [];
       sink.flush();
       setPartial(undefined);
       setEntries((current) => [
