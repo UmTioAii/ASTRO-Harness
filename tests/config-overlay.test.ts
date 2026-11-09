@@ -1,0 +1,112 @@
+/**
+ * Camada global de configuração (ADR-0029, #401): merge `global < projeto` e
+ * estreitamento de segurança (o projeto nunca amplia o global).
+ */
+import { expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadEffectiveConfig } from "../src/provider/profiles";
+
+const PATHS = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
+const provider = (id: string): Record<string, unknown> => ({
+  kind: "openai-compat", baseUrl: `https://${id}.example/v1`, credentialRef: "KEY",
+});
+const model = (providerId: string, id: string, context = 8192): Record<string, unknown> => ({
+  provider: providerId, id, tags: [], context,
+});
+const projectBase = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  providers: { p: provider("p") },
+  models: [model("p", "m")],
+  agent: { model: "p/m", maxSteps: 4, tools: ["read_file"] },
+  paths: PATHS,
+  ...over,
+});
+
+/** Home temporário com `config.json` global e, opcionalmente, projeto em disco. */
+function scenario(global: unknown, project?: unknown): { configPath: string; env: Record<string, string> } {
+  const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
+  const cwd = mkdtempSync(join(tmpdir(), "astro-global-project-"));
+  writeFileSync(join(home, "config.json"), JSON.stringify(global));
+  const configPath = join(cwd, "astro.config.json");
+  if (project !== undefined) writeFileSync(configPath, JSON.stringify(project));
+  return { configPath, env: { ASTRO_HOME: home } };
+}
+
+/** Config efetiva das camadas dadas. */
+function effective(global: unknown, project?: unknown) {
+  const { configPath, env } = scenario(global, project);
+  return loadEffectiveConfig(configPath, { env, allowMissing: true });
+}
+
+test("merge: agent, providers e models (três linhas de resultado da tabela do #401)", () => {
+  // 1) o global mantém maxSteps e tools; o projeto sobrescreve só o model.
+  expect(effective(
+    { agent: { maxSteps: 12, tools: ["read_file", "grep"] } },
+    projectBase({ agent: { model: "p/m" } }),
+  ).config.agent).toMatchObject({ model: "p/m", maxSteps: 12, tools: ["read_file", "grep"] });
+
+  // 2) providers dos dois layers convivem; o do projeto sobrescreve por chave.
+  const providers = effective(
+    {
+      providers: { openai: provider("openai"), local: provider("local") },
+      models: [model("openai", "a"), model("local", "b")],
+    },
+    projectBase({
+      providers: { local: { baseUrl: "https://local2.example/v1" } },
+      models: [model("local", "b")],
+      agent: { model: "local/b", maxSteps: 4, tools: ["read_file"] },
+    }),
+  ).config;
+  expect(Object.keys(providers.providers).sort()).toEqual(["local", "openai"]);
+  expect(providers.providers.local).toMatchObject({ baseUrl: "https://local2.example/v1", credentialRef: "KEY" });
+
+  // 3) models une por provider/id; o projeto prevalece no conflito.
+  const models = effective(
+    { providers: { p: provider("p") }, models: [model("p", "a"), model("p", "b", 4096)] },
+    projectBase({
+      models: [model("p", "b", 16384), model("p", "c")],
+      agent: { model: "p/b", maxSteps: 4, tools: ["read_file"] },
+    }),
+  ).config;
+  expect(models.models.map((entry) => entry.id).sort()).toEqual(["a", "b", "c"]);
+  expect(models.models.find((entry) => entry.id === "b")?.context).toBe(16384);
+});
+
+test("rejeita: projeto que amplia tools, permissions.mode ou budget (ADR-0029)", () => {
+  const widening: [unknown, unknown, RegExp][] = [
+    [{ agent: { maxSteps: 4, tools: ["read_file", "grep"] } },
+      projectBase({ agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "grep", "run_command"] } }),
+      /amplia a allowlist global/],
+    [{ permissions: { mode: "ask" } }, projectBase({ permissions: { mode: "bypass" } }), /amplia o modo de permissão global/],
+    [{ budget: { scope: "day", limitUsd: 50, warnAt: 0.8, onExceed: "ask" } },
+      projectBase({ budget: { limitUsd: 500 } }),
+      /amplia o budget global/],
+  ];
+  for (const [global, project, message] of widening) {
+    expect(() => effective(global, project)).toThrow(message);
+  }
+});
+
+test("camada global sozinha define a config efetiva quando não há projeto", () => {
+  const only = effective({
+    providers: { g: provider("g") },
+    models: [model("g", "gm")],
+    agent: { model: "g/gm", maxSteps: 6, tools: ["read_file"] },
+    permissions: { mode: "allow-edits" },
+    paths: PATHS,
+  });
+  expect(only.config.agent.model).toBe("g/gm");
+  expect(only.config.permissions.mode).toBe("allow-edits");
+  expect(only.activeProvider).toBe("g");
+  // A camada global define tools e permissões: o aviso de baseline não vale.
+  expect(only.warnings.some((warning) => warning.includes("tools padrão"))).toBe(false);
+});
+
+test("ASTRO_NO_GLOBAL_CONFIG=1 e noGlobalConfig isolam a camada do projeto", () => {
+  const { configPath, env } = scenario({ permissions: { mode: "allow-edits" } }, projectBase());
+  expect(loadEffectiveConfig(configPath, { env }).config.permissions.mode).toBe("allow-edits");
+  const off = { ...env, ASTRO_NO_GLOBAL_CONFIG: "1" };
+  expect(loadEffectiveConfig(configPath, { env: off }).config.permissions.mode).toBe("ask");
+  expect(loadEffectiveConfig(configPath, { env, noGlobalConfig: true }).config.permissions.mode).toBe("ask");
+});
