@@ -6,7 +6,7 @@ import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, resolveAstroHome, type Permi
 import { loadAttachment, loadPastedText } from "../attachments/load";
 import { materializePrompt } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
-import type { LoadedAttachment } from "../attachments/model";
+import { dedupeKey, type AttachmentMeta, type LoadedAttachment } from "../attachments/model";
 import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
 import { loadTrustedStore, trustStatePath } from "../trust";
 import type { ProfileManager, ProfileView } from "../provider/profile-manager";
@@ -33,7 +33,7 @@ export interface ReplIO {
 
 export interface ChatSession {
   readonly model: string;
-  send(prompt: string, signal?: AbortSignal, onToken?: (text: string) => void, turn?: SendTurnOptions): Promise<TurnResult>;
+  send(prompt: string, signal?: AbortSignal, onToken?: (text: string) => void, attachments?: AttachmentMeta[], turn?: SendTurnOptions): Promise<TurnResult>;
   compact(force?: boolean): Promise<string>;
   clear(): void;
   resume(snapshot: SessionSnapshot): void;
@@ -456,15 +456,16 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
           continue;
         }
         try {
-          pending.push(
-            await loadAttachment({
-              path: command.path,
-              ...(command.range === undefined ? {} : { range: command.range }),
-              cwd,
-              astroHome,
-              confirmOutsideCwd: confirmOutside,
-            }),
-          );
+          const attachment = await loadAttachment({
+            path: command.path,
+            ...(command.range === undefined ? {} : { range: command.range }),
+            cwd,
+            astroHome,
+            confirmOutsideCwd: confirmOutside,
+          });
+          const existing = pending.find((item) => dedupeKey(item) === dedupeKey(attachment));
+          if (existing !== undefined) { io.write(paint(`erro: anexo já adicionado: ${existing.name} (o mesmo anexo já está pendente)`, RED, style)); continue; }
+          pending.push(attachment);
           io.write(`anexo adicionado: ${command.path}\n${listPending()}`);
         } catch (error) {
           io.write(paint(`erro: ${messageOf(error)}`, RED, style));
@@ -505,6 +506,7 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         const result = await session.send(
           prompt,
           opts.signal,
+          undefined,
           undefined,
           pending.length === 0 ? undefined : { attachments: pending, approveAttachment },
         );

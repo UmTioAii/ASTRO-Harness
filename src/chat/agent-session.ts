@@ -16,9 +16,8 @@ import { configSummaryOf, type ConfigSummary } from "./config-summary";
 import type { CodexLoginStart } from "../provider/codex-login";
 import { expandHomePath, saveCodexAuth, startCodexLogin } from "../provider/codex-login";
 import { loadEffectiveConfig, providerIdentityFor, type ProviderSelection, type ProviderSource } from "../provider/profiles";
-import type { ChatMessage } from "../provider/types";
-import type { FetchLike } from "../provider/types";
-import type { LoadedAttachment } from "../attachments/model";
+import type { ChatMessage, FetchLike, ImagePart } from "../provider/types";
+import type { AttachmentMeta, LoadedAttachment } from "../attachments/model";
 import { ArtifactStore, resolveArtifactRoot } from "../attachments/store";
 import { prepareTurnAttachments, type AttachmentApprover } from "../attachments/turn";
 import { Registry, type ModelEntry } from "../registry";
@@ -118,6 +117,12 @@ export interface SessionSnapshot {
 
 function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
+}
+
+/** I-03/#392: imagem é runtime-only; o histórico persistível guarda só `ref`/`hash`. */
+function withoutImages(message: ChatMessage): ChatMessage {
+  const { images: _images, ...rest } = message;
+  return rest;
 }
 
 /** Sobe até achar `.git`; usado para não gravar credenciais dentro do repositório. */
@@ -544,7 +549,7 @@ export class AgentSession {
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
     this.#messages = [
       { role: "system", content: this.#systemPrompt },
-      ...snapshot.messages.filter((message) => message.role !== "system").map((message) => ({ ...message })),
+      ...snapshot.messages.filter((message) => message.role !== "system").map(withoutImages),
     ];
     if (this.#registry.get(snapshot.model)?.status === "active") this.#modelRef = snapshot.model;
     this.#turns = snapshot.turns;
@@ -557,10 +562,12 @@ export class AgentSession {
     this.#append("session.resumed", { turns: snapshot.turns, model: this.#modelRef });
   }
 
+  /** 4º parâmetro (`attachments`) é transitório: a TUI migra para `SendTurnOptions` no próximo PR. Com o 5º, ele é a fonte de verdade (dedupe, teto, aprovação, store e metas). */
   async send(
     prompt: string,
     signal?: AbortSignal,
     onToken?: (text: string) => void,
+    attachments?: AttachmentMeta[],
     turn?: SendTurnOptions,
   ): Promise<TurnResult> {
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
@@ -571,15 +578,21 @@ export class AgentSession {
       const baseline = this.#ledger.readAll().length;
       const guard = guardContext([...before, { role: "user", content: prompt }], this.contextLimit());
       const history = guard.messages.slice(0, -1); // o último é o prompt deste turno
-      const attachments = turn?.attachments ?? [];
-      const hasImage = attachments.some((attachment) => attachment.kind === "image");
-      const prepared = await prepareTurnAttachments({
-        attachments,
-        owner: { sessionId: this.id, runId: this.id },
-        ...(turn?.approveAttachment === undefined ? {} : { approver: turn.approveAttachment }),
-        ...(hasImage ? { store: this.#imageStore() } : {}),
-        audit: (tipo, payload) => this.#append(tipo, payload),
-      });
+      let metas = attachments;
+      let images: ImagePart[] | undefined;
+      if (turn?.attachments !== undefined) {
+        const prepared = await prepareTurnAttachments({
+          attachments: turn.attachments,
+          owner: { sessionId: this.id, runId: this.id },
+          ...(turn.approveAttachment === undefined ? {} : { approver: turn.approveAttachment }),
+          ...(turn.attachments.some((attachment) => attachment.kind === "image")
+            ? { store: this.#imageStore() }
+            : {}),
+          audit: (tipo, payload) => this.#append(tipo, payload),
+        });
+        metas = prepared.metas.length === 0 ? undefined : prepared.metas;
+        images = prepared.images.length === 0 ? undefined : prepared.images;
+      }
       this.#append("chat.prompt", { taskHash: shortTaskHash(prompt) });
 
       let report: RunReport;
@@ -596,8 +609,8 @@ export class AgentSession {
           suppressRunEvents: true,
           ...(this.#allowMissing ? { allowMissingConfig: true } : {}),
           history,
-          ...(prepared.metas.length === 0 ? {} : { attachments: prepared.metas }),
-          ...(prepared.images.length === 0 ? {} : { images: prepared.images }),
+          ...(metas === undefined ? {} : { attachments: metas }),
+          ...(images === undefined ? {} : { images }),
           ...(onToken === undefined ? {} : { onToken }),
           ...(this.#approveSwap === undefined ? {} : { approveSwap: this.#approveSwap }),
           ...(this.#budgetDecider === undefined ? {} : { onBudgetExceeded: this.#budgetDecider }),
@@ -619,7 +632,8 @@ export class AgentSession {
         throw error;
       }
 
-      this.#messages = [...(report.messages ?? guard.messages), { role: "assistant", content: report.final }];
+      const next: ChatMessage[] = [...(report.messages ?? guard.messages), { role: "assistant", content: report.final }];
+      this.#messages = next.map(withoutImages);
       this.#turns++;
       this.#steps += report.steps;
       this.#tokensIn += report.tokensIn;

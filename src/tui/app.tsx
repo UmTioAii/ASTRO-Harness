@@ -10,7 +10,7 @@ import { isFatalSessionError } from "../chat/session-errors";
 import { DEFAULT_PERMISSION_MODE, resolveAstroHome } from "../permissions";
 import { isYes } from "../chat/approvers";
 import { loadAttachment, loadPastedText } from "../attachments/load";
-import { materializePrompt } from "../attachments/render";
+import { materializePrompt, toMeta } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
 import type { LoadedAttachment } from "../attachments/model";
 import { redactSecrets } from "../sanitize-external";
@@ -435,11 +435,12 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
     });
     try {
       const prompt = materializePrompt(command.text, pendingAttachments.current);
+      const metas = pendingAttachments.current.map(toMeta);
       const result = await session.send(
         prompt,
         controller.signal,
         (delta) => sink.add(delta),
-        { attachments: pendingAttachments.current },
+        metas.length === 0 ? undefined : metas,
       );
       pendingAttachments.current = [];
       sink.flush();

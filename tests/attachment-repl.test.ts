@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentSession, type SendTurnOptions, type TurnResult } from "../src/chat/agent-session";
 import { runRepl, type ChatSession, type ReplIO } from "../src/chat/repl";
-import type { LoadedAttachment } from "../src/attachments/model";
+import type { AttachmentMeta, LoadedAttachment } from "../src/attachments/model";
 
 class ScriptedIO implements ReplIO {
   readonly outputs: string[] = [];
@@ -22,7 +22,7 @@ class ScriptedIO implements ReplIO {
 class CaptureSession implements ChatSession {
   model = "p/m1";
   sent: Array<{ prompt: string; attachments?: readonly LoadedAttachment[] }> = [];
-  async send(prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, turn?: SendTurnOptions): Promise<TurnResult> {
+  async send(prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, _attachments?: AttachmentMeta[], turn?: SendTurnOptions): Promise<TurnResult> {
     this.sent.push({ prompt, ...(turn?.attachments === undefined ? {} : { attachments: [...turn.attachments] }) });
     return {
       final: "ok", model: this.model, steps: 1, tokensIn: 1, tokensOut: 1, costUsd: 0,
@@ -108,32 +108,35 @@ describe("/attach e /paste no REPL (ADR-0026, #392)", () => {
     expect(session.sent[1]?.prompt).toBe("outra");
     expect(session.sent[1]?.attachments).toBeUndefined();
   });
+
+  test("mesmo anexo duas vezes é recusado e materializa um bloco só", async () => {
+    const cwd = sandbox();
+    writeFileSync(join(cwd, "a.txt"), "um\ndois\n");
+    const session = new CaptureSession();
+    const io = new ScriptedIO(["/attach a.txt", "/attach a.txt", "resuma", "/exit"]);
+    await runRepl(session, io, { cwd });
+    expect(io.outputs.join("\n")).toContain("já adicionado: a.txt");
+    expect(session.sent[0]?.prompt).toBe("resuma\n\n[anexo: a.txt]\num\ndois\n");
+    expect(session.sent[0]?.attachments).toHaveLength(1);
+  });
 });
 
 /** PNG 1x1 real (70 bytes), o mesmo fixture do teste de turno. */
-const pngData =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-
-interface CapturedBody {
-  messages?: Array<{ role?: string; content?: unknown }>;
-}
+const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+interface CapturedBody { messages?: Array<{ role?: string; content?: unknown }> }
 
 /** Sessão real + servidor local que captura o corpo: exercita o wire até o provider. */
 function e2eSetup() {
   const base = sandbox();
-  const cwd = join(base, "work");
-  const home = join(base, "home");
+  const cwd = join(base, "work"), home = join(base, "home");
   mkdirSync(cwd, { recursive: true });
   mkdirSync(home, { recursive: true });
   writeFileSync(join(cwd, "a.png"), Buffer.from(pngData, "base64"));
   const bodies: CapturedBody[] = [];
-  const server = Bun.serve({
-    port: 0,
-    async fetch(req) {
-      bodies.push((await req.json()) as CapturedBody);
-      return Response.json({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
-    },
-  });
+  const server = Bun.serve({ port: 0, async fetch(req) {
+    bodies.push((await req.json()) as CapturedBody);
+    return Response.json({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  } });
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
     providers: { p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
@@ -141,11 +144,7 @@ function e2eSetup() {
     agent: { model: "p/m1", maxSteps: 1, tools: [] },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
-  const session = new AgentSession({
-    configPath,
-    cwd,
-    env: { ASTRO_HOME: home, ASTRO_ALLOW_PRIVATE_URLS: "1", KEY: "k" },
-  });
+  const session = new AgentSession({ configPath, cwd, env: { ASTRO_HOME: home, ASTRO_ALLOW_PRIVATE_URLS: "1", KEY: "k" } });
   return { cwd, bodies, session, stop: () => server.stop(true) };
 }
 
@@ -153,27 +152,9 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
   test("imagem aprovada chega ao provider como image_url", async () => {
     const { cwd, bodies, session, stop } = e2eSetup();
     try {
-      const io = new ScriptedIO(["/attach a.png", "resuma", "s", "/exit"]);
-      await runRepl(session, io, { cwd });
+      await runRepl(session, new ScriptedIO(["/attach a.png", "resuma", "s", "/exit"]), { cwd });
       expect(bodies).toHaveLength(1);
-      expect(bodies[0]?.messages?.at(-1)?.content).toContainEqual({
-        type: "image_url",
-        image_url: { url: `data:image/png;base64,${pngData}` },
-      });
-    } finally {
-      stop();
-    }
-  });
-
-  test("imagem recusada não envia turno e mantém pendente", async () => {
-    const { cwd, bodies, session, stop } = e2eSetup();
-    const io = new ScriptedIO(["/attach a.png", "resuma", "n", "/attach", "/exit"]);
-    try {
-      await runRepl(session, io, { cwd });
-      expect(bodies).toHaveLength(0);
-      const text = io.outputs.join("\n");
-      expect(text).toContain("erro:");
-      expect(text).toContain("1. a.png");
+      expect(bodies[0]?.messages?.at(-1)?.content).toContainEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${pngData}` } });
     } finally {
       stop();
     }

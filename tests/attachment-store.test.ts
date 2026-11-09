@@ -73,11 +73,9 @@ describe("validateArtifactRoot", () => {
   test("aceita raiz ainda inexistente e a cria com 0700", () => {
     const base = mkdtempSync(join(tmpdir(), "astro-art-missing-"));
     dirs.push(base);
-    const cwd = join(base, "work");
-    const astroHome = join(base, "home");
+    const cwd = join(base, "work"), astroHome = join(base, "home"), root = join(base, "artifacts");
     mkdirSync(cwd, { recursive: true });
     mkdirSync(astroHome, { recursive: true });
-    const root = join(base, "artifacts");
     expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
     new ArtifactStore(root, { cwd, astroHome });
     expect(existsSync(root)).toBe(true);

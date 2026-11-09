@@ -10,16 +10,16 @@ import { formatApprovalPrompt, prepareTurnAttachments } from "../src/attachments
 /** PNG 1x1 real (70 bytes): assinatura + IHDR com width=1 e height=1. */
 const pngData =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const owner = { runId: "r1" };
 
 let base: string;
 let cwd: string;
-let astroHome: string;
 let store: ArtifactStore;
 
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), "astro-att-turn-"));
   cwd = join(base, "work");
-  astroHome = join(base, "home");
+  const astroHome = join(base, "home");
   mkdirSync(cwd, { recursive: true });
   mkdirSync(astroHome, { recursive: true });
   const root = join(base, "artifacts"); // fora do cwd e do ASTRO_HOME
@@ -27,21 +27,12 @@ beforeEach(() => {
   store = new ArtifactStore(root, { cwd, astroHome, checkPrivate: () => true });
 });
 
-afterEach(() => {
-  rmSync(base, { recursive: true, force: true });
-});
+afterEach(() => rmSync(base, { recursive: true, force: true }));
 
 function image(name: string, dataBase64: string): LoadedAttachment {
   const bytes = Buffer.from(dataBase64, "base64");
-  return {
-    kind: "image",
-    path: join(cwd, name),
-    name,
-    sizeBytes: bytes.length,
-    mediaType: "image/png",
-    data: dataBase64,
-    hash: createHash("sha256").update(bytes).digest("hex"),
-  };
+  return { kind: "image", path: join(cwd, name), name, sizeBytes: bytes.length,
+    mediaType: "image/png", data: dataBase64, hash: createHash("sha256").update(bytes).digest("hex") };
 }
 
 function textOf(sizeBytes: number): LoadedAttachment {
@@ -49,35 +40,38 @@ function textOf(sizeBytes: number): LoadedAttachment {
 }
 
 describe("prepareTurnAttachments (ADR-0026, #392)", () => {
-  test("deduplica imagem por hash e conta uma vez no turno", async () => {
-    const a = image("a.png", pngData);
-    const b = image("b.png", pngData);
-    const prepared = await prepareTurnAttachments({ attachments: [a, b], owner: { runId: "r1" }, store, approver: () => true });
-    expect(prepared.attachments).toHaveLength(1);
+  test("deduplica imagem por hash, preserva a primeira e conta uma vez no turno", async () => {
+    const prepared = await prepareTurnAttachments({ attachments: [image("a.png", pngData), image("b.png", pngData)], owner, store, approver: () => true });
     expect(prepared.images).toHaveLength(1);
+    expect(prepared.metas).toHaveLength(1);
+    expect(prepared.metas[0]?.name).toBe("a.png");
+    expect(prepared.metas[0]).not.toHaveProperty("data");
   });
 
   test("teto de 40 MiB do turno vale para texto e imagem juntos", async () => {
     const big = { ...image("a.png", pngData), sizeBytes: MAX_TURN_BYTES };
-    await expect(prepareTurnAttachments({ attachments: [big, textOf(1)], owner: { runId: "r1" }, store, approver: () => true }))
+    await expect(prepareTurnAttachments({ attachments: [big, textOf(1)], owner, store, approver: () => true }))
       .rejects.toMatchObject({ code: "attachment_turn_too_large" });
   });
 
-  test("sem aprovador imagem é negada (fail closed)", async () => {
-    await expect(prepareTurnAttachments({ attachments: [image("a.png", pngData)], owner: { runId: "r1" }, store }))
+  test("imagem sem aprovação é negada (fail closed) e não grava", async () => {
+    await expect(prepareTurnAttachments({ attachments: [image("a.png", pngData)], owner, store }))
       .rejects.toMatchObject({ code: "attachment_image_denied" });
+    await expect(prepareTurnAttachments({ attachments: [image("a.png", pngData)], owner, store, approver: () => false }))
+      .rejects.toMatchObject({ code: "attachment_image_denied" });
+    expect(store.usageBytes()).toBe(0);
   });
 
-  test("rejeição não grava nada no store", async () => {
-    await expect(prepareTurnAttachments({ attachments: [image("a.png", pngData)], owner: { runId: "r1" }, store, approver: () => false }))
-      .rejects.toMatchObject({ code: "attachment_image_denied" });
+  test("imagem aprovada sem store falha e não grava", async () => {
+    await expect(prepareTurnAttachments({ attachments: [image("a.png", pngData)], owner, approver: () => true }))
+      .rejects.toMatchObject({ code: "attachment_root_invalid" });
     expect(store.usageBytes()).toBe(0);
   });
 
   test("aprovação grava, preenche ref/hash e audita sem conteúdo", async () => {
     const events: Array<{ tipo: string; payload: Record<string, unknown> }> = [];
     const prepared = await prepareTurnAttachments({
-      attachments: [image("a.png", pngData)], owner: { runId: "r1" }, store,
+      attachments: [image("a.png", pngData)], owner, store,
       approver: (items) => { expect(items[0]).toMatchObject({ name: "a.png", pixels: { width: 1, height: 1 } }); return true; },
       audit: (tipo, payload) => events.push({ tipo, payload }),
     });
