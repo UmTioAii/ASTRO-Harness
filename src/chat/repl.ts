@@ -4,12 +4,13 @@ import { runProviderWizard } from "./provider-wizard";
 import { configLines, type ConfigSummary } from "./config-summary";
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, resolveAstroHome, type PermissionMode } from "../permissions";
 import { loadAttachment, loadPastedText } from "../attachments/load";
-import { materializePrompt, toMeta } from "../attachments/render";
+import { materializePrompt } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
-import type { AttachmentMeta, LoadedAttachment } from "../attachments/model";
+import type { LoadedAttachment } from "../attachments/model";
+import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
 import { loadTrustedStore, trustStatePath } from "../trust";
 import type { ProfileManager, ProfileView } from "../provider/profile-manager";
-import type { ModelInfo, ProviderInfo, SessionSnapshot, TurnResult } from "./agent-session";
+import type { ModelInfo, ProviderInfo, SendTurnOptions, SessionSnapshot, TurnResult } from "./agent-session";
 import type { HealthCheck, HealthReport } from "../health";
 import type { CodexLoginStart } from "../provider/codex-login";
 import type { SessionStore } from "./store";
@@ -32,7 +33,7 @@ export interface ReplIO {
 
 export interface ChatSession {
   readonly model: string;
-  send(prompt: string, signal?: AbortSignal, onToken?: (text: string) => void, attachments?: AttachmentMeta[]): Promise<TurnResult>;
+  send(prompt: string, signal?: AbortSignal, onToken?: (text: string) => void, turn?: SendTurnOptions): Promise<TurnResult>;
   compact(force?: boolean): Promise<string>;
   clear(): void;
   resume(snapshot: SessionSnapshot): void;
@@ -184,8 +185,15 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
     pending.length === 0
       ? "nenhum anexo pendente"
       : pending.map((attachment, index) => `${index + 1}. ${attachment.name} (${attachment.sizeBytes} bytes)`).join("\n");
+  const readFresh = (prompt: string): Promise<string | null> =>
+    io.readFresh === undefined ? io.read(prompt) : io.readFresh(prompt);
   const confirmOutside = async (absolute: string): Promise<boolean> => {
-    const answer = await (io.readFresh ?? io.read)(`anexo fora do cwd: ${absolute} — aprovar? [s/N] `);
+    const answer = await readFresh(`anexo fora do cwd: ${absolute} — aprovar? [s/N] `);
+    return answer !== null && /^(s|sim|y|yes)/i.test(answer.trim());
+  };
+  const approveAttachment: AttachmentApprover = async (items) => {
+    io.write(formatApprovalPrompt(items));
+    const answer = await readFresh("aprovar envio? [s/N] ");
     return answer !== null && /^(s|sim|y|yes)/i.test(answer.trim());
   };
   try {
@@ -494,8 +502,12 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
       }
       try {
         const prompt = materializePrompt(command.text, pending);
-        const metas = pending.map(toMeta);
-        const result = await session.send(prompt, opts.signal, undefined, metas.length === 0 ? undefined : metas);
+        const result = await session.send(
+          prompt,
+          opts.signal,
+          undefined,
+          pending.length === 0 ? undefined : { attachments: pending, approveAttachment },
+        );
         pending.length = 0;
         io.write(result.final);
         io.write(paint(statusLine(result), DIM, style));

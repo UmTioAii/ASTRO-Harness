@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -68,6 +68,20 @@ describe("validateArtifactRoot", () => {
   test("rejeita quando a checagem de privacidade falha", () => {
     const { root, cwd, astroHome } = sandbox();
     expect(() => validateArtifactRoot(root, { ...context(cwd, astroHome), checkPrivate: () => false })).toThrow(/privad/i);
+  });
+
+  test("aceita raiz ainda inexistente e a cria com 0700", () => {
+    const base = mkdtempSync(join(tmpdir(), "astro-art-missing-"));
+    dirs.push(base);
+    const cwd = join(base, "work");
+    const astroHome = join(base, "home");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(astroHome, { recursive: true });
+    const root = join(base, "artifacts");
+    expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
+    new ArtifactStore(root, { cwd, astroHome });
+    expect(existsSync(root)).toBe(true);
+    if (process.platform !== "win32") expect(statSync(root).mode & 0o777).toBe(0o700);
   });
 });
 

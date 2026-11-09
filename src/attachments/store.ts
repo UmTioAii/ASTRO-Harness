@@ -88,8 +88,9 @@ function defaultCheckPrivate(path: string): boolean {
   if (process.platform === "win32") return true;
   try {
     return (statSync(path).mode & 0o077) === 0;
-  } catch {
-    return false;
+  } catch (error) {
+    // Raiz ainda não criada: o construtor cria com 0700 logo após validar.
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
 }
 

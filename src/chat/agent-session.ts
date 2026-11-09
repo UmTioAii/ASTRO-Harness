@@ -18,10 +18,12 @@ import { expandHomePath, saveCodexAuth, startCodexLogin } from "../provider/code
 import { loadEffectiveConfig, providerIdentityFor, type ProviderSelection, type ProviderSource } from "../provider/profiles";
 import type { ChatMessage } from "../provider/types";
 import type { FetchLike } from "../provider/types";
-import type { AttachmentMeta } from "../attachments/model";
+import type { LoadedAttachment } from "../attachments/model";
+import { ArtifactStore, resolveArtifactRoot } from "../attachments/store";
+import { prepareTurnAttachments, type AttachmentApprover } from "../attachments/turn";
 import { Registry, type ModelEntry } from "../registry";
 import { Ledger } from "../ledger";
-import { isPermissionMode, resolvePermissionMode, type PermissionMode } from "../permissions";
+import { isPermissionMode, resolveAstroHome, resolvePermissionMode, type PermissionMode } from "../permissions";
 import { readAgentsMd } from "../spawn";
 import { forceCompaction, recordCompactionSuccess } from "../compaction/breaker";
 import { assertWithinQuota, quotaStatus, type QuotaStatus } from "../quota";
@@ -54,6 +56,14 @@ export interface AgentSessionOptions {
   allowCritical?: readonly string[];
   /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
+  /** Raiz do artifact store de imagens (ADR-0026); ausente usa env/`$ASTRO_HOME/attachments`. */
+  artifactRoot?: string;
+}
+
+/** Opções de um turno de chat: anexos carregados e aprovador explícito de imagem. */
+export interface SendTurnOptions {
+  attachments?: readonly LoadedAttachment[];
+  approveAttachment?: AttachmentApprover;
 }
 
 export interface ProviderInfo {
@@ -127,6 +137,7 @@ export class AgentSession {
   readonly #configPath: string;
   readonly #cwd: string;
   readonly #env: Record<string, string | undefined> | undefined;
+  readonly #artifactRoot: string;
   #config: AstroConfig;
   #providerSource: ProviderSource;
   #providerSelection: ProviderSelection;
@@ -147,6 +158,7 @@ export class AgentSession {
   #modelRef: string;
   #permissionMode: PermissionMode;
   #messages: ChatMessage[];
+  #imageStoreInstance: ArtifactStore | undefined;
   #turns = 0;
   #steps = 0;
   #tokensIn = 0;
@@ -162,6 +174,11 @@ export class AgentSession {
     this.#configPath = opts.configPath;
     this.#cwd = opts.cwd ?? process.cwd();
     this.#env = opts.env;
+    this.#artifactRoot = resolveArtifactRoot({
+      flag: opts.artifactRoot,
+      env: opts.env,
+      astroHome: resolveAstroHome(opts.env),
+    });
     const effective = loadEffectiveConfig(opts.configPath, {
       ...(opts.env === undefined ? {} : { env: opts.env }),
       ...(opts.provider === undefined ? {} : { provider: opts.provider }),
@@ -208,6 +225,19 @@ export class AgentSession {
   /** Auditor novo por evento: outro Auditor (runTask) avança o seq no mesmo arquivo. */
   #append(tipo: string, payload: Record<string, unknown>): void {
     new Auditor(this.#auditPath).append({ run: this.id, agent: "default", tipo, payload });
+  }
+
+  /** Store de imagem criado só na primeira imagem; raiz resolvida uma vez no construtor. */
+  #imageStore(): ArtifactStore {
+    if (this.#imageStoreInstance === undefined) {
+      this.#imageStoreInstance = new ArtifactStore(this.#artifactRoot, {
+        cwd: this.#cwd,
+        astroHome: resolveAstroHome(this.#env),
+        ttlDays: this.#config.attachments.artifactTtlDays,
+        maxBytes: this.#config.attachments.artifactMaxBytes,
+      });
+    }
+    return this.#imageStoreInstance;
   }
 
   get messages(): readonly ChatMessage[] {
@@ -531,7 +561,7 @@ export class AgentSession {
     prompt: string,
     signal?: AbortSignal,
     onToken?: (text: string) => void,
-    attachments?: AttachmentMeta[],
+    turn?: SendTurnOptions,
   ): Promise<TurnResult> {
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
     if (this.#busy) throw new Error("turno já em andamento");
@@ -541,6 +571,15 @@ export class AgentSession {
       const baseline = this.#ledger.readAll().length;
       const guard = guardContext([...before, { role: "user", content: prompt }], this.contextLimit());
       const history = guard.messages.slice(0, -1); // o último é o prompt deste turno
+      const attachments = turn?.attachments ?? [];
+      const hasImage = attachments.some((attachment) => attachment.kind === "image");
+      const prepared = await prepareTurnAttachments({
+        attachments,
+        owner: { sessionId: this.id, runId: this.id },
+        ...(turn?.approveAttachment === undefined ? {} : { approver: turn.approveAttachment }),
+        ...(hasImage ? { store: this.#imageStore() } : {}),
+        audit: (tipo, payload) => this.#append(tipo, payload),
+      });
       this.#append("chat.prompt", { taskHash: shortTaskHash(prompt) });
 
       let report: RunReport;
@@ -557,7 +596,8 @@ export class AgentSession {
           suppressRunEvents: true,
           ...(this.#allowMissing ? { allowMissingConfig: true } : {}),
           history,
-          ...(attachments === undefined ? {} : { attachments }),
+          ...(prepared.metas.length === 0 ? {} : { attachments: prepared.metas }),
+          ...(prepared.images.length === 0 ? {} : { images: prepared.images }),
           ...(onToken === undefined ? {} : { onToken }),
           ...(this.#approveSwap === undefined ? {} : { approveSwap: this.#approveSwap }),
           ...(this.#budgetDecider === undefined ? {} : { onBudgetExceeded: this.#budgetDecider }),

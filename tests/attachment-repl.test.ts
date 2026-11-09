@@ -23,7 +23,7 @@ class CaptureSession implements ChatSession {
   model = "p/m1";
   sent: Array<{ prompt: string; attachments?: readonly LoadedAttachment[] }> = [];
   async send(prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, turn?: SendTurnOptions): Promise<TurnResult> {
-    this.sent.push({ prompt, ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }) });
+    this.sent.push({ prompt, ...(turn?.attachments === undefined ? {} : { attachments: [...turn.attachments] }) });
     return {
       final: "ok", model: this.model, steps: 1, tokensIn: 1, tokensOut: 1, costUsd: 0,
       totalTokensIn: 1, totalTokensOut: 1, totalCostUsd: 0,
@@ -153,7 +153,8 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
   test("imagem aprovada chega ao provider como image_url", async () => {
     const { cwd, bodies, session, stop } = e2eSetup();
     try {
-      await runRepl(session, new ScriptedIO(["/attach a.png", "resuma", "s", "/exit"]), { cwd });
+      const io = new ScriptedIO(["/attach a.png", "resuma", "s", "/exit"]);
+      await runRepl(session, io, { cwd });
       expect(bodies).toHaveLength(1);
       expect(bodies[0]?.messages?.at(-1)?.content).toContainEqual({
         type: "image_url",
