@@ -3,16 +3,16 @@ import { render } from "ink-testing-library";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionSnapshot, TurnResult } from "../src/chat/agent-session";
+import type { SendTurnOptions, SessionSnapshot, TurnResult } from "../src/chat/agent-session";
 import type { ChatSession } from "../src/chat/repl";
-import type { AttachmentMeta } from "../src/attachments/model";
+import type { LoadedAttachment } from "../src/attachments/model";
 import { TuiApp } from "../src/tui/app";
 
 class FakeSession implements ChatSession {
   model = "p/m1";
-  sent: Array<{ prompt: string; attachments?: AttachmentMeta[] }> = [];
-  async send(prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, attachments?: AttachmentMeta[]): Promise<TurnResult> {
-    this.sent.push({ prompt, ...(attachments === undefined ? {} : { attachments }) });
+  sent: Array<{ prompt: string; attachments?: readonly LoadedAttachment[] }> = [];
+  async send(prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, turn?: SendTurnOptions): Promise<TurnResult> {
+    this.sent.push({ prompt, ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }) });
     return {
       final: "ok", model: this.model, steps: 1, tokensIn: 1, tokensOut: 1, costUsd: 0,
       totalTokensIn: 1, totalTokensOut: 1, totalCostUsd: 0,
