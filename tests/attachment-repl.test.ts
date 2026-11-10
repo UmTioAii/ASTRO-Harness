@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentSession, type SendTurnOptions, type TurnResult } from "../src/chat/agent-session";
@@ -145,16 +145,45 @@ function e2eSetup() {
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
   const session = new AgentSession({ configPath, cwd, env: { ASTRO_HOME: home, ASTRO_ALLOW_PRIVATE_URLS: "1", KEY: "k" } });
-  return { cwd, bodies, session, stop: () => server.stop(true) };
+  return { cwd, home, bodies, session, stop: () => server.stop(true) };
 }
 
 describe("imagem no turno do REPL (ADR-0026, #392)", () => {
   test("imagem aprovada chega ao provider como image_url", async () => {
     const { cwd, bodies, session, stop } = e2eSetup();
     try {
-      await runRepl(session, new ScriptedIO(["/attach a.png", "resuma", "s", "/exit"]), { cwd });
+      await runRepl(session, new ScriptedIO(["/attach a.png", "resuma", "s", "/exit"]), { cwd, interactive: true });
       expect(bodies).toHaveLength(1);
       expect(bodies[0]?.messages?.at(-1)?.content).toContainEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${pngData}` } });
+    } finally {
+      stop();
+    }
+  });
+
+  test("resposta 'sair' não aprova por prefixo e nega o turno", async () => {
+    const { cwd, home, bodies, session, stop } = e2eSetup();
+    const io = new ScriptedIO(["/attach a.png", "resuma", "sair", "/exit"]);
+    try {
+      await runRepl(session, io, { cwd, interactive: true });
+      expect(bodies).toHaveLength(0);
+      expect(io.outputs.join("\n")).toContain("não aprovado");
+      expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
+      const auditPath = join(cwd, ".astro", "audit.jsonl");
+      expect(existsSync(auditPath) ? readFileSync(auditPath, "utf8") : "").not.toContain("attachment.approved");
+    } finally {
+      stop();
+    }
+  });
+
+  test("sem TTY imagem é negada sem perguntar", async () => {
+    const { cwd, home, bodies, session, stop } = e2eSetup();
+    const io = new ScriptedIO(["/attach a.png", "resuma", "/exit"]);
+    try {
+      await runRepl(session, io, { cwd });
+      expect(bodies).toHaveLength(0);
+      expect(io.outputs.join("\n")).toContain("não aprovado");
+      expect(io.prompts.join("\n")).not.toContain("aprovar envio?");
+      expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
     } finally {
       stop();
     }

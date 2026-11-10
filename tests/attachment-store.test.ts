@@ -81,6 +81,19 @@ describe("validateArtifactRoot", () => {
     expect(existsSync(root)).toBe(true);
     if (process.platform !== "win32") expect(statSync(root).mode & 0o777).toBe(0o700);
   });
+
+  test("raiz cujo pai é arquivo falha tipada e não grava", () => {
+    const base = mkdtempSync(join(tmpdir(), "astro-art-blocked-"));
+    dirs.push(base);
+    const cwd = join(base, "work"), astroHome = join(base, "home"), parent = join(base, "arquivo");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(astroHome, { recursive: true });
+    writeFileSync(parent, "x");
+    let thrown: unknown;
+    try { new ArtifactStore(join(parent, "artifacts"), { cwd, astroHome, checkPrivate: () => true }); } catch (error) { thrown = error; }
+    expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
+    expect(existsSync(join(parent, "artifacts"))).toBe(false);
+  });
 });
 
 describe("ArtifactStore", () => {

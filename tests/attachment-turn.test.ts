@@ -70,11 +70,18 @@ describe("prepareTurnAttachments (ADR-0026, #392)", () => {
 
   test("aprovação grava, preenche ref/hash e audita sem conteúdo", async () => {
     const events: Array<{ tipo: string; payload: Record<string, unknown> }> = [];
+    let prompt = "";
     const prepared = await prepareTurnAttachments({
       attachments: [image("a.png", pngData)], owner, store,
-      approver: (items) => { expect(items[0]).toMatchObject({ name: "a.png", pixels: { width: 1, height: 1 } }); return true; },
+      approver: (items) => {
+        prompt = formatApprovalPrompt(items);
+        expect(items[0]).toMatchObject({ name: "a.png", pixels: { width: 1, height: 1 } });
+        return true;
+      },
       audit: (tipo, payload) => events.push({ tipo, payload }),
     });
+    expect(prompt).toContain("a.png");
+    expect(prompt).not.toContain(pngData);
     expect(prepared.metas[0]).toMatchObject({ kind: "image", mediaType: "image/png" });
     expect(prepared.metas[0]?.ref).toBeString();
     expect(prepared.metas[0]?.hash).toBeString();
@@ -84,9 +91,16 @@ describe("prepareTurnAttachments (ADR-0026, #392)", () => {
     expect(JSON.stringify(events[0])).not.toContain(pngData);
   });
 
-  test("formatApprovalPrompt lista nome, bytes e MPx", () => {
-    const text = formatApprovalPrompt([{ name: "a.png", mediaType: "image/png", sizeBytes: 70, pixels: { width: 1, height: 1 } }]);
-    expect(text).toContain("não redigíveis");
-    expect(text).toContain("1. a.png - 70 bytes - 1x1 (0.0 MPx)");
+  test("formatApprovalPrompt mostra path, sanitiza controle e mantém nome sem path", () => {
+    const text = formatApprovalPrompt([
+      { name: "a.png", path: "/x/um/a.png", mediaType: "image/png", sizeBytes: 70, pixels: { width: 1, height: 1 } },
+      { name: "só-nome.png", mediaType: "image/png", sizeBytes: 70 },
+      { name: "mal\nicioso\u001b[31m.png", mediaType: "image/png", sizeBytes: 70 },
+    ]);
+    expect(text).toContain("1. /x/um/a.png - 70 bytes - 1x1 (0.0 MPx)");
+    expect(text).toContain("2. só-nome.png - 70 bytes - dimensão desconhecida");
+    expect(text.split("\n")).toHaveLength(4); // título + 3 itens: `\n` no nome não forja linha
+    expect(text).not.toContain("mal\nicioso");
+    expect(text).not.toContain("\u001b");
   });
 });
