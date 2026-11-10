@@ -34,8 +34,19 @@ function aclEnv(path: string): NodeJS.ProcessEnv {
   };
 }
 
-function isAllowedTrustee(trustee: string, userSid: string): boolean {
+/**
+ * Normaliza um trustee do SDDL para comparação por SID: a conta built-in
+ * Administrator (…-500) aparece como alias `LA` no SDDL (ex.: `runneradmin` no
+ * runner windows do CI) e, nesse caso, `LA` é exatamente o próprio usuário.
+ */
+export function canonicalTrustee(trustee: string, userSid: string): string {
   const sid = trustee.trim().toUpperCase();
+  if (sid === "LA" && userSid.trim().toUpperCase().endsWith("-500")) return userSid.trim().toUpperCase();
+  return sid;
+}
+
+function isAllowedTrustee(trustee: string, userSid: string): boolean {
+  const sid = canonicalTrustee(trustee, userSid);
   if (sid === "") return false;
   return sid === userSid.trim().toUpperCase() || SYSTEM_TRUSTEES.has(sid) || ADMIN_TRUSTEES.has(sid);
 }
