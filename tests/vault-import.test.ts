@@ -20,7 +20,9 @@ const projectConfig = (credentialRef = "KEY") => ({
   agent: { model: "p/m1", maxSteps: 2, tools: [] as string[] },
   paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
 });
-const profile = (id: string, credentialRef = "KEY") => ({
+// A referência do store é diferente da do projeto: a camada global reserva a
+// referência de credencial (ADR-0029) e o projeto não pode reusá-la.
+const profile = (id: string, credentialRef = "GLOBAL_KEY") => ({
   id,
   name: id.toUpperCase(),
   kind: "openai-compat",
@@ -39,7 +41,7 @@ function setup(opts: { project?: boolean; store?: boolean } = {}) {
     dir,
     configPath,
     storePath,
-    env: { ASTRO_HOME: dir, KEY: SENTINEL },
+    env: { ASTRO_HOME: dir, KEY: SENTINEL, GLOBAL_KEY: SENTINEL },
     vault: new Vault(join(dir, "vault.json"), fake),
   };
 }

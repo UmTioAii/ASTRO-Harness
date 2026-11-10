@@ -128,7 +128,7 @@ test("list mescla projeto, global e env com precedência do projeto", () => {
         name: "p",
         kind: "openai-compat",
         baseUrl: "https://global-p.example/v1",
-        credentialRef: "KEY",
+        credentialRef: "GLOBAL_KEY",
         models: [{ id: "m1", tags: [], context: 1000 }],
       },
     ],
@@ -182,7 +182,7 @@ test("list marca o provider do projeto quando agent.profile decide", () => {
     activeProfileId: "outro",
     profiles: [{
       id: "outro", name: "Outro", kind: "openai-compat",
-      baseUrl: "https://o.example/v1", credentialRef: "KEY",
+      baseUrl: "https://o.example/v1", credentialRef: "GLOBAL_KEY",
       models: [{ id: "m1", tags: [], context: 1000 }],
     }],
   }, join(home, "providers.json"));

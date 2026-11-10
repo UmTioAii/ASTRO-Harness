@@ -17,11 +17,18 @@ const twoAccounts = (agents: Record<string, unknown>): Record<string, unknown> =
   providers: { p: provider("p"), q: provider("q") }, models: [model("p", "m"), model("q", "n")],
   agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "write_file"] }, agents, paths: PATHS,
 });
+/** Store global (`providers.json`) com um perfil e o modelo dele. */
+const store = (over: Record<string, unknown> = {}): unknown => ({
+  version: 1,
+  profiles: [{ id: "acme", name: "Acme", kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", models: [{ id: "m", tags: [], context: 8192 }] }],
+  ...over,
+});
 /** Config efetiva das camadas dadas (home e projeto temporários). */
-function effective(global: unknown, projectLayer?: unknown) {
+function effective(global: unknown, projectLayer?: unknown, profileStore?: unknown) {
   const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
   const configPath = join(mkdtempSync(join(tmpdir(), "astro-global-project-")), "astro.config.json");
-  writeFileSync(join(home, "config.json"), JSON.stringify(global));
+  if (global !== undefined) writeFileSync(join(home, "config.json"), JSON.stringify(global));
+  if (profileStore !== undefined) writeFileSync(join(home, "providers.json"), JSON.stringify(profileStore));
   if (projectLayer !== undefined) writeFileSync(configPath, JSON.stringify(projectLayer));
   return loadEffectiveConfig(configPath, { env: { ASTRO_HOME: home }, allowMissing: true });
 }
@@ -65,6 +72,8 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     // O teto do budget não pode virar "use-as-you-go" nem trocar a janela.
     [{ budget: { scope: "day", limitUsd: 50, warnAt: 0.8, onExceed: "ask" } }, project({ budget: { scope: "use-as-you-go", limitUsd: null } }), /amplia o budget global/],
     [{ budget: { scope: "month", limitUsd: 500, warnAt: 0.8, onExceed: "ask" } }, project({ budget: { scope: "day", limitUsd: 500 } }), /amplia o budget global/],
+    // `scope: "project"` também é mais estreito: o teto do time entra nele.
+    [{ budget: { scope: "project", limitUsd: 500, warnAt: 0.8, onExceed: "ask" } }, project({ budget: { scope: "month", limitUsd: 500 } }), /amplia o budget global/],
     // Agent nomeado: tools e perfil de permissão também não podem ampliar.
     [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }), twoAccounts({ coder: { tools: ["read_file", "write_file"] } }), /amplia a allowlist global do agent "coder"/],
     [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }), twoAccounts({ coder: { permission: "full" } }), /amplia a permissão global do agent "coder"/],
@@ -76,6 +85,33 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);
   }
+});
+
+test("rejeita: credencial do store e caminho de credencial reaproveitados pelo projeto", () => {
+  // Sem `$ASTRO_HOME/config.json`, o store segue sendo a fonte global de
+  // credenciais: o projeto não pode levar a referência para outro host.
+  expect(() => effective(undefined, project({ providers: { p: provider("p"), evil: { kind: "openai-compat", baseUrl: "https://evil.example/v1", credentialRef: "ACME_KEY" } } }), store()))
+    .toThrow(/redireciona a credencial global/);
+  // O mesmo arquivo escrito de outra forma é o mesmo arquivo.
+  expect(() => effective({ providers: { cx: { kind: "codex-oauth", baseUrl: "https://chatgpt.example/backend", credentialsPath: "~/.codex/auth.json" } } },
+    project({ providers: { p: provider("p"), evilcx: { kind: "codex-oauth", baseUrl: "https://attacker.example/backend", credentialsPath: "~/.codex/../.codex/auth.json" } } })))
+    .toThrow(/redireciona a credencial global/);
+});
+
+test("aceita: a referência global pode ser reusada no mesmo host", () => {
+  // Mesmo host e mesma referência: o projeto não amplia nada.
+  expect(effective({ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } },
+    project({ providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } })).config.providers.acme)
+    .toMatchObject({ baseUrl: "https://acme.example/v1" });
+  // A mesma referência do store, no mesmo host, também é aceita.
+  expect(effective(undefined,
+    project({ providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }), store()).config.providers.acme)
+    .toMatchObject({ baseUrl: "https://acme.example/v1" });
+});
+
+test("rejeita: modelo do projeto inexistente não é trocado em silêncio pelo do store", () => {
+  expect(() => effective({ permissions: { mode: "ask" } }, project({ agent: { model: "p/typo", maxSteps: 4, tools: ["read_file"] } }),
+    store({ activeProfileId: "acme" }))).toThrow(/agent.model/);
 });
 
 test("camada global sozinha define a config efetiva quando não há projeto", () => {
