@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inspectWindowsAcl } from "../src/attachments/acl";
 import {
   ArtifactStore,
   resolveArtifactRoot,
@@ -105,6 +106,31 @@ describe("validateArtifactRoot", () => {
       expect(existsSync(root)).toBe(false);
     } finally {
       execFileSync("icacls", [parent, "/remove", "*S-1-1-0"], { stdio: "ignore" });
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("store endurece a raiz criada e a checagem real aprova", () => {
+    const { cwd, astroHome } = sandbox();
+    const root = join(astroHome, "hardened-artifacts");
+    new ArtifactStore(root, { cwd, astroHome });
+    const acl = inspectWindowsAcl(root);
+    expect(acl).toBeDefined();
+    const trustees = [...acl!.sddl.matchAll(/\(([^)]*)\)/g)].map(([, body]) =>
+      body.split(";")[5]!.trim().toUpperCase(),
+    );
+    expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl!.userSid.toUpperCase()].sort());
+    expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
+  });
+
+  test.skipIf(process.platform !== "win32")("rejeita raiz pré-existente com ACE de Guests", () => {
+    const { cwd, astroHome } = sandbox();
+    const root = join(astroHome, "guests-artifacts");
+    mkdirSync(root, { recursive: true });
+    try {
+      execFileSync("icacls", [root, "/grant", "*S-1-5-32-546:(OI)(CI)(R)"], { stdio: "ignore" });
+      expect(() => validateArtifactRoot(root, { cwd, astroHome })).toThrow(/privad/i);
+    } finally {
+      execFileSync("icacls", [root, "/remove", "*S-1-5-32-546"], { stdio: "ignore" });
     }
   });
 
