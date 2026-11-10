@@ -22,6 +22,8 @@ export interface RunTuiOptions {
   allowCritical?: readonly string[];
   /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
+  /** `--artifact-root` (ADR-0026): raiz do artifact store de imagens; ausente usa env/default. */
+  artifactRoot?: string;
 }
 
 /** Ink desmontaria no ctrl+c antes do handler da app; a app decide a saída. */
@@ -165,6 +167,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       trustAsk: async (dir) => trustChoice(await approvals.askText(trustPrompt(dir))),
       ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
       ...(opts.allowSensitive === undefined ? {} : { allowSensitive: opts.allowSensitive }),
+      ...(opts.artifactRoot === undefined ? {} : { artifactRoot: opts.artifactRoot }),
       ...(model === undefined ? {} : { model }),
     });
     // `--provider` explícito vence o último modelo salvo em .astro/tui.json.

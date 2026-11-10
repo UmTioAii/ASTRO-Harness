@@ -16,12 +16,15 @@ import { configSummaryOf, type ConfigSummary } from "./config-summary";
 import type { CodexLoginStart } from "../provider/codex-login";
 import { expandHomePath, saveCodexAuth, startCodexLogin } from "../provider/codex-login";
 import { loadEffectiveConfig, providerIdentityFor, type ProviderSelection, type ProviderSource } from "../provider/profiles";
-import type { ChatMessage } from "../provider/types";
-import type { FetchLike } from "../provider/types";
-import type { AttachmentMeta } from "../attachments/model";
+import type { ChatMessage, FetchLike, ImagePart } from "../provider/types";
+import type { WindowsAcl } from "../attachments/acl";
+import { AttachmentError, type AttachmentMeta, type LoadedAttachment } from "../attachments/model";
+import { ArtifactStore, resolveArtifactRoot } from "../attachments/store";
+import { prepareTurnAttachments, type AttachmentApprover } from "../attachments/turn";
+import { effectiveOutputCap } from "../output-limit";
 import { Registry, type ModelEntry } from "../registry";
 import { Ledger } from "../ledger";
-import { isPermissionMode, resolvePermissionMode, type PermissionMode } from "../permissions";
+import { isPermissionMode, resolveAstroHome, resolvePermissionMode, type PermissionMode } from "../permissions";
 import { readAgentsMd } from "../spawn";
 import { forceCompaction, recordCompactionSuccess } from "../compaction/breaker";
 import { assertWithinQuota, quotaStatus, type QuotaStatus } from "../quota";
@@ -54,6 +57,18 @@ export interface AgentSessionOptions {
   allowCritical?: readonly string[];
   /** `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
+  /** Raiz do artifact store de imagens (ADR-0026); ausente usa env/`$ASTRO_HOME/attachments`. */
+  artifactRoot?: string;
+  /** Injeção de testes para a privacidade da raiz (ADR-0026); nunca via env (I-03/I-11). */
+  artifactCheckPrivate?: (path: string) => boolean;
+  /** Injeção de testes para o endurecimento win32 da raiz; ausente usa o real. */
+  artifactHardenPrivate?: (path: string) => WindowsAcl;
+}
+
+/** Opções de um turno de chat: anexos carregados e aprovador explícito de imagem. */
+export interface SendTurnOptions {
+  attachments?: readonly LoadedAttachment[];
+  approveAttachment?: AttachmentApprover;
 }
 
 export interface ProviderInfo {
@@ -110,6 +125,12 @@ function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
 }
 
+/** I-03/#392: imagem é runtime-only; o histórico persistível guarda só `ref`/`hash`. */
+function withoutImages(message: ChatMessage): ChatMessage {
+  const { images: _images, ...rest } = message;
+  return rest;
+}
+
 /** Sobe até achar `.git`; usado para não gravar credenciais dentro do repositório. */
 function findGitRoot(start: string): string | undefined {
   let dir = resolve(start);
@@ -127,6 +148,7 @@ export class AgentSession {
   readonly #configPath: string;
   readonly #cwd: string;
   readonly #env: Record<string, string | undefined> | undefined;
+  readonly #artifactRoot: string;
   #config: AstroConfig;
   #providerSource: ProviderSource;
   #providerSelection: ProviderSelection;
@@ -144,9 +166,12 @@ export class AgentSession {
   readonly #fetchLike: FetchLike | undefined;
   readonly #allowCritical: readonly string[] | undefined;
   readonly #allowSensitive: readonly string[] | undefined;
+  readonly #artifactCheckPrivate: ((path: string) => boolean) | undefined;
+  readonly #artifactHardenPrivate: ((path: string) => WindowsAcl) | undefined;
   #modelRef: string;
   #permissionMode: PermissionMode;
   #messages: ChatMessage[];
+  #imageStoreInstance: ArtifactStore | undefined;
   #turns = 0;
   #steps = 0;
   #tokensIn = 0;
@@ -162,6 +187,11 @@ export class AgentSession {
     this.#configPath = opts.configPath;
     this.#cwd = opts.cwd ?? process.cwd();
     this.#env = opts.env;
+    this.#artifactRoot = resolveArtifactRoot({
+      flag: opts.artifactRoot,
+      env: opts.env,
+      astroHome: resolveAstroHome(opts.env),
+    });
     const effective = loadEffectiveConfig(opts.configPath, {
       ...(opts.env === undefined ? {} : { env: opts.env }),
       ...(opts.provider === undefined ? {} : { provider: opts.provider }),
@@ -187,6 +217,8 @@ export class AgentSession {
     this.#fetchLike = opts.fetchLike;
     this.#allowCritical = opts.allowCritical;
     this.#allowSensitive = opts.allowSensitive;
+    this.#artifactCheckPrivate = opts.artifactCheckPrivate;
+    this.#artifactHardenPrivate = opts.artifactHardenPrivate;
     if (this.#config.tools?.run_command?.sandbox === false) this.#warnings.push(SANDBOX_DISABLED_WARNING);
     this.#modelRef = opts.model ?? this.#config.agent.model;
     // Modo inicial idêntico ao do run (app.ts lê só process.env, nunca o env injetado):
@@ -208,6 +240,14 @@ export class AgentSession {
   /** Auditor novo por evento: outro Auditor (runTask) avança o seq no mesmo arquivo. */
   #append(tipo: string, payload: Record<string, unknown>): void {
     new Auditor(this.#auditPath).append({ run: this.id, agent: "default", tipo, payload });
+  }
+
+  /** Store de imagem criado só na primeira imagem; raiz resolvida uma vez no construtor. */
+  #imageStore(): ArtifactStore {
+    return this.#imageStoreInstance ??= new ArtifactStore(this.#artifactRoot, { cwd: this.#cwd, astroHome: resolveAstroHome(this.#env),
+      ttlDays: this.#config.attachments.artifactTtlDays, maxBytes: this.#config.attachments.artifactMaxBytes,
+      ...(this.#artifactCheckPrivate === undefined ? {} : { checkPrivate: this.#artifactCheckPrivate }),
+      ...(this.#artifactHardenPrivate === undefined ? {} : { hardenPrivate: this.#artifactHardenPrivate }) });
   }
 
   get messages(): readonly ChatMessage[] {
@@ -514,7 +554,7 @@ export class AgentSession {
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
     this.#messages = [
       { role: "system", content: this.#systemPrompt },
-      ...snapshot.messages.filter((message) => message.role !== "system").map((message) => ({ ...message })),
+      ...snapshot.messages.filter((message) => message.role !== "system").map(withoutImages),
     ];
     if (this.#registry.get(snapshot.model)?.status === "active") this.#modelRef = snapshot.model;
     this.#turns = snapshot.turns;
@@ -527,11 +567,13 @@ export class AgentSession {
     this.#append("session.resumed", { turns: snapshot.turns, model: this.#modelRef });
   }
 
+  /** 4º parâmetro (`attachments`) é transitório: a TUI migra para `SendTurnOptions` no próximo PR. Com o 5º, ele é a fonte de verdade (dedupe, teto, aprovação, store e metas). */
   async send(
     prompt: string,
     signal?: AbortSignal,
     onToken?: (text: string) => void,
     attachments?: AttachmentMeta[],
+    turn?: SendTurnOptions,
   ): Promise<TurnResult> {
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
     if (this.#busy) throw new Error("turno já em andamento");
@@ -539,8 +581,29 @@ export class AgentSession {
     try {
       const before = this.#messages;
       const baseline = this.#ledger.readAll().length;
-      const guard = guardContext([...before, { role: "user", content: prompt }], this.contextLimit());
+      let metas = attachments;
+      let images: ImagePart[] | undefined;
+      if (turn?.attachments !== undefined) {
+        const prepared = await prepareTurnAttachments({ attachments: turn.attachments, owner: { sessionId: this.id, runId: this.id },
+          ...(turn.approveAttachment === undefined ? {} : { approver: turn.approveAttachment }),
+          ...(turn.attachments.some((a) => a.kind === "image") ? { store: this.#imageStore() } : {}),
+          audit: (tipo, payload) => this.#append(tipo, payload) });
+        metas = prepared.metas.length === 0 ? undefined : prepared.metas;
+        images = prepared.images.length === 0 ? undefined : prepared.images;
+      }
+      // A imagem entra na estimativa e no pré-check antes de qualquer request (ADR-0026).
+      const guard = guardContext([...before, { role: "user", content: prompt,
+        ...(metas === undefined ? {} : { attachments: metas }),
+        ...(images === undefined ? {} : { images }) }], this.contextLimit());
       const history = guard.messages.slice(0, -1); // o último é o prompt deste turno
+      if (images !== undefined) {
+        const window = this.contextLimit();
+        const reserve = effectiveOutputCap(this.#config.outputLimit, window);
+        if (guard.tokens + reserve > window) {
+          throw new AttachmentError("attachment_turn_too_large",
+            `imagem excede a janela de contexto do modelo: ~${guard.tokens} tokens + ${reserve} de saída > ${window}`);
+        }
+      }
       this.#append("chat.prompt", { taskHash: shortTaskHash(prompt) });
 
       let report: RunReport;
@@ -557,7 +620,8 @@ export class AgentSession {
           suppressRunEvents: true,
           ...(this.#allowMissing ? { allowMissingConfig: true } : {}),
           history,
-          ...(attachments === undefined ? {} : { attachments }),
+          ...(metas === undefined ? {} : { attachments: metas }),
+          ...(images === undefined ? {} : { images }),
           ...(onToken === undefined ? {} : { onToken }),
           ...(this.#approveSwap === undefined ? {} : { approveSwap: this.#approveSwap }),
           ...(this.#budgetDecider === undefined ? {} : { onBudgetExceeded: this.#budgetDecider }),
@@ -579,7 +643,8 @@ export class AgentSession {
         throw error;
       }
 
-      this.#messages = [...(report.messages ?? guard.messages), { role: "assistant", content: report.final }];
+      const next: ChatMessage[] = [...(report.messages ?? guard.messages), { role: "assistant", content: report.final }];
+      this.#messages = next.map(withoutImages);
       this.#turns++;
       this.#steps += report.steps;
       this.#tokensIn += report.tokensIn;

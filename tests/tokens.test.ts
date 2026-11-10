@@ -33,6 +33,23 @@ describe("contagem de tokens por provider (S-19, D-22)", () => {
     expect(countMessageTokens([user("abcde")])).toEqual({ tokens: 2, source: "estimate" });
   });
 
+  test("imagem soma ceil(base64/4) e força a fonte para estimate (ADR-0026)", () => {
+    const withImage = (content: string, dataBase64: string): ChatMessage =>
+      ({ role: "user", content, images: [{ mediaType: "image/png", dataBase64 }] });
+    expect(countMessageTokens([withImage("", "a".repeat(8))])).toEqual({ tokens: 2, source: "estimate" });
+    expect(countMessageTokens([withImage("abcd", "a".repeat(8))])).toEqual({ tokens: 3, source: "estimate" });
+    expect(countRequestTokens({ model: "m1", messages: [withImage("abcd", "a".repeat(8))] }))
+      .toEqual({ tokens: 3, source: "estimate" });
+
+    const seen: string[] = [];
+    registerTokenizer("native", (text) => { seen.push(text); return text.length; }, "chars");
+    const mixed = countMessageTokens([withImage("abcd", "a".repeat(8))], { provider: "native" });
+    expect(mixed).toEqual({ tokens: 6, source: "estimate" }); // 4 medidos + 2 estimados
+    expect(mixed).not.toHaveProperty("tokenizer");
+    expect(seen).not.toContain("a".repeat(8)); // base64 nunca vai ao tokenizer nativo
+    expect(countMessageTokens([user("abcd")], { provider: "native" })).toMatchObject({ tokens: 4, source: "measured" });
+  });
+
   test("tokenizer nativo registrado por provider é medido; outro provider estima", () => {
     registerTokenizer("native", (text) => text.length, "native-test");
     expect(hasTokenizer("native")).toBe(true);

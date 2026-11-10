@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { AgentSession } from "../src/chat/agent-session";
+import type { LoadedAttachment } from "../src/attachments/model";
 import { loadConfig } from "../src/config";
 import type { PermissionMode } from "../src/permissions";
 import type { ChatMessage } from "../src/provider/types";
 import { Ledger } from "../src/ledger";
-import { testEnv } from "./setup";
+import { FAKE_PRIVATE_ACL, testEnv } from "./setup";
 
 interface Body { model?: string; messages?: ChatMessage[] }
 
@@ -34,6 +35,7 @@ function setup(opts: {
     },
     models: [
       { provider: "p", id: "m1", tags: ["writing-code"], context: opts.context ?? 8192,
+        capabilities: { vision: true },
         price: { inputPerM: 1, outputPerM: 1, fonte: "t", verificado: false } },
       { provider: "p", id: "m2", tags: ["writing-code"], context: opts.context ?? 8192,
         price: { inputPerM: 1, outputPerM: 1, fonte: "t", verificado: false } },
@@ -79,6 +81,35 @@ describe("AgentSession (T1, #62)", () => {
       chat.close();
       stop();
     }
+  });
+  test("turno com imagem não persiste base64 no histórico nem no snapshot", async () => {
+    const { cwd, session, stop } = setup();
+    // ACL fake injetado: no runner windows do CI o PowerShell real estoura o timeout.
+    const chat = session({ artifactCheckPrivate: () => true, artifactHardenPrivate: () => FAKE_PRIVATE_ACL });
+    const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    try {
+      const attachment: LoadedAttachment = { kind: "image", path: join(cwd, "a.png"), name: "a.png", sizeBytes: 70, mediaType: "image/png", data: pngData, hash: "0".repeat(64) };
+      await chat.send("olhe", undefined, undefined, undefined, { attachments: [attachment], approveAttachment: () => true });
+      const snapshot = chat.snapshot(), json = JSON.stringify(snapshot);
+      expect(snapshot.messages.some((m) => m.images !== undefined)).toBe(false);
+      expect(json).not.toContain("dataBase64");
+      expect(json).not.toContain(pngData);
+      const metas = snapshot.messages.flatMap((m) => m.attachments ?? []);
+      expect(metas[0]).toMatchObject({ kind: "image", name: "a.png" });
+      expect(metas[0]?.ref).toBeString();
+    } finally { chat.close(); stop(); }
+  });
+
+  test("artifactCheckPrivate injetado chega ao store de imagens e falha fechado", async () => {
+    const { cwd, session, bodies, stop } = setup();
+    const chat = session({ artifactCheckPrivate: () => false });
+    const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    try {
+      const attachment: LoadedAttachment = { kind: "image", path: join(cwd, "a.png"), name: "a.png", sizeBytes: 70, mediaType: "image/png", data: pngData, hash: "0".repeat(64) };
+      await expect(chat.send("olhe", undefined, undefined, undefined, { attachments: [attachment], approveAttachment: () => true }))
+        .rejects.toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
+      expect(bodies).toHaveLength(0);
+    } finally { chat.close(); stop(); }
   });
   test("emite run.started/chat.prompt/run.completed por sessão (só taskHash)", async () => {
     const { cwd, session, stop } = setup();

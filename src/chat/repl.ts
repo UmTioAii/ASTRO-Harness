@@ -4,12 +4,14 @@ import { runProviderWizard } from "./provider-wizard";
 import { configLines, type ConfigSummary } from "./config-summary";
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, resolveAstroHome, type PermissionMode } from "../permissions";
 import { loadAttachment, loadPastedText } from "../attachments/load";
-import { materializePrompt, toMeta } from "../attachments/render";
+import { materializePrompt } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
-import type { AttachmentMeta, LoadedAttachment } from "../attachments/model";
+import { isYes } from "./approvers";
+import { dedupeKey, type AttachmentMeta, type LoadedAttachment } from "../attachments/model";
+import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
 import { loadTrustedStore, trustStatePath } from "../trust";
 import type { ProfileManager, ProfileView } from "../provider/profile-manager";
-import type { ModelInfo, ProviderInfo, SessionSnapshot, TurnResult } from "./agent-session";
+import type { ModelInfo, ProviderInfo, SendTurnOptions, SessionSnapshot, TurnResult } from "./agent-session";
 import type { HealthCheck, HealthReport } from "../health";
 import type { CodexLoginStart } from "../provider/codex-login";
 import type { SessionStore } from "./store";
@@ -32,7 +34,7 @@ export interface ReplIO {
 
 export interface ChatSession {
   readonly model: string;
-  send(prompt: string, signal?: AbortSignal, onToken?: (text: string) => void, attachments?: AttachmentMeta[]): Promise<TurnResult>;
+  send(prompt: string, signal?: AbortSignal, onToken?: (text: string) => void, attachments?: AttachmentMeta[], turn?: SendTurnOptions): Promise<TurnResult>;
   compact(force?: boolean): Promise<string>;
   clear(): void;
   resume(snapshot: SessionSnapshot): void;
@@ -80,6 +82,8 @@ export interface ReplOptions {
   manager?: ProfileManager;
   /** Leitor do clipboard para `/paste` (teste/injeção); ausente usa o comando nativo. */
   clipboard?: () => string;
+  /** TTY real; sem isso aprovação de imagem e confirmação fora do cwd negam (fail closed). */
+  interactive?: boolean;
 }
 
 function messageOf(error: unknown): string {
@@ -184,9 +188,16 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
     pending.length === 0
       ? "nenhum anexo pendente"
       : pending.map((attachment, index) => `${index + 1}. ${attachment.name} (${attachment.sizeBytes} bytes)`).join("\n");
+  const readFresh = (prompt: string): Promise<string | null> => (io.readFresh === undefined ? io.read(prompt) : io.readFresh(prompt));
   const confirmOutside = async (absolute: string): Promise<boolean> => {
-    const answer = await (io.readFresh ?? io.read)(`anexo fora do cwd: ${absolute} — aprovar? [s/N] `);
-    return answer !== null && /^(s|sim|y|yes)/i.test(answer.trim());
+    if (opts.interactive !== true) return false;
+    const answer = await readFresh(`anexo fora do cwd: ${absolute} — aprovar? [s/N] `);
+    return isYes(answer);
+  };
+  const approveAttachment: AttachmentApprover = async (items) => {
+    if (opts.interactive !== true) return false;
+    io.write(formatApprovalPrompt(items));
+    return isYes(await readFresh("aprovar envio? [s/N] "));
   };
   try {
     for (;;) {
@@ -448,15 +459,16 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
           continue;
         }
         try {
-          pending.push(
-            await loadAttachment({
-              path: command.path,
-              ...(command.range === undefined ? {} : { range: command.range }),
-              cwd,
-              astroHome,
-              confirmOutsideCwd: confirmOutside,
-            }),
-          );
+          const attachment = await loadAttachment({
+            path: command.path,
+            ...(command.range === undefined ? {} : { range: command.range }),
+            cwd,
+            astroHome,
+            confirmOutsideCwd: confirmOutside,
+          });
+          const existing = pending.find((item) => dedupeKey(item) === dedupeKey(attachment));
+          if (existing !== undefined) { io.write(paint(`erro: anexo já adicionado: ${existing.name} (o mesmo anexo já está pendente)`, RED, style)); continue; }
+          pending.push(attachment);
           io.write(`anexo adicionado: ${command.path}\n${listPending()}`);
         } catch (error) {
           io.write(paint(`erro: ${messageOf(error)}`, RED, style));
@@ -466,7 +478,10 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
       if (command.kind === "paste") {
         try {
           const text = opts.clipboard === undefined ? readClipboardText() : opts.clipboard();
-          pending.push(loadPastedText(text));
+          const pasted = loadPastedText(text);
+          const existing = pending.find((item) => dedupeKey(item) === dedupeKey(pasted));
+          if (existing !== undefined) { io.write(paint(`erro: anexo já adicionado: ${existing.name} (o mesmo anexo já está pendente)`, RED, style)); continue; }
+          pending.push(pasted);
           io.write(`anexo adicionado: clipboard\n${listPending()}`);
         } catch (error) {
           io.write(paint(`erro: ${messageOf(error)}`, RED, style));
@@ -494,8 +509,13 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
       }
       try {
         const prompt = materializePrompt(command.text, pending);
-        const metas = pending.map(toMeta);
-        const result = await session.send(prompt, opts.signal, undefined, metas.length === 0 ? undefined : metas);
+        const result = await session.send(
+          prompt,
+          opts.signal,
+          undefined,
+          undefined,
+          pending.length === 0 ? undefined : { attachments: pending, approveAttachment },
+        );
         pending.length = 0;
         io.write(result.final);
         io.write(paint(statusLine(result), DIM, style));

@@ -15,6 +15,13 @@ describe("context guard do chat (T1, #62)", () => {
     expect(estimateMessagesTokens([withCall])).toBeGreaterThan(0);
   });
 
+  test("imagem soma custo fixo de ceil(base64/4) (ADR-0026)", () => {
+    const image = (dataBase64: string): ChatMessage => ({ role: "user", content: "", images: [{ mediaType: "image/png", dataBase64 }] });
+    expect(estimateMessagesTokens([image("a".repeat(8))])).toBe(2);
+    expect(estimateMessagesTokens([image("")])).toBe(0);
+    expect(estimateMessagesTokens([{ role: "user", content: "abcd", images: [{ mediaType: "image/png", dataBase64: "a".repeat(8) }] }])).toBe(3);
+  });
+
   test("avisa em 80% e não mexe abaixo disso", () => {
     const messages = [sys, ...turn("a".repeat(20), "b".repeat(20))];
     const guard = guardContext(messages, 100);
