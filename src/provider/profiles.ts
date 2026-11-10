@@ -250,7 +250,10 @@ export function loadProjectConfig(configPath: string, opts: { env?: NodeJS.Proce
   const homeEnv = { ...process.env, ...opts.env };
   const global = homeEnv.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(homeEnv);
   const declared = mergeConfigLayers(global ?? {}, loadConfigRaw(configPath));
-  if (global !== undefined) assertNarrowed(global, declared);
+  // O store é fonte global de credenciais mesmo sem `$ASTRO_HOME/config.json`.
+  const store = loadProfileStore(profilesPath(homeEnv));
+  const storeProviders = Object.fromEntries(store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));
+  assertNarrowed(global ?? {}, declared, storeProviders);
   return validateConfig(declared);
 }
 
@@ -403,8 +406,9 @@ export function resolveEffectiveConfig(input: {
       globalModels.push({ provider: profile.id, id: model.id, tags: model.tags, context: model.context });
     }
   }
-  // O estreitamento olha a camada global e o store: a credencial global não muda de host.
-  if (global !== undefined) assertNarrowed(global, declared, globalProviders);
+  // O estreitamento olha a camada global e o store: a credencial global não
+  // muda de host. O store vale mesmo sem `$ASTRO_HOME/config.json`.
+  assertNarrowed(global ?? {}, declared, globalProviders);
 
   const providers: Record<string, unknown> = { ...globalProviders, ...(isPlainObject(base.providers) ? base.providers : {}) };
   const models = mergeModelLayers(globalModels, Array.isArray(base.models) ? base.models : []);
@@ -542,6 +546,16 @@ export function loadEffectiveConfig(
   }
   const project = exists ? loadConfigRaw(configPath) : undefined;
   const global = useGlobal ? loadGlobalConfig(homeEnv) : undefined;
+  // O `agent.model` declarado precisa existir nas camadas (global + projeto):
+  // sem esta checagem, um modelo inexistente seria trocado em silêncio pelo
+  // modelo resolvido (store/env).
+  const merged = mergeConfigLayers(global ?? {}, project ?? {});
+  const declaredAgent = isPlainObject(merged.agent) ? merged.agent : {};
+  const declaredModels = Array.isArray(merged.models) ? merged.models : [];
+  if (typeof declaredAgent.model === "string"
+    && !declaredModels.some((model) => isPlainObject(model) && `${String(model.provider)}/${String(model.id)}` === declaredAgent.model)) {
+    throw new ConfigError(`config inválida: "agent.model" referencia o modelo "${declaredAgent.model}", que não está declarado em "models"`);
+  }
   const store = loadProfileStore(opts.storePath ?? profilesPath(homeEnv));
   const envProfile = profileFromEnv(env);
   return resolveEffectiveConfig({
