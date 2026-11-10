@@ -136,11 +136,18 @@ export function assertNarrowed(global: Record<string, unknown>, merged: Record<s
   // Provider: a credencial global não muda de host (comparação pela referência).
   // A referência é reservada pela camada global (config global + store): o
   // projeto pode reusá-la no mesmo host, nunca em outro. O perfil efêmero de
-  // env entra no conjunto: a escolha do próprio usuário não é bloqueio.
+  // env não entra: ele é por execução e a escolha do usuário não é bloqueio.
   const endpoints = new Map<string, Set<string>>();
+  // Os providers globais por id e por referência: a política de custo (domínio
+  // de quota) acompanha a credencial e o provider herdado.
+  const globalById = new Map<string, Record<string, unknown>[]>();
+  const globalByRef = new Map<string, Record<string, unknown>[]>();
   const globalProviders = isPlainObject(global.providers) ? global.providers : {};
-  for (const provider of [...Object.values(globalProviders), ...Object.values(storeProviders)]) {
+  for (const [id, provider] of [...Object.entries(storeProviders), ...Object.entries(globalProviders)]) {
     if (!isPlainObject(provider)) continue;
+    const byId = globalById.get(id) ?? [];
+    byId.push(provider);
+    globalById.set(id, byId);
     const endpoint = endpointOf(provider);
     for (const key of CREDENTIAL_KEYS) {
       const ref = provider[key];
@@ -149,19 +156,28 @@ export function assertNarrowed(global: Record<string, unknown>, merged: Record<s
       const allowed = endpoints.get(mapKey) ?? new Set<string>();
       allowed.add(endpoint);
       endpoints.set(mapKey, allowed);
+      const byRef = globalByRef.get(mapKey) ?? [];
+      byRef.push(provider);
+      globalByRef.set(mapKey, byRef);
     }
   }
   const mergedProviders = isPlainObject(merged.providers) ? merged.providers : {};
   for (const [id, provider] of Object.entries(mergedProviders)) {
     if (!isPlainObject(provider)) continue;
     const endpoint = endpointOf(provider);
+    // De onde o provider herda a política global: pelo id e pela referência.
+    const sources = [...(globalById.get(id) ?? [])];
     for (const key of CREDENTIAL_KEYS) {
       const ref = provider[key];
-      const allowed = typeof ref === "string" ? endpoints.get(credentialKey(key, ref)) : undefined;
+      if (typeof ref !== "string") continue;
+      const mapKey = credentialKey(key, ref);
+      const allowed = endpoints.get(mapKey);
       if (allowed !== undefined && !allowed.has(endpoint)) {
         throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}" (a mesma referência já está declarada em outro host)`);
       }
+      sources.push(...(globalByRef.get(mapKey) ?? []));
     }
+    assertQuotaDomain(id, provider, sources, global.quota);
   }
 }
 
@@ -206,6 +222,38 @@ function assertQuotas(globalValue: unknown, mergedValue: unknown, label: string)
   }
 }
 
+/** Domínio de quota do provider (o runtime usa `quotaDomain ?? "default"`). */
+function quotaDomainOf(provider: Record<string, unknown>): string {
+  return typeof provider.quotaDomain === "string" ? provider.quotaDomain : "default";
+}
+
+/**
+ * Quota: o domínio do provider é parte da política global de custo. O projeto
+ * não move um provider que herda a credencial global (nem um provider global)
+ * para outro domínio: escaparia do teto global — um domínio sem limite
+ * declarado passa no enforcement — e zeraria o contador do domínio.
+ */
+function assertQuotaDomain(
+  id: string,
+  provider: Record<string, unknown>,
+  sources: Record<string, unknown>[],
+  globalQuota: unknown,
+): void {
+  const limits = isPlainObject(globalQuota) ? globalQuota : {};
+  const domain = quotaDomainOf(provider);
+  for (const source of sources) {
+    const sourceDomain = quotaDomainOf(source);
+    // Sem teto global no domínio de origem, não há o que escapar.
+    if (!isPlainObject(limits[sourceDomain])) continue;
+    if (domain !== sourceDomain) {
+      throw new ConfigError(
+        `config inválida: o projeto amplia o budget global (o domínio de quota do provider "${id}" ` +
+          `não pode mudar de "${sourceDomain}" para "${domain}")`,
+      );
+    }
+  }
+}
+
 /** Chave de comparação da referência: o caminho de credenciais é normalizado. */
 function credentialKey(key: string, ref: string): string {
   if (key === "credentialsPath") return `${key}=${normalizePath(ref)}`;
@@ -244,7 +292,8 @@ function normalizePath(path: string): string {
   try {
     canonical = realpathSync.native(resolved);
   } catch {
-    // O arquivo pode não existir ainda: a comparação lexical ainda vale.
+    // O arquivo pode não existir (ou o link não resolve): sem arquivo não há
+    // credencial para ler, e a comparação lexical ainda separa as grafias.
   }
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
