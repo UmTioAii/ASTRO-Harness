@@ -254,12 +254,13 @@ function quotaDomainOf(provider: Record<string, unknown>): string {
 /**
  * Quota: o domínio de quota do provider é parte da política global de custo. O
  * projeto não tira um provider que herda a política global (mesmo id OU reuso
- * da referência global) de um domínio com teto: escaparia do teto global (um
- * domínio sem limite declarado passa no enforcement) e zeraria o contador.
+ * da referência global) de um domínio com teto: escaparia do teto global — um
+ * domínio sem limite declarado passa no enforcement, que corta por domínio —
+ * e a troca fragmentaria o contador da conta em dois domínios.
  *
- * O gasto continua em um domínio que a camada global já usa para a conta (as
- * fontes globais podem discordar entre si: divergência do usuário não é erro
- * do projeto) ou em um domínio com teto próprio.
+ * O destino precisa ter teto declarado na camada global. O teto do próprio
+ * projeto não conta: um limite que o projeto declara pode ser maior que o
+ * global, e o domínio é política da camada global.
  */
 function assertQuotaDomain(
   id: string,
@@ -267,19 +268,21 @@ function assertQuotaDomain(
   sources: GlobalSource[],
   globalQuota: unknown,
 ): void {
-  // O tipo do campo é do schema: com um valor que não é string, o schema fala.
-  if (provider.quotaDomain !== undefined && typeof provider.quotaDomain !== "string") return;
+  // O tipo do campo é do schema: com um valor que não é string (ou vazio), o
+  // schema fala.
+  if (provider.quotaDomain !== undefined
+    && (typeof provider.quotaDomain !== "string" || provider.quotaDomain.length === 0)) return;
   const limits = isPlainObject(globalQuota) ? globalQuota : {};
   const domain = quotaDomainOf(provider);
   const sourceDomains = sources
-    .filter((source) => source.provider.quotaDomain === undefined || typeof source.provider.quotaDomain === "string")
+    .filter((source) => source.provider.quotaDomain === undefined
+      || (typeof source.provider.quotaDomain === "string" && source.provider.quotaDomain.length > 0))
     .map((source) => quotaDomainOf(source.provider));
   // Sem teto global no domínio de origem, não há o que escapar.
   const ceilingDomains = [...new Set(sourceDomains.filter((source) => isPlainObject(limits[source])))];
   if (ceilingDomains.length === 0) return;
-  // O gasto continua na conta que a camada global já usa...
-  if (sourceDomains.includes(domain)) return;
-  // ...ou em um domínio com teto próprio.
+  // O destino tem teto declarado na camada global (o enforcement corta por
+  // domínio: um destino sem teto passaria sem limite).
   if (isPlainObject(limits[domain])) return;
   throw new ConfigError(
     `config inválida: o projeto amplia o budget global (o domínio de quota do provider "${id}" ` +
