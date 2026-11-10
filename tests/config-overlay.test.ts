@@ -23,6 +23,15 @@ const projectBase = (over: Record<string, unknown> = {}): Record<string, unknown
   ...over,
 });
 
+/** Projeto com duas contas (o teto de agentes ativos exige duas) e um agent nomeado. */
+const twoAccounts = (agents: Record<string, unknown>): Record<string, unknown> => ({
+  providers: { p: provider("p"), q: { ...provider("q"), credentialRef: "KEY2" } },
+  models: [model("p", "m"), model("q", "n")],
+  agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "write_file"] },
+  agents,
+  paths: PATHS,
+});
+
 /** Home temporário com `config.json` global e, opcionalmente, projeto em disco. */
 function scenario(global: unknown, project?: unknown): { configPath: string; env: Record<string, string> } {
   const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
@@ -49,7 +58,10 @@ test("merge: agent, providers e models (três linhas de resultado da tabela do #
   // 2) providers dos dois layers convivem; o do projeto sobrescreve por chave.
   const providers = effective(
     {
-      providers: { openai: provider("openai"), local: provider("local") },
+      providers: {
+        openai: provider("openai"),
+        local: { kind: "openai-compat", baseUrl: "https://local.example/v1" },
+      },
       models: [model("openai", "a"), model("local", "b")],
     },
     projectBase({
@@ -59,7 +71,7 @@ test("merge: agent, providers e models (três linhas de resultado da tabela do #
     }),
   ).config;
   expect(Object.keys(providers.providers).sort()).toEqual(["local", "openai"]);
-  expect(providers.providers.local).toMatchObject({ baseUrl: "https://local2.example/v1", credentialRef: "KEY" });
+  expect(providers.providers.local).toMatchObject({ kind: "openai-compat", baseUrl: "https://local2.example/v1" });
 
   // 3) models une por provider/id; o projeto prevalece no conflito.
   const models = effective(
@@ -73,8 +85,9 @@ test("merge: agent, providers e models (três linhas de resultado da tabela do #
   expect(models.models.find((entry) => entry.id === "b")?.context).toBe(16384);
 });
 
-test("rejeita: projeto que amplia tools, permissions.mode ou budget (ADR-0029)", () => {
+test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
   const widening: [unknown, unknown, RegExp][] = [
+    // As três linhas de rejeição da tabela do #401.
     [{ agent: { maxSteps: 4, tools: ["read_file", "grep"] } },
       projectBase({ agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "grep", "run_command"] } }),
       /amplia a allowlist global/],
@@ -82,6 +95,21 @@ test("rejeita: projeto que amplia tools, permissions.mode ou budget (ADR-0029)",
     [{ budget: { scope: "day", limitUsd: 50, warnAt: 0.8, onExceed: "ask" } },
       projectBase({ budget: { limitUsd: 500 } }),
       /amplia o budget global/],
+    // O teto do budget não pode virar "use-as-you-go".
+    [{ budget: { scope: "day", limitUsd: 50, warnAt: 0.8, onExceed: "ask" } },
+      projectBase({ budget: { scope: "use-as-you-go", limitUsd: null } }),
+      /amplia o budget global/],
+    // Agent nomeado: tools e perfil de permissão também não podem ampliar.
+    [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }),
+      twoAccounts({ coder: { tools: ["read_file", "write_file"] } }),
+      /amplia a allowlist global do agent "coder"/],
+    [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }),
+      twoAccounts({ coder: { permission: "full" } }),
+      /amplia a permissão global do agent "coder"/],
+    // O projeto não redireciona a credencial global para outro host.
+    [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } },
+      projectBase({ providers: { p: provider("p"), acme: { baseUrl: "https://outro.example/v1" } } }),
+      /redireciona a credencial global/],
   ];
   for (const [global, project, message] of widening) {
     expect(() => effective(global, project)).toThrow(message);
