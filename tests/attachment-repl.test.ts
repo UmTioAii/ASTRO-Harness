@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TurnResult } from "../src/chat/agent-session";
+import { AgentSession, type SendTurnOptions, type TurnResult } from "../src/chat/agent-session";
 import { runRepl, type ChatSession, type ReplIO } from "../src/chat/repl";
-import type { AttachmentMeta } from "../src/attachments/model";
+import type { AttachmentMeta, LoadedAttachment } from "../src/attachments/model";
 
 class ScriptedIO implements ReplIO {
   readonly outputs: string[] = [];
@@ -21,9 +21,9 @@ class ScriptedIO implements ReplIO {
 
 class CaptureSession implements ChatSession {
   model = "p/m1";
-  sent: Array<{ prompt: string; attachments?: AttachmentMeta[] }> = [];
-  async send(prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, attachments?: AttachmentMeta[]): Promise<TurnResult> {
-    this.sent.push({ prompt, ...(attachments === undefined ? {} : { attachments }) });
+  sent: Array<{ prompt: string; attachments?: readonly LoadedAttachment[] }> = [];
+  async send(prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, _attachments?: AttachmentMeta[], turn?: SendTurnOptions): Promise<TurnResult> {
+    this.sent.push({ prompt, ...(turn?.attachments === undefined ? {} : { attachments: [...turn.attachments] }) });
     return {
       final: "ok", model: this.model, steps: 1, tokensIn: 1, tokensOut: 1, costUsd: 0,
       totalTokensIn: 1, totalTokensOut: 1, totalCostUsd: 0,
@@ -107,5 +107,92 @@ describe("/attach e /paste no REPL (ADR-0026, #392)", () => {
     expect(session.sent[0]?.prompt).toBe("leia\n\n[anexo: clipboard]\ncolado");
     expect(session.sent[1]?.prompt).toBe("outra");
     expect(session.sent[1]?.attachments).toBeUndefined();
+  });
+
+  test("mesmo anexo duas vezes é recusado e materializa um bloco só", async () => {
+    const cwd = sandbox();
+    writeFileSync(join(cwd, "a.txt"), "um\ndois\n");
+    const session = new CaptureSession();
+    const io = new ScriptedIO(["/attach a.txt", "/attach a.txt", "resuma", "/exit"]);
+    await runRepl(session, io, { cwd });
+    expect(io.outputs.join("\n")).toContain("já adicionado: a.txt");
+    expect(session.sent[0]?.prompt).toBe("resuma\n\n[anexo: a.txt]\num\ndois\n");
+    expect(session.sent[0]?.attachments).toHaveLength(1);
+  });
+});
+
+/** PNG 1x1 real (70 bytes), o mesmo fixture do teste de turno. */
+const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+interface CapturedBody { messages?: Array<{ role?: string; content?: unknown }> }
+
+/** Sessão real + servidor local que captura o corpo: exercita o wire até o provider. */
+function e2eSetup(context = 8192) {
+  const base = sandbox();
+  const cwd = join(base, "work"), home = join(base, "home");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(cwd, "a.png"), Buffer.from(pngData, "base64"));
+  const bodies: CapturedBody[] = [];
+  const server = Bun.serve({ port: 0, async fetch(req) {
+    bodies.push((await req.json()) as CapturedBody);
+    return Response.json({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  } });
+  const configPath = join(cwd, "astro.config.json");
+  writeFileSync(configPath, JSON.stringify({
+    providers: { p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
+    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context, capabilities: { vision: true } }],
+    agent: { model: "p/m1", maxSteps: 1, tools: [] },
+    paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+  }));
+  const session = new AgentSession({ configPath, cwd, env: { ASTRO_HOME: home, ASTRO_ALLOW_PRIVATE_URLS: "1", KEY: "k" } });
+  return { cwd, home, bodies, session, stop: () => server.stop(true) };
+}
+
+describe("imagem no turno do REPL (ADR-0026, #392)", () => {
+  test("imagem aprovada chega ao provider como image_url", async () => {
+    const { cwd, bodies, session, stop } = e2eSetup();
+    try {
+      await runRepl(session, new ScriptedIO(["/attach a.png", "resuma", "s", "/exit"]), { cwd, interactive: true });
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]?.messages?.at(-1)?.content).toContainEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${pngData}` } });
+    } finally { stop(); }
+  });
+
+  test("resposta 'sair' não aprova por prefixo e nega o turno", async () => {
+    const { cwd, home, bodies, session, stop } = e2eSetup();
+    const io = new ScriptedIO(["/attach a.png", "resuma", "sair", "/exit"]);
+    try {
+      await runRepl(session, io, { cwd, interactive: true });
+      expect(bodies).toHaveLength(0);
+      expect(io.outputs.join("\n")).toContain("não aprovado");
+      expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
+      expect(existsSync(join(cwd, ".astro", "audit.jsonl")) ? readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8") : "").not.toContain("attachment.approved");
+    } finally { stop(); }
+  });
+  test("sem TTY imagem é negada sem perguntar", async () => {
+    const { cwd, home, bodies, session, stop } = e2eSetup();
+    const io = new ScriptedIO(["/attach a.png", "resuma", "/exit"]);
+    try {
+      await runRepl(session, io, { cwd });
+      expect(bodies).toHaveLength(0);
+      expect(io.outputs.join("\n")).toContain("não aprovado");
+      expect(io.prompts.join("\n")).not.toContain("aprovar envio?");
+      expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
+    } finally { stop(); }
+  });
+
+  test("imagem maior que a janela é rejeitada antes do request e o anexo continua pendente", async () => {
+    const { cwd, bodies, session, stop } = e2eSetup(16);
+    const io = new ScriptedIO(["/attach a.png", "resuma", "s", "/attach", "/exit"]);
+    try {
+      await runRepl(session, io, { cwd, interactive: true });
+      expect(bodies).toHaveLength(0);
+      const text = io.outputs.join("\n");
+      expect(text).toContain("janela de contexto");
+      expect(text).toMatch(/~\d+ tokens \+ \d+ de saída > 16/);
+      expect(text).not.toContain(pngData); // I-03: erro cita contagens, nunca conteúdo
+      // Falha não consome o anexo: continua pendente para /detach ou novo turno.
+      expect(text.slice(text.indexOf("janela de contexto"))).toContain("1. a.png");
+    } finally { stop(); }
   });
 });

@@ -4,10 +4,11 @@
  * A estimativa é heurística (4 chars ≈ 1 token) — a mesma dos compactadores.
  */
 import type { ChatMessage } from "../provider/types";
+import { imageTokens } from "../tokens";
 
 export function estimateMessageTokens(message: ChatMessage): number {
   const calls = message.toolCalls === undefined ? "" : JSON.stringify(message.toolCalls);
-  return Math.ceil((message.content.length + calls.length) / 4);
+  return Math.ceil((message.content.length + calls.length) / 4) + imageTokens(message.images);
 }
 
 export function estimateMessagesTokens(messages: readonly ChatMessage[]): number {

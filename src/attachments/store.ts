@@ -88,8 +88,9 @@ function defaultCheckPrivate(path: string): boolean {
   if (process.platform === "win32") return true;
   try {
     return (statSync(path).mode & 0o077) === 0;
-  } catch {
-    return false;
+  } catch (error) {
+    // Raiz ainda não criada: o construtor cria com 0700 logo após validar.
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
 }
 
@@ -156,9 +157,13 @@ export class ArtifactStore {
       ...(protectedPaths === undefined ? {} : { protectedPaths }),
       ...(checkPrivate === undefined ? {} : { checkPrivate }),
     };
-    validateArtifactRoot(root, this.#context);
-    this.root = canonicalize(expandHome(root));
-    mkdirSync(this.root, { recursive: true, mode: 0o700 });
+    try {
+      validateArtifactRoot(root, this.#context);
+      this.root = canonicalize(expandHome(root));
+      mkdirSync(this.root, { recursive: true, mode: 0o700 });
+    } catch (error) {
+      throw error instanceof AttachmentError ? error : new AttachmentError("attachment_root_invalid", `não foi possível preparar a raiz de artefato: ${error instanceof Error ? error.message : String(error)}`, root);
+    }
     this.#ttlMs = (options.ttlDays ?? DEFAULT_TTL_DAYS) * 24 * 60 * 60 * 1000;
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.#now = options.now ?? Date.now;
