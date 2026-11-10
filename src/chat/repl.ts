@@ -478,7 +478,10 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
       if (command.kind === "paste") {
         try {
           const text = opts.clipboard === undefined ? readClipboardText() : opts.clipboard();
-          pending.push(loadPastedText(text));
+          const pasted = loadPastedText(text);
+          const existing = pending.find((item) => dedupeKey(item) === dedupeKey(pasted));
+          if (existing !== undefined) { io.write(paint(`erro: anexo já adicionado: ${existing.name} (o mesmo anexo já está pendente)`, RED, style)); continue; }
+          pending.push(pasted);
           io.write(`anexo adicionado: clipboard\n${listPending()}`);
         } catch (error) {
           io.write(paint(`erro: ${messageOf(error)}`, RED, style));

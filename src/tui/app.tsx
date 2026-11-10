@@ -10,9 +10,10 @@ import { isFatalSessionError } from "../chat/session-errors";
 import { DEFAULT_PERMISSION_MODE, resolveAstroHome } from "../permissions";
 import { isYes } from "../chat/approvers";
 import { loadAttachment, loadPastedText } from "../attachments/load";
-import { materializePrompt, toMeta } from "../attachments/render";
+import { materializePrompt } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
-import type { LoadedAttachment } from "../attachments/model";
+import { dedupeKey, type LoadedAttachment } from "../attachments/model";
+import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
 import { redactSecrets } from "../sanitize-external";
 import { runCommand, type CommandState, type Entry } from "./commands";
 import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
@@ -269,6 +270,15 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
           .map((attachment, index) => `${index + 1}. ${attachment.name} (${attachment.sizeBytes} bytes)`)
           .join("\n");
 
+  /** Aprovação do lote de imagens na linha da TUI; sem a ponte de aprovação, nega (fail closed). */
+  const approveAttachment: AttachmentApprover = async (items) =>
+    approvals !== undefined && isYes(await approvals.askText(`${formatApprovalPrompt(items)}\naprovar envio? (s/n)`));
+
+  const duplicateMessage = (attachment: LoadedAttachment): string | undefined => {
+    const existing = pendingAttachments.current.find((item) => dedupeKey(item) === dedupeKey(attachment));
+    return existing === undefined ? undefined : `erro: anexo já adicionado: ${existing.name} (o mesmo anexo já está pendente)`;
+  };
+
   const handleAttachmentCommand = async (command: ReplCommand): Promise<void> => {
     if (command.kind === "attach") {
       if (command.path === undefined) {
@@ -286,6 +296,11 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
               ? false
               : isYes(await approvals.askText(`anexo fora do cwd: ${absolute} — aprovar? (s/n)`)),
         });
+        const duplicate = duplicateMessage(loaded);
+        if (duplicate !== undefined) {
+          setEntries((current) => [...current, { kind: "error", text: duplicate }]);
+          return;
+        }
         pendingAttachments.current.push(loaded);
         setEntries((current) => [
           ...current,
@@ -298,7 +313,13 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
     }
     if (command.kind === "paste") {
       try {
-        pendingAttachments.current.push(loadPastedText(readClipboardText()));
+        const pasted = loadPastedText(readClipboardText());
+        const duplicate = duplicateMessage(pasted);
+        if (duplicate !== undefined) {
+          setEntries((current) => [...current, { kind: "error", text: duplicate }]);
+          return;
+        }
+        pendingAttachments.current.push(pasted);
         setEntries((current) => [
           ...current,
           { kind: "info", text: `anexo adicionado: clipboard\n${listPending()}` },
@@ -435,12 +456,13 @@ export function TuiApp({ session, cwd, branch, store, sessionApi, approvals, she
     });
     try {
       const prompt = materializePrompt(command.text, pendingAttachments.current);
-      const metas = pendingAttachments.current.map(toMeta);
+      const attachments = pendingAttachments.current;
       const result = await session.send(
         prompt,
         controller.signal,
         (delta) => sink.add(delta),
-        metas.length === 0 ? undefined : metas,
+        undefined,
+        attachments.length === 0 ? undefined : { attachments, approveAttachment },
       );
       pendingAttachments.current = [];
       sink.flush();
