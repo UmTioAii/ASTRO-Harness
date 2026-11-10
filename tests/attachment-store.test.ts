@@ -93,20 +93,41 @@ describe("validateArtifactRoot", () => {
     }
   });
 
-  test.skipIf(process.platform !== "win32")("store falha e não deixa raiz criada quando herda Everyone", () => {
+  test.skipIf(process.platform !== "win32")("store endurece a raiz criada e remove a ACE herdada do pai", () => {
     const { cwd, astroHome } = sandbox();
     const parent = join(astroHome, "public-parent");
     const root = join(parent, "artifacts");
     mkdirSync(parent, { recursive: true });
     try {
       execFileSync("icacls", [parent, "/grant", "*S-1-1-0:(OI)(CI)(R)"], { stdio: "ignore" });
-      let thrown: unknown;
-      try { new ArtifactStore(root, { cwd, astroHome }); } catch (error) { thrown = error; }
-      expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
-      expect(existsSync(root)).toBe(false);
+      new ArtifactStore(root, { cwd, astroHome });
+      const acl = inspectWindowsAcl(root);
+      expect(acl).toBeDefined();
+      const trustees = [...acl!.sddl.matchAll(/\(([^)]*)\)/g)].map(([, body]) =>
+        body.split(";")[5]!.trim().toUpperCase(),
+      );
+      expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl!.userSid.toUpperCase()].sort());
+      expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
     } finally {
       execFileSync("icacls", [parent, "/remove", "*S-1-1-0"], { stdio: "ignore" });
     }
+  });
+
+  test("raiz recém-criada que não fica privada é removida e falha tipada", () => {
+    const { cwd, astroHome } = sandbox();
+    const root = join(astroHome, "artifacts-unchecked");
+    let calls = 0;
+    let thrown: unknown;
+    try {
+      new ArtifactStore(root, {
+        cwd,
+        astroHome,
+        // Pré-check passa (raiz ausente); a revalidação pós-mkdir falha.
+        checkPrivate: () => ++calls === 1,
+      });
+    } catch (error) { thrown = error; }
+    expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
+    expect(existsSync(root)).toBe(false);
   });
 
   test.skipIf(process.platform !== "win32")("store endurece a raiz criada e a checagem real aprova", () => {
