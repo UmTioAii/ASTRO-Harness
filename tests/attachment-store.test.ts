@@ -3,12 +3,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hardenWindowsAcl, inspectWindowsAcl } from "../src/attachments/acl";
+import { hardenWindowsAcl, inspectWindowsAcl, type WindowsAcl } from "../src/attachments/acl";
 import {
   ArtifactStore,
   resolveArtifactRoot,
   validateArtifactRoot,
 } from "../src/attachments/store";
+import { FAKE_PRIVATE_ACL } from "./setup";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -79,7 +80,7 @@ describe("validateArtifactRoot", () => {
     new ArtifactStore(root, { cwd, astroHome });
     expect(existsSync(root)).toBe(true);
     if (process.platform !== "win32") expect(statSync(root).mode & 0o777).toBe(0o700);
-  }, 20_000);
+  }, 120_000);
 
   test.skipIf(process.platform !== "win32")("rejeita raiz com ACE Everyone usando a checagem real", () => {
     const { cwd, astroHome } = sandbox();
@@ -91,7 +92,7 @@ describe("validateArtifactRoot", () => {
     } finally {
       execFileSync("icacls", [root, "/remove", "*S-1-1-0"], { stdio: "ignore" });
     }
-  }, 20_000);
+  }, 120_000);
 
   test.skipIf(process.platform !== "win32")("store endurece a raiz criada e remove a ACE herdada do pai", () => {
     const { cwd, astroHome } = sandbox();
@@ -111,7 +112,7 @@ describe("validateArtifactRoot", () => {
     } finally {
       execFileSync("icacls", [parent, "/remove", "*S-1-1-0"], { stdio: "ignore" });
     }
-  }, 20_000);
+  }, 120_000);
 
   // Regressão do CI Windows: `/inheritance:r` remove só ACEs herdadas; uma ACE explícita
   // já na raiz sobrevive e mantém um trustee fora de dono/SY/BA.
@@ -126,7 +127,7 @@ describe("validateArtifactRoot", () => {
     );
     expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl.userSid.toUpperCase()].sort());
     expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
-  }, 20_000);
+  }, 120_000);
 
   test("raiz recém-criada que não fica privada é removida e falha tipada", () => {
     const { cwd, astroHome } = sandbox();
@@ -143,7 +144,7 @@ describe("validateArtifactRoot", () => {
     } catch (error) { thrown = error; }
     expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
     expect(existsSync(root)).toBe(false);
-  }, 20_000);
+  }, 120_000);
 
   test.skipIf(process.platform !== "win32")("store endurece a raiz criada e a checagem real aprova", () => {
     const { cwd, astroHome } = sandbox();
@@ -156,7 +157,7 @@ describe("validateArtifactRoot", () => {
     );
     expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl!.userSid.toUpperCase()].sort());
     expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
-  }, 20_000);
+  }, 120_000);
 
   test.skipIf(process.platform !== "win32")("rejeita raiz pré-existente com ACE de Guests", () => {
     const { cwd, astroHome } = sandbox();
@@ -168,7 +169,51 @@ describe("validateArtifactRoot", () => {
     } finally {
       execFileSync("icacls", [root, "/remove", "*S-1-5-32-546"], { stdio: "ignore" });
     }
-  }, 20_000);
+  }, 120_000);
+
+  // Injeção de `hardenPrivate`: os testes e2e (REPL/TUI/agent-session) não podem
+  // spawnar PowerShell real no runner windows do CI (cold start > 15 s por chamada).
+  test.skipIf(process.platform !== "win32")("hardenPrivate injetado substitui o subprocesso real e falha fechado", () => {
+    const { cwd, astroHome } = sandbox();
+    const root = join(astroHome, "injected-harden");
+    const calls: string[] = [];
+    const notPrivate: WindowsAcl = {
+      userSid: "S-1-5-21-0-0-0-1000",
+      sddl: "O:S-1-5-21-0-0-0-1000G:S-1-5-21-0-0-0-513D:PAI(A;OICI;FA;;;S-1-5-32-546)",
+    };
+    let thrown: unknown;
+    try {
+      new ArtifactStore(root, {
+        cwd,
+        astroHome,
+        checkPrivate: () => true,
+        hardenPrivate: (path) => {
+          calls.push(path);
+          return notPrivate;
+        },
+      });
+    } catch (error) { thrown = error; }
+    expect(calls).toHaveLength(1);
+    expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
+    expect(existsSync(root)).toBe(false);
+  });
+
+  test.skipIf(process.platform !== "win32")("hardenPrivate injetado privado aprova a raiz sem subprocesso", () => {
+    const { cwd, astroHome } = sandbox();
+    const root = join(astroHome, "injected-harden-ok");
+    const calls: string[] = [];
+    const store = new ArtifactStore(root, {
+      cwd,
+      astroHome,
+      checkPrivate: () => true,
+      hardenPrivate: (path) => {
+        calls.push(path);
+        return FAKE_PRIVATE_ACL;
+      },
+    });
+    expect(calls).toEqual([store.root]);
+    expect(existsSync(root)).toBe(true);
+  });
 
   test("raiz cujo pai é arquivo falha tipada e não grava", () => {
     const { cwd, astroHome } = sandbox();

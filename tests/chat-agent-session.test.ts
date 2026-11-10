@@ -9,7 +9,7 @@ import { loadConfig } from "../src/config";
 import type { PermissionMode } from "../src/permissions";
 import type { ChatMessage } from "../src/provider/types";
 import { Ledger } from "../src/ledger";
-import { testEnv } from "./setup";
+import { FAKE_PRIVATE_ACL, testEnv } from "./setup";
 
 interface Body { model?: string; messages?: ChatMessage[] }
 
@@ -84,7 +84,8 @@ describe("AgentSession (T1, #62)", () => {
   });
   test("turno com imagem não persiste base64 no histórico nem no snapshot", async () => {
     const { cwd, session, stop } = setup();
-    const chat = session();
+    // ACL fake injetado: no runner windows do CI o PowerShell real estoura o timeout.
+    const chat = session({ artifactCheckPrivate: () => true, artifactHardenPrivate: () => FAKE_PRIVATE_ACL });
     const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     try {
       const attachment: LoadedAttachment = { kind: "image", path: join(cwd, "a.png"), name: "a.png", sizeBytes: 70, mediaType: "image/png", data: pngData, hash: "0".repeat(64) };
@@ -97,7 +98,19 @@ describe("AgentSession (T1, #62)", () => {
       expect(metas[0]).toMatchObject({ kind: "image", name: "a.png" });
       expect(metas[0]?.ref).toBeString();
     } finally { chat.close(); stop(); }
-  }, 20_000);
+  });
+
+  test("artifactCheckPrivate injetado chega ao store de imagens e falha fechado", async () => {
+    const { cwd, session, bodies, stop } = setup();
+    const chat = session({ artifactCheckPrivate: () => false });
+    const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    try {
+      const attachment: LoadedAttachment = { kind: "image", path: join(cwd, "a.png"), name: "a.png", sizeBytes: 70, mediaType: "image/png", data: pngData, hash: "0".repeat(64) };
+      await expect(chat.send("olhe", undefined, undefined, undefined, { attachments: [attachment], approveAttachment: () => true }))
+        .rejects.toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
+      expect(bodies).toHaveLength(0);
+    } finally { chat.close(); stop(); }
+  });
   test("emite run.started/chat.prompt/run.completed por sessão (só taskHash)", async () => {
     const { cwd, session, stop } = setup();
     const chat = session();
