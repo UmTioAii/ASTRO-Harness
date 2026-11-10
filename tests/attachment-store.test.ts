@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,6 +78,34 @@ describe("validateArtifactRoot", () => {
     new ArtifactStore(root, { cwd, astroHome });
     expect(existsSync(root)).toBe(true);
     if (process.platform !== "win32") expect(statSync(root).mode & 0o777).toBe(0o700);
+  });
+
+  test.skipIf(process.platform !== "win32")("rejeita raiz com ACE Everyone usando a checagem real", () => {
+    const { cwd, astroHome } = sandbox();
+    const root = join(astroHome, "public-artifacts");
+    mkdirSync(root, { recursive: true });
+    try {
+      execFileSync("icacls", [root, "/grant", "*S-1-1-0:(OI)(CI)(R)"], { stdio: "ignore" });
+      expect(() => validateArtifactRoot(root, { cwd, astroHome })).toThrow(/privad/i);
+    } finally {
+      execFileSync("icacls", [root, "/remove", "*S-1-1-0"], { stdio: "ignore" });
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("store falha e não deixa raiz criada quando herda Everyone", () => {
+    const { cwd, astroHome } = sandbox();
+    const parent = join(astroHome, "public-parent");
+    const root = join(parent, "artifacts");
+    mkdirSync(parent, { recursive: true });
+    try {
+      execFileSync("icacls", [parent, "/grant", "*S-1-1-0:(OI)(CI)(R)"], { stdio: "ignore" });
+      let thrown: unknown;
+      try { new ArtifactStore(root, { cwd, astroHome }); } catch (error) { thrown = error; }
+      expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
+      expect(existsSync(root)).toBe(false);
+    } finally {
+      execFileSync("icacls", [parent, "/remove", "*S-1-1-0"], { stdio: "ignore" });
+    }
   });
 
   test("raiz cujo pai é arquivo falha tipada e não grava", () => {
