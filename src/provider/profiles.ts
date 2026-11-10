@@ -261,7 +261,7 @@ export function loadProjectConfig(configPath: string, opts: { env?: NodeJS.Proce
   // O store é fonte global de credenciais mesmo sem `$ASTRO_HOME/config.json`.
   const store = loadProfileStore(profilesPath(homeEnv));
   const storeProviders = Object.fromEntries(store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));
-  assertNarrowed(global ?? {}, declared, storeProviders);
+  assertNarrowed(global ?? {}, declared, storeProviders, projectLayer);
   return validateConfig(declared);
 }
 
@@ -419,7 +419,7 @@ export function resolveEffectiveConfig(input: {
   // efêmero de env não entra: ele é por execução e a escolha do usuário não
   // é um bloqueio do projeto.
   const storeProviders = Object.fromEntries(input.store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));
-  assertNarrowed(global ?? {}, declared, storeProviders);
+  assertNarrowed(global ?? {}, declared, storeProviders, project);
 
   const providers: Record<string, unknown> = { ...globalProviders, ...(isPlainObject(base.providers) ? base.providers : {}) };
   const models = mergeModelLayers(globalModels, Array.isArray(base.models) ? base.models : []);
@@ -471,6 +471,10 @@ export function resolveEffectiveConfig(input: {
     else if (input.envProfile !== undefined) { activeProvider = input.envProfile.id; selection = "env"; }
     else if (input.store.profiles[0] !== undefined) { activeProvider = input.store.profiles[0].id; selection = "store"; }
     else {
+      // Sem provider em lugar nenhum: o erro de schema vem primeiro (como em
+      // `origin/main`), senão a mensagem aponta para a correção errada
+      // ("/provider add") em vez de apontar o campo inválido.
+      if (project !== undefined) validateConfig(declared);
       throw new NoProviderError(NO_PROVIDER_MESSAGE);
     }
   }

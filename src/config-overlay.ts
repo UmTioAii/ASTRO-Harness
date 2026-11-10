@@ -99,7 +99,12 @@ function assertExclusiveModel(agent: unknown, field: string): void {
  * permissão ficam dentro do global, `permissions.mode` fica mais restrito, o
  * budget não passa do teto global e a credencial global não muda de host.
  */
-export function assertNarrowed(global: Record<string, unknown>, merged: Record<string, unknown>, storeProviders: Record<string, unknown> = {}): void {
+export function assertNarrowed(
+  global: Record<string, unknown>,
+  merged: Record<string, unknown>,
+  storeProviders: Record<string, unknown> = {},
+  projectLayer?: Record<string, unknown>,
+): void {
   // Agent principal e agents nomeados: tools e perfil de permissão.
   const main = isPlainObject(global.agent) ? global.agent : undefined;
   const mainAfter = isPlainObject(merged.agent) ? merged.agent : undefined;
@@ -138,16 +143,16 @@ export function assertNarrowed(global: Record<string, unknown>, merged: Record<s
   // projeto pode reusá-la no mesmo host, nunca em outro. O perfil efêmero de
   // env não entra: ele é por execução e a escolha do usuário não é bloqueio.
   const endpoints = new Map<string, Set<string>>();
-  // Os providers globais por id e por referência: a política de custo (domínio
-  // de quota) acompanha a credencial e o provider herdado.
-  const globalById = new Map<string, Record<string, unknown>[]>();
-  const globalByRef = new Map<string, Record<string, unknown>[]>();
+  // As fontes globais (config global + store) por id e por referência: a
+  // reserva da credencial e a política de custo (domínio de quota) seguem a
+  // credencial e o provider herdado.
+  const globalById = new Map<string, GlobalSource[]>();
+  const globalByRef = new Map<string, GlobalSource[]>();
   const globalProviders = isPlainObject(global.providers) ? global.providers : {};
-  for (const [id, provider] of [...Object.entries(storeProviders), ...Object.entries(globalProviders)]) {
+  for (const [id, provider] of [...Object.entries(globalProviders), ...Object.entries(storeProviders)]) {
     if (!isPlainObject(provider)) continue;
-    const byId = globalById.get(id) ?? [];
-    byId.push(provider);
-    globalById.set(id, byId);
+    const source: GlobalSource = { id, provider };
+    globalById.set(id, [...(globalById.get(id) ?? []), source]);
     const endpoint = endpointOf(provider);
     for (const key of CREDENTIAL_KEYS) {
       const ref = provider[key];
@@ -156,29 +161,48 @@ export function assertNarrowed(global: Record<string, unknown>, merged: Record<s
       const allowed = endpoints.get(mapKey) ?? new Set<string>();
       allowed.add(endpoint);
       endpoints.set(mapKey, allowed);
-      const byRef = globalByRef.get(mapKey) ?? [];
-      byRef.push(provider);
-      globalByRef.set(mapKey, byRef);
+      globalByRef.set(mapKey, [...(globalByRef.get(mapKey) ?? []), source]);
     }
   }
   const mergedProviders = isPlainObject(merged.providers) ? merged.providers : {};
   for (const [id, provider] of Object.entries(mergedProviders)) {
     if (!isPlainObject(provider)) continue;
     const endpoint = endpointOf(provider);
+    for (const key of CREDENTIAL_KEYS) {
+      const ref = provider[key];
+      if (typeof ref !== "string") continue;
+      const allowed = endpoints.get(credentialKey(key, ref));
+      if (allowed !== undefined && !allowed.has(endpoint)) {
+        throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}" (a mesma referência já está declarada em outro host)`);
+      }
+    }
+  }
+  // Domínio de quota: o que o PROJETO declara é política do projeto; o que a
+  // camada global (ou o store) declara é do usuário. Duas fontes globais que
+  // discordam entre si não são erro do projeto.
+  const projectProviders = isPlainObject(projectLayer?.providers) ? projectLayer.providers : {};
+  for (const [id, provider] of Object.entries(projectProviders)) {
+    if (!isPlainObject(provider)) continue;
+    const effective = mergedProviders[id];
+    if (!isPlainObject(effective)) continue;
     // De onde o provider herda a política global: pelo id e pela referência.
     const sources = [...(globalById.get(id) ?? [])];
     for (const key of CREDENTIAL_KEYS) {
       const ref = provider[key];
       if (typeof ref !== "string") continue;
-      const mapKey = credentialKey(key, ref);
-      const allowed = endpoints.get(mapKey);
-      if (allowed !== undefined && !allowed.has(endpoint)) {
-        throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}" (a mesma referência já está declarada em outro host)`);
+      for (const source of globalByRef.get(credentialKey(key, ref)) ?? []) {
+        if (source.id === id) continue; // o mesmo provider, não outra conta
+        sources.push(source);
       }
-      sources.push(...(globalByRef.get(mapKey) ?? []));
     }
-    assertQuotaDomain(id, provider, sources, global.quota);
+    assertQuotaDomain(id, effective, sources, global.quota);
   }
+}
+
+/** Uma fonte global (config global ou store) de um provider. */
+interface GlobalSource {
+  id: string;
+  provider: Record<string, unknown>;
 }
 
 /** Tools e perfil de permissão de um agent: só o que o global permite. */
@@ -228,30 +252,39 @@ function quotaDomainOf(provider: Record<string, unknown>): string {
 }
 
 /**
- * Quota: o domínio do provider é parte da política global de custo. O projeto
- * não move um provider que herda a credencial global (nem um provider global)
- * para outro domínio: escaparia do teto global — um domínio sem limite
- * declarado passa no enforcement — e zeraria o contador do domínio.
+ * Quota: o domínio de quota do provider é parte da política global de custo. O
+ * projeto não tira um provider que herda a política global (mesmo id OU reuso
+ * da referência global) de um domínio com teto: escaparia do teto global (um
+ * domínio sem limite declarado passa no enforcement) e zeraria o contador.
+ *
+ * O gasto continua em um domínio que a camada global já usa para a conta (as
+ * fontes globais podem discordar entre si: divergência do usuário não é erro
+ * do projeto) ou em um domínio com teto próprio.
  */
 function assertQuotaDomain(
   id: string,
   provider: Record<string, unknown>,
-  sources: Record<string, unknown>[],
+  sources: GlobalSource[],
   globalQuota: unknown,
 ): void {
+  // O tipo do campo é do schema: com um valor que não é string, o schema fala.
+  if (provider.quotaDomain !== undefined && typeof provider.quotaDomain !== "string") return;
   const limits = isPlainObject(globalQuota) ? globalQuota : {};
   const domain = quotaDomainOf(provider);
-  for (const source of sources) {
-    const sourceDomain = quotaDomainOf(source);
-    // Sem teto global no domínio de origem, não há o que escapar.
-    if (!isPlainObject(limits[sourceDomain])) continue;
-    if (domain !== sourceDomain) {
-      throw new ConfigError(
-        `config inválida: o projeto amplia o budget global (o domínio de quota do provider "${id}" ` +
-          `não pode mudar de "${sourceDomain}" para "${domain}")`,
-      );
-    }
-  }
+  const sourceDomains = sources
+    .filter((source) => source.provider.quotaDomain === undefined || typeof source.provider.quotaDomain === "string")
+    .map((source) => quotaDomainOf(source.provider));
+  // Sem teto global no domínio de origem, não há o que escapar.
+  const ceilingDomains = [...new Set(sourceDomains.filter((source) => isPlainObject(limits[source])))];
+  if (ceilingDomains.length === 0) return;
+  // O gasto continua na conta que a camada global já usa...
+  if (sourceDomains.includes(domain)) return;
+  // ...ou em um domínio com teto próprio.
+  if (isPlainObject(limits[domain])) return;
+  throw new ConfigError(
+    `config inválida: o projeto amplia o budget global (o domínio de quota do provider "${id}" ` +
+      `não pode mudar para "${domain}": o teto global está em "${ceilingDomains.join('", "')}")`,
+  );
 }
 
 /** Chave de comparação da referência: o caminho de credenciais é normalizado. */
