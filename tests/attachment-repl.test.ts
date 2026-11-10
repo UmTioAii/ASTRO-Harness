@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { AgentSession, type SendTurnOptions, type TurnResult } from "../src/chat/agent-session";
 import { runRepl, type ChatSession, type ReplIO } from "../src/chat/repl";
 import type { AttachmentMeta, LoadedAttachment } from "../src/attachments/model";
+import { FAKE_PRIVATE_ACL } from "./setup";
 
 class ScriptedIO implements ReplIO {
   readonly outputs: string[] = [];
@@ -109,6 +110,16 @@ describe("/attach e /paste no REPL (ADR-0026, #392)", () => {
     expect(session.sent[1]?.attachments).toBeUndefined();
   });
 
+  test("/paste repetido é recusado e materializa um bloco só (#392)", async () => {
+    const cwd = sandbox();
+    const session = new CaptureSession();
+    const io = new ScriptedIO(["/paste", "/paste", "leia", "/exit"]);
+    await runRepl(session, io, { cwd, clipboard: () => "colado" });
+    expect(io.outputs.join("\n")).toContain("já adicionado: clipboard");
+    expect(session.sent[0]?.prompt).toBe("leia\n\n[anexo: clipboard]\ncolado");
+    expect(session.sent[0]?.attachments).toHaveLength(1);
+  });
+
   test("mesmo anexo duas vezes é recusado e materializa um bloco só", async () => {
     const cwd = sandbox();
     writeFileSync(join(cwd, "a.txt"), "um\ndois\n");
@@ -144,7 +155,14 @@ function e2eSetup(context = 8192) {
     agent: { model: "p/m1", maxSteps: 1, tools: [] },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
-  const session = new AgentSession({ configPath, cwd, env: { ASTRO_HOME: home, ASTRO_ALLOW_PRIVATE_URLS: "1", KEY: "k" } });
+  // Injeta ACL fake: no runner windows do CI o cold start do PowerShell passa de 15 s.
+  const session = new AgentSession({
+    configPath,
+    cwd,
+    env: { ASTRO_HOME: home, ASTRO_ALLOW_PRIVATE_URLS: "1", KEY: "k" },
+    artifactCheckPrivate: () => true,
+    artifactHardenPrivate: () => FAKE_PRIVATE_ACL,
+  });
   return { cwd, home, bodies, session, stop: () => server.stop(true) };
 }
 
@@ -194,5 +212,23 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       // Falha não consome o anexo: continua pendente para /detach ou novo turno.
       expect(text.slice(text.indexOf("janela de contexto"))).toContain("1. a.png");
     } finally { stop(); }
+  });
+
+  test("imagem recusada falha o turno, mantém o anexo e não grava nada (#392)", async () => {
+    const { cwd, home, bodies, session, stop } = e2eSetup();
+    try {
+      const io = new ScriptedIO(["/attach a.png", "resuma", "n", "/attach", "/exit"]);
+      await runRepl(session, io, { cwd, interactive: true });
+      const out = io.outputs.join("\n");
+      expect(out).toContain("não redigíveis");
+      expect(out).toContain("erro: envio de imagem não aprovado");
+      expect(io.outputs).toContain("1. a.png (70 bytes)"); // pendente mantido após a recusa
+      expect(bodies).toHaveLength(0);
+      const root = join(home, "attachments");
+      expect(existsSync(root) ? readdirSync(root) : []).toHaveLength(0);
+      expect(readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8")).not.toContain("attachment.approved");
+    } finally {
+      stop();
+    }
   });
 });

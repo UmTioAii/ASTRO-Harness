@@ -190,8 +190,8 @@ const USAGE = `Uso:
   astro bench [--config <path>] [--models <filtro>] [--runs <n>] [--out <dir>]
   astro serve [--port <n>]
   astro replay <run-id> --task "<pedido>" [--config <path>] [--cwd <dir>]
-  astro chat [--config <path>] [--cwd <dir>] [--provider <name>] [--permission-mode <modo>]
-  astro tui [--config <path>] [--cwd <dir>] [--provider <name>] [--permission-mode <modo>]
+  astro chat [--config <path>] [--cwd <dir>] [--provider <name>] [--permission-mode <modo>] [--artifact-root <dir>]
+  astro tui [--config <path>] [--cwd <dir>] [--provider <name>] [--permission-mode <modo>] [--artifact-root <dir>]
   astro resume <run-id> --task "<pedido>" [--config <path>] [--cwd <dir>]
   astro continue <run-id> [--task "<pedido>"] [--agent <name>] [--config <path>] [--cwd <dir>]
   astro health [--config <path>]
@@ -211,6 +211,7 @@ Opções:
   --provider <name> provider ativo (default: store/env/agent.model)
   --cwd <dir>      diretório de trabalho do agente (default: diretório atual)
   --permission-mode <bypass|allow-edits|ask>  modo do gate de tool (vence permissions.mode)
+  --artifact-root <dir>     raiz do artifact store de imagens (só em chat/tui)
   --allow-critical <path>   libera path do hard-block configurável (repete, máx 64; exige --i-understand; só em run/chat/tui)
   --allow-sensitive <glob>  declara glob como sensitive (repete, máx 64; só em run/chat/tui)
   --i-understand            confirma a leitura de --allow-critical (obrigatório na mesma invocação)
@@ -288,6 +289,8 @@ interface ChatCommand {
   provider?: string;
   configExplicit: boolean;
   permissionMode?: PermissionMode;
+  /** `--artifact-root`: raiz do artifact store de imagens (ADR-0026). */
+  artifactRoot?: string;
   /** Flags de allowlist (ADR-0027 slice 5a); validadas antes do run. */
   allowlistFlags?: AllowlistFlags;
 }
@@ -298,6 +301,8 @@ interface TuiCommand {
   provider?: string;
   configExplicit: boolean;
   permissionMode?: PermissionMode;
+  /** `--artifact-root`: raiz do artifact store de imagens (ADR-0026). */
+  artifactRoot?: string;
   /** Flags de allowlist (ADR-0027 slice 5a); validadas antes do run. */
   allowlistFlags?: AllowlistFlags;
 }
@@ -784,9 +789,19 @@ function parseArgs(argv: string[]): ParsedCommand {
     let provider: string | undefined;
     let permissionMode: PermissionMode | undefined;
     let configExplicit = false;
+    let artifactRoot: string | undefined;
     const allowlistFlags: AllowlistFlags = { allowCriticalRaw: [], allowSensitiveRaw: [], iUnderstand: false };
     for (let i = 0; i < rest.length; i++) {
       const arg = rest[i] as string;
+      if (arg === "--artifact-root") {
+        const value = rest.at(i + 1);
+        if (value === undefined || value.startsWith("-") || value.trim() === "") {
+          throw new UsageError(`falta o valor de ${arg}`);
+        }
+        i++;
+        artifactRoot = value;
+        continue;
+      }
       if (arg === "--config" || arg === "--cwd" || arg === "--provider" || arg === "--permission-mode") {
         const value = rest.at(i + 1);
         if (value === undefined || value.startsWith("-")) throw new UsageError(`falta o valor de ${arg}`);
@@ -808,6 +823,7 @@ function parseArgs(argv: string[]): ParsedCommand {
       ...(cwd === undefined ? {} : { cwd }),
       ...(provider === undefined ? {} : { provider }),
       ...(permissionMode === undefined ? {} : { permissionMode }),
+      ...(artifactRoot === undefined ? {} : { artifactRoot }),
       ...(allowlistFlags.allowCriticalRaw.length > 0 || allowlistFlags.allowSensitiveRaw.length > 0 || allowlistFlags.iUnderstand ? { allowlistFlags } : {}),
     };
     return command === "chat" ? { kind: "chat", options } : { kind: "tui", options };
@@ -1203,6 +1219,7 @@ async function main(argv: string[]): Promise<number> {
       configPath: resolve(o.configPath),
       cwd: o.cwd ?? process.cwd(),
       ...(o.provider === undefined ? {} : { provider: o.provider }),
+      ...(o.artifactRoot === undefined ? {} : { artifactRoot: o.artifactRoot }),
       allowMissingConfig: !o.configExplicit,
       ...allowlistOpts,
     });
@@ -1224,6 +1241,7 @@ async function main(argv: string[]): Promise<number> {
       const session = new AgentSession({
         configPath, cwd: base, env: process.env,
         ...(o.provider === undefined ? {} : { provider: o.provider }),
+        ...(o.artifactRoot === undefined ? {} : { artifactRoot: o.artifactRoot }),
         allowMissingConfig: !o.configExplicit,
         ...allowlistOpts,
         ...chatApprovers(io, interactive),

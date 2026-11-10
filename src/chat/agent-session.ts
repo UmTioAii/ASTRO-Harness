@@ -17,6 +17,7 @@ import type { CodexLoginStart } from "../provider/codex-login";
 import { expandHomePath, saveCodexAuth, startCodexLogin } from "../provider/codex-login";
 import { loadEffectiveConfig, providerIdentityFor, type ProviderSelection, type ProviderSource } from "../provider/profiles";
 import type { ChatMessage, FetchLike, ImagePart } from "../provider/types";
+import type { WindowsAcl } from "../attachments/acl";
 import { AttachmentError, type AttachmentMeta, type LoadedAttachment } from "../attachments/model";
 import { ArtifactStore, resolveArtifactRoot } from "../attachments/store";
 import { prepareTurnAttachments, type AttachmentApprover } from "../attachments/turn";
@@ -58,6 +59,10 @@ export interface AgentSessionOptions {
   allowSensitive?: readonly string[];
   /** Raiz do artifact store de imagens (ADR-0026); ausente usa env/`$ASTRO_HOME/attachments`. */
   artifactRoot?: string;
+  /** Injeção de testes para a privacidade da raiz (ADR-0026); nunca via env (I-03/I-11). */
+  artifactCheckPrivate?: (path: string) => boolean;
+  /** Injeção de testes para o endurecimento win32 da raiz; ausente usa o real. */
+  artifactHardenPrivate?: (path: string) => WindowsAcl;
 }
 
 /** Opções de um turno de chat: anexos carregados e aprovador explícito de imagem. */
@@ -161,6 +166,8 @@ export class AgentSession {
   readonly #fetchLike: FetchLike | undefined;
   readonly #allowCritical: readonly string[] | undefined;
   readonly #allowSensitive: readonly string[] | undefined;
+  readonly #artifactCheckPrivate: ((path: string) => boolean) | undefined;
+  readonly #artifactHardenPrivate: ((path: string) => WindowsAcl) | undefined;
   #modelRef: string;
   #permissionMode: PermissionMode;
   #messages: ChatMessage[];
@@ -210,6 +217,8 @@ export class AgentSession {
     this.#fetchLike = opts.fetchLike;
     this.#allowCritical = opts.allowCritical;
     this.#allowSensitive = opts.allowSensitive;
+    this.#artifactCheckPrivate = opts.artifactCheckPrivate;
+    this.#artifactHardenPrivate = opts.artifactHardenPrivate;
     if (this.#config.tools?.run_command?.sandbox === false) this.#warnings.push(SANDBOX_DISABLED_WARNING);
     this.#modelRef = opts.model ?? this.#config.agent.model;
     // Modo inicial idêntico ao do run (app.ts lê só process.env, nunca o env injetado):
@@ -236,7 +245,9 @@ export class AgentSession {
   /** Store de imagem criado só na primeira imagem; raiz resolvida uma vez no construtor. */
   #imageStore(): ArtifactStore {
     return this.#imageStoreInstance ??= new ArtifactStore(this.#artifactRoot, { cwd: this.#cwd, astroHome: resolveAstroHome(this.#env),
-      ttlDays: this.#config.attachments.artifactTtlDays, maxBytes: this.#config.attachments.artifactMaxBytes });
+      ttlDays: this.#config.attachments.artifactTtlDays, maxBytes: this.#config.attachments.artifactMaxBytes,
+      ...(this.#artifactCheckPrivate === undefined ? {} : { checkPrivate: this.#artifactCheckPrivate }),
+      ...(this.#artifactHardenPrivate === undefined ? {} : { hardenPrivate: this.#artifactHardenPrivate }) });
   }
 
   get messages(): readonly ChatMessage[] {

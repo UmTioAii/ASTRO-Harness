@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TUI_RENDER_OPTIONS } from "../src/tui/run";
 
@@ -18,4 +18,24 @@ test("tui recusa stdin em pipe sem carregar a interface", async () => {
   const stderr = await new Response(proc.stderr).text();
   expect(exit).toBe(1);
   expect(stderr).toContain("terminal interativo");
+});
+
+test("tui aceita --artifact-root e rejeita valor vazio (#392)", async () => {
+  const accepted = Bun.spawn(
+    ["bun", "src/cli.ts", "tui", "--cwd", root, "--artifact-root", join(root, "..", "artifacts")],
+    { cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+  );
+  accepted.stdin.end();
+  expect(await accepted.exited).toBe(1); // falha por não ser TTY, não na flag
+  const stderr = await new Response(accepted.stderr).text();
+  expect(stderr).toContain("terminal interativo");
+  expect(stderr).not.toContain("opção desconhecida");
+
+  const empty = Bun.spawn(
+    ["bun", "src/cli.ts", "tui", "--artifact-root", "", "--cwd", root],
+    { cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+  );
+  empty.stdin.end();
+  expect(await empty.exited).toBe(1);
+  expect(await new Response(empty.stderr).text()).toContain("falta o valor de --artifact-root");
 });

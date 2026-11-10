@@ -2,6 +2,16 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { WindowsAcl } from "../src/attachments/acl";
+
+/**
+ * ACL owner-only fake para injetar `hardenPrivate` em testes e não spawnar
+ * PowerShell real (o cold start passa de 15 s no runner windows do CI).
+ */
+export const FAKE_PRIVATE_ACL: WindowsAcl = {
+  userSid: "S-1-5-21-0-0-0-1000",
+  sddl: "O:S-1-5-21-0-0-0-1000G:S-1-5-21-0-0-0-513D:PAI(A;OICI;FA;;;S-1-5-21-0-0-0-1000)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)",
+};
 
 /** Diretório ASTRO_HOME temporário criado para a suíte de testes. */
 export const TEST_ASTRO_HOME = mkdtempSync(join(tmpdir(), "astro-tests-home-"));
