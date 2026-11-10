@@ -15,15 +15,9 @@ const TEMP_SDDL =
 const acl = (...aces: string[]) => `O:SYG:SYD:PAI${aces.join("")}`;
 
 describe("windowsAclIsPrivate", () => {
-  test("recusa allow para Everyone/Users/Authenticated/Interactive (alias)", () => {
-    for (const alias of ["WD", "BU", "AU", "IU"]) {
-      expect(windowsAclIsPrivate(acl("(A;OICI;FA;;;SY)", `(A;OICI;FR;;;${alias})`))).toBe(false);
-    }
-  });
-
-  test("recusa allow para os SIDs completos dos mesmos grupos", () => {
-    for (const sid of ["S-1-1-0", "S-1-5-32-545", "S-1-5-11", "S-1-5-4"]) {
-      expect(windowsAclIsPrivate(acl("(A;OICI;FA;;;SY)", `(A;OICI;FR;;;${sid})`))).toBe(false);
+  test("recusa allow para Everyone/Users/Authenticated/Interactive (alias e SID)", () => {
+    for (const principal of ["WD", "BU", "AU", "IU", "S-1-1-0", "S-1-5-32-545", "S-1-5-11", "S-1-5-4"]) {
+      expect(windowsAclIsPrivate(acl("(A;OICI;FA;;;SY)", `(A;OICI;FR;;;${principal})`))).toBe(false);
     }
   });
 
@@ -40,13 +34,10 @@ describe("windowsAclIsPrivate", () => {
     expect(windowsAclIsPrivate(acl("(D;;FR;;;WD)", "(A;OICI;FA;;;SY)", "(A;OICI;FA;;;BA)"))).toBe(true);
   });
 
-  test("entrada vazia, sem ACE ou lixo falha fechado", () => {
+  test("entrada vazia, sem ACE, lixo ou ACE malformado falha fechado", () => {
     expect(windowsAclIsPrivate("")).toBe(false);
     expect(windowsAclIsPrivate("O:SYG:SYD:PAI")).toBe(false);
     expect(windowsAclIsPrivate("garbage")).toBe(false);
-  });
-
-  test("ACE malformado falha fechado", () => {
     expect(windowsAclIsPrivate("(A;OICI;FA;;)")).toBe(false);
   });
 
