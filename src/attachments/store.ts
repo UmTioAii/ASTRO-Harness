@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, 
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { canonicalize, isWithin } from "../tools/paths";
-import { defaultCheckPrivate } from "./acl";
+import { defaultCheckPrivate, hardenWindowsAcl, inspectWindowsAcl } from "./acl";
 import { AttachmentError, MAX_ATTACHMENT_BYTES } from "./model";
 
 export interface ResolveArtifactRootInput {
@@ -155,13 +155,21 @@ export class ArtifactStore {
       validateArtifactRoot(root, this.#context);
       this.root = target;
       mkdirSync(this.root, { recursive: true, mode: 0o700 });
-      // No Windows a raiz criada herda a ACL do pai; revalida depois de criar.
-      if (process.platform === "win32" && !existed) {
-        const checkPrivate = this.#context.checkPrivate ?? defaultCheckPrivate;
-        if (!checkPrivate(this.root)) {
-          try { rmdirSync(this.root); } catch { /* vazio; melhor esforço */ }
-          throw new AttachmentError("attachment_root_invalid", `raiz de artefato precisa ser privada (0700/ACL): ${this.root}`);
+      // Raiz recém-criada herda a ACL do pai: endurece e revalida em toda plataforma,
+      // fechando o TOCTOU entre o ENOENT do pré-check e o mkdir. Raiz pré-existente
+      // já passou pelo pré-check.
+      if (!existed) {
+        if (process.platform === "win32") {
+          const acl = inspectWindowsAcl(this.root);
+          if (acl === undefined) this.#invalidRoot();
+          try {
+            hardenWindowsAcl(this.root, acl.userSid);
+          } catch {
+            this.#invalidRoot();
+          }
         }
+        const checkPrivate = this.#context.checkPrivate ?? defaultCheckPrivate;
+        if (!checkPrivate(this.root)) this.#invalidRoot();
       }
     } catch (error) {
       throw error instanceof AttachmentError ? error : new AttachmentError("attachment_root_invalid", `não foi possível preparar a raiz de artefato: ${error instanceof Error ? error.message : String(error)}`, root);
@@ -169,6 +177,12 @@ export class ArtifactStore {
     this.#ttlMs = (options.ttlDays ?? DEFAULT_TTL_DAYS) * 24 * 60 * 60 * 1000;
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.#now = options.now ?? Date.now;
+  }
+
+  /** Raiz criada mas insegura: remove o diretório vazio (melhor esforço) e falha tipado. */
+  #invalidRoot(): never {
+    try { rmdirSync(this.root); } catch { /* vazio; melhor esforço */ }
+    throw new AttachmentError("attachment_root_invalid", `raiz de artefato precisa ser privada (0700/ACL): ${this.root}`);
   }
 
   /** Bytes já usados por artefatos do harness. */
