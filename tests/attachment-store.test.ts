@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hardenWindowsAcl, inspectWindowsAcl, type WindowsAcl } from "../src/attachments/acl";
+import { canonicalTrustee, hardenWindowsAcl, inspectWindowsAcl, type WindowsAcl } from "../src/attachments/acl";
 import {
   ArtifactStore,
   resolveArtifactRoot,
@@ -105,7 +105,7 @@ describe("validateArtifactRoot", () => {
       const acl = inspectWindowsAcl(root);
       expect(acl).toBeDefined();
       const trustees = [...acl!.sddl.matchAll(/\(([^)]*)\)/g)].map(([, body]) =>
-        body.split(";")[5]!.trim().toUpperCase(),
+        canonicalTrustee(body.split(";")[5]!, acl!.userSid),
       );
       expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl!.userSid.toUpperCase()].sort());
       expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
@@ -123,7 +123,7 @@ describe("validateArtifactRoot", () => {
     execFileSync("icacls", [root, "/grant", "*S-1-5-32-546:(OI)(CI)(R)"], { stdio: "ignore" });
     const acl = hardenWindowsAcl(root);
     const trustees = [...acl.sddl.matchAll(/\(([^)]*)\)/g)].map(([, body]) =>
-      body.split(";")[5]!.trim().toUpperCase(),
+      canonicalTrustee(body.split(";")[5]!, acl.userSid),
     );
     expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl.userSid.toUpperCase()].sort());
     expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
@@ -153,7 +153,7 @@ describe("validateArtifactRoot", () => {
     const acl = inspectWindowsAcl(root);
     expect(acl).toBeDefined();
     const trustees = [...acl!.sddl.matchAll(/\(([^)]*)\)/g)].map(([, body]) =>
-      body.split(";")[5]!.trim().toUpperCase(),
+      canonicalTrustee(body.split(";")[5]!, acl!.userSid),
     );
     expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl!.userSid.toUpperCase()].sort());
     expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();

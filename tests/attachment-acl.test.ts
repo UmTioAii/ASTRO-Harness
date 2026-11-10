@@ -87,6 +87,15 @@ describe("windowsAclIsPrivate", () => {
   test("fixture real de C:\\Users\\Public é recusada", () => {
     expect(windowsAclIsPrivate(PUBLIC_SDDL, USER)).toBe(false);
   });
+
+  // Regressão do runner windows do CI: a conta built-in Administrator (…-500,
+  // ex.: runneradmin) aparece como alias `LA` no SDDL, não como SID.
+  test("alias LA vale como o próprio usuário quando o SID é …-500; LA de outro usuário é recusado", () => {
+    const admin = "S-1-5-21-3289802278-1561746829-1498425070-500";
+    expect(windowsAclIsPrivate(`O:LAG:S-1-5-32-544D:PAI(A;OICI;FA;;;LA)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`, admin)).toBe(true);
+    expect(windowsAclIsPrivate(sddl(USER, allow("LA")), USER)).toBe(false);
+    expect(windowsAclIsPrivate(sddl(USER, allow("LA"), allow(USER)), admin)).toBe(false); // dono não é o admin
+  });
 });
 
 describe("defaultCheckPrivate", () => {
