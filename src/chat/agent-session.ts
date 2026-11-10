@@ -17,9 +17,10 @@ import type { CodexLoginStart } from "../provider/codex-login";
 import { expandHomePath, saveCodexAuth, startCodexLogin } from "../provider/codex-login";
 import { loadEffectiveConfig, providerIdentityFor, type ProviderSelection, type ProviderSource } from "../provider/profiles";
 import type { ChatMessage, FetchLike, ImagePart } from "../provider/types";
-import type { AttachmentMeta, LoadedAttachment } from "../attachments/model";
+import { AttachmentError, type AttachmentMeta, type LoadedAttachment } from "../attachments/model";
 import { ArtifactStore, resolveArtifactRoot } from "../attachments/store";
 import { prepareTurnAttachments, type AttachmentApprover } from "../attachments/turn";
+import { effectiveOutputCap } from "../output-limit";
 import { Registry, type ModelEntry } from "../registry";
 import { Ledger } from "../ledger";
 import { isPermissionMode, resolveAstroHome, resolvePermissionMode, type PermissionMode } from "../permissions";
@@ -569,8 +570,6 @@ export class AgentSession {
     try {
       const before = this.#messages;
       const baseline = this.#ledger.readAll().length;
-      const guard = guardContext([...before, { role: "user", content: prompt }], this.contextLimit());
-      const history = guard.messages.slice(0, -1); // o último é o prompt deste turno
       let metas = attachments;
       let images: ImagePart[] | undefined;
       if (turn?.attachments !== undefined) {
@@ -580,6 +579,19 @@ export class AgentSession {
           audit: (tipo, payload) => this.#append(tipo, payload) });
         metas = prepared.metas.length === 0 ? undefined : prepared.metas;
         images = prepared.images.length === 0 ? undefined : prepared.images;
+      }
+      // A imagem entra na estimativa e no pré-check antes de qualquer request (ADR-0026).
+      const guard = guardContext([...before, { role: "user", content: prompt,
+        ...(metas === undefined ? {} : { attachments: metas }),
+        ...(images === undefined ? {} : { images }) }], this.contextLimit());
+      const history = guard.messages.slice(0, -1); // o último é o prompt deste turno
+      if (images !== undefined) {
+        const window = this.contextLimit();
+        const reserve = effectiveOutputCap(this.#config.outputLimit, window);
+        if (guard.tokens + reserve > window) {
+          throw new AttachmentError("attachment_turn_too_large",
+            `imagem excede a janela de contexto do modelo: ~${guard.tokens} tokens + ${reserve} de saída > ${window}`);
+        }
       }
       this.#append("chat.prompt", { taskHash: shortTaskHash(prompt) });
 

@@ -4,7 +4,7 @@
  * provider registra um; senão estimativa documentada de 4 chars/token, sempre
  * marcada como `estimate` e nunca zero para texto não vazio.
  */
-import type { ChatMessage, CompletionRequest, ToolDef } from "./provider/types";
+import type { ChatMessage, CompletionRequest, ImagePart, ToolDef } from "./provider/types";
 
 /** De onde veio a contagem: tokenizer do provider ou estimativa 4 chars/token. */
 export type TokenSource = "measured" | "estimate";
@@ -66,6 +66,17 @@ export function estimateTokens(text: string): number {
   return text.length === 0 ? 0 : Math.ceil(text.length / 4);
 }
 
+/**
+ * Custo fixo de uma imagem (ADR-0026, spec 3c): base64 tem ~4/3 do tamanho em
+ * bytes e a heurística é 4 chars/token, então `ceil(base64/4)` — sem decodificar
+ * e sem passar base64 ao tokenizer nativo. Sem base64, custo zero.
+ */
+export function imageTokens(images: readonly ImagePart[] | undefined): number {
+  let total = 0;
+  for (const image of images ?? []) total += Math.ceil(image.dataBase64.length / 4);
+  return total;
+}
+
 function tokenizerFor(opts: TokenCountOptions): RegisteredTokenizer | undefined {
   if (opts.provider === undefined) return undefined;
   return TOKENIZERS.get(providerKey(opts.provider));
@@ -113,15 +124,22 @@ function toolPieces(tool: ToolDef): string[] {
   return [tool.name, tool.description, parametersText(tool.parameters)];
 }
 
+/** Soma o custo fixo das imagens; havendo imagem, a fonte nunca é `measured`. */
+function addImageCost(count: TokenCount, messages: readonly ChatMessage[]): TokenCount {
+  const images = messages.reduce((total, message) => total + imageTokens(message.images), 0);
+  return images === 0 ? count : { tokens: count.tokens + images, source: "estimate" };
+}
+
 /** Conta uma lista de mensagens para o provider/model ativo. */
 export function countMessageTokens(messages: readonly ChatMessage[], opts: TokenCountOptions = {}): TokenCount {
-  return countPieces(messages.flatMap(messagePieces), opts);
+  return addImageCost(countPieces(messages.flatMap(messagePieces), opts), messages);
 }
 
 /** Conta mensagens + definições de tools da request (o que vai ao provider). */
 export function countRequestTokens(request: CompletionRequest, opts: TokenCountOptions = {}): TokenCount {
-  return countPieces(
+  const text = countPieces(
     [...request.messages.flatMap(messagePieces), ...(request.tools ?? []).flatMap(toolPieces)],
     opts,
   );
+  return addImageCost(text, request.messages);
 }
