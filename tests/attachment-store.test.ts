@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectWindowsAcl } from "../src/attachments/acl";
+import { hardenWindowsAcl, inspectWindowsAcl } from "../src/attachments/acl";
 import {
   ArtifactStore,
   resolveArtifactRoot,
@@ -111,6 +111,25 @@ describe("validateArtifactRoot", () => {
     } finally {
       execFileSync("icacls", [parent, "/remove", "*S-1-1-0"], { stdio: "ignore" });
     }
+  });
+
+  // Regressão do CI Windows: `/inheritance:r` remove só ACEs herdadas; uma ACE explícita
+  // já na raiz sobrevive e mantém um trustee fora de dono/SY/BA.
+  test.skipIf(process.platform !== "win32")("endurecimento troca a DACL explícita por uma nova protegida", () => {
+    const { cwd, astroHome } = sandbox();
+    const root = join(astroHome, "explicit-ace-artifacts");
+    mkdirSync(root, { recursive: true });
+    execFileSync("icacls", [root, "/grant", "*S-1-5-32-546:(OI)(CI)(R)"], { stdio: "ignore" });
+    const before = inspectWindowsAcl(root);
+    expect(before).toBeDefined();
+    hardenWindowsAcl(root, before!.userSid);
+    const acl = inspectWindowsAcl(root);
+    expect(acl).toBeDefined();
+    const trustees = [...acl!.sddl.matchAll(/\(([^)]*)\)/g)].map(([, body]) =>
+      body.split(";")[5]!.trim().toUpperCase(),
+    );
+    expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl!.userSid.toUpperCase()].sort());
+    expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
   });
 
   test("raiz recém-criada que não fica privada é removida e falha tipada", () => {
