@@ -20,8 +20,10 @@ async function runCli(args: string[], opts: { cwd: string; env: Record<string, s
     delete baseEnv[key];
   }
   const home = opts.env.ASTRO_HOME ?? mkdtempSync(join(tmpdir(), "astro-wire-home-"));
-  const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
-    cwd: root,
+  // O spawn roda no diretório do teste: um `astro.config.json` local na raiz do
+  // repositório não pode entrar nos testes que esperam "sem config".
+  const proc = Bun.spawn(["bun", join(root, "src", "cli.ts"), ...args], {
+    cwd: opts.cwd,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -186,9 +188,8 @@ test("--config explícito ausente falha em vez de usar baseline", async () => {
 
 test("run sem config falha", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-wire-run-"));
-  // O config do projeto é procurado a partir de `--cwd`, não do cwd do processo.
-  const result = await runCli(["run", "oi", "--cwd", cwd], {
-    cwd: root,
+  const result = await runCli(["run", "oi"], {
+    cwd,
     env: { OPENAI_API_KEY: "k", OPENAI_MODEL: "gpt-4o" },
   });
   expect(result.exit).toBe(1);
