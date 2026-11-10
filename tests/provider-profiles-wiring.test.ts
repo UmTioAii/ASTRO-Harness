@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -193,6 +193,28 @@ test("run sem config falha", async () => {
   });
   expect(result.exit).toBe(1);
   expect(result.stderr).toMatch(/configuração não encontrada/);
+});
+
+test("--no-global-config é aceita depois de outra flag e desliga a camada global", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "astro-wire-flag-"));
+  const home = mkdtempSync(join(tmpdir(), "astro-wire-flag-home-"));
+  // A camada global traz o provider e o modelo; o projeto depende dela.
+  writeFileSync(join(home, "config.json"), JSON.stringify({
+    providers: { g: { kind: "openai-compat", baseUrl: "https://g.example/v1", credentialRef: "G_KEY" } },
+    models: [{ provider: "g", id: "gm", tags: [], context: 8192 }],
+  }));
+  writeFileSync(join(cwd, "astro.config.json"), JSON.stringify({
+    agent: { model: "g/gm", maxSteps: 2, tools: ["read_file"] },
+    paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+  }));
+  // Sem a flag, a camada global entra e o modelo declarado existe.
+  const withGlobal = await runCli(["models", "list"], { cwd, env: { ASTRO_HOME: home } });
+  expect(withGlobal.exit).toBe(0);
+  // A flag depois de outra flag é aceita (e desliga a camada global).
+  const isolated = await runCli(["models", "list", "--seeds", "--no-global-config"], { cwd, env: { ASTRO_HOME: home } });
+  expect(isolated.stderr).not.toMatch(/opção desconhecida/);
+  expect(isolated.exit).toBe(1);
+  expect(isolated.stderr).toMatch(/não está declarado em "models"/);
 });
 
 test("--provider desconhecido falha", async () => {

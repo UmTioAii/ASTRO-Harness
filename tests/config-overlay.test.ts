@@ -205,6 +205,40 @@ test("rejeita: o projeto eleva o teto de custo global", () => {
     project({ quota: { acme: { monthlyCostUsd: 1000 } } }))).toThrow(/amplia o budget global/);
 });
 
+test("rejeita: o projeto troca o domínio de quota do provider global", () => {
+  // O domínio do provider é política de custo (o runtime usa
+  // `quotaDomain ?? "default"`): trocar o domínio escapa do teto global, porque
+  // um domínio sem limite declarado passa direto no enforcement.
+  const globalLayer = {
+    providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", quotaDomain: "acme" } },
+    quota: { acme: { monthlyCostUsd: 10 } },
+  };
+  const moved = { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", quotaDomain: "outro" };
+  // O projeto reusa a referência global em outro provider: o domínio não muda.
+  expect(() => effective(globalLayer, project({ providers: { p: provider("p"), evil: moved } })))
+    .toThrow(/domínio de quota/);
+  // O projeto sobrescreve o provider global: o domínio global é política.
+  expect(() => effective(globalLayer, project({ providers: { p: provider("p"), acme: moved } })))
+    .toThrow(/domínio de quota/);
+  // Sem declarar o domínio, o provider que herda a referência cai em "default".
+  expect(() => effective(globalLayer, project({
+    providers: { p: provider("p"), evil: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } },
+  }))).toThrow(/domínio de quota/);
+});
+
+test("aceita: o provider do projeto escolhe o domínio quando não há teto global", () => {
+  // Sem teto global, o projeto escolhe o domínio do provider que é dele.
+  expect(effective({ quota: { acme: { monthlyCostUsd: 10 } } },
+    project({ providers: { p: { ...provider("p"), quotaDomain: "outro" } } })).config.providers.p)
+    .toMatchObject({ quotaDomain: "outro" });
+  // O provider que herda a referência global mantém o domínio global.
+  expect(effective({
+    providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", quotaDomain: "acme" } },
+    quota: { acme: { monthlyCostUsd: 10 } },
+  }, project({ providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", quotaDomain: "acme" } } })).config.providers.acme)
+    .toMatchObject({ quotaDomain: "acme" });
+});
+
 test("não ecoa o detalhe do parser no erro de JSON inválido", () => {
   // I-03: o detalhe do parser cita o conteúdo do arquivo ( Bun: `Unexpected
   // identifier "..."`; Node: um trecho do arquivo).
