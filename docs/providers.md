@@ -34,7 +34,7 @@ Perfis vivem em `~/.astro/providers.json` (`ASTRO_HOME` sobrescreve), modo 0600,
 
 | Precedência | Ordem |
 |---|---|
-| Definição do provider | `astro.config.json` > perfil global de mesmo nome |
+| Definição do provider | `astro.config.json` > `$ASTRO_HOME/config.json` > perfil global de mesmo nome |
 | Provider ativo | `--provider` > `ASTRO_PROVIDER` > `activeProfileId` > provider do `agent.model` |
 | Modelos | união; o projeto vence no mesmo `provider/id` |
 

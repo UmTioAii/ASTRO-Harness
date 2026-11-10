@@ -1,7 +1,5 @@
-/**
- * Camada global de configuração (ADR-0029, #401): merge `global < projeto` e
- * estreitamento de segurança (o projeto nunca amplia o global).
- */
+/** Camada global de configuração (ADR-0029, #401): merge `global < projeto` e
+ * estreitamento de segurança (o projeto nunca amplia o global). */
 import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,27 +7,17 @@ import { join } from "node:path";
 import { loadEffectiveConfig } from "../src/provider/profiles";
 
 const PATHS = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
-const provider = (id: string): Record<string, unknown> => ({
-  kind: "openai-compat", baseUrl: `https://${id}.example/v1`, credentialRef: "KEY",
-});
-const model = (providerId: string, id: string, context = 8192): Record<string, unknown> => ({
-  provider: providerId, id, tags: [], context,
-});
+const provider = (id: string): Record<string, unknown> => ({ kind: "openai-compat", baseUrl: `https://${id}.example/v1`, credentialRef: "KEY" });
+const model = (providerId: string, id: string, context = 8192): Record<string, unknown> => ({ provider: providerId, id, tags: [], context });
 const projectBase = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-  providers: { p: provider("p") },
-  models: [model("p", "m")],
-  agent: { model: "p/m", maxSteps: 4, tools: ["read_file"] },
-  paths: PATHS,
-  ...over,
+  providers: { p: provider("p") }, models: [model("p", "m")],
+  agent: { model: "p/m", maxSteps: 4, tools: ["read_file"] }, paths: PATHS, ...over,
 });
-
-/** Projeto com duas contas (o teto de agentes ativos exige duas) e um agent nomeado. */
+/** Duas contas (o teto de agents ativos exige duas) e um agent nomeado. */
 const twoAccounts = (agents: Record<string, unknown>): Record<string, unknown> => ({
   providers: { p: provider("p"), q: { ...provider("q"), credentialRef: "KEY2" } },
   models: [model("p", "m"), model("q", "n")],
-  agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "write_file"] },
-  agents,
-  paths: PATHS,
+  agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "write_file"] }, agents, paths: PATHS,
 });
 
 /** Home temporário com `config.json` global e, opcionalmente, projeto em disco. */
@@ -50,37 +38,24 @@ function effective(global: unknown, project?: unknown) {
 
 test("merge: agent, providers e models (três linhas de resultado da tabela do #401)", () => {
   // 1) o global mantém maxSteps e tools; o projeto sobrescreve só o model.
-  expect(effective(
-    { agent: { maxSteps: 12, tools: ["read_file", "grep"] } },
-    projectBase({ agent: { model: "p/m" } }),
-  ).config.agent).toMatchObject({ model: "p/m", maxSteps: 12, tools: ["read_file", "grep"] });
+  expect(effective({ agent: { maxSteps: 12, tools: ["read_file", "grep"] } },
+    projectBase({ agent: { model: "p/m" } })).config.agent)
+    .toMatchObject({ model: "p/m", maxSteps: 12, tools: ["read_file", "grep"] });
 
   // 2) providers dos dois layers convivem; o do projeto sobrescreve por chave.
-  const providers = effective(
-    {
-      providers: {
-        openai: provider("openai"),
-        local: { kind: "openai-compat", baseUrl: "https://local.example/v1" },
-      },
-      models: [model("openai", "a"), model("local", "b")],
-    },
-    projectBase({
-      providers: { local: { baseUrl: "https://local2.example/v1" } },
-      models: [model("local", "b")],
-      agent: { model: "local/b", maxSteps: 4, tools: ["read_file"] },
-    }),
-  ).config;
+  const providers = effective({
+    providers: { openai: provider("openai"), local: { kind: "openai-compat", baseUrl: "https://local.example/v1" } },
+    models: [model("openai", "a"), model("local", "b")],
+  }, projectBase({
+    providers: { local: { baseUrl: "https://local2.example/v1" } },
+    models: [model("local", "b")], agent: { model: "local/b", maxSteps: 4, tools: ["read_file"] },
+  })).config;
   expect(Object.keys(providers.providers).sort()).toEqual(["local", "openai"]);
   expect(providers.providers.local).toMatchObject({ kind: "openai-compat", baseUrl: "https://local2.example/v1" });
 
   // 3) models une por provider/id; o projeto prevalece no conflito.
-  const models = effective(
-    { providers: { p: provider("p") }, models: [model("p", "a"), model("p", "b", 4096)] },
-    projectBase({
-      models: [model("p", "b", 16384), model("p", "c")],
-      agent: { model: "p/b", maxSteps: 4, tools: ["read_file"] },
-    }),
-  ).config;
+  const models = effective({ providers: { p: provider("p") }, models: [model("p", "a"), model("p", "b", 4096)] },
+    projectBase({ models: [model("p", "b", 16384), model("p", "c")], agent: { model: "p/b", maxSteps: 4, tools: ["read_file"] } })).config;
   expect(models.models.map((entry) => entry.id).sort()).toEqual(["a", "b", "c"]);
   expect(models.models.find((entry) => entry.id === "b")?.context).toBe(16384);
 });
@@ -118,11 +93,9 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
 
 test("camada global sozinha define a config efetiva quando não há projeto", () => {
   const only = effective({
-    providers: { g: provider("g") },
-    models: [model("g", "gm")],
+    providers: { g: provider("g") }, models: [model("g", "gm")],
     agent: { model: "g/gm", maxSteps: 6, tools: ["read_file"] },
-    permissions: { mode: "allow-edits" },
-    paths: PATHS,
+    permissions: { mode: "allow-edits" }, paths: PATHS,
   });
   expect(only.config.agent.model).toBe("g/gm");
   expect(only.config.permissions.mode).toBe("allow-edits");

@@ -1115,7 +1115,7 @@ async function main(argv: string[]): Promise<number> {
     const auditPath = resolve(base, config.paths.audit);
     try {
       const result = await replayRun({
-        configPath: resolve(base, o.configPath),
+        configPath: resolve(o.configPath),
         auditPath,
         runId: o.runId,
         task: o.task,
@@ -1146,7 +1146,7 @@ async function main(argv: string[]): Promise<number> {
       const agent = o.agent ?? resolveContinueAgent(base, o.runId);
       const checkpoint = loadCheckpoint(base, o.runId, agent);
       const report = await runTask({
-        configPath: resolve(base, o.configPath),
+        configPath: resolve(o.configPath),
         task: continueTask(checkpoint, o.task),
         cwd: base,
         continuedFrom: { run: o.runId, agent },
@@ -1175,7 +1175,7 @@ async function main(argv: string[]): Promise<number> {
     const cancellation = installCancellation();
     try {
       const report = await runTask({
-        configPath: resolve(o.cwd ?? process.cwd(), o.configPath),
+        configPath: resolve(o.configPath),
         task: o.task,
         ...(o.cwd === undefined ? {} : { cwd: o.cwd }),
         resume: o.runId,
@@ -1204,7 +1204,7 @@ async function main(argv: string[]): Promise<number> {
     const o = parsed.options;
     const { runTui } = await import("./tui/run");
     return await runTui({
-      configPath: resolve(o.cwd ?? process.cwd(), o.configPath),
+      configPath: resolve(o.configPath),
       cwd: o.cwd ?? process.cwd(),
       ...(o.provider === undefined ? {} : { provider: o.provider }),
       allowMissingConfig: !o.configExplicit,
@@ -1219,7 +1219,7 @@ async function main(argv: string[]): Promise<number> {
     let sessionApi: import("./chat/session-api").SessionApi | undefined;
     try {
       const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
-      const configPath = resolve(base, o.configPath);
+      const configPath = resolve(o.configPath);
       const project = existsSync(configPath) ? loadConfig(configPath) : undefined;
       const manager = new ProfileManager({
         project, env: process.env,
@@ -1430,7 +1430,6 @@ async function main(argv: string[]): Promise<number> {
   try {
     const report = await runTask({
       ...parsed.options,
-      configPath: resolve(parsed.options.cwd ?? process.cwd(), parsed.options.configPath),
       ...allowlistOpts,
       signal: cancellation.signal,
       // Sem TTY não há como perguntar: `ask` nega e para (I-08/I-19).

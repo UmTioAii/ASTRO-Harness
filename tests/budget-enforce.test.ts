@@ -7,7 +7,6 @@ import { runTask } from "../src/app";
 import { BudgetExceededError, effectiveBudget, enforceBudget } from "../src/budget";
 import type { BudgetConfig } from "../src/config";
 import { Ledger } from "../src/ledger";
-import { testEnv } from "./setup";
 
 function ledgerWith(costUsd: number | null): Ledger {
   const dir = mkdtempSync(join(tmpdir(), "astro-budget-enf-"));
@@ -208,12 +207,12 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
   test("não-interativo: para com checkpoint e resume re-aplica o enforcement", async () => {
     const { cwd, configPath, calls, stop } = await runWithBudget({ scope: "day", limitUsd: 9 });
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) })).rejects.toThrow(/budget esgotado/);
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })).rejects.toThrow(/budget esgotado/);
       expect(calls()).toBe(1);
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       expect(ledger.readStates().find((s) => s.state === "interrupted")?.reason).toBe("budget_exceeded");
       expect(ledger.readAllEntries().some((e) => e.kind === "budget" && e.event === "non_interactive")).toBe(true);
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), resume: ledger.readStates()[0]!.run,
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, resume: ledger.readStates()[0]!.run,
         onBudgetExceeded: () => "continue_same" })).rejects.toThrow(/excedeu 4 passos/);
       expect(calls()).toBeGreaterThan(1);
     } finally {
@@ -224,7 +223,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
   test("parada por budget com handoff recebido não invalida a retomada (I-19)", async () => {
     const { cwd, configPath, stop } = await runWithBudget({ scope: "day", limitUsd: 9 }, { tool: "handoff", agents: true });
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) })).rejects.toThrow(/budget esgotado/);
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })).rejects.toThrow(/budget esgotado/);
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       expect(ledger.readAllEntries().some((e) => (e as { kind: string }).kind === "handoff.failed")).toBe(false);
       expect(ledger.readStates().some((s) => s.state === "interrupted" && s.reason === "budget_exceeded")).toBe(true);
@@ -237,7 +236,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
     for (const [choice, expected] of [["continue_same", 4], ["lower_effort", 3]] as const) {
       const { cwd, configPath, calls, stop } = await runWithBudget({ scope: "day", limitUsd: 9 });
       try {
-        await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }),
+        await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" },
           onBudgetExceeded: () => choice })).rejects.toBeDefined();
         expect(calls()).toBe(expected);
       } finally {
@@ -249,7 +248,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
   test("ceiling cruzado no último step também para e registra o evento", async () => {
     const { cwd, configPath, stop } = await runWithBudget({ scope: "day", limitUsd: 50, hardCeilingUsd: 9 }, { final: true, usage: 10000 });
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), onBudgetExceeded: () => "continue_same" }))
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => "continue_same" }))
         .rejects.toThrow(/budget esgotado \(ceiling\)/);
       expect(new Ledger(join(cwd, ".astro", "ledger.jsonl")).readAllEntries()
         .some((e) => e.kind === "budget" && e.event === "ceiling_hit")).toBe(true);
@@ -261,7 +260,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
   test("ceiling no último step do multi também para (I-17)", async () => {
     const { cwd, configPath, stop } = await runWithBudget({ scope: "day", limitUsd: 50, hardCeilingUsd: 9 }, { final: true, agents: true, usage: 10000 });
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), onBudgetExceeded: () => "continue_same" }))
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => "continue_same" }))
         .rejects.toThrow(/budget esgotado \(ceiling\)/);
       expect(new Ledger(join(cwd, ".astro", "ledger.jsonl")).readStates()
         .find((s) => s.state === "interrupted")?.reason).toBe("budget_exceeded");
@@ -274,7 +273,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
     const { cwd, configPath, calls, stop } = await runWithBudget(
       { scope: "day", limitUsd: 10, hardCeilingUsd: 1 }, { usage: 10, priced: false, final: true });
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), onBudgetExceeded: () => "continue_same" }))
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => "continue_same" }))
         .rejects.toThrow(/budget esgotado \(unknown_price\)/);
       expect(calls()).toBe(1);
       expect(new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll()
@@ -288,7 +287,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
     const { cwd, configPath, calls, stop } = await runWithBudget({ scope: "day", limitUsd: 2 });
     let raised = false;
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), onBudgetExceeded: () => {
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => {
         if (raised) return "stop";
         raised = true;
         return { choice: "raise", limitUsd: 15 };
@@ -307,7 +306,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
       { scope: "day", limitUsd: 2, hardCeilingUsd: 15 }, { usage: 3000, maxSteps: 12 });
     let raised = false;
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), onBudgetExceeded: () => {
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => {
         if (raised) return "stop";
         raised = true;
         return { choice: "raise", limitUsd: 30, hardCeilingUsd: 40, confirmedCeiling: true };
@@ -325,7 +324,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
     const { cwd, configPath, stop } = await runWithBudget({ scope: "day", limitUsd: 2 }, { finalAfter: 1 });
     let raised = false;
     try {
-      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), onBudgetExceeded: () => {
+      const report = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => {
         if (raised) return "stop";
         raised = true;
         return { choice: "raise", limitUsd: 30 };
@@ -342,7 +341,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
       { scope: "day", limitUsd: 1, hardCeilingUsd: 3 }, { usage: 2000, context: 100, tool: "handoff", agents: true });
     let raised = false;
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), onBudgetExceeded: () => {
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => {
         if (raised) return "continue_same";
         raised = true;
         return { choice: "raise", limitUsd: 5, hardCeilingUsd: 8, confirmedCeiling: true };
@@ -363,7 +362,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
     const { cwd, configPath, stop } = await runWithBudget(
       { scope: "day", limitUsd: 1, hardCeilingUsd: 10 }, { usage: 1000 });
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }), onBudgetExceeded: () => ({
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, onBudgetExceeded: () => ({
         choice: "raise", limitUsd: 20, hardCeilingUsd: 30 }) }))
         .rejects.toThrow(/teto físico não confirmado/);
     } finally {

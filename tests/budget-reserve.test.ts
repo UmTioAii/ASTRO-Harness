@@ -6,7 +6,6 @@ import { runTask } from "../src/app";
 import { budgetStatus, outstandingReservations } from "../src/budget";
 import type { BudgetConfig } from "../src/config";
 import { Ledger } from "../src/ledger";
-import { testEnv } from "./setup";
 
 interface Row {
   kind?: "usage" | "budget";
@@ -137,7 +136,7 @@ describe("reserva no run (B9, #132 parte 4)", () => {
   test("cada chamada reserva a cadeia e libera com o custo real", async () => {
     const { cwd, configPath, stop } = await runOnce({ scope: "day", limitUsd: 10 });
     try {
-      const report = await runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) });
+      const report = await runTask({ configPath, task: "x", cwd, env: { KEY: "k" } });
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       const budgetEvents = ledger.readAllEntries().filter((e) => e.kind === "budget");
       const reserved = budgetEvents.find((e) => e.kind === "budget" && e.event === "reserved");
@@ -159,7 +158,7 @@ describe("reserva no run (B9, #132 parte 4)", () => {
       })}\n`);
     });
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) }))
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } }))
         .rejects.toThrow(/budget esgotado/);
       expect(calls()).toBe(0);
     } finally {
@@ -170,7 +169,7 @@ describe("reserva no run (B9, #132 parte 4)", () => {
   test("cadeia transitiva de profile entra na reserva (B9/F-31)", async () => {
     const { cwd, configPath, calls, stop } = await profileRun();
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) }))
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } }))
         .rejects.toThrow(/budget esgotado/);
       expect(calls()).toBe(0); // reserva do profile caro já estoura o limite
     } finally {
@@ -181,7 +180,7 @@ describe("reserva no run (B9, #132 parte 4)", () => {
   test("parada por team antes do budget não deixa reserva órfã", async () => {
     const { cwd, configPath, stop } = await runOnce({ scope: "day", limitUsd: 100 }, undefined, { team: { projectBudgetUsd: 0 } });
     try {
-      await expect(runTask({ configPath, task: "x", cwd, env: testEnv({ KEY: "k" }) })).rejects.toBeDefined();
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })).rejects.toBeDefined();
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       expect(ledger.readAllEntries().some((e) => e.kind === "budget" && e.event === "reserved")).toBe(false);
     } finally {

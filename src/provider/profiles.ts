@@ -525,16 +525,19 @@ export function loadEffectiveConfig(
   } = {},
 ): EffectiveConfig {
   const env = opts.env ?? process.env;
+  // Os artefatos do home (config global e store de providers) usam o env do
+  // processo: um env parcial de execução não realoca o `~/.astro`.
+  const homeEnv = { ...process.env, ...opts.env };
   // A camada global vale mesmo com `--config` explícito; só as duas flags
   // abaixo (e o env) a desligam (ADR-0029).
-  const useGlobal = env.ASTRO_NO_GLOBAL_CONFIG !== "1" && opts.noGlobalConfig !== true;
+  const useGlobal = homeEnv.ASTRO_NO_GLOBAL_CONFIG !== "1" && opts.noGlobalConfig !== true;
   const exists = existsSync(configPath);
   if (!exists && opts.allowMissing !== true) {
     throw new ConfigError(`configuração não encontrada: "${configPath}"`);
   }
   const project = exists ? loadConfigRaw(configPath) : undefined;
-  const global = useGlobal ? loadGlobalConfig(env) : undefined;
-  const store = loadProfileStore(opts.storePath ?? profilesPath(env));
+  const global = useGlobal ? loadGlobalConfig(homeEnv) : undefined;
+  const store = loadProfileStore(opts.storePath ?? profilesPath(homeEnv));
   const envProfile = profileFromEnv(env);
   return resolveEffectiveConfig({
     ...(project === undefined ? {} : { project }),

@@ -15,7 +15,7 @@ Use `$ASTRO_HOME` (default `~/.astro`) para `config.json`, `state.json` e `vault
 
 Resolva defaults < configuração global < configuração de projeto (`astro.config.json` ou `--config`) < flags/env. `--config` escolhe somente a camada de projeto. `--no-global-config` e `ASTRO_NO_GLOBAL_CONFIG=1` ignoram a camada global.
 
-Mescle objetos em profundidade; arrays substituem, exceto `models`, unidos por `provider/id` com precedência do projeto; escalares substituem. Rejeite widening de tools, modo de permissões e budget declarado globalmente.
+Mescle objetos em profundidade; arrays substituem, exceto `models`, unidos por `provider/id` com precedência do projeto; escalares substituem. Rejeite widening de tools, modo de permissões e budget declarado globalmente; o projeto também não pode mudar o host de um provider global herdando a credencial global.
 
 Importe `providers.json` e `trusted.json` uma única vez para os destinos novos, preservando os arquivos legados. Sem configuração nem dados legados, o carregamento não cria arquivos; a configuração só é criada por uma ação explícita confirmada.
 

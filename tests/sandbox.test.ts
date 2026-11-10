@@ -18,7 +18,6 @@ import {
   sanitizedEnv,
 } from "../src/tools/run-command";
 import { expectSandboxRefusal, installDockerSpawnMock, isolatedRunCommand } from "./helpers/docker-mock";
-import { testEnv } from "./setup";
 
 const ctx = (cwd: string) => ({ cwd, run: "r1", agent: "coder" });
 
@@ -91,7 +90,7 @@ describe("erros e aviso do sandbox (ADR-0027, #391 slice 5b)", () => {
     const warnings: string[] = [];
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
     try {
-      await runTask({ configPath, cwd, task: "x", env: testEnv({ OPENAI_API_KEY: "k" }) }).catch(() => {});
+      await runTask({ configPath, cwd, task: "x", env: { OPENAI_API_KEY: "k" } }).catch(() => {});
     } finally {
       console.warn = original;
     }
