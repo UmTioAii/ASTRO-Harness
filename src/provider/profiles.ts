@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { ConfigError, DEFAULT_ATTACHMENTS, loadConfig, validateConfig, type AstroConfig, type ModelConfig, type ProviderConfig } from "../config";
+import { ConfigError, DEFAULT_ATTACHMENTS, isPlainObject, loadConfigRaw, validateConfig, type AstroConfig, type ModelConfig, type ProviderConfig } from "../config";
+import { globalConfigPath } from "../astro-home";
+import { assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
 import { isKnownTag } from "../tags";
 import { isAuthHeader, isVaultCredentialRef, looksLikeSecret } from "../secrets";
 import { outboundUrlProblem } from "../url-safety";
@@ -234,6 +236,16 @@ export function saveProfileStore(store: ProviderStore, path: string = profilesPa
   }
 }
 
+/**
+ * Camada global crua de `$ASTRO_HOME/config.json`; ausente = undefined.
+ * A camada é parcial: só o que o arquivo declara entra no merge.
+ */
+export function loadGlobalConfig(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | undefined {
+  const path = globalConfigPath(env);
+  if (!existsSync(path)) return undefined;
+  return loadConfigRaw(path);
+}
+
 export type ProviderSource = "project" | "global" | "env";
 
 /** Quem escolheu o provider ativo (a definição pode vir de outro lugar). */
@@ -282,6 +294,14 @@ const BASELINE_TOOLS = ["read_file", "write_file", "edit", "grep", "list_dir", "
 const BASELINE_PATHS = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
 const ENV_MODEL_CONTEXT = 128_000;
 
+/** Defaults de código: a camada mais baixa (defaults < global < projeto, ADR-0029). */
+const BASELINE_LAYER: Record<string, unknown> = {
+  agent: { maxSteps: 12, tools: [...BASELINE_TOOLS] },
+  permissions: { mode: "ask" },
+  attachments: DEFAULT_ATTACHMENTS,
+  paths: { ...BASELINE_PATHS },
+};
+
 /** Perfil efêmero a partir de OPENAI_*; nunca é gravado. */
 export function profileFromEnv(env: NodeJS.ProcessEnv): ProviderProfile | undefined {
   const apiKey = env.OPENAI_API_KEY;
@@ -318,17 +338,10 @@ function profileToProvider(profile: ProviderProfile): ProviderConfig {
   };
 }
 
-function providerOfModel(modelRef: string, providers: Record<string, ProviderConfig>): string | undefined {
+function providerOfModel(modelRef: string, providers: Record<string, unknown>): string | undefined {
   return Object.keys(providers)
     .sort((a, b) => b.length - a.length)
     .find((name) => modelRef.startsWith(`${name}/`));
-}
-
-function mergeModels(global: ModelConfig[], project: ModelConfig[]): ModelConfig[] {
-  const merged = new Map<string, ModelConfig>();
-  for (const model of global) merged.set(`${model.provider}/${model.id}`, model);
-  for (const model of project) merged.set(`${model.provider}/${model.id}`, model);
-  return [...merged.values()];
 }
 
 /** Estado inicial sem nenhum provider: a TUI abre a tela de providers. */
@@ -339,9 +352,12 @@ export class NoProviderError extends Error {
 export const NO_PROVIDER_MESSAGE =
   "nenhum provider configurado: rode /provider add ou defina OPENAI_API_KEY e OPENAI_MODEL";
 
-/** Mescla perfis globais com o projeto e resolve o provider ativo. */
+/** Mescla a camada global com o projeto e resolve o provider ativo. */
 export function resolveEffectiveConfig(input: {
-  project?: AstroConfig;
+  /** Camada de projeto: JSON cru do arquivo ou config já validada. */
+  project?: unknown;
+  /** Camada global (`$ASTRO_HOME/config.json`), JSON cru e parcial. */
+  global?: unknown;
   store: ProviderStore;
   envProfile?: ProviderProfile;
   providerFlag?: string;
@@ -358,7 +374,13 @@ export function resolveEffectiveConfig(input: {
   } catch {
     // cofre ilegível não quebra o start da sessão; `astro health` reporta o detalhe
   }
-  const project = input.project;
+  const project = isPlainObject(input.project) ? input.project : undefined;
+  const global = isPlainObject(input.global) ? input.global : undefined;
+  // ADR-0029: defaults < global < projeto. O merge só junta as camadas; quem
+  // decide o que é seguro é a validação do resultado mesclado.
+  const declared = mergeConfigLayers(global ?? {}, project ?? {});
+  if (global !== undefined) assertNarrowed(global, declared);
+  const base = project === undefined ? mergeConfigLayers(BASELINE_LAYER, declared) : declared;
 
   const profiles = new Map(input.store.profiles.map((profile) => [profile.id, profile]));
   if (input.envProfile !== undefined) {
@@ -368,18 +390,25 @@ export function resolveEffectiveConfig(input: {
     profiles.set(input.envProfile.id, input.envProfile);
   }
 
-  const globalProviders: Record<string, ProviderConfig> = {};
-  const globalModels: ModelConfig[] = [];
+  const storeProviders: Record<string, ProviderConfig> = {};
+  const storeModels: ModelConfig[] = [];
   for (const profile of profiles.values()) {
-    globalProviders[profile.id] = profileToProvider(profile);
+    storeProviders[profile.id] = profileToProvider(profile);
     for (const model of profile.models) {
-      globalModels.push({ provider: profile.id, id: model.id, tags: model.tags, context: model.context });
+      storeModels.push({ provider: profile.id, id: model.id, tags: model.tags, context: model.context });
     }
   }
 
-  const providers = { ...globalProviders, ...(project?.providers ?? {}) };
-  const models = mergeModels(globalModels, project?.models ?? []);
-  const projectProvider = project === undefined ? undefined : providerOfModel(project.agent.model, providers);
+  const providers: Record<string, unknown> = { ...storeProviders, ...(isPlainObject(base.providers) ? base.providers : {}) };
+  const models = mergeModelLayers(storeModels, Array.isArray(base.models) ? base.models : []);
+  const agent = isPlainObject(base.agent) ? base.agent : {};
+  const profileName = typeof agent.profile === "string" ? agent.profile : undefined;
+  const pool = isPlainObject(base.modelPool) ? base.modelPool : {};
+  const poolEntry = profileName === undefined ? undefined : pool[profileName];
+  // Na pool (F-27), o profile substitui `agent.model`.
+  const poolModel = isPlainObject(poolEntry) && typeof poolEntry.model === "string" ? poolEntry.model : undefined;
+  const declaredModel = typeof agent.model === "string" ? agent.model : poolModel;
+  const projectProvider = declaredModel === undefined ? undefined : providerOfModel(declaredModel, providers);
 
   let requested: string | undefined;
   let requestKind: ProviderSelection | undefined;
@@ -392,7 +421,7 @@ export function resolveEffectiveConfig(input: {
     requestKind = "store";
   }
 
-  const pooled = project?.agent.profile !== undefined;
+  const pooled = profileName !== undefined;
   if (pooled) {
     if (requested !== undefined && requested !== projectProvider) {
       if (requestKind === "flag") {
@@ -427,41 +456,33 @@ export function resolveEffectiveConfig(input: {
 
   const currentProvider = projectProvider;
   let modelRef: string;
-  if (project !== undefined && !pooled && currentProvider === activeProvider) {
-    modelRef = project.agent.model;
-  } else if (project !== undefined && pooled) {
-    modelRef = project.agent.model;
+  if (declaredModel !== undefined && (pooled || currentProvider === activeProvider)) {
+    modelRef = declaredModel;
   } else {
-    const currentId = currentProvider === undefined ? undefined : project?.agent.model.slice(currentProvider.length + 1);
-    const candidates = models.filter(
+    const currentId = currentProvider === undefined ? undefined : declaredModel?.slice(currentProvider.length + 1);
+    const candidates = (models as { provider?: unknown; id?: unknown; status?: unknown }[]).filter(
       (model) => model.provider === activeProvider && (model.status ?? "active") === "active",
     );
     const kept = currentId === undefined ? undefined : candidates.find((model) => model.id === currentId);
     const chosen = kept ?? candidates[0];
     if (chosen === undefined) throw new Error(`provider "${activeProvider}" não tem modelo ativo`);
-    modelRef = `${chosen.provider}/${chosen.id}`;
+    modelRef = `${String(chosen.provider)}/${String(chosen.id)}`;
   }
 
-  const base = project ?? {
-    providers,
-    models,
-    agent: { model: modelRef, maxSteps: 12, tools: [...BASELINE_TOOLS] },
-    permissions: { mode: "ask" as const },
-    attachments: DEFAULT_ATTACHMENTS,
-    paths: { ...BASELINE_PATHS },
-  };
-  if (project === undefined) {
+  // O aviso de baseline só vale quando as tools padrão e o modo `ask` estão em uso.
+  const baselineTools = !isPlainObject(declared.agent) || declared.agent.tools === undefined;
+  if (project === undefined && baselineTools && isPlainObject(base.permissions) && base.permissions.mode === "ask") {
     warnings.push(
       "sem astro.config.json: usando tools padrão; escrita e shell pedem aprovação",
     );
   }
 
-  const { model: _resolvedModel, ...agentSansModel } = base.agent;
+  const { model: _declaredModel, ...agentSansModel } = agent;
   // `validateConfig` devolve agents com `model` resolvido + `profile`; revalidar os dois falha.
-  const agentsSansModel = base.agents === undefined
+  const agentsSansModel = !isPlainObject(base.agents)
     ? undefined
     : Object.fromEntries(Object.entries(base.agents).map(([name, entry]) => {
-        if (entry.profile === undefined) return [name, entry];
+        if (!isPlainObject(entry) || entry.profile === undefined) return [name, entry];
         const { model: _resolved, ...rest } = entry;
         return [name, rest];
       }));
@@ -469,10 +490,11 @@ export function resolveEffectiveConfig(input: {
     ...base,
     providers,
     models,
-    agent: pooled ? agentSansModel : { ...base.agent, model: modelRef },
+    agent: pooled ? agentSansModel : { ...agent, model: modelRef },
     ...(agentsSansModel === undefined ? {} : { agents: agentsSansModel }),
   });
-  const providerSource: ProviderSource = project !== undefined && Object.hasOwn(project.providers, activeProvider)
+  const projectProviders = project === undefined ? [] : Object.keys(isPlainObject(project.providers) ? project.providers : {});
+  const providerSource: ProviderSource = projectProviders.includes(activeProvider)
     ? "project"
     : input.envProfile !== undefined && activeProvider === input.envProfile.id
       ? "env"
@@ -483,7 +505,7 @@ export function resolveEffectiveConfig(input: {
     activeProvider,
     providerSource,
     providerSelection: selection,
-    projectProviders: Object.keys(project?.providers ?? {}),
+    projectProviders,
     ...(input.envProfile === undefined ? {} : { envProviderId: input.envProfile.id }),
     warnings,
   };
@@ -498,18 +520,25 @@ export function loadEffectiveConfig(
     storePath?: string;
     allowMissing?: boolean;
     ignoreStoredSelection?: boolean;
+    /** Ignora a camada global (`--no-global-config`). */
+    noGlobalConfig?: boolean;
   } = {},
 ): EffectiveConfig {
   const env = opts.env ?? process.env;
+  // A camada global vale mesmo com `--config` explícito; só as duas flags
+  // abaixo (e o env) a desligam (ADR-0029).
+  const useGlobal = env.ASTRO_NO_GLOBAL_CONFIG !== "1" && opts.noGlobalConfig !== true;
   const exists = existsSync(configPath);
   if (!exists && opts.allowMissing !== true) {
     throw new ConfigError(`configuração não encontrada: "${configPath}"`);
   }
-  const project = exists ? loadConfig(configPath) : undefined;
+  const project = exists ? loadConfigRaw(configPath) : undefined;
+  const global = useGlobal ? loadGlobalConfig(env) : undefined;
   const store = loadProfileStore(opts.storePath ?? profilesPath(env));
   const envProfile = profileFromEnv(env);
   return resolveEffectiveConfig({
     ...(project === undefined ? {} : { project }),
+    ...(global === undefined ? {} : { global }),
     store,
     ...(envProfile === undefined ? {} : { envProfile }),
     ...(opts.provider === undefined ? {} : { providerFlag: opts.provider }),

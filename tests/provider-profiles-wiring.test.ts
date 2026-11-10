@@ -186,8 +186,9 @@ test("--config explícito ausente falha em vez de usar baseline", async () => {
 
 test("run sem config falha", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-wire-run-"));
-  const result = await runCli(["run", "oi"], {
-    cwd,
+  // O config do projeto é procurado a partir de `--cwd`, não do cwd do processo.
+  const result = await runCli(["run", "oi", "--cwd", cwd], {
+    cwd: root,
     env: { OPENAI_API_KEY: "k", OPENAI_MODEL: "gpt-4o" },
   });
   expect(result.exit).toBe(1);

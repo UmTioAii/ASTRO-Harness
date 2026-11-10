@@ -214,6 +214,7 @@ Opções:
   --allow-critical <path>   libera path do hard-block configurável (repete, máx 64; exige --i-understand; só em run/chat/tui)
   --allow-sensitive <glob>  declara glob como sensitive (repete, máx 64; só em run/chat/tui)
   --i-understand            confirma a leitura de --allow-critical (obrigatório na mesma invocação)
+  --no-global-config        ignora a camada global ($ASTRO_HOME/config.json)
   --help           mostra este texto
 
 Eval:
@@ -1009,9 +1010,12 @@ function formatBenchTable(report: BenchReport): string {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // `--no-global-config` vale para qualquer comando: sai do argv antes do parser
+  // e vira o mesmo env de `ASTRO_NO_GLOBAL_CONFIG=1` (comportamento idêntico).
+  if (argv.includes("--no-global-config")) process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
   let parsed: ParsedCommand;
   try {
-    parsed = parseArgs(argv);
+    parsed = parseArgs(argv.filter((arg) => arg !== "--no-global-config"));
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
     console.error(`erro: ${error.message}\n`);
@@ -1111,7 +1115,7 @@ async function main(argv: string[]): Promise<number> {
     const auditPath = resolve(base, config.paths.audit);
     try {
       const result = await replayRun({
-        configPath: resolve(o.configPath),
+        configPath: resolve(base, o.configPath),
         auditPath,
         runId: o.runId,
         task: o.task,
@@ -1142,7 +1146,7 @@ async function main(argv: string[]): Promise<number> {
       const agent = o.agent ?? resolveContinueAgent(base, o.runId);
       const checkpoint = loadCheckpoint(base, o.runId, agent);
       const report = await runTask({
-        configPath: resolve(o.configPath),
+        configPath: resolve(base, o.configPath),
         task: continueTask(checkpoint, o.task),
         cwd: base,
         continuedFrom: { run: o.runId, agent },
@@ -1171,7 +1175,7 @@ async function main(argv: string[]): Promise<number> {
     const cancellation = installCancellation();
     try {
       const report = await runTask({
-        configPath: resolve(o.configPath),
+        configPath: resolve(o.cwd ?? process.cwd(), o.configPath),
         task: o.task,
         ...(o.cwd === undefined ? {} : { cwd: o.cwd }),
         resume: o.runId,
@@ -1200,7 +1204,7 @@ async function main(argv: string[]): Promise<number> {
     const o = parsed.options;
     const { runTui } = await import("./tui/run");
     return await runTui({
-      configPath: resolve(o.configPath),
+      configPath: resolve(o.cwd ?? process.cwd(), o.configPath),
       cwd: o.cwd ?? process.cwd(),
       ...(o.provider === undefined ? {} : { provider: o.provider }),
       allowMissingConfig: !o.configExplicit,
@@ -1215,7 +1219,7 @@ async function main(argv: string[]): Promise<number> {
     let sessionApi: import("./chat/session-api").SessionApi | undefined;
     try {
       const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
-      const configPath = resolve(o.configPath);
+      const configPath = resolve(base, o.configPath);
       const project = existsSync(configPath) ? loadConfig(configPath) : undefined;
       const manager = new ProfileManager({
         project, env: process.env,
@@ -1426,6 +1430,7 @@ async function main(argv: string[]): Promise<number> {
   try {
     const report = await runTask({
       ...parsed.options,
+      configPath: resolve(parsed.options.cwd ?? process.cwd(), parsed.options.configPath),
       ...allowlistOpts,
       signal: cancellation.signal,
       // Sem TTY não há como perguntar: `ask` nega e para (I-08/I-19).
