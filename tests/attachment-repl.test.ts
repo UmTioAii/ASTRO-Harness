@@ -109,6 +109,16 @@ describe("/attach e /paste no REPL (ADR-0026, #392)", () => {
     expect(session.sent[1]?.attachments).toBeUndefined();
   });
 
+  test("/paste repetido é recusado e materializa um bloco só (#392)", async () => {
+    const cwd = sandbox();
+    const session = new CaptureSession();
+    const io = new ScriptedIO(["/paste", "/paste", "leia", "/exit"]);
+    await runRepl(session, io, { cwd, clipboard: () => "colado" });
+    expect(io.outputs.join("\n")).toContain("já adicionado: clipboard");
+    expect(session.sent[0]?.prompt).toBe("leia\n\n[anexo: clipboard]\ncolado");
+    expect(session.sent[0]?.attachments).toHaveLength(1);
+  });
+
   test("mesmo anexo duas vezes é recusado e materializa um bloco só", async () => {
     const cwd = sandbox();
     writeFileSync(join(cwd, "a.txt"), "um\ndois\n");
@@ -194,5 +204,23 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       // Falha não consome o anexo: continua pendente para /detach ou novo turno.
       expect(text.slice(text.indexOf("janela de contexto"))).toContain("1. a.png");
     } finally { stop(); }
+  });
+
+  test("imagem recusada falha o turno, mantém o anexo e não grava nada (#392)", async () => {
+    const { cwd, home, bodies, session, stop } = e2eSetup();
+    try {
+      const io = new ScriptedIO(["/attach a.png", "resuma", "n", "/attach", "/exit"]);
+      await runRepl(session, io, { cwd, interactive: true });
+      const out = io.outputs.join("\n");
+      expect(out).toContain("não redigíveis");
+      expect(out).toContain("erro: envio de imagem não aprovado");
+      expect(io.outputs).toContain("1. a.png (70 bytes)"); // pendente mantido após a recusa
+      expect(bodies).toHaveLength(0);
+      const root = join(home, "attachments");
+      expect(existsSync(root) ? readdirSync(root) : []).toHaveLength(0);
+      expect(readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8")).not.toContain("attachment.approved");
+    } finally {
+      stop();
+    }
   });
 });

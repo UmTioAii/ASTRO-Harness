@@ -109,3 +109,24 @@ test("chat sem --config inválido falha claro", async () => {
   expect(await proc.exited).toBe(1);
   expect(await new Response(proc.stderr).text()).toContain("erro:");
 }, 20_000);
+
+test("chat aceita --artifact-root e rejeita valor vazio (#392)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "astro-chat-cli-root-"));
+  const accepted = Bun.spawn(
+    ["bun", "src/cli.ts", "chat", "--config", join(cwd, "nope.json"), "--cwd", cwd, "--artifact-root", join(cwd, "..", "artifacts")],
+    { cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+  );
+  accepted.stdin.end();
+  expect(await accepted.exited).toBe(1); // falha na config ausente, não na flag
+  const stderr = await new Response(accepted.stderr).text();
+  expect(stderr).not.toContain("opção desconhecida");
+  expect(stderr).toContain("erro:");
+
+  const empty = Bun.spawn(
+    ["bun", "src/cli.ts", "chat", "--artifact-root", "", "--cwd", cwd],
+    { cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+  );
+  empty.stdin.end();
+  expect(await empty.exited).toBe(1);
+  expect(await new Response(empty.stderr).text()).toContain("falta o valor de --artifact-root");
+}, 20_000);
