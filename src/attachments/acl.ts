@@ -74,7 +74,7 @@ export function inspectWindowsAcl(path: string): WindowsAcl | undefined {
   try {
     const output = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", script], {
       encoding: "utf8",
-      timeout: 15000,
+      timeout: 60_000, // runner windows-latest: o cold start do PowerShell passa de 15 s
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
       cwd: join(root, "System32"),
@@ -125,7 +125,7 @@ export function hardenWindowsAcl(path: string): WindowsAcl {
   if (!existsSync(exe)) throw new Error("powershell.exe não encontrado");
   const output = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", HARDEN_SCRIPT], {
     encoding: "utf8",
-    timeout: 15000,
+    timeout: 60_000, // runner windows-latest: o cold start do PowerShell passa de 15 s
     windowsHide: true,
     stdio: ["ignore", "pipe", "ignore"],
     cwd: join(root, "System32"),

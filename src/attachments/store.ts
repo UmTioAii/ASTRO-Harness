@@ -20,6 +20,8 @@ export interface ArtifactValidationContext {
   protectedPaths?: readonly string[];
   /** Checagem de privacidade injetável (teste); ausente usa modo/ACL da plataforma. */
   checkPrivate?: (path: string) => boolean;
+  /** Endurecimento win32 injetável (teste); ausente usa `hardenWindowsAcl`. Nunca via env. */
+  hardenPrivate?: (path: string) => WindowsAcl;
 }
 
 export interface ArtifactOwner {
@@ -142,12 +144,13 @@ export class ArtifactStore {
   readonly #now: () => number;
 
   constructor(root: string, options: ArtifactStoreOptions) {
-    const { cwd, astroHome, protectedPaths, checkPrivate } = options;
+    const { cwd, astroHome, protectedPaths, checkPrivate, hardenPrivate } = options;
     this.#context = {
       cwd,
       astroHome,
       ...(protectedPaths === undefined ? {} : { protectedPaths }),
       ...(checkPrivate === undefined ? {} : { checkPrivate }),
+      ...(hardenPrivate === undefined ? {} : { hardenPrivate }),
     };
     try {
       const target = canonicalize(expandHome(root));
@@ -160,9 +163,10 @@ export class ArtifactStore {
       // já passou pelo pré-check.
       if (!existed) {
         if (process.platform === "win32") {
+          const harden = this.#context.hardenPrivate ?? hardenWindowsAcl;
           let acl: WindowsAcl;
           try {
-            acl = hardenWindowsAcl(this.root);
+            acl = harden(this.root);
           } catch {
             this.#invalidRoot();
           }
