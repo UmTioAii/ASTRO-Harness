@@ -239,6 +239,50 @@ test("aceita: o provider do projeto escolhe o domínio quando não há teto glob
     .toMatchObject({ quotaDomain: "acme" });
 });
 
+test("rejeita: projeto sem provider usa a mensagem de schema", () => {
+  // `origin/main` (e `chat`/`tui`) dizem que o config é inválido; o erro de
+  // "nenhum provider configurado" aponta para a correção errada.
+  expect(() => effective(undefined, { permissions: { mode: "ask" }, paths: PATHS }))
+    .toThrow(/"providers" deve ser um objeto/);
+});
+
+test("aceita: fontes globais que divergem no domínio não quebram o projeto", () => {
+  // `config.json` e `providers.json` discordam sobre o domínio da mesma conta:
+  // divergência do usuário, não do projeto — a config tem de carregar.
+  const globalLayer = {
+    providers: { h: { kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain: "global" } },
+    quota: { global: { monthlyCostUsd: 10 }, loja: { monthlyCostUsd: 10 } },
+  };
+  const divergent = {
+    version: 1,
+    profiles: [{ id: "g", name: "G", kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain: "loja", models: [{ id: "gm", tags: [], context: 8192 }] }],
+  };
+  // O projeto não toca em nada: a config carrega.
+  expect(() => effective(globalLayer, undefined, divergent)).not.toThrow();
+  // Mesmo id nos dois artefatos globais: a camada global vence no merge.
+  expect(() => effective(globalLayer, undefined, { version: 1, profiles: [{ ...divergent.profiles[0], id: "h" }] })).not.toThrow();
+  // O provider do projeto que reusa a referência global fica num domínio que a
+  // camada global já usa (a conta é a mesma).
+  const reuse = (quotaDomain: string) => project({
+    providers: { p: provider("p"), evil: { kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain } },
+  });
+  expect(() => effective(globalLayer, reuse("global"), divergent)).not.toThrow();
+  expect(() => effective(globalLayer, reuse("loja"), divergent)).not.toThrow();
+  // Um domínio sem teto próprio (e que a camada global não usa) escapa do teto.
+  expect(() => effective(globalLayer, reuse("outro"), divergent)).toThrow(/domínio de quota/);
+});
+
+test("rejeita: quotaDomain inválido usa a mensagem de schema", () => {
+  // O tipo do campo é do schema: a guarda do domínio não pode falar primeiro.
+  const globalLayer = {
+    providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", quotaDomain: "acme" } },
+    quota: { acme: { monthlyCostUsd: 10 } },
+  };
+  expect(() => effective(globalLayer, project({
+    providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", quotaDomain: 123 } },
+  }))).toThrow(/quotaDomain" deve ser uma string/);
+});
+
 test("não ecoa o detalhe do parser no erro de JSON inválido", () => {
   // I-03: o detalhe do parser cita o conteúdo do arquivo ( Bun: `Unexpected
   // identifier "..."`; Node: um trecho do arquivo).
