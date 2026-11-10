@@ -1,13 +1,15 @@
 /** Camadas de configuração (ADR-0029, #401): merge `global < projeto` e guarda
  * de estreitamento — o projeto só pode restringir a camada global. */
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { ConfigError, isPlainObject } from "./config";
 
 /** Ranque de permissão: `ask` é o mais restrito, `bypass` o mais largo. */
 const MODE_RANK: Record<string, number> = { ask: 0, "allow-edits": 1, bypass: 2 };
 /** Ranque do perfil do agent: `read-only` é o mais restrito. */
 const PERMISSION_RANK: Record<string, number> = { "read-only": 0, write: 1, execute: 2, full: 3 };
-/** Janela do budget: a mensal é a mais estreita; o dia gasta o teto todo dia. */
-const SCOPE_RANK: Record<string, number> = { month: 0, project: 0, day: 1, "use-as-you-go": 2 };
+/** Janela do budget: `project` é a mais estreita (o teto do time entra nela). */
+const SCOPE_RANK: Record<string, number> = { project: 0, month: 1, day: 2, "use-as-you-go": 3 };
 /** Chaves de credencial: guardam a referência, nunca o valor. */
 const CREDENTIAL_KEYS = ["credentialRef", "credentialsPath"];
 
@@ -75,28 +77,38 @@ export function assertNarrowed(global: Record<string, unknown>, merged: Record<s
   const scopeFrom = SCOPE_RANK[String(globalBudget.scope)];
   const scopeTo = SCOPE_RANK[String(mergedBudget.scope)];
   if (scopeFrom !== undefined && scopeTo !== undefined && scopeTo > scopeFrom) {
-    throw new ConfigError("config inválida: o projeto amplia o budget global (a janela do escopo não pode encolher)");
+    throw new ConfigError("config inválida: o projeto amplia o budget global (a janela do escopo não pode alargar)");
   }
   if (globalBudget.onExceed === "stop" && mergedBudget.onExceed === "ask") {
     throw new ConfigError("config inválida: o projeto amplia o budget global (onExceed: stop → ask)");
   }
   // Provider: a credencial global não muda de host (comparação pela referência).
-  const endpoints = new Map<string, string>();
+  // A referência é reservada pela camada global (config global + store): o
+  // projeto pode reusá-la no mesmo host, nunca em outro. O perfil efêmero de
+  // env entra no conjunto: a escolha do próprio usuário não é bloqueio.
+  const endpoints = new Map<string, Set<string>>();
   const globalProviders = isPlainObject(global.providers) ? global.providers : {};
   for (const provider of [...Object.values(globalProviders), ...Object.values(storeProviders)]) {
     if (!isPlainObject(provider)) continue;
-    const endpoint = `${String(provider.baseUrl)}|${String(provider.kind)}`;
-    for (const key of CREDENTIAL_KEYS) if (typeof provider[key] === "string") endpoints.set(`${key}=${provider[key]}`, endpoint);
+    const endpoint = endpointOf(provider);
+    for (const key of CREDENTIAL_KEYS) {
+      const ref = provider[key];
+      if (typeof ref !== "string") continue;
+      const mapKey = credentialKey(key, ref);
+      const allowed = endpoints.get(mapKey) ?? new Set<string>();
+      allowed.add(endpoint);
+      endpoints.set(mapKey, allowed);
+    }
   }
   const mergedProviders = isPlainObject(merged.providers) ? merged.providers : {};
   for (const [id, provider] of Object.entries(mergedProviders)) {
     if (!isPlainObject(provider)) continue;
-    const endpoint = `${String(provider.baseUrl)}|${String(provider.kind)}`;
+    const endpoint = endpointOf(provider);
     for (const key of CREDENTIAL_KEYS) {
       const ref = provider[key];
-      const origin = typeof ref === "string" ? endpoints.get(`${key}=${ref}`) : undefined;
-      if (origin !== undefined && origin !== endpoint) {
-        throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}"`);
+      const allowed = typeof ref === "string" ? endpoints.get(credentialKey(key, ref)) : undefined;
+      if (allowed !== undefined && !allowed.has(endpoint)) {
+        throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}" (a mesma referência já está declarada em outro host)`);
       }
     }
   }
@@ -120,4 +132,22 @@ function assertNotWider(globalValue: unknown, mergedValue: unknown, table: Recor
   if (from !== undefined && to !== undefined && to > from) {
     throw new ConfigError(`config inválida: o projeto amplia ${label} ("${String(globalValue)}" → "${String(mergedValue)}")`);
   }
+}
+
+/** Chave de comparação da referência: o caminho de credenciais é normalizado. */
+function credentialKey(key: string, ref: string): string {
+  return `${key}=${key === "credentialsPath" ? normalizePath(ref) : ref}`;
+}
+
+/** Endpoint do provider: host e tipo — a credencial não troca de host. */
+function endpointOf(provider: Record<string, unknown>): string {
+  const baseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim().replace(/\/+$/, "") : String(provider.baseUrl);
+  return `${baseUrl}|${String(provider.kind)}`;
+}
+
+/** Normaliza como o runtime: `~` vira o home e o `..` é resolvido. */
+function normalizePath(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
+  return resolve(path);
 }
