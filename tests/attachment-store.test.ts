@@ -71,11 +71,8 @@ describe("validateArtifactRoot", () => {
   });
 
   test("aceita raiz ainda inexistente e a cria com 0700", () => {
-    const base = mkdtempSync(join(tmpdir(), "astro-art-missing-"));
-    dirs.push(base);
-    const cwd = join(base, "work"), astroHome = join(base, "home"), root = join(base, "artifacts");
-    mkdirSync(cwd, { recursive: true });
-    mkdirSync(astroHome, { recursive: true });
+    const { cwd, astroHome } = sandbox();
+    const root = join(astroHome, "artifacts-missing");
     expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
     new ArtifactStore(root, { cwd, astroHome });
     expect(existsSync(root)).toBe(true);
@@ -83,14 +80,11 @@ describe("validateArtifactRoot", () => {
   });
 
   test("raiz cujo pai é arquivo falha tipada e não grava", () => {
-    const base = mkdtempSync(join(tmpdir(), "astro-art-blocked-"));
-    dirs.push(base);
-    const cwd = join(base, "work"), astroHome = join(base, "home"), parent = join(base, "arquivo");
-    mkdirSync(cwd, { recursive: true });
-    mkdirSync(astroHome, { recursive: true });
+    const { cwd, astroHome } = sandbox();
+    const parent = join(astroHome, "arquivo");
     writeFileSync(parent, "x");
     let thrown: unknown;
-    try { new ArtifactStore(join(parent, "artifacts"), { cwd, astroHome, checkPrivate: () => true }); } catch (error) { thrown = error; }
+    try { new ArtifactStore(join(parent, "artifacts"), context(cwd, astroHome)); } catch (error) { thrown = error; }
     expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
     expect(existsSync(join(parent, "artifacts"))).toBe(false);
   });

@@ -89,18 +89,14 @@ describe("AgentSession (T1, #62)", () => {
     try {
       const attachment: LoadedAttachment = { kind: "image", path: join(cwd, "a.png"), name: "a.png", sizeBytes: 70, mediaType: "image/png", data: pngData, hash: "0".repeat(64) };
       await chat.send("olhe", undefined, undefined, undefined, { attachments: [attachment], approveAttachment: () => true });
-      const snapshot = chat.snapshot();
-      const json = JSON.stringify(snapshot);
-      expect(snapshot.messages.some((message) => message.images !== undefined)).toBe(false);
+      const snapshot = chat.snapshot(), json = JSON.stringify(snapshot);
+      expect(snapshot.messages.some((m) => m.images !== undefined)).toBe(false);
       expect(json).not.toContain("dataBase64");
       expect(json).not.toContain(pngData);
-      const metas = snapshot.messages.flatMap((message) => message.attachments ?? []);
+      const metas = snapshot.messages.flatMap((m) => m.attachments ?? []);
       expect(metas[0]).toMatchObject({ kind: "image", name: "a.png" });
       expect(metas[0]?.ref).toBeString();
-    } finally {
-      chat.close();
-      stop();
-    }
+    } finally { chat.close(); stop(); }
   });
   test("emite run.started/chat.prompt/run.completed por sessão (só taskHash)", async () => {
     const { cwd, session, stop } = setup();

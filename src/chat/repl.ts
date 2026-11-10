@@ -6,6 +6,7 @@ import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, resolveAstroHome, type Permi
 import { loadAttachment, loadPastedText } from "../attachments/load";
 import { materializePrompt } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
+import { isYes } from "./approvers";
 import { dedupeKey, type AttachmentMeta, type LoadedAttachment } from "../attachments/model";
 import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
 import { loadTrustedStore, trustStatePath } from "../trust";
@@ -81,6 +82,8 @@ export interface ReplOptions {
   manager?: ProfileManager;
   /** Leitor do clipboard para `/paste` (teste/injeção); ausente usa o comando nativo. */
   clipboard?: () => string;
+  /** TTY real; sem isso aprovação de imagem e confirmação fora do cwd negam (fail closed). */
+  interactive?: boolean;
 }
 
 function messageOf(error: unknown): string {
@@ -185,16 +188,16 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
     pending.length === 0
       ? "nenhum anexo pendente"
       : pending.map((attachment, index) => `${index + 1}. ${attachment.name} (${attachment.sizeBytes} bytes)`).join("\n");
-  const readFresh = (prompt: string): Promise<string | null> =>
-    io.readFresh === undefined ? io.read(prompt) : io.readFresh(prompt);
+  const readFresh = (prompt: string): Promise<string | null> => (io.readFresh === undefined ? io.read(prompt) : io.readFresh(prompt));
   const confirmOutside = async (absolute: string): Promise<boolean> => {
+    if (opts.interactive !== true) return false;
     const answer = await readFresh(`anexo fora do cwd: ${absolute} — aprovar? [s/N] `);
-    return answer !== null && /^(s|sim|y|yes)/i.test(answer.trim());
+    return isYes(answer);
   };
   const approveAttachment: AttachmentApprover = async (items) => {
+    if (opts.interactive !== true) return false;
     io.write(formatApprovalPrompt(items));
-    const answer = await readFresh("aprovar envio? [s/N] ");
-    return answer !== null && /^(s|sim|y|yes)/i.test(answer.trim());
+    return isYes(await readFresh("aprovar envio? [s/N] "));
   };
   try {
     for (;;) {

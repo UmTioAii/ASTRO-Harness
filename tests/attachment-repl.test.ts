@@ -155,9 +155,7 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       await runRepl(session, new ScriptedIO(["/attach a.png", "resuma", "s", "/exit"]), { cwd, interactive: true });
       expect(bodies).toHaveLength(1);
       expect(bodies[0]?.messages?.at(-1)?.content).toContainEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${pngData}` } });
-    } finally {
-      stop();
-    }
+    } finally { stop(); }
   });
 
   test("resposta 'sair' não aprova por prefixo e nega o turno", async () => {
@@ -168,13 +166,9 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       expect(bodies).toHaveLength(0);
       expect(io.outputs.join("\n")).toContain("não aprovado");
       expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
-      const auditPath = join(cwd, ".astro", "audit.jsonl");
-      expect(existsSync(auditPath) ? readFileSync(auditPath, "utf8") : "").not.toContain("attachment.approved");
-    } finally {
-      stop();
-    }
+      expect(existsSync(join(cwd, ".astro", "audit.jsonl")) ? readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8") : "").not.toContain("attachment.approved");
+    } finally { stop(); }
   });
-
   test("sem TTY imagem é negada sem perguntar", async () => {
     const { cwd, home, bodies, session, stop } = e2eSetup();
     const io = new ScriptedIO(["/attach a.png", "resuma", "/exit"]);
@@ -184,8 +178,6 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       expect(io.outputs.join("\n")).toContain("não aprovado");
       expect(io.prompts.join("\n")).not.toContain("aprovar envio?");
       expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
-    } finally {
-      stop();
-    }
+    } finally { stop(); }
   });
 });

@@ -234,15 +234,8 @@ export class AgentSession {
 
   /** Store de imagem criado só na primeira imagem; raiz resolvida uma vez no construtor. */
   #imageStore(): ArtifactStore {
-    if (this.#imageStoreInstance === undefined) {
-      this.#imageStoreInstance = new ArtifactStore(this.#artifactRoot, {
-        cwd: this.#cwd,
-        astroHome: resolveAstroHome(this.#env),
-        ttlDays: this.#config.attachments.artifactTtlDays,
-        maxBytes: this.#config.attachments.artifactMaxBytes,
-      });
-    }
-    return this.#imageStoreInstance;
+    return this.#imageStoreInstance ??= new ArtifactStore(this.#artifactRoot, { cwd: this.#cwd, astroHome: resolveAstroHome(this.#env),
+      ttlDays: this.#config.attachments.artifactTtlDays, maxBytes: this.#config.attachments.artifactMaxBytes });
   }
 
   get messages(): readonly ChatMessage[] {
@@ -581,15 +574,10 @@ export class AgentSession {
       let metas = attachments;
       let images: ImagePart[] | undefined;
       if (turn?.attachments !== undefined) {
-        const prepared = await prepareTurnAttachments({
-          attachments: turn.attachments,
-          owner: { sessionId: this.id, runId: this.id },
+        const prepared = await prepareTurnAttachments({ attachments: turn.attachments, owner: { sessionId: this.id, runId: this.id },
           ...(turn.approveAttachment === undefined ? {} : { approver: turn.approveAttachment }),
-          ...(turn.attachments.some((attachment) => attachment.kind === "image")
-            ? { store: this.#imageStore() }
-            : {}),
-          audit: (tipo, payload) => this.#append(tipo, payload),
-        });
+          ...(turn.attachments.some((a) => a.kind === "image") ? { store: this.#imageStore() } : {}),
+          audit: (tipo, payload) => this.#append(tipo, payload) });
         metas = prepared.metas.length === 0 ? undefined : prepared.metas;
         images = prepared.images.length === 0 ? undefined : prepared.images;
       }

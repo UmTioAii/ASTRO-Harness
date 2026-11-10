@@ -1232,7 +1232,7 @@ async function main(argv: string[]): Promise<number> {
       const store = new SessionStore(resolve(base, ".astro", "sessions"));
       const { openSessionApi } = await import("./chat/session-api");
       sessionApi = openSessionApi(resolve(base, ".astro"));
-      await runRepl(session, io, { store, sessionApi, signal: io.signal, style: interactive, cwd: base, manager });
+      await runRepl(session, io, { store, sessionApi, signal: io.signal, style: interactive, cwd: base, manager, interactive });
       return 0;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
