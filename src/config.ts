@@ -1557,9 +1557,9 @@ export function loadConfigRaw(path: string): Record<string, unknown> {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new ConfigError(`configuração em "${path}" não é JSON válido: ${detail}`);
+  } catch {
+    // I-03: o detalhe do parser de JSON pode citar o conteúdo do arquivo — não ecoar.
+    throw new ConfigError(`configuração em "${path}" não é JSON válido`);
   }
 
   if (!isPlainObject(raw)) fail('config inválida: "config" deve ser um objeto');

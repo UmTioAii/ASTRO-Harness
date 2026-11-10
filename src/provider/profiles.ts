@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ConfigError, DEFAULT_ATTACHMENTS, isPlainObject, loadConfigRaw, validateConfig, type AstroConfig, type ModelConfig, type ProviderConfig } from "../config";
 import { globalConfigPath } from "../astro-home";
-import { assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
+import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
 import { isKnownTag } from "../tags";
 import { isAuthHeader, isVaultCredentialRef, looksLikeSecret } from "../secrets";
 import { outboundUrlProblem } from "../url-safety";
@@ -249,7 +249,15 @@ export function loadProjectConfig(configPath: string, opts: { env?: NodeJS.Proce
   if (!existsSync(configPath)) return undefined;
   const homeEnv = { ...process.env, ...opts.env };
   const global = homeEnv.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(homeEnv);
-  const declared = mergeConfigLayers(global ?? {}, loadConfigRaw(configPath));
+  const projectLayer = loadConfigRaw(configPath);
+  // O schema de cada camada crua: `model` e `profile` não convivem e `models`
+  // não se repete (a mescla entre camadas resolve o XOR, o conflito dentro da
+  // camada é erro).
+  assertLayerSchema(projectLayer);
+  assertLayerSchema(global);
+  const declared = mergeConfigLayers(global ?? {}, projectLayer);
+  // Todo model declarado aponta para um provider declarado nas camadas.
+  assertDeclaredProviders(declared);
   // O store é fonte global de credenciais mesmo sem `$ASTRO_HOME/config.json`.
   const store = loadProfileStore(profilesPath(homeEnv));
   const storeProviders = Object.fromEntries(store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));
@@ -407,8 +415,11 @@ export function resolveEffectiveConfig(input: {
     }
   }
   // O estreitamento olha a camada global e o store: a credencial global não
-  // muda de host. O store vale mesmo sem `$ASTRO_HOME/config.json`.
-  assertNarrowed(global ?? {}, declared, globalProviders);
+  // muda de host. O store vale mesmo sem `$ASTRO_HOME/config.json`. O perfil
+  // efêmero de env não entra: ele é por execução e a escolha do usuário não
+  // é um bloqueio do projeto.
+  const storeProviders = Object.fromEntries(input.store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));
+  assertNarrowed(global ?? {}, declared, storeProviders);
 
   const providers: Record<string, unknown> = { ...globalProviders, ...(isPlainObject(base.providers) ? base.providers : {}) };
   const models = mergeModelLayers(globalModels, Array.isArray(base.models) ? base.models : []);
@@ -546,10 +557,17 @@ export function loadEffectiveConfig(
   }
   const project = exists ? loadConfigRaw(configPath) : undefined;
   const global = useGlobal ? loadGlobalConfig(homeEnv) : undefined;
+  // O schema de cada camada crua: `model` e `profile` não convivem e `models`
+  // não se repete (a mescla entre camadas resolve o XOR, o conflito dentro da
+  // camada é erro).
+  assertLayerSchema(project);
+  assertLayerSchema(global);
+  const merged = mergeConfigLayers(global ?? {}, project ?? {});
+  // Todo model declarado aponta para um provider declarado nas camadas.
+  assertDeclaredProviders(merged);
   // O `agent.model` declarado precisa existir nas camadas (global + projeto):
   // sem esta checagem, um modelo inexistente seria trocado em silêncio pelo
   // modelo resolvido (store/env).
-  const merged = mergeConfigLayers(global ?? {}, project ?? {});
   const declaredAgent = isPlainObject(merged.agent) ? merged.agent : {};
   const declaredModels = Array.isArray(merged.models) ? merged.models : [];
   if (typeof declaredAgent.model === "string"

@@ -1,8 +1,10 @@
 /** Camadas de configuração (ADR-0029, #401): merge `global < projeto` e guarda
  * de estreitamento — o projeto só pode restringir a camada global. */
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ConfigError, isPlainObject } from "./config";
+import { isVaultRef } from "./secrets";
 
 /** Ranque de permissão: `ask` é o mais restrito, `bypass` o mais largo. */
 const MODE_RANK: Record<string, number> = { ask: 0, "allow-edits": 1, bypass: 2 };
@@ -22,9 +24,11 @@ export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record
     else if (isPlainObject(current) && isPlainObject(value)) {
       const next = mergeConfigLayers(current, value);
       // `model` e `profile` são uma chave lógica (o schema proíbe os dois):
-      // declarar um no projeto descarta o herdado da camada global.
-      if (value.model !== undefined) delete (next as Record<string, unknown>).profile;
-      else if (value.profile !== undefined) delete (next as Record<string, unknown>).model;
+      // declarar um no projeto descarta o herdado da camada global. O
+      // conflito dentro da mesma camada é erro do schema (ADR-0007) e passa
+      // intacto para a validação.
+      if (value.model !== undefined && value.profile === undefined) delete (next as Record<string, unknown>).profile;
+      else if (value.profile !== undefined && value.model === undefined) delete (next as Record<string, unknown>).model;
       merged[key] = next;
     } else merged[key] = value;
   }
@@ -42,6 +46,52 @@ export function mergeModelLayers(base: readonly unknown[], overlay: readonly unk
     index += 1;
   }
   return [...merged.values()];
+}
+
+/**
+ * Schema de uma camada crua: `model` e `profile` não convivem (ADR-0007) e
+ * `models` não se repete. A mescla entre camadas resolve o XOR; o conflito
+ * dentro da camada é erro, com a mesma mensagem de `validateConfig`.
+ */
+export function assertLayerSchema(raw: unknown): void {
+  if (!isPlainObject(raw)) return;
+  assertExclusiveModel(raw.agent, "agent");
+  const named = isPlainObject(raw.agents) ? raw.agents : {};
+  for (const [name, agent] of Object.entries(named)) assertExclusiveModel(agent, `agents.${name}`);
+  const models = Array.isArray(raw.models) ? raw.models : [];
+  const seen = new Set<string>();
+  for (const entry of models) {
+    if (!isPlainObject(entry)) continue;
+    const key = `${String(entry.provider)}/${String(entry.id)}`;
+    if (seen.has(key)) throw new ConfigError(`config inválida: modelo duplicado "${key}" em "models"`);
+    seen.add(key);
+  }
+}
+
+/** Todo model declarado aponta para um provider declarado nas camadas. */
+export function assertDeclaredProviders(declared: Record<string, unknown>): void {
+  const providers = isPlainObject(declared.providers) ? declared.providers : {};
+  const models = Array.isArray(declared.models) ? declared.models : [];
+  for (const entry of models) {
+    if (!isPlainObject(entry)) continue;
+    const provider = String(entry.provider);
+    if (!Object.hasOwn(providers, provider)) {
+      throw new ConfigError(
+        `config inválida: modelo "${provider}/${String(entry.id)}" aponta para o provider ` +
+          `"${provider}", que não está declarado em "providers"`,
+      );
+    }
+  }
+}
+
+/** `model` e `profile` na mesma camada: o schema proíbe os dois (ADR-0007). */
+function assertExclusiveModel(agent: unknown, field: string): void {
+  if (!isPlainObject(agent)) return;
+  if (agent.model !== undefined && agent.profile !== undefined) {
+    throw new ConfigError(
+      `config inválida: "${field}" define "model" e "profile"; use apenas um — o profile substitui o model (ADR-0007)`,
+    );
+  }
 }
 
 /**
@@ -67,13 +117,8 @@ export function assertNarrowed(global: Record<string, unknown>, merged: Record<s
   // Budget: teto, janela e escopo não podem crescer.
   const globalBudget = isPlainObject(global.budget) ? global.budget : {};
   const mergedBudget = isPlainObject(merged.budget) ? merged.budget : {};
-  for (const key of ["limitUsd", "hardCeilingUsd"]) {
-    const ceiling = globalBudget[key];
-    const value = mergedBudget[key];
-    if (typeof ceiling === "number" && (typeof value !== "number" || value > ceiling)) {
-      throw new ConfigError(`config inválida: o projeto amplia o budget global (${key} acima do teto global)`);
-    }
-  }
+  assertCeiling(globalBudget.limitUsd, mergedBudget.limitUsd, "budget.limitUsd");
+  assertCeiling(globalBudget.hardCeilingUsd, mergedBudget.hardCeilingUsd, "budget.hardCeilingUsd");
   const scopeFrom = SCOPE_RANK[String(globalBudget.scope)];
   const scopeTo = SCOPE_RANK[String(mergedBudget.scope)];
   if (scopeFrom !== undefined && scopeTo !== undefined && scopeTo > scopeFrom) {
@@ -82,6 +127,12 @@ export function assertNarrowed(global: Record<string, unknown>, merged: Record<s
   if (globalBudget.onExceed === "stop" && mergedBudget.onExceed === "ask") {
     throw new ConfigError("config inválida: o projeto amplia o budget global (onExceed: stop → ask)");
   }
+  // Teto do time e das quotas: o custo efetivo não cresce com o budget intacto.
+  const globalTeam = isPlainObject(global.team) ? global.team : {};
+  const mergedTeam = isPlainObject(merged.team) ? merged.team : {};
+  assertCeiling(globalTeam.projectBudgetUsd, mergedTeam.projectBudgetUsd, "team.projectBudgetUsd");
+  assertQuotas(globalTeam.agentQuotas, mergedTeam.agentQuotas, "team.agentQuotas");
+  assertQuotas(global.quota, merged.quota, "quota");
   // Provider: a credencial global não muda de host (comparação pela referência).
   // A referência é reservada pela camada global (config global + store): o
   // projeto pode reusá-la no mesmo host, nunca em outro. O perfil efêmero de
@@ -134,20 +185,66 @@ function assertNotWider(globalValue: unknown, mergedValue: unknown, table: Recor
   }
 }
 
+/** Teto numérico: o projeto não passa do valor global. */
+function assertCeiling(globalValue: unknown, mergedValue: unknown, label: string): void {
+  if (typeof globalValue !== "number") return;
+  if (typeof mergedValue !== "number" || mergedValue > globalValue) {
+    throw new ConfigError(`config inválida: o projeto amplia o budget global (${label} acima do teto global)`);
+  }
+}
+
+/** Quotas por agent (`team.agentQuotas`) e por domínio (`quota`): teto por chave. */
+function assertQuotas(globalValue: unknown, mergedValue: unknown, label: string): void {
+  if (!isPlainObject(globalValue)) return;
+  const merged = isPlainObject(mergedValue) ? mergedValue : {};
+  for (const [key, limit] of Object.entries(globalValue)) {
+    if (!isPlainObject(limit)) continue;
+    const after = isPlainObject(merged[key]) ? merged[key] : {};
+    for (const field of ["dailyTokens", "monthlyCostUsd"]) {
+      assertCeiling(limit[field], after[field], `${label}.${key}.${field}`);
+    }
+  }
+}
+
 /** Chave de comparação da referência: o caminho de credenciais é normalizado. */
 function credentialKey(key: string, ref: string): string {
-  return `${key}=${key === "credentialsPath" ? normalizePath(ref) : ref}`;
+  if (key === "credentialsPath") return `${key}=${normalizePath(ref)}`;
+  // O nome de variável de ambiente é comparado sem diferenciar maiúsculas: o
+  // ambiente do Windows não diferencia e a mesma variável não pode virar duas
+  // credenciais. A ref do cofre é exata (o id do cofre diferencia maiúsculas).
+  return `${key}=${isVaultRef(ref) ? ref : ref.toUpperCase()}`;
 }
 
 /** Endpoint do provider: host e tipo — a credencial não troca de host. */
 function endpointOf(provider: Record<string, unknown>): string {
-  const baseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim().replace(/\/+$/, "") : String(provider.baseUrl);
-  return `${baseUrl}|${String(provider.kind)}`;
+  const baseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : String(provider.baseUrl);
+  return `${canonicalUrl(baseUrl)}|${String(provider.kind)}`;
+}
+
+/** A mesma URL em outra grafia é o mesmo host. */
+function canonicalUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}${url.search}`;
+  } catch {
+    return raw.replace(/\/+$/, "");
+  }
 }
 
 /** Normaliza como o runtime: `~` vira o home e o `..` é resolvido. */
 function normalizePath(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
-  return resolve(path);
+  const expanded = path === "~"
+    ? homedir()
+    : path.startsWith("~/") || path.startsWith("~\\")
+      ? join(homedir(), path.slice(2))
+      : path;
+  const resolved = resolve(expanded);
+  // Mesmo arquivo com outro nome: link (symlink/junction) e a caixa do Windows.
+  let canonical = resolved;
+  try {
+    canonical = realpathSync.native(resolved);
+  } catch {
+    // O arquivo pode não existir ainda: a comparação lexical ainda vale.
+  }
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }

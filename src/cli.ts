@@ -1010,10 +1010,14 @@ function formatBenchTable(report: BenchReport): string {
 
 async function main(argv: string[]): Promise<number> {
   // `--no-global-config` vale para qualquer comando: sai do argv e vira o env.
-  if (argv.includes("--no-global-config")) process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
+  // A flag nunca é o valor de outra opção (o parser recusa valor que começa
+  // com "-"), então ela só conta quando está numa posição de flag.
+  const isGlobalFlag = (arg: string, index: number): boolean =>
+    arg === "--no-global-config" && !(index > 0 && (argv[index - 1] as string).startsWith("-"));
+  if (argv.some(isGlobalFlag)) process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
   let parsed: ParsedCommand;
   try {
-    parsed = parseArgs(argv.filter((arg) => arg !== "--no-global-config"));
+    parsed = parseArgs(argv.filter((arg, index) => !isGlobalFlag(arg, index)));
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
     console.error(`erro: ${error.message}\n`);
