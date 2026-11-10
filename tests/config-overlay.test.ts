@@ -272,6 +272,56 @@ test("aceita: fontes globais que divergem no domínio não quebram o projeto", (
   expect(() => effective(globalLayer, reuse("outro"), divergent)).toThrow(/domínio de quota/);
 });
 
+test("rejeita: o projeto move o provider para um domínio global sem teto", () => {
+  // A mesma credencial em dois domínios e só um deles com teto: o gasto no
+  // domínio sem teto passa sem corte (o enforcement corta por domínio).
+  const globalLayer = {
+    providers: {
+      h1: { kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain: "global" },
+      h2: { kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain: "loja" },
+    },
+    quota: { global: { monthlyCostUsd: 10 } },
+  };
+  const reuse = (quotaDomain: string, id = "x") => project({
+    providers: { p: provider("p"), [id]: { kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain } },
+  });
+  // O projeto move o gasto para "loja" (domínio que a camada global usa, mas
+  // sem teto): o teto global de 10 USD/mês deixa de valer.
+  expect(() => effective(globalLayer, reuse("loja"))).toThrow(/domínio de quota/);
+  // A mesma credencial em dois domínios: o gasto ficaria fragmentado e o teto
+  // da conta seria contornado por uma parte dele.
+  expect(() => effective(globalLayer, project({
+    providers: {
+      p: provider("p"),
+      x: { kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain: "global" },
+      y: { kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain: "loja" },
+    },
+  }))).toThrow(/domínio de quota/);
+  // O mesmo provider no domínio que tem teto continua aceito.
+  expect(() => effective(globalLayer, reuse("global"))).not.toThrow();
+  // O store é a outra fonte global: a mesma referência em outro domínio sem
+  // teto também escapa do teto global.
+  const divergentStore = {
+    version: 1,
+    profiles: [{ id: "g", name: "G", kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain: "loja", models: [{ id: "gm", tags: [], context: 8192 }] }],
+  };
+  expect(() => effective({
+    providers: { h: { kind: "openai-compat", baseUrl: "https://h.example/v1", credentialRef: "G_KEY", quotaDomain: "global" } },
+    quota: { global: { monthlyCostUsd: 10 } },
+  }, reuse("loja"), divergentStore)).toThrow(/domínio de quota/);
+});
+
+test("rejeita: quotaDomain vazio usa a mensagem de schema", () => {
+  // String vazia é valor inválido de schema: a regra da política fica quieta.
+  const globalLayer = {
+    providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", quotaDomain: "acme" } },
+    quota: { acme: { monthlyCostUsd: 10 } },
+  };
+  expect(() => effective(globalLayer, project({
+    providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY", quotaDomain: "" } },
+  }))).toThrow(/quotaDomain" deve ser uma string não vazia/);
+});
+
 test("rejeita: quotaDomain inválido usa a mensagem de schema", () => {
   // O tipo do campo é do schema: a guarda do domínio não pode falar primeiro.
   const globalLayer = {
