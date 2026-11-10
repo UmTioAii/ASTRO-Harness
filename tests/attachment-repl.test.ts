@@ -166,7 +166,7 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       expect(bodies).toHaveLength(1);
       expect(bodies[0]?.messages?.at(-1)?.content).toContainEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${pngData}` } });
     } finally { stop(); }
-  });
+  }, 20_000);
 
   test("resposta 'sair' não aprova por prefixo e nega o turno", async () => {
     const { cwd, home, bodies, session, stop } = e2eSetup();
@@ -178,7 +178,7 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
       expect(existsSync(join(cwd, ".astro", "audit.jsonl")) ? readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8") : "").not.toContain("attachment.approved");
     } finally { stop(); }
-  });
+  }, 20_000);
   test("sem TTY imagem é negada sem perguntar", async () => {
     const { cwd, home, bodies, session, stop } = e2eSetup();
     const io = new ScriptedIO(["/attach a.png", "resuma", "/exit"]);
@@ -189,7 +189,7 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       expect(io.prompts.join("\n")).not.toContain("aprovar envio?");
       expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
     } finally { stop(); }
-  });
+  }, 20_000);
 
   test("imagem maior que a janela é rejeitada antes do request e o anexo continua pendente", async () => {
     const { cwd, bodies, session, stop } = e2eSetup(16);
@@ -204,7 +204,7 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       // Falha não consome o anexo: continua pendente para /detach ou novo turno.
       expect(text.slice(text.indexOf("janela de contexto"))).toContain("1. a.png");
     } finally { stop(); }
-  });
+  }, 20_000);
 
   test("imagem recusada falha o turno, mantém o anexo e não grava nada (#392)", async () => {
     const { cwd, home, bodies, session, stop } = e2eSetup();
@@ -222,5 +222,5 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
     } finally {
       stop();
     }
-  });
+  }, 20_000);
 });

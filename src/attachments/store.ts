@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, 
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { canonicalize, isWithin } from "../tools/paths";
-import { defaultCheckPrivate, hardenWindowsAcl, inspectWindowsAcl } from "./acl";
+import { defaultCheckPrivate, hardenWindowsAcl, type WindowsAcl, windowsAclIsPrivate } from "./acl";
 import { AttachmentError, MAX_ATTACHMENT_BYTES } from "./model";
 
 export interface ResolveArtifactRootInput {
@@ -160,13 +160,13 @@ export class ArtifactStore {
       // já passou pelo pré-check.
       if (!existed) {
         if (process.platform === "win32") {
-          const acl = inspectWindowsAcl(this.root);
-          if (acl === undefined) this.#invalidRoot();
+          let acl: WindowsAcl;
           try {
-            hardenWindowsAcl(this.root, acl.userSid);
+            acl = hardenWindowsAcl(this.root);
           } catch {
             this.#invalidRoot();
           }
+          if (!windowsAclIsPrivate(acl.sddl, acl.userSid)) this.#invalidRoot();
         }
         const checkPrivate = this.#context.checkPrivate ?? defaultCheckPrivate;
         if (!checkPrivate(this.root)) this.#invalidRoot();

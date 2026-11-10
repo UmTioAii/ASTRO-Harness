@@ -97,7 +97,7 @@ describe("AgentSession (T1, #62)", () => {
       expect(metas[0]).toMatchObject({ kind: "image", name: "a.png" });
       expect(metas[0]?.ref).toBeString();
     } finally { chat.close(); stop(); }
-  });
+  }, 20_000);
   test("emite run.started/chat.prompt/run.completed por sessão (só taskHash)", async () => {
     const { cwd, session, stop } = setup();
     const chat = session();

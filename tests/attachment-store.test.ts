@@ -79,7 +79,7 @@ describe("validateArtifactRoot", () => {
     new ArtifactStore(root, { cwd, astroHome });
     expect(existsSync(root)).toBe(true);
     if (process.platform !== "win32") expect(statSync(root).mode & 0o777).toBe(0o700);
-  });
+  }, 20_000);
 
   test.skipIf(process.platform !== "win32")("rejeita raiz com ACE Everyone usando a checagem real", () => {
     const { cwd, astroHome } = sandbox();
@@ -91,7 +91,7 @@ describe("validateArtifactRoot", () => {
     } finally {
       execFileSync("icacls", [root, "/remove", "*S-1-1-0"], { stdio: "ignore" });
     }
-  });
+  }, 20_000);
 
   test.skipIf(process.platform !== "win32")("store endurece a raiz criada e remove a ACE herdada do pai", () => {
     const { cwd, astroHome } = sandbox();
@@ -111,7 +111,7 @@ describe("validateArtifactRoot", () => {
     } finally {
       execFileSync("icacls", [parent, "/remove", "*S-1-1-0"], { stdio: "ignore" });
     }
-  });
+  }, 20_000);
 
   // Regressão do CI Windows: `/inheritance:r` remove só ACEs herdadas; uma ACE explícita
   // já na raiz sobrevive e mantém um trustee fora de dono/SY/BA.
@@ -120,17 +120,13 @@ describe("validateArtifactRoot", () => {
     const root = join(astroHome, "explicit-ace-artifacts");
     mkdirSync(root, { recursive: true });
     execFileSync("icacls", [root, "/grant", "*S-1-5-32-546:(OI)(CI)(R)"], { stdio: "ignore" });
-    const before = inspectWindowsAcl(root);
-    expect(before).toBeDefined();
-    hardenWindowsAcl(root, before!.userSid);
-    const acl = inspectWindowsAcl(root);
-    expect(acl).toBeDefined();
-    const trustees = [...acl!.sddl.matchAll(/\(([^)]*)\)/g)].map(([, body]) =>
+    const acl = hardenWindowsAcl(root);
+    const trustees = [...acl.sddl.matchAll(/\(([^)]*)\)/g)].map(([, body]) =>
       body.split(";")[5]!.trim().toUpperCase(),
     );
-    expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl!.userSid.toUpperCase()].sort());
+    expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl.userSid.toUpperCase()].sort());
     expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
-  });
+  }, 20_000);
 
   test("raiz recém-criada que não fica privada é removida e falha tipada", () => {
     const { cwd, astroHome } = sandbox();
@@ -147,7 +143,7 @@ describe("validateArtifactRoot", () => {
     } catch (error) { thrown = error; }
     expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_root_invalid" });
     expect(existsSync(root)).toBe(false);
-  });
+  }, 20_000);
 
   test.skipIf(process.platform !== "win32")("store endurece a raiz criada e a checagem real aprova", () => {
     const { cwd, astroHome } = sandbox();
@@ -160,7 +156,7 @@ describe("validateArtifactRoot", () => {
     );
     expect([...new Set(trustees)].sort()).toEqual(["BA", "SY", acl!.userSid.toUpperCase()].sort());
     expect(() => validateArtifactRoot(root, { cwd, astroHome })).not.toThrow();
-  });
+  }, 20_000);
 
   test.skipIf(process.platform !== "win32")("rejeita raiz pré-existente com ACE de Guests", () => {
     const { cwd, astroHome } = sandbox();
@@ -172,7 +168,7 @@ describe("validateArtifactRoot", () => {
     } finally {
       execFileSync("icacls", [root, "/remove", "*S-1-5-32-546"], { stdio: "ignore" });
     }
-  });
+  }, 20_000);
 
   test("raiz cujo pai é arquivo falha tipada e não grava", () => {
     const { cwd, astroHome } = sandbox();

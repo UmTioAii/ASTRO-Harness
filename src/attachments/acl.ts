@@ -74,7 +74,7 @@ export function inspectWindowsAcl(path: string): WindowsAcl | undefined {
   try {
     const output = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", script], {
       encoding: "utf8",
-      timeout: 5000,
+      timeout: 15000,
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
       cwd: join(root, "System32"),
@@ -93,30 +93,51 @@ export function inspectWindowsAcl(path: string): WindowsAcl | undefined {
 }
 
 /**
- * Reescreve a DACL da raiz como owner-only: sem herança, só usuário atual, SYSTEM e
- * Administrators com controle total. `icacls.exe` absoluto, cwd do sistema, env mínimo.
+ * Script de endurecimento: monta uma DACL nova, protegida (sem herança) e com
+ * controle total só para o usuário atual, SYSTEM e Administrators, e a instala
+ * com `Set-Acl`. Uma DACL nova descarta ACEs herdadas *e* explícitas; `icacls
+ * /inheritance:r` só remove as herdadas e deixaria uma ACE explícita da raiz.
  */
-export function hardenWindowsAcl(path: string, userSid: string): void {
+const HARDEN_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "$path=$env:ASTRO_ACL_PATH",
+  "$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+  "$acl=New-Object System.Security.AccessControl.DirectorySecurity",
+  "$acl.SetAccessRuleProtection($true,$false)",
+  "$acl.SetOwner($sid)",
+  "foreach($id in @($sid.Value,'S-1-5-18','S-1-5-32-544')){",
+  "  $rule=New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($id)),[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Allow)",
+  "  $acl.AddAccessRule($rule)",
+  "}",
+  "Set-Acl -LiteralPath $path -AclObject $acl",
+  "Write-Output $sid.Value",
+  "Write-Output (Get-Acl -LiteralPath $path).Sddl",
+].join("\n");
+
+/**
+ * Reescreve a DACL da raiz como owner-only numa única chamada ao PowerShell e
+ * devolve o resultado lido do sistema (o store não precisa de um segundo spawn).
+ * `powershell.exe` absoluto, cwd do sistema, env mínimo. Qualquer falha lança.
+ */
+export function hardenWindowsAcl(path: string): WindowsAcl {
   const root = windowsRoot();
-  const exe = join(root, "System32", "icacls.exe");
-  if (!existsSync(exe)) throw new Error("icacls.exe não encontrado");
-  execFileSync(
-    exe,
-    [
-      path,
-      "/inheritance:r",
-      "/grant:r", `*${userSid}:(OI)(CI)F`,
-      "/grant:r", "*S-1-5-18:(OI)(CI)F",
-      "/grant:r", "*S-1-5-32-544:(OI)(CI)F",
-    ],
-    {
-      timeout: 5000,
-      windowsHide: true,
-      stdio: ["ignore", "ignore", "ignore"],
-      cwd: join(root, "System32"),
-      env: aclEnv(path),
-    },
-  );
+  const exe = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  if (!existsSync(exe)) throw new Error("powershell.exe não encontrado");
+  const output = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", HARDEN_SCRIPT], {
+    encoding: "utf8",
+    timeout: 15000,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "ignore"],
+    cwd: join(root, "System32"),
+    env: aclEnv(path),
+    maxBuffer: 1 << 20,
+  });
+  const lines = output.split(/\r?\n/);
+  const userSid = lines[0]?.trim() ?? "";
+  if (!/^S-1-[0-9-]+$/.test(userSid)) throw new Error("SID do usuário atual inválido após o endurecimento");
+  const sddl = lines.slice(1).join("").trim();
+  if (sddl === "") throw new Error("SDDL vazio após o endurecimento");
+  return { userSid, sddl };
 }
 
 /** Checagem default: modo POSIX ou DACL owner-only do Windows; qualquer falha fecha. */
