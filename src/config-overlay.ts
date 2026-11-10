@@ -1,27 +1,30 @@
-/**
- * Camadas de configuração (ADR-0029, #401): merge `global < projeto` e guarda
- * de estreitamento — o projeto só pode restringir a camada global; o merge não
- * aplica segurança (o estreitamento é conferido na validação).
- */
+/** Camadas de configuração (ADR-0029, #401): merge `global < projeto` e guarda
+ * de estreitamento — o projeto só pode restringir a camada global. */
 import { ConfigError, isPlainObject } from "./config";
 
 /** Ranque de permissão: `ask` é o mais restrito, `bypass` o mais largo. */
 const MODE_RANK: Record<string, number> = { ask: 0, "allow-edits": 1, bypass: 2 };
-/** Ranque do perfil de permissão do agent: `read-only` é o mais restrito. */
+/** Ranque do perfil do agent: `read-only` é o mais restrito. */
 const PERMISSION_RANK: Record<string, number> = { "read-only": 0, write: 1, execute: 2, full: 3 };
+/** Janela do budget: a mensal é a mais estreita; o dia gasta o teto todo dia. */
+const SCOPE_RANK: Record<string, number> = { month: 0, project: 0, day: 1, "use-as-you-go": 2 };
+/** Chaves de credencial: guardam a referência, nunca o valor. */
+const CREDENTIAL_KEYS = ["credentialRef", "credentialsPath"];
 
 /** Mescla camadas: objetos por chave, arrays substituem, escalares substituem. */
 export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(overlay)) {
     const current = merged[key];
-    if (key === "models") {
-      merged[key] = mergeModelLayers(Array.isArray(current) ? current : [], Array.isArray(value) ? value : []);
-    } else if (isPlainObject(current) && isPlainObject(value)) {
-      merged[key] = mergeConfigLayers(current, value);
-    } else {
-      merged[key] = value;
-    }
+    if (key === "models" && Array.isArray(current) && Array.isArray(value)) merged[key] = mergeModelLayers(current, value);
+    else if (isPlainObject(current) && isPlainObject(value)) {
+      const next = mergeConfigLayers(current, value);
+      // `model` e `profile` são uma chave lógica (o schema proíbe os dois):
+      // declarar um no projeto descarta o herdado da camada global.
+      if (value.model !== undefined) delete (next as Record<string, unknown>).profile;
+      else if (value.profile !== undefined) delete (next as Record<string, unknown>).model;
+      merged[key] = next;
+    } else merged[key] = value;
   }
   return merged;
 }
@@ -32,8 +35,7 @@ export function mergeModelLayers(base: readonly unknown[], overlay: readonly unk
   let index = 0;
   for (const model of [...base, ...overlay]) {
     const key = isPlainObject(model) && typeof model.provider === "string" && typeof model.id === "string"
-      ? `${model.provider}/${model.id}`
-      : `#${index}`; // modelo inválido fica à parte para a validação reportar
+      ? `${model.provider}/${model.id}` : `#${index}`; // modelo inválido fica à parte
     merged.set(key, model);
     index += 1;
   }
@@ -41,70 +43,66 @@ export function mergeModelLayers(base: readonly unknown[], overlay: readonly unk
 }
 
 /**
- * O projeto estreita a camada global, nunca amplia (ADR-0029): tools e perfil
- * de permissão ficam dentro do global, `permissions.mode` fica mais restrito, o
+ * O projeto estreita a camada global, nunca amplia (ADR-0029): tools e perfil de
+ * permissão ficam dentro do global, `permissions.mode` fica mais restrito, o
  * budget não passa do teto global e a credencial global não muda de host.
  */
-export function assertNarrowed(global: Record<string, unknown>, merged: Record<string, unknown>): void {
+export function assertNarrowed(global: Record<string, unknown>, merged: Record<string, unknown>, storeProviders: Record<string, unknown> = {}): void {
   // Agent principal e agents nomeados: tools e perfil de permissão.
-  const mainGlobal = isPlainObject(global.agent) ? global.agent : undefined;
-  const mainMerged = isPlainObject(merged.agent) ? merged.agent : undefined;
-  if (mainGlobal !== undefined && mainMerged !== undefined) {
-    assertAgentNarrowed(mainGlobal, mainMerged, "do agent principal");
+  const main = isPlainObject(global.agent) ? global.agent : undefined;
+  const mainAfter = isPlainObject(merged.agent) ? merged.agent : undefined;
+  if (main !== undefined && mainAfter !== undefined) assertAgentNarrowed(main, mainAfter, "do agent principal");
+  const named = isPlainObject(global.agents) ? global.agents : {};
+  const namedAfter = isPlainObject(merged.agents) ? merged.agents : {};
+  for (const [name, agent] of Object.entries(named)) {
+    const after = namedAfter[name];
+    if (isPlainObject(agent) && isPlainObject(after)) assertAgentNarrowed(agent, after, `do agent "${name}"`);
   }
-  const globalAgents = isPlainObject(global.agents) ? global.agents : {};
-  const mergedAgents = isPlainObject(merged.agents) ? merged.agents : {};
-  for (const [name, globalAgent] of Object.entries(globalAgents)) {
-    const mergedAgent = mergedAgents[name];
-    if (isPlainObject(globalAgent) && isPlainObject(mergedAgent)) {
-      assertAgentNarrowed(globalAgent, mergedAgent, `do agent "${name}"`);
-    }
-  }
-
-  // Modo de permissão do gate.
-  const before = at(global, "permissions", "mode");
-  const after = at(merged, "permissions", "mode");
-  const from = typeof before === "string" ? MODE_RANK[before] : undefined;
-  const to = typeof after === "string" ? MODE_RANK[after] : undefined;
-  if (from !== undefined && to !== undefined && to > from) {
-    throw new ConfigError(`config inválida: o projeto amplia o modo de permissão global ("${before}" → "${after}")`);
-  }
-
-  // Budget: teto e escopo não podem crescer.
+  // Modo de permissão do gate: o projeto só pode ser mais restrito.
+  const globalMode = isPlainObject(global.permissions) ? global.permissions.mode : undefined;
+  const mergedMode = isPlainObject(merged.permissions) ? merged.permissions.mode : undefined;
+  assertNotWider(globalMode, mergedMode, MODE_RANK, "o modo de permissão global");
+  // Budget: teto, janela e escopo não podem crescer.
   const globalBudget = isPlainObject(global.budget) ? global.budget : {};
   const mergedBudget = isPlainObject(merged.budget) ? merged.budget : {};
   for (const key of ["limitUsd", "hardCeilingUsd"]) {
     const ceiling = globalBudget[key];
     const value = mergedBudget[key];
-    if (typeof ceiling !== "number") continue;
-    if (typeof value !== "number" || value > ceiling) {
-      throw new ConfigError(`config inválida: o projeto amplia o budget global (${key}: ${String(value)} > ${ceiling})`);
+    if (typeof ceiling === "number" && (typeof value !== "number" || value > ceiling)) {
+      throw new ConfigError(`config inválida: o projeto amplia o budget global (${key} acima do teto global)`);
     }
   }
-  if (globalBudget.scope !== undefined && globalBudget.scope !== "use-as-you-go" && mergedBudget.scope === "use-as-you-go") {
-    throw new ConfigError(`config inválida: o projeto amplia o budget global (scope: ${String(globalBudget.scope)} → use-as-you-go)`);
+  const scopeFrom = SCOPE_RANK[String(globalBudget.scope)];
+  const scopeTo = SCOPE_RANK[String(mergedBudget.scope)];
+  if (scopeFrom !== undefined && scopeTo !== undefined && scopeTo > scopeFrom) {
+    throw new ConfigError("config inválida: o projeto amplia o budget global (a janela do escopo não pode encolher)");
   }
-
-  // Provider global: o projeto não muda o host heritando a credencial global.
+  if (globalBudget.onExceed === "stop" && mergedBudget.onExceed === "ask") {
+    throw new ConfigError("config inválida: o projeto amplia o budget global (onExceed: stop → ask)");
+  }
+  // Provider: a credencial global não muda de host (comparação pela referência).
+  const endpoints = new Map<string, string>();
   const globalProviders = isPlainObject(global.providers) ? global.providers : {};
+  for (const provider of [...Object.values(globalProviders), ...Object.values(storeProviders)]) {
+    if (!isPlainObject(provider)) continue;
+    const endpoint = `${String(provider.baseUrl)}|${String(provider.kind)}`;
+    for (const key of CREDENTIAL_KEYS) if (typeof provider[key] === "string") endpoints.set(`${key}=${provider[key]}`, endpoint);
+  }
   const mergedProviders = isPlainObject(merged.providers) ? merged.providers : {};
-  for (const [id, globalProvider] of Object.entries(globalProviders)) {
-    const mergedProvider = mergedProviders[id];
-    if (!isPlainObject(globalProvider) || !isPlainObject(mergedProvider)) continue;
-    const moved = ["baseUrl", "kind"].some((key) => mergedProvider[key] !== globalProvider[key]);
-    const inherited = ["credentialRef", "credentialsPath"].some(
-      (key) => globalProvider[key] !== undefined && mergedProvider[key] === globalProvider[key],
-    );
-    if (moved && inherited) {
-      throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}"`);
+  for (const [id, provider] of Object.entries(mergedProviders)) {
+    if (!isPlainObject(provider)) continue;
+    const endpoint = `${String(provider.baseUrl)}|${String(provider.kind)}`;
+    for (const key of CREDENTIAL_KEYS) {
+      const ref = provider[key];
+      const origin = typeof ref === "string" ? endpoints.get(`${key}=${ref}`) : undefined;
+      if (origin !== undefined && origin !== endpoint) {
+        throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}"`);
+      }
     }
   }
 }
 
-/**
- * Tools e perfil de permissão de um agent: o projeto só escolhe tools da
- * allowlist global e um perfil mais restrito.
- */
+/** Tools e perfil de permissão de um agent: só o que o global permite. */
 function assertAgentNarrowed(globalAgent: Record<string, unknown>, mergedAgent: Record<string, unknown>, label: string): void {
   const allowed = globalAgent.tools;
   const declared = mergedAgent.tools;
@@ -112,17 +110,14 @@ function assertAgentNarrowed(globalAgent: Record<string, unknown>, mergedAgent: 
     const extra = declared.filter((tool) => !allowed.map(String).includes(String(tool)));
     if (extra.length > 0) throw new ConfigError(`config inválida: o projeto amplia a allowlist global ${label} (${extra.join(", ")})`);
   }
-  const from = globalAgent.permission;
-  const to = mergedAgent.permission;
-  const before = typeof from === "string" ? PERMISSION_RANK[from] : undefined;
-  const after = typeof to === "string" ? PERMISSION_RANK[to] : undefined;
-  if (before !== undefined && after !== undefined && after > before) {
-    throw new ConfigError(`config inválida: o projeto amplia a permissão global ${label} ("${from}" → "${to}")`);
-  }
+  assertNotWider(globalAgent.permission, mergedAgent.permission, PERMISSION_RANK, `a permissão global ${label}`);
 }
 
-/** Campo em `raw.secao.chave`; ausente = undefined. */
-function at(raw: Record<string, unknown>, section: string, key: string): unknown {
-  const block = raw[section];
-  return isPlainObject(block) ? block[key] : undefined;
+/** Rejeita quando o projeto é mais permissivo que o global. */
+function assertNotWider(globalValue: unknown, mergedValue: unknown, table: Record<string, number>, label: string): void {
+  const from = typeof globalValue === "string" ? table[globalValue] : undefined;
+  const to = typeof mergedValue === "string" ? table[mergedValue] : undefined;
+  if (from !== undefined && to !== undefined && to > from) {
+    throw new ConfigError(`config inválida: o projeto amplia ${label} ("${String(globalValue)}" → "${String(mergedValue)}")`);
+  }
 }

@@ -5,9 +5,8 @@ import { validateAllowlistFlags, type AllowlistFlags, type CliAllowlists } from 
 import { AllowlistInvalidError } from "./path-class";
 import { denyDisplayPath, isPermissionMode, nonInteractiveApprover, type PermissionMode } from "./permissions";
 import { defaultArgs, isInteractive } from "./cli-default";
-import { existsSync } from "node:fs";
-import { loadConfig, validateConfig } from "./config";
-import { loadEffectiveConfig } from "./provider/profiles";
+import { validateConfig } from "./config";
+import { loadEffectiveConfig, loadProjectConfig } from "./provider/profiles";
 import { ProfileManager } from "./provider/profile-manager";
 import { formatVaultImport, importVaultCredential } from "./provider/vault-import";
 import { Ledger } from "./ledger";
@@ -1010,8 +1009,7 @@ function formatBenchTable(report: BenchReport): string {
 }
 
 async function main(argv: string[]): Promise<number> {
-  // `--no-global-config` vale para qualquer comando: sai do argv antes do parser
-  // e vira o mesmo env de `ASTRO_NO_GLOBAL_CONFIG=1` (comportamento idêntico).
+  // `--no-global-config` vale para qualquer comando: sai do argv e vira o env.
   if (argv.includes("--no-global-config")) process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
   let parsed: ParsedCommand;
   try {
@@ -1220,7 +1218,7 @@ async function main(argv: string[]): Promise<number> {
     try {
       const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
       const configPath = resolve(o.configPath);
-      const project = existsSync(configPath) ? loadConfig(configPath) : undefined;
+      const project = loadProjectConfig(configPath, { env: process.env });
       const manager = new ProfileManager({
         project, env: process.env,
         ...(o.provider === undefined ? {} : { provider: o.provider }),

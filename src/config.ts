@@ -1562,9 +1562,7 @@ export function loadConfigRaw(path: string): Record<string, unknown> {
     throw new ConfigError(`configuração em "${path}" não é JSON válido: ${detail}`);
   }
 
-  if (!isPlainObject(raw)) {
-    fail('config inválida: "config" deve ser um objeto');
-  }
+  if (!isPlainObject(raw)) fail('config inválida: "config" deve ser um objeto');
   return raw;
 }
 

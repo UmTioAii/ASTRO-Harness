@@ -236,14 +236,22 @@ export function saveProfileStore(store: ProviderStore, path: string = profilesPa
   }
 }
 
-/**
- * Camada global crua de `$ASTRO_HOME/config.json`; ausente = undefined.
- * A camada é parcial: só o que o arquivo declara entra no merge.
- */
+/** Camada global crua de `$ASTRO_HOME/config.json`; ausente = undefined. */
 export function loadGlobalConfig(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | undefined {
   const path = globalConfigPath(env);
   if (!existsSync(path)) return undefined;
   return loadConfigRaw(path);
+}
+
+/** Config do projeto mesclada com a camada global (validada); ausente = undefined.
+ * `chat`/`tui` não validam o projeto isolado: ele pode depender do global. */
+export function loadProjectConfig(configPath: string, opts: { env?: NodeJS.ProcessEnv } = {}): AstroConfig | undefined {
+  if (!existsSync(configPath)) return undefined;
+  const homeEnv = { ...process.env, ...opts.env };
+  const global = homeEnv.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(homeEnv);
+  const declared = mergeConfigLayers(global ?? {}, loadConfigRaw(configPath));
+  if (global !== undefined) assertNarrowed(global, declared);
+  return validateConfig(declared);
 }
 
 export type ProviderSource = "project" | "global" | "env";
@@ -376,12 +384,9 @@ export function resolveEffectiveConfig(input: {
   }
   const project = isPlainObject(input.project) ? input.project : undefined;
   const global = isPlainObject(input.global) ? input.global : undefined;
-  // ADR-0029: defaults < global < projeto. O merge só junta as camadas; quem
-  // decide o que é seguro é a validação do resultado mesclado.
+  // ADR-0029: defaults < global < projeto; a validação do merge decide o que é seguro.
   const declared = mergeConfigLayers(global ?? {}, project ?? {});
-  if (global !== undefined) assertNarrowed(global, declared);
   const base = project === undefined ? mergeConfigLayers(BASELINE_LAYER, declared) : declared;
-
   const profiles = new Map(input.store.profiles.map((profile) => [profile.id, profile]));
   if (input.envProfile !== undefined) {
     if (profiles.has(input.envProfile.id)) {
@@ -390,21 +395,22 @@ export function resolveEffectiveConfig(input: {
     profiles.set(input.envProfile.id, input.envProfile);
   }
 
-  const storeProviders: Record<string, ProviderConfig> = {};
-  const storeModels: ModelConfig[] = [];
+  const globalProviders: Record<string, ProviderConfig> = {};
+  const globalModels: ModelConfig[] = [];
   for (const profile of profiles.values()) {
-    storeProviders[profile.id] = profileToProvider(profile);
+    globalProviders[profile.id] = profileToProvider(profile);
     for (const model of profile.models) {
-      storeModels.push({ provider: profile.id, id: model.id, tags: model.tags, context: model.context });
+      globalModels.push({ provider: profile.id, id: model.id, tags: model.tags, context: model.context });
     }
   }
+  // O estreitamento olha a camada global e o store: a credencial global não muda de host.
+  if (global !== undefined) assertNarrowed(global, declared, globalProviders);
 
-  const providers: Record<string, unknown> = { ...storeProviders, ...(isPlainObject(base.providers) ? base.providers : {}) };
-  const models = mergeModelLayers(storeModels, Array.isArray(base.models) ? base.models : []);
+  const providers: Record<string, unknown> = { ...globalProviders, ...(isPlainObject(base.providers) ? base.providers : {}) };
+  const models = mergeModelLayers(globalModels, Array.isArray(base.models) ? base.models : []);
   const agent = isPlainObject(base.agent) ? base.agent : {};
   const profileName = typeof agent.profile === "string" ? agent.profile : undefined;
-  const pool = isPlainObject(base.modelPool) ? base.modelPool : {};
-  const poolEntry = profileName === undefined ? undefined : pool[profileName];
+  const poolEntry = profileName === undefined ? undefined : (isPlainObject(base.modelPool) ? base.modelPool[profileName] : undefined);
   // Na pool (F-27), o profile substitui `agent.model`.
   const poolModel = isPlainObject(poolEntry) && typeof poolEntry.model === "string" ? poolEntry.model : undefined;
   const declaredModel = typeof agent.model === "string" ? agent.model : poolModel;
@@ -525,11 +531,10 @@ export function loadEffectiveConfig(
   } = {},
 ): EffectiveConfig {
   const env = opts.env ?? process.env;
-  // Os artefatos do home (config global e store de providers) usam o env do
-  // processo: um env parcial de execução não realoca o `~/.astro`.
+  // Os artefatos do home (config global e store) usam o env do processo: um env
+  // parcial de execução não realoca o `~/.astro`. A camada global vale mesmo
+  // com `--config` explícito; só as duas flags (e o env) a desligam (ADR-0029).
   const homeEnv = { ...process.env, ...opts.env };
-  // A camada global vale mesmo com `--config` explícito; só as duas flags
-  // abaixo (e o env) a desligam (ADR-0029).
   const useGlobal = homeEnv.ASTRO_NO_GLOBAL_CONFIG !== "1" && opts.noGlobalConfig !== true;
   const exists = existsSync(configPath);
   if (!exists && opts.allowMissing !== true) {

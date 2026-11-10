@@ -20,8 +20,7 @@ async function runCli(args: string[], opts: { cwd: string; env: Record<string, s
     delete baseEnv[key];
   }
   const home = opts.env.ASTRO_HOME ?? mkdtempSync(join(tmpdir(), "astro-wire-home-"));
-  // O spawn roda no diretório do teste: um `astro.config.json` local na raiz do
-  // repositório não pode entrar nos testes que esperam "sem config".
+  // O spawn roda no diretório do teste: o `astro.config.json` da raiz não entra.
   const proc = Bun.spawn(["bun", join(root, "src", "cli.ts"), ...args], {
     cwd: opts.cwd,
     stdin: "pipe",
