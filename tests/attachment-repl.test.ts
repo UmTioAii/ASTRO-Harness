@@ -126,7 +126,7 @@ const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8B
 interface CapturedBody { messages?: Array<{ role?: string; content?: unknown }> }
 
 /** Sessão real + servidor local que captura o corpo: exercita o wire até o provider. */
-function e2eSetup() {
+function e2eSetup(context = 8192) {
   const base = sandbox();
   const cwd = join(base, "work"), home = join(base, "home");
   mkdirSync(cwd, { recursive: true });
@@ -140,7 +140,7 @@ function e2eSetup() {
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
     providers: { p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
-    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192, capabilities: { vision: true } }],
+    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context, capabilities: { vision: true } }],
     agent: { model: "p/m1", maxSteps: 1, tools: [] },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
@@ -178,6 +178,21 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       expect(io.outputs.join("\n")).toContain("não aprovado");
       expect(io.prompts.join("\n")).not.toContain("aprovar envio?");
       expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
+    } finally { stop(); }
+  });
+
+  test("imagem maior que a janela é rejeitada antes do request e o anexo continua pendente", async () => {
+    const { cwd, bodies, session, stop } = e2eSetup(16);
+    const io = new ScriptedIO(["/attach a.png", "resuma", "s", "/attach", "/exit"]);
+    try {
+      await runRepl(session, io, { cwd, interactive: true });
+      expect(bodies).toHaveLength(0);
+      const text = io.outputs.join("\n");
+      expect(text).toContain("janela de contexto");
+      expect(text).toMatch(/~\d+ tokens \+ \d+ de saída > 16/);
+      expect(text).not.toContain(pngData); // I-03: erro cita contagens, nunca conteúdo
+      // Falha não consome o anexo: continua pendente para /detach ou novo turno.
+      expect(text.slice(text.indexOf("janela de contexto"))).toContain("1. a.png");
     } finally { stop(); }
   });
 });
