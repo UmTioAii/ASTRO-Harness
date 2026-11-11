@@ -20,7 +20,7 @@ test("reload preserva a escolha explícita e cai no projeto se o modelo sumir", 
     activeProfileId: "q",
     profiles: [{
       id: "q", name: "Q", kind: "openai-compat",
-      baseUrl: "https://q.example/v1", credentialRef: "KEY",
+      baseUrl: "https://q.example/v1", credentialRef: "Q_KEY",
       models: [{ id: "m2", tags: ["writing-code"], context: 8192 }],
     }],
   }, join(home, "providers.json"));
