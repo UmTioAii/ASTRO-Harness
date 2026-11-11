@@ -77,7 +77,7 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     // Agent nomeado: tools e perfil de permissão também não podem ampliar.
     [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }), twoAccounts({ coder: { tools: ["read_file", "write_file"] } }), /amplia a allowlist global do agent "coder"/],
     [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }), twoAccounts({ coder: { permission: "full" } }), /amplia a permissão global do agent "coder"/],
-    // O projeto não redireciona a credencial global para outro host.
+    // O projeto não redireciona a credencial global para outro endpoint.
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), acme: { baseUrl: "https://outro.example/v1" } } }), /redireciona a credencial global/],
     // Nem reaproveitar a mesma referência em outro provider.
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), evil: { kind: "openai-compat", baseUrl: "https://evil.example/v1", credentialRef: "ACME_KEY" } } }), /redireciona a credencial global/],
@@ -89,7 +89,7 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
 
 test("rejeita: credencial do store e caminho de credencial reaproveitados pelo projeto", () => {
   // Sem `$ASTRO_HOME/config.json`, o store segue sendo a fonte global de
-  // credenciais: o projeto não pode levar a referência para outro host.
+  // credenciais: o projeto não pode levar a referência para outro endpoint.
   expect(() => effective(undefined, project({ providers: { p: provider("p"), evil: { kind: "openai-compat", baseUrl: "https://evil.example/v1", credentialRef: "ACME_KEY" } } }), store()))
     .toThrow(/redireciona a credencial global/);
   // O mesmo arquivo escrito de outra forma é o mesmo arquivo.
@@ -98,12 +98,12 @@ test("rejeita: credencial do store e caminho de credencial reaproveitados pelo p
     .toThrow(/redireciona a credencial global/);
 });
 
-test("aceita: a referência global pode ser reusada no mesmo host", () => {
-  // Mesmo host e mesma referência: o projeto não amplia nada.
+test("aceita: a referência global pode ser reusada no mesmo endpoint", () => {
+  // Mesmo endpoint e mesma referência: o projeto não amplia nada.
   expect(effective({ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } },
     project({ providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } })).config.providers.acme)
     .toMatchObject({ baseUrl: "https://acme.example/v1" });
-  // A mesma referência do store, no mesmo host, também é aceita.
+  // A mesma referência do store, no mesmo endpoint, também é aceita.
   expect(effective(undefined,
     project({ providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }), store()).config.providers.acme)
     .toMatchObject({ baseUrl: "https://acme.example/v1" });
@@ -174,7 +174,7 @@ test("rejeita: o mesmo arquivo de credencial com outro nome", () => {
 });
 
 test("aceita: o mesmo endpoint escrito de outro jeito", () => {
-  // A mesma URL em outra grafia é o mesmo host.
+  // A mesma URL em outra grafia é o mesmo endpoint.
   expect(effective({ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } },
     project({ providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://ACME.example/v1/", credentialRef: "ACME_KEY" } } })).config.providers.acme)
     .toMatchObject({ baseUrl: "https://ACME.example/v1/" });

@@ -415,7 +415,7 @@ export function resolveEffectiveConfig(input: {
     }
   }
   // O estreitamento olha a camada global e o store: a credencial global não
-  // muda de host. O store vale mesmo sem `$ASTRO_HOME/config.json`. O perfil
+  // muda de endpoint. O store vale mesmo sem `$ASTRO_HOME/config.json`. O perfil
   // efêmero de env não entra: ele é por execução e a escolha do usuário não
   // é um bloqueio do projeto.
   const storeProviders = Object.fromEntries(input.store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));

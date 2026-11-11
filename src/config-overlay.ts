@@ -97,7 +97,7 @@ function assertExclusiveModel(agent: unknown, field: string): void {
 /**
  * O projeto estreita a camada global, nunca amplia (ADR-0029): tools e perfil de
  * permissão ficam dentro do global, `permissions.mode` fica mais restrito, o
- * budget não passa do teto global e a credencial global não muda de host.
+ * budget não passa do teto global e a credencial global não muda de endpoint.
  */
 export function assertNarrowed(
   global: Record<string, unknown>,
@@ -138,7 +138,7 @@ export function assertNarrowed(
   assertCeiling(globalTeam.projectBudgetUsd, mergedTeam.projectBudgetUsd, "team.projectBudgetUsd");
   assertQuotas(globalTeam.agentQuotas, mergedTeam.agentQuotas, "team.agentQuotas");
   assertQuotas(global.quota, merged.quota, "quota");
-  // Provider: a credencial global não muda de host (comparação pela referência).
+  // Provider: a credencial global não muda de endpoint (comparação pela referência: a URL canonicalizada com o `kind`).
   // A referência é reservada pela camada global (config global + store): o
   // projeto pode reusá-la no mesmo endpoint, nunca em outro. O perfil efêmero de
   // env não entra: ele é por execução e a escolha do usuário não é bloqueio.
