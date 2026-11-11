@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatSession } from "../src/chat/repl";
@@ -117,6 +117,24 @@ describe("comandos da TUI (T2, #63)", () => {
     );
     expect(outcome.entries[0]!.text).not.toContain("sk-live-SEGREDO123");
     expect(outcome.entries[0]!.text).toMatch(/^erro: /);
+  });
+
+  test("/save grava pela SessionApi e não cria arquivo JSON (#366)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-tui-save-cutover-"));
+    const astroDir = join(root, ".astro");
+    const sessionApi = new SessionApi(astroDir);
+    try {
+      const outcome = await runCommand({ kind: "save" }, new FakeSession(), {}, { sessionApi });
+      expect(outcome.entries[0]!.kind).toBe("info");
+      expect(outcome.entries[0]!.text).toContain("sessão salva");
+      expect(sessionApi.list()).toHaveLength(1);
+      const legacyDir = join(astroDir, "sessions");
+      const legacyFiles = existsSync(legacyDir) ? readdirSync(legacyDir).filter((name) => name.endsWith(".json")) : [];
+      expect(legacyFiles).toEqual([]);
+    } finally {
+      sessionApi.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("comando desconhecido sugere o mais próximo; exit encerra (#275)", async () => {

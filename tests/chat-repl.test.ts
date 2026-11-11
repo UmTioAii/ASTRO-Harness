@@ -133,6 +133,67 @@ describe("REPL do chat (T1, #62)", () => {
     const record = JSON.parse(readFileSync(join(dir, file), "utf8")) as { messages: unknown[] };
     expect(record.messages).toEqual([{ role: "system", content: "sys" }]);
   });
+  test("auto-save grava na SessionApi e não cria arquivo JSON (#366)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-chat-repl-cutover-"));
+    const astroDir = join(root, ".astro");
+    const sessionApi = new SessionApi(astroDir);
+    try {
+      await runRepl(new FakeSession(), new ScriptedIO(["olá", "/exit"]), { sessionApi });
+      const listed = sessionApi.list();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]!.id).toBe("s1");
+      expect(listed[0]!.turns).toBe(1);
+      const legacyDir = join(astroDir, "sessions");
+      const legacyFiles = existsSync(legacyDir) ? readdirSync(legacyDir).filter((name) => name.endsWith(".json")) : [];
+      expect(legacyFiles).toEqual([]);
+    } finally {
+      sessionApi.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a sessão salva sobrevive ao fechamento e reaparece no reopen (#366)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-chat-repl-reopen-"));
+    const astroDir = join(root, ".astro");
+    const sessionApi = new SessionApi(astroDir);
+    await runRepl(new FakeSession(), new ScriptedIO(["olá", "/exit"]), { sessionApi });
+    sessionApi.close();
+
+    const reopened = new SessionApi(astroDir);
+    try {
+      const listed = reopened.list();
+      expect(listed).toHaveLength(1);
+      const record = reopened.load(listed[0]!.id);
+      expect(record.messages).toEqual([{ role: "user", content: "x" }]);
+      expect(record.turns).toBe(1);
+    } finally {
+      reopened.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a sessão salva é retomada depois do reopen (#366)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-chat-repl-resume-"));
+    const astroDir = join(root, ".astro");
+    const first = new SessionApi(astroDir);
+    await runRepl(new FakeSession(), new ScriptedIO(["olá", "/exit"]), { sessionApi: first });
+    first.close();
+
+    const reopened = new SessionApi(astroDir);
+    const session = new FakeSession();
+    try {
+      const io = new ScriptedIO(["/resume 1", "/exit"]);
+      await runRepl(session, io, { sessionApi: reopened });
+      expect(io.outputs).toContain("sessão retomada: s1 (1 turnos)");
+      expect(session.resumed).toHaveLength(1);
+      expect(session.resumed[0]!.id).toBe("s1");
+      expect(session.resumed[0]!.messages).toEqual([{ role: "user", content: "x" }]);
+    } finally {
+      reopened.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("EOF encerra e fecha a sessão", async () => {
     const session = new FakeSession();
     await runRepl(session, new ScriptedIO([]));
