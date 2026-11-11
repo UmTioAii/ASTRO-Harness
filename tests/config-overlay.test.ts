@@ -109,6 +109,18 @@ test("aceita: a referência global pode ser reusada no mesmo host", () => {
     .toMatchObject({ baseUrl: "https://acme.example/v1" });
 });
 
+test("rejeita: o redirecionamento da credencial é por endpoint e o diagnóstico cita o endpoint", () => {
+  // O endpoint é a URL canonicalizada (esquema + host + path + query) junto
+  // com o `kind`: mesmo host com outro path é outro endpoint, entao a recusa
+  // é correta.
+  const global = { providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } };
+  const outroPath = project({ providers: { p: provider("p"), acme: { kind: "openai-compat", baseUrl: "https://acme.example/v2", credentialRef: "ACME_KEY" } } });
+  expect(() => effective(global, outroPath)).toThrow(/redireciona a credencial global/);
+  // O diagnóstico aponta o endpoint, não o host: com o mesmo host o usuário
+  // não encontraria a diferença que a mensagem aponta.
+  expect(() => effective(global, outroPath)).toThrow(/a mesma referência já está declarada em outro endpoint/);
+});
+
 test("rejeita: modelo do projeto inexistente não é trocado em silêncio pelo do store", () => {
   expect(() => effective({ permissions: { mode: "ask" } }, project({ agent: { model: "p/typo", maxSteps: 4, tools: ["read_file"] } }),
     store({ activeProfileId: "acme" }))).toThrow(/agent.model/);
