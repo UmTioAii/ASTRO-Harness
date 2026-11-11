@@ -78,12 +78,12 @@ describe("erros e aviso do sandbox (ADR-0027, #391 slice 5b)", () => {
     expect(SANDBOX_DISABLED_WARNING).toContain("run_command");
   });
 
-  test("runTask emite o aviso de sandbox:false no boot (review B F5)", async () => {
+  test("runTask emite o aviso de sandbox:false no boot (review B F5)", { timeout: 30000 }, async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-sb-warn-"));
     const configPath = join(cwd, "astro.config.json");
     writeFileSync(configPath, JSON.stringify({
       ...baseConfig,
-      providers: { ...baseConfig.providers, openai: { ...baseConfig.providers.openai, baseUrl: "https://invalid.example/v1" } },
+      providers: { ...baseConfig.providers, openai: { ...baseConfig.providers.openai, baseUrl: "http://127.0.0.1:9/v1", timeoutMs: 500, maxRetries: 0 } },
       tools: { run_command: { sandbox: false } },
     }));
     const original = console.warn;

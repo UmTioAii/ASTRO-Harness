@@ -340,7 +340,7 @@ function fail(message: string): never {
   throw new ConfigError(message);
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -1544,8 +1544,8 @@ export function validateConfig(raw: unknown): AstroConfig {
   return { providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(security === undefined ? {} : { security }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
 }
 
-/** Lê um arquivo JSON de configuração e o valida. */
-export function loadConfig(path: string): AstroConfig {
+/** Lê o JSON cru de um config, sem validar (o merge por camadas vem antes). */
+export function loadConfigRaw(path: string): Record<string, unknown> {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -1557,12 +1557,18 @@ export function loadConfig(path: string): AstroConfig {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new ConfigError(`configuração em "${path}" não é JSON válido: ${detail}`);
+  } catch {
+    // I-03: o detalhe do parser de JSON pode citar o conteúdo do arquivo — não ecoar.
+    throw new ConfigError(`configuração em "${path}" não é JSON válido`);
   }
 
-  return validateConfig(raw);
+  if (!isPlainObject(raw)) fail('config inválida: "config" deve ser um objeto');
+  return raw;
+}
+
+/** Lê um arquivo JSON de configuração e o valida. */
+export function loadConfig(path: string): AstroConfig {
+  return validateConfig(loadConfigRaw(path));
 }
 
 /**

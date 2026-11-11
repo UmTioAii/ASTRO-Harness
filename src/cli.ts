@@ -5,9 +5,8 @@ import { validateAllowlistFlags, type AllowlistFlags, type CliAllowlists } from 
 import { AllowlistInvalidError } from "./path-class";
 import { denyDisplayPath, isPermissionMode, nonInteractiveApprover, type PermissionMode } from "./permissions";
 import { defaultArgs, isInteractive } from "./cli-default";
-import { existsSync } from "node:fs";
-import { loadConfig, validateConfig } from "./config";
-import { loadEffectiveConfig } from "./provider/profiles";
+import { validateConfig } from "./config";
+import { loadEffectiveConfig, loadProjectConfig } from "./provider/profiles";
 import { ProfileManager } from "./provider/profile-manager";
 import { formatVaultImport, importVaultCredential } from "./provider/vault-import";
 import { Ledger } from "./ledger";
@@ -215,6 +214,7 @@ Opções:
   --allow-critical <path>   libera path do hard-block configurável (repete, máx 64; exige --i-understand; só em run/chat/tui)
   --allow-sensitive <glob>  declara glob como sensitive (repete, máx 64; só em run/chat/tui)
   --i-understand            confirma a leitura de --allow-critical (obrigatório na mesma invocação)
+  --no-global-config        ignora a camada global ($ASTRO_HOME/config.json)
   --help           mostra este texto
 
 Eval:
@@ -1025,9 +1025,13 @@ function formatBenchTable(report: BenchReport): string {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // `--no-global-config` vale para qualquer comando: sai do argv e vira o env.
+  // A flag nunca é o valor de outra opção: todo parser recusa valor que começa
+  // com "-" (`falta o valor de --task`), então ela é sempre uma flag.
+  if (argv.includes("--no-global-config")) process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
   let parsed: ParsedCommand;
   try {
-    parsed = parseArgs(argv);
+    parsed = parseArgs(argv.filter((arg) => arg !== "--no-global-config"));
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
     console.error(`erro: ${error.message}\n`);
@@ -1233,7 +1237,7 @@ async function main(argv: string[]): Promise<number> {
     try {
       const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
       const configPath = resolve(o.configPath);
-      const project = existsSync(configPath) ? loadConfig(configPath) : undefined;
+      const project = loadProjectConfig(configPath, { env: process.env });
       const manager = new ProfileManager({
         project, env: process.env,
         ...(o.provider === undefined ? {} : { provider: o.provider }),

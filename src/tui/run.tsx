@@ -1,10 +1,9 @@
 /** Bootstrap da TUI: Ink é carregado por import dinâmico só neste comando. */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { ConfigError, loadConfig } from "../config";
+import { ConfigError } from "../config";
 import { ProfileManager } from "../provider/profile-manager";
-import { NoProviderError, NO_PROVIDER_MESSAGE } from "../provider/profiles";
+import { NoProviderError, NO_PROVIDER_MESSAGE, loadProjectConfig } from "../provider/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
@@ -152,7 +151,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
     const vault = new Vault(vaultPath(opts.env ?? process.env));
     const { saveSecret, discardSecret } = createSecretHandlers(vault);
     const configPath = resolve(opts.configPath);
-    const project = existsSync(configPath) ? loadConfig(configPath) : undefined;
+    const project = loadProjectConfig(configPath, { env: opts.env });
     const manager = new ProfileManager({
       project,
       env: opts.env ?? process.env,
