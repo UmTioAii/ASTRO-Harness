@@ -140,7 +140,7 @@ export function assertNarrowed(
   assertQuotas(global.quota, merged.quota, "quota");
   // Provider: a credencial global não muda de host (comparação pela referência).
   // A referência é reservada pela camada global (config global + store): o
-  // projeto pode reusá-la no mesmo host, nunca em outro. O perfil efêmero de
+  // projeto pode reusá-la no mesmo endpoint, nunca em outro. O perfil efêmero de
   // env não entra: ele é por execução e a escolha do usuário não é bloqueio.
   const endpoints = new Map<string, Set<string>>();
   // As fontes globais (config global + store) por id e por referência: a
@@ -173,7 +173,7 @@ export function assertNarrowed(
       if (typeof ref !== "string") continue;
       const allowed = endpoints.get(credentialKey(key, ref));
       if (allowed !== undefined && !allowed.has(endpoint)) {
-        throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}" (a mesma referência já está declarada em outro host)`);
+        throw new ConfigError(`config inválida: o projeto redireciona a credencial global do provider "${id}" (a mesma referência já está declarada em outro endpoint)`);
       }
     }
   }
@@ -299,13 +299,13 @@ function credentialKey(key: string, ref: string): string {
   return `${key}=${isVaultRef(ref) ? ref : ref.toUpperCase()}`;
 }
 
-/** Endpoint do provider: host e tipo — a credencial não troca de host. */
+/** Endpoint do provider: URL canonicalizada e tipo — a credencial não troca de endpoint. */
 function endpointOf(provider: Record<string, unknown>): string {
   const baseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : String(provider.baseUrl);
   return `${canonicalUrl(baseUrl)}|${String(provider.kind)}`;
 }
 
-/** A mesma URL em outra grafia é o mesmo host. */
+/** A mesma URL em outra grafia é o mesmo endpoint. */
 function canonicalUrl(raw: string): string {
   try {
     const url = new URL(raw);
