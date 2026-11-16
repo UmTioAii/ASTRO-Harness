@@ -19,14 +19,19 @@ function toolSummary(call: { name: string; id: string; arguments: string }): str
   return `- \`${call.name}\` (${call.id}): \`${short}\``;
 }
 
+/** Remove controles/newlines e redige antes de interpolar metadado no Markdown. */
+function safeLabel(value: string): string {
+  return redactSecrets(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+}
+
 /** Metadados de anexo; `ref`/hash, nunca bytes, caminho ou conteúdo (ADR-0026). */
 function attachmentLines(message: ChatMessage): string[] {
   if (message.attachments === undefined || message.attachments.length === 0) return [];
   const lines = ["Anexos:", ""];
   for (const attachment of message.attachments) {
     const range = attachment.range === undefined ? "" : ` - linhas ${attachment.range.start}-${attachment.range.end}`;
-    const ref = attachment.ref === undefined ? "" : ` - ref ${redactSecrets(attachment.ref)}`;
-    lines.push(`- ${attachment.kind} ${redactSecrets(attachment.name)} (${attachment.sizeBytes} bytes, ${redactSecrets(attachment.mediaType)})${range}${ref}`);
+    const ref = attachment.ref === undefined ? "" : ` - ref ${safeLabel(attachment.ref)}`;
+    lines.push(`- ${attachment.kind} ${safeLabel(attachment.name)} (${attachment.sizeBytes} bytes, ${safeLabel(attachment.mediaType)})${range}${ref}`);
   }
   lines.push("");
   return lines;
