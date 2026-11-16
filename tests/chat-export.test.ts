@@ -56,6 +56,18 @@ describe("exportar sessão em Markdown (T2, #63)", () => {
     expect(markdown).not.toContain("deadbeefdeadbeef");
   });
 
+  test("sanitiza separadores/invisíveis e kind", () => {
+    const markdown = renderMarkdown(snapshot({ messages: [
+      { role: "user", content: "x", attachments: [
+        { kind: "text\u2028## Kind" as never, name: "a\u2028## Name", sizeBytes: 1, mediaType: "text/plain\u2029" },
+      ] },
+    ] }));
+    expect(markdown).not.toContain("\u2028");
+    expect(markdown).not.toContain("\u2029");
+    expect(markdown).not.toContain("\n## Kind");
+    expect(markdown).not.toContain("\n## Name");
+  });
+
   test("sanitiza newline/controle no nome e no mediaType", () => {
     const markdown = renderMarkdown(snapshot({ messages: [
       { role: "user", content: "x", attachments: [

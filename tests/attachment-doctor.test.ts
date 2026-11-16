@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectFacts, runChecks } from "../scripts/doctor";
@@ -69,6 +70,54 @@ describe("doctor de anexos (#392)", () => {
     expect(check?.detail).toMatch(/gravável|permiss|EACCES/i);
   });
 
+  test.skipIf(process.platform !== "win32")("ACL que nega subdiretório vira fail", () => {
+    const { astroHome, root } = sandbox();
+    const user = process.env.USERNAME ?? "";
+    try {
+      execFileSync("icacls", [root, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)F`], { stdio: "ignore" });
+      execFileSync("icacls", [root, "/deny", `${user}:(AD)`], { stdio: "ignore" });
+    } catch (error) {
+      throw new Error(`não foi possível preparar a ACL de teste: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      const report = runChecks(collectFacts(process.cwd(), { env: envFor(astroHome, root), checkPrivate: () => true }));
+      const check = report.checks.find((item) => item.label === "anexos");
+      expect(check?.level).toBe("fail");
+      expect(check?.detail).toContain("gravável");
+    } finally {
+      try { execFileSync("icacls", [root, "/remove:d", user], { stdio: "ignore" }); } catch { /* melhor esforço */ }
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("ACL que nega listagem vira fail", () => {
+    const { astroHome, root } = sandbox();
+    const user = process.env.USERNAME ?? "";
+    try {
+      execFileSync("icacls", [root, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)F`], { stdio: "ignore" });
+      execFileSync("icacls", [root, "/deny", `${user}:(RD)`], { stdio: "ignore" });
+    } catch (error) {
+      throw new Error(`não foi possível preparar a ACL de teste: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      const report = runChecks(collectFacts(process.cwd(), { env: envFor(astroHome, root), checkPrivate: () => true }));
+      const check = report.checks.find((item) => item.label === "anexos");
+      expect(check?.level).toBe("fail");
+      expect(check?.detail).toMatch(/gravável|permiss|EACCES|EPERM/i);
+    } finally {
+      try { execFileSync("icacls", [root, "/remove:d", user], { stdio: "ignore" }); } catch { /* melhor esforço */ }
+    }
+  });
+
+  test("probe de escrita que falha vira fail e não deixa temporário", () => {
+    const { astroHome, root } = sandbox();
+    const env = envFor(astroHome, root);
+    const report = runChecks(collectFacts(process.cwd(), { env, checkPrivate: () => true, probeWritable: () => false }));
+    const check = report.checks.find((item) => item.label === "anexos");
+    expect(check?.level).toBe("fail");
+    expect(check?.detail).toContain("gravável");
+    expect(readdirSync(root).filter((name) => name.startsWith(".doctor-"))).toEqual([]);
+  });
+
   test("lê TTL e teto da config global efetiva", () => {
     const { astroHome, root } = sandbox();
     writeFileSync(join(astroHome, "config.json"), JSON.stringify({
@@ -92,6 +141,7 @@ describe("doctor de anexos (#392)", () => {
     const facts = collectFacts(process.cwd(), { env, checkPrivate: () => true });
     expect(facts.attachments).toMatchObject({ exists: true, usageBytes: 3, artifacts: 1 });
     expect(facts.attachments.lastGc).toBeString();
+    expect(readdirSync(root).filter((name) => name.startsWith(".doctor-"))).toEqual([]);
     const check = runChecks(facts).checks.find((item) => item.label === "anexos");
     expect(check?.level).toBe("ok");
     expect(check?.detail).toContain("1 artefato");
