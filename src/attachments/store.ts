@@ -273,7 +273,11 @@ export class ArtifactStore {
     if (
       meta === null || typeof meta !== "object" || meta.schema !== "artifact/v1" ||
       meta.ref !== ref || meta.hash !== hash || typeof meta.mediaType !== "string" ||
-      typeof meta.bytes !== "number" || !Number.isFinite(meta.bytes) || meta.bytes < 0
+      typeof meta.bytes !== "number" || !Number.isFinite(meta.bytes) || meta.bytes < 0 ||
+      typeof meta.runId !== "string" || typeof meta.createdAt !== "string" ||
+      (meta.sessionId !== undefined && typeof meta.sessionId !== "string") ||
+      (meta.lineage !== undefined && (!Array.isArray(meta.lineage) ||
+        meta.lineage.some((id) => typeof id !== "string" || !/^[A-Za-z0-9-]+$/.test(id))))
     ) {
       throw new AttachmentError("attachment_image_invalid", `metadado adulterado: ${ref}`);
     }
@@ -345,14 +349,7 @@ export class ArtifactStore {
     const tmp = `${path}.${randomUUID()}.tmp`;
     try {
       writeFileSync(tmp, data, { mode: 0o600, flag: "wx" });
-      try {
-        renameSync(tmp, path);
-      } catch (error) {
-        if (process.platform !== "win32") throw error;
-        // Windows não substitui no rename; o arquivo é do harness (0600).
-        try { unlinkSync(path); } catch { /* destino ausente */ }
-        renameSync(tmp, path);
-      }
+      renameSync(tmp, path);
     } catch (error) {
       try { unlinkSync(tmp); } catch { /* melhor esforço */ }
       throw error;

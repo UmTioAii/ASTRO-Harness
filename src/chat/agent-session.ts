@@ -582,11 +582,10 @@ export class AgentSession {
 
     const summary = response.content.trim();
 
-    // O sumário mantém só o metadado dos anexos de usuário descartados (#392);
+    // O sumário mantém só o metadado dos anexos (inclusive o sumário anterior);
     // os bytes continuam fora do store e o export conserva os refs.
     const preservedAttachments = new Map<string, AttachmentMeta>();
     for (const message of this.#messages) {
-      if (message.role !== "user") continue;
       for (const attachment of message.attachments ?? []) {
         const key = attachment.ref ?? `${attachment.kind}:${attachment.name}:${attachment.sizeBytes}:${attachment.mediaType}`;
         preservedAttachments.set(key, attachment);
