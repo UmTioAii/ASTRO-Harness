@@ -544,6 +544,83 @@ describe("AgentSession.quotaStatus (#64)", () => {
   });
 });
 
+describe("AgentSession session hooks (#367)", () => {
+  test("emite onMessage/onToolResult na ordem do store para um turno com tool", async () => {
+    const { session, stop } = setup({ reply: (call) => call === 1 ? toolCall() : final("pronto") });
+    const events: string[] = [];
+    const chat = session({
+      onMessage: (event: { message: ChatMessage }) => events.push(`message:${event.message.role}`),
+      onToolResult: (event: { name: string }) => events.push(`tool:${event.name}`),
+    });
+    try {
+      await chat.send("use a tool");
+      expect(events).toEqual(["message:user", "message:assistant", "tool:ghost", "message:assistant"]);
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
+  test("hooks recebem payload sanitizado e sem imagens", async () => {
+    const hookSecret = ["ghp", "_", "hook", "payload", "123456"].join("");
+    const { session, stop } = setup({ reply: () => final(`eco ${hookSecret}`) });
+    const seen: unknown[] = [];
+    const chat = session({ onMessage: (event: unknown) => seen.push(event) });
+    try {
+      await chat.send(`prompt ${hookSecret}`);
+      const json = JSON.stringify(seen);
+      expect(json).not.toContain(hookSecret);
+      expect(json).toContain("[REDACTED]");
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
+  test("erro do observador não aborta o turno", async () => {
+    const { session, stop } = setup({ reply: (call) => call === 1 ? toolCall() : final("ok") });
+    let calls = 0;
+    const chat = session({
+      onMessage: () => { calls++; throw new Error("observer boom"); },
+      onToolResult: () => { calls++; throw new Error("observer boom"); },
+    });
+    try {
+      const result = await chat.send("oi");
+      expect(result.final).toBe("ok");
+      expect(calls).toBe(4); // user + assistant(tool call) + tool result + assistant final
+      expect(chat.messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool", "assistant"]);
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
+  test("não emite hooks depois de abort ou close", async () => {
+    const { session, stop } = setup();
+    let emitted = 0;
+    const chat = session({
+      onMessage: () => emitted++,
+      onToolResult: () => emitted++,
+    });
+    try {
+      await chat.send("ok");
+      expect(emitted).toBe(2); // controle positivo: user + assistant
+      emitted = 0;
+
+      const controller = new AbortController();
+      controller.abort();
+      await expect(chat.send("x", controller.signal)).rejects.toThrow();
+      expect(emitted).toBe(0);
+
+      chat.close();
+      await expect(chat.send("y")).rejects.toThrow(/encerrada/);
+      expect(emitted).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+});
+
 describe("AgentSession.budgetStatus (#63)", () => {
   test("sem budget na config devolve undefined", () => {
     const { session, stop } = setup();
