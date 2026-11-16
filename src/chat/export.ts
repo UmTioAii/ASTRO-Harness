@@ -21,7 +21,7 @@ function toolSummary(call: { name: string; id: string; arguments: string }): str
 
 /** Remove controles/newlines e redige antes de interpolar metadado no Markdown. */
 function safeLabel(value: string): string {
-  return redactSecrets(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  return redactSecrets(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]|\p{Cf}/gu, " ");
 }
 
 /** Metadados de anexo; `ref`/hash, nunca bytes, caminho ou conteúdo (ADR-0026). */
@@ -31,7 +31,7 @@ function attachmentLines(message: ChatMessage): string[] {
   for (const attachment of message.attachments) {
     const range = attachment.range === undefined ? "" : ` - linhas ${attachment.range.start}-${attachment.range.end}`;
     const ref = attachment.ref === undefined ? "" : ` - ref ${safeLabel(attachment.ref)}`;
-    lines.push(`- ${attachment.kind} ${safeLabel(attachment.name)} (${attachment.sizeBytes} bytes, ${safeLabel(attachment.mediaType)})${range}${ref}`);
+    lines.push(`- ${safeLabel(attachment.kind)} ${safeLabel(attachment.name)} (${attachment.sizeBytes} bytes, ${safeLabel(attachment.mediaType)})${range}${ref}`);
   }
   lines.push("");
   return lines;

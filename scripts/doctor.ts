@@ -2,7 +2,8 @@
  * Diagnóstico local do ambiente, sem rede: versões, dependências, artefatos,
  * config, credenciais por NOME e ASTRO_HOME. Nunca imprime valor de segredo (I-03).
  */
-import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -280,6 +281,19 @@ function readArtifactUsage(root: string): { usageBytes: number; artifacts: numbe
   return { usageBytes, artifacts };
 }
 
+/** `accessSync` não reflete ACL do Windows nem o bit de execução POSIX; prova a escrita. */
+function writableDirectory(root: string): boolean {
+  const probe = join(root, `.doctor-${randomUUID()}.tmp`);
+  try {
+    writeFileSync(probe, "", { flag: "wx", mode: 0o600 });
+    unlinkSync(probe);
+    return true;
+  } catch {
+    try { unlinkSync(probe); } catch { /* probe não chegou a existir */ }
+    return false;
+  }
+}
+
 function collectAttachmentFacts(
   env: NodeJS.ProcessEnv,
   checkPrivate?: (path: string) => boolean,
@@ -299,7 +313,10 @@ function collectAttachmentFacts(
       if (!statSync(root).isDirectory()) {
         return { ...base, exists: true, invalidReason: `raiz de artefato não é um diretório: ${root}` };
       }
-      accessSync(root, constants.R_OK | constants.W_OK);
+      accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
+      if (!writableDirectory(root)) {
+        return { ...base, exists: true, invalidReason: `raiz de artefato não é gravável: ${root}` };
+      }
     } catch (error) {
       return {
         ...base,
