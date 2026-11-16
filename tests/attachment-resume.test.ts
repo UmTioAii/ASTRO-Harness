@@ -115,6 +115,71 @@ describe("attachment resume (ADR-0026, #392)", () => {
     }
   });
 
+  test("rejeita artefato de sessão irmã mesmo com ancestral comum", () => {
+    const { session, artifact, meta, stop } = setup();
+    const sibling = artifact({ sessionId: "b", runId: "r1", lineage: ["a"] });
+    const chat = session();
+    try {
+      expect(() => chat.resume(snapshot("c", meta(sibling), ["a", "c"]))).toThrow(/attachment_image_invalid|outra sessão|sess/i);
+      expect(chat.messages.map((message) => message.role)).toEqual(["system"]);
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
+  test("não reidrata anexo na mensagem assistant do compact", () => {
+    const { session, artifact, meta, stop } = setup();
+    const saved = artifact();
+    const chat = session();
+    try {
+      chat.resume({
+        id: "s2", startedAt: "2026-10-01T10:00:00.000Z", model: "p/m1",
+        messages: [
+          { role: "user", content: "olhe", attachments: [meta(saved)] },
+          { role: "assistant", content: "resumo", attachments: [meta(saved)] },
+        ],
+        turns: 2, tokensIn: 10, tokensOut: 5, costUsd: 0.001, lineage: ["s1"],
+      });
+      expect(chat.messages.find((message) => message.role === "assistant")?.images).toBeUndefined();
+      expect(chat.snapshot().messages.find((message) => message.role === "assistant")?.attachments?.[0]?.ref).toBe(saved.ref);
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
+  test("limita a linhagem a 32 ids mantendo a sessão atual", () => {
+    const { session, stop } = setup();
+    const chat = session();
+    try {
+      const lineage = Array.from({ length: 32 }, (_, index) => `s${index}`);
+      chat.resume({
+        id: "s-new", startedAt: "2026-10-01T10:00:00.000Z", model: "p/m1",
+        messages: [{ role: "user", content: "ok" }], turns: 1, tokensIn: 1, tokensOut: 1, costUsd: null, lineage,
+      });
+      expect(chat.snapshot().lineage).toHaveLength(32);
+      expect(chat.snapshot().lineage?.at(-1)).toBe("s-new");
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
+  test("clear esquece a linhagem de imagens", () => {
+    const { session, artifact, meta, stop } = setup();
+    const chat = session();
+    try {
+      chat.resume(snapshot("s2", meta(artifact()), ["s1"]));
+      expect(chat.snapshot().lineage).toEqual(["s1", "s2"]);
+      chat.clear();
+      expect(chat.snapshot().lineage).toBeUndefined();
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
   test("compact preserva o metadado da imagem e remove os bytes", async () => {
     const { session, artifact, meta, stop } = setup();
     const saved = artifact(), chat = session();
