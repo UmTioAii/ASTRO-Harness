@@ -208,9 +208,14 @@ describe("REPL do chat (T1, #62)", () => {
     }
     try {
       await runRepl(new SecretSession(), new ScriptedIO(["olá", "/exit"]), { sessionApi });
-      const record = sessionApi.load("s1");
-      expect(JSON.stringify(record)).not.toContain(secret);
-      expect(JSON.stringify(record)).toContain("[REDACTED]");
+      const db = new Database(sessionApi.databasePath, { readonly: true });
+      try {
+        const raw = db.query("SELECT record_json FROM sessions WHERE id = ?").get("s1") as { record_json: string };
+        expect(raw.record_json).not.toContain(secret);
+        expect(raw.record_json).toContain("[REDACTED]");
+      } finally {
+        db.close();
+      }
     } finally {
       sessionApi.close();
       rmSync(root, { recursive: true, force: true });

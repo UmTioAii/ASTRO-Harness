@@ -438,7 +438,7 @@ test("/exit grava a sessão sanitizada antes de fechar", async () => {
   const sessionApi = new SessionApi(join(dir, ".astro"));
   let exits = 0;
   const instance = render(
-    <TuiApp session={new FakeSession()} cwd="/tmp/astro" sessionApi={sessionApi} onExit={() => { exits++; }} />,
+    <TuiApp session={new FakeSession()} cwd={dir} sessionApi={sessionApi} onExit={() => { exits++; }} />,
   );
   try {
     instance.stdin.write("/exit");
