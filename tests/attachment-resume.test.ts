@@ -195,6 +195,21 @@ describe("attachment resume (ADR-0026, #392)", () => {
     }
   });
 
+  test("segundo compact mantém o metadado do sumário anterior", async () => {
+    const { session, artifact, meta, stop } = setup();
+    const saved = artifact(), chat = session();
+    try {
+      chat.resume(snapshot("s2", meta(saved)));
+      await chat.compact();
+      await chat.compact();
+      const summary = chat.snapshot().messages.find((message) => message.role === "assistant");
+      expect(summary?.attachments?.[0]).toMatchObject({ ref: saved.ref, hash: saved.hash });
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
   test("GC na criação do store remove ref expirado e preserva o atual", () => {
     const { root, context, session, artifact, meta, stop } = setup();
     const current = artifact();

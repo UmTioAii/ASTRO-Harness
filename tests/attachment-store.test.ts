@@ -302,13 +302,16 @@ describe("ArtifactStore", () => {
     const store = new ArtifactStore(root, context(cwd, astroHome));
     const bytes = new TextEncoder().encode("meta");
     const saved = store.save(owner, bytes, "image/png");
-    expect(store.meta(saved.ref)).toMatchObject({ schema: "artifact/v1", ref: saved.ref, hash: saved.hash, bytes: bytes.length,
+    const good = store.meta(saved.ref);
+    expect(good).toMatchObject({ schema: "artifact/v1", ref: saved.ref, hash: saved.hash, bytes: bytes.length,
       mediaType: "image/png", sessionId: "s1", runId: "r1", lineage: ["s0"] });
     expect(() => store.meta("session-abc/def")).toThrow(/attachment_image_invalid|ref/i);
     const [dir, hash] = saved.ref.split("/");
     const metaPath = join(root, dir!, `${hash}.json`);
     writeFileSync(metaPath, JSON.stringify({ schema: "artifact/v1", ref: "outro/ref", hash }));
     expect(() => store.meta(saved.ref)).toThrow(/attachment_image_invalid|metadado|ref/i);
+    writeFileSync(metaPath, JSON.stringify({ ...good, lineage: "s0" }));
+    expect(() => store.meta(saved.ref)).toThrow(/attachment_image_invalid|metadado/i);
     unlinkSync(metaPath);
     expect(() => store.meta(saved.ref)).toThrow(/attachment_image_invalid|ausente|metadado/i);
   });
