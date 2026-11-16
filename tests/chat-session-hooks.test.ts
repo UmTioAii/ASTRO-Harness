@@ -29,13 +29,22 @@ describe("session hooks (#367)", () => {
     expect(sanitized.toolCalls?.[0]?.arguments).not.toContain(secret);
   });
 
-  test("boundHookToolResult redige e limita o resultado", () => {
+  test("boundHookToolResult redige e limita o resultado incluindo o marcador", () => {
     const result = `${secret} ${"x".repeat(MAX_HOOK_TOOL_RESULT_CHARS + 50)}`;
     const bounded = boundHookToolResult(result);
 
     expect(bounded).not.toContain(secret);
     expect(bounded.endsWith("[truncated]")).toBe(true);
-    expect(Array.from(bounded).length).toBeLessThanOrEqual(MAX_HOOK_TOOL_RESULT_CHARS + "\n[truncated]".length);
+    expect(Array.from(bounded).length).toBe(MAX_HOOK_TOOL_RESULT_CHARS);
+
+    expect(boundHookToolResult("x".repeat(MAX_HOOK_TOOL_RESULT_CHARS - 1)))
+      .toBe("x".repeat(MAX_HOOK_TOOL_RESULT_CHARS - 1));
+    expect(boundHookToolResult("x".repeat(MAX_HOOK_TOOL_RESULT_CHARS)))
+      .toBe("x".repeat(MAX_HOOK_TOOL_RESULT_CHARS));
+
+    const over = boundHookToolResult("x".repeat(MAX_HOOK_TOOL_RESULT_CHARS + 1));
+    expect(over.endsWith("[truncated]")).toBe(true);
+    expect(Array.from(over).length).toBe(MAX_HOOK_TOOL_RESULT_CHARS);
   });
 
   test("erro do observador não escapa de emitHook", () => {
