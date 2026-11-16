@@ -517,6 +517,7 @@ export class AgentSession {
     if (this.#busy) throw new Error("turno em andamento");
     this.#messages = [{ role: "system", content: this.#systemPrompt }];
     this.#resumedFrom = undefined;
+    this.#lineage = [];
   }
 
   /** Compacta o histórico: pede ao provider um sumário sem tools, substitui mensagens (mantém system). */
@@ -625,16 +626,18 @@ export class AgentSession {
     const store = this.#imageStore(refs);
     return messages.map((message) => {
       const clean = withoutImages(message);
+      // Só mensagem de usuário carrega imagem no wire; o metadado do sumário
+      // (assistant) fica no store/export, mas não vira image_url de assistant.
+      if (message.role !== "user") return clean;
       const images: ImagePart[] = [];
       for (const attachment of message.attachments ?? []) {
         if (attachment.kind !== "image" || attachment.ref === undefined) continue;
-        const bytes = store.read(attachment.ref);
         const meta = store.meta(attachment.ref);
-        const allowed = (meta.sessionId !== undefined && lineage.includes(meta.sessionId))
-          || (meta.lineage?.some((id) => lineage.includes(id)) ?? false);
+        const allowed = meta.sessionId !== undefined && lineage.includes(meta.sessionId);
         if (!allowed) {
           throw new AttachmentError("attachment_image_invalid", `imagem de outra sessão: ${attachment.ref}`);
         }
+        const bytes = store.read(attachment.ref);
         images.push({ mediaType: meta.mediaType, dataBase64: Buffer.from(bytes).toString("base64") });
       }
       return images.length === 0 ? clean : { ...clean, images };
@@ -645,7 +648,7 @@ export class AgentSession {
   resume(snapshot: SessionSnapshot): void {
     if (this.#busy) throw new Error("turno em andamento");
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
-    const lineage = [...new Set([...(snapshot.lineage ?? []), snapshot.id])];
+    const lineage = [...new Set([...(snapshot.lineage ?? []), snapshot.id])].slice(-32);
     const messages = this.#rehydrate(snapshot.messages.filter((message) => message.role !== "system"), lineage);
     this.#lineage = lineage;
     this.#messages = [
