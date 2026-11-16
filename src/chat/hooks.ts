@@ -42,13 +42,19 @@ export function sanitizeHookMessage(message: ChatMessage): ChatMessage {
   return sanitizeValue(rest) as ChatMessage;
 }
 
-/** Redige e limita o resultado da tool; o marcador `[truncated]` fica no fim. */
+/** Redige um texto isolado do payload do hook (I-03). */
+export function sanitizeHookText(value: string): string {
+  return redactSecrets(value);
+}
+
+/** Redige e limita o resultado da tool; o teto inclui o marcador `[truncated]`. */
 export function boundHookToolResult(result: string): string {
   const redacted = redactSecrets(result);
   const chars = Array.from(redacted);
   if (chars.length <= MAX_HOOK_TOOL_RESULT_CHARS) return redacted;
+  const marker = "\n[truncated]";
   // `Array.from` evita cortar um par surrogate no meio.
-  return `${chars.slice(0, MAX_HOOK_TOOL_RESULT_CHARS).join("")}\n[truncated]`;
+  return `${chars.slice(0, MAX_HOOK_TOOL_RESULT_CHARS - marker.length).join("")}${marker}`;
 }
 
 /** Chama o observador; erro dele nunca aborta o turno (#367). */

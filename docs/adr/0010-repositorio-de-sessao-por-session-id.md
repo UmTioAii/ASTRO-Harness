@@ -26,7 +26,7 @@ T1 (#62) persiste a conversa do REPL num JSON plano `.astro/sessions/<ts>.json`.
 
 ## Hooks de sessão (#367)
 
-O runtime expõe dois observadores opcionais, sem consumidor neste slice: `onMessage({sessionId, message, at})` dispara uma vez por mensagem `user`/`assistant` gravada, e `onToolResult({sessionId, toolCallId, name, result, at})` uma vez por resultado de tool. Os hooks são síncronos e disparam ao fim do turno, na ordem do store. Os payloads são sanitizados na origem (I-03; `redactSecrets` em todo texto, sem `images`) e o resultado da tool é limitado a 16.384 caracteres; o store mantém o conteúdo completo. Erro do observador nunca aborta o turno, e nenhum hook dispara após abort/close (I-19). O contrato fica em `src/chat/hooks.ts`.
+O runtime expõe dois observadores opcionais, sem consumidor neste slice: `onMessage({sessionId, message, at})` dispara uma vez por mensagem `user`/`assistant` gravada, e `onToolResult({sessionId, toolCallId, name, result, at})` uma vez por resultado de tool. Os hooks são síncronos e disparam ao fim do turno de `send`, na ordem do store; compactação e resume não emitem. Os payloads são sanitizados na origem (I-03; `redactSecrets` em todo texto, sem `images`) e o resultado da tool é limitado a 16.384 caracteres; o store mantém o conteúdo completo. Erro do observador nunca aborta o turno, e nenhum hook dispara após abort/close (I-19). O contrato fica em `src/chat/hooks.ts`.
 
 ## Alternativas descartadas
 

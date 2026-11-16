@@ -32,7 +32,7 @@ import { DEFAULT_SYSTEM_PROMPT, safePrompt } from "../session";
 import { guardContext } from "./context-guard";
 import { isFatalSessionError } from "./session-errors";
 import { runHealthCheck, testProvider as probeProvider, type HealthCheck, type HealthReport } from "../health";
-import { boundHookToolResult, emitHook, sanitizeHookMessage, type SessionMessageHook, type SessionToolResultHook } from "./hooks";
+import { boundHookToolResult, emitHook, sanitizeHookMessage, sanitizeHookText, type SessionMessageHook, type SessionToolResultHook } from "./hooks";
 
 export interface AgentSessionOptions {
   configPath: string;
@@ -252,17 +252,23 @@ export class AgentSession {
   }
 
   /** Dispara os hooks do turno na ordem do store; observador nunca aborta o turno. */
-  #emitTurnHooks(historyLength: number, messages: readonly ChatMessage[], final: string): void {
+  #emitTurnHooks(messages: readonly ChatMessage[]): void {
     if (this.#onMessage === undefined && this.#onToolResult === undefined) return;
     const names = new Map<string, string>();
-    for (const message of messages.slice(historyLength)) {
+    for (const message of messages) {
       for (const call of message.toolCalls ?? []) names.set(call.id, call.name);
+    }
+    // `appended` já começa no prompt do turno; no fallback com `report.messages`
+    // o histórico anterior vem antes, então corta no último `user` (#367).
+    const start = messages.findLastIndex((message) => message.role === "user");
+    if (start < 0) return;
+    for (const message of messages.slice(start)) {
       if (message.role === "tool") {
         const id = message.toolCallId ?? "";
         emitHook(this.#onToolResult, {
           sessionId: this.id,
-          toolCallId: id,
-          name: names.get(id) ?? "unknown",
+          toolCallId: sanitizeHookText(id),
+          name: sanitizeHookText(names.get(id) ?? "unknown"),
           result: boundHookToolResult(message.content),
           at: new Date().toISOString(),
         });
@@ -276,13 +282,6 @@ export class AgentSession {
         });
       }
     }
-    const last = messages.at(-1);
-    if (last?.role === "assistant" && last.content === final) return;
-    emitHook(this.#onMessage, {
-      sessionId: this.id,
-      message: sanitizeHookMessage({ role: "assistant", content: final }),
-      at: new Date().toISOString(),
-    });
   }
 
   /** Store de imagem criado só na primeira imagem; raiz resolvida uma vez no construtor. */
@@ -694,7 +693,7 @@ export class AgentSession {
       this.#tokensOut += report.tokensOut;
       if (report.costUsd === null) this.#costKnown = false;
       else this.#costUsd += report.costUsd;
-      this.#emitTurnHooks(history.length, report.messages ?? guard.messages, report.final);
+      this.#emitTurnHooks(report.appended ?? [...(report.messages ?? guard.messages), { role: "assistant", content: report.final }]);
 
       return {
         final: report.final,
