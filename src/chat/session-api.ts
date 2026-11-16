@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "../sanitize-external";
@@ -191,15 +191,30 @@ export class SessionApi {
       return deleted;
     });
     const deleted = transaction();
-    if (deleted) {
-      try {
-        // exclusão explícita também purga a cópia JSON legada em texto plano (#428)
-        new SessionStore(join(this.astroDir, "sessions")).deleteById(id);
-      } catch {
-        // tombstone ainda impede a reimportação; a purga é melhor esforço
+    // Retry a purga mesmo quando a linha já não existe: um delete anterior pode ter deixado a cópia.
+    if (deleted || this.#isTombstoned(id)) {
+      if (!this.#purgeLegacy(id)) {
+        // sem caminho absoluto nem conteúdo; o tombstone ainda segura enquanto o banco existir
+        console.warn("aviso: cópia legada da sessão não removida; a sessão não volta enquanto o banco existir");
       }
     }
     return deleted;
+  }
+
+  /** Remove cópias legadas por id, inclusive as ilegíveis (nome carrega o id), e confirma o resultado. */
+  #purgeLegacy(id: string): boolean {
+    const dir = join(this.astroDir, "sessions");
+    try { new SessionStore(dir).deleteById(id); } catch { /* a varredura por nome abaixo cobre */ }
+    const suffix = `-${id}.json`;
+    try {
+      for (const name of readdirSync(dir)) {
+        if (!name.endsWith(suffix)) continue;
+        try { unlinkSync(join(dir, name)); } catch { /* confirmado abaixo */ }
+      }
+      return !readdirSync(dir).some((name) => name.endsWith(suffix));
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
   }
 
   close(): void {
