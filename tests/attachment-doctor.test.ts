@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectFacts, runChecks } from "../scripts/doctor";
@@ -58,6 +58,15 @@ describe("doctor de anexos (#392)", () => {
     const check = report.checks.find((item) => item.label === "anexos");
     expect(check?.level).toBe("fail");
     expect(check?.detail).toContain("diretório");
+  });
+
+  test.skipIf(process.platform === "win32")("raiz sem busca/escrita vira fail", () => {
+    const { astroHome, root } = sandbox();
+    chmodSync(root, 0o600);
+    const report = runChecks(collectFacts(process.cwd(), { env: envFor(astroHome, root), checkPrivate: () => true }));
+    const check = report.checks.find((item) => item.label === "anexos");
+    expect(check?.level).toBe("fail");
+    expect(check?.detail).toMatch(/gravável|permiss|EACCES/i);
   });
 
   test("lê TTL e teto da config global efetiva", () => {
