@@ -183,7 +183,7 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       await runRepl(session, io, { cwd, interactive: true });
       expect(bodies).toHaveLength(0);
       expect(io.outputs.join("\n")).toContain("não aprovado");
-      expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
+      expect(existsSync(join(home, "attachments")) ? readdirSync(join(home, "attachments")) : []).toHaveLength(0);
       expect(existsSync(join(cwd, ".astro", "audit.jsonl")) ? readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8") : "").not.toContain("attachment.approved");
     } finally { stop(); }
   });
@@ -195,7 +195,7 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       expect(bodies).toHaveLength(0);
       expect(io.outputs.join("\n")).toContain("não aprovado");
       expect(io.prompts.join("\n")).not.toContain("aprovar envio?");
-      expect(readdirSync(join(home, "attachments"))).toHaveLength(0);
+      expect(existsSync(join(home, "attachments")) ? readdirSync(join(home, "attachments")) : []).toHaveLength(0);
     } finally { stop(); }
   });
 
