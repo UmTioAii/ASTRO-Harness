@@ -64,8 +64,7 @@ function snapshot(id: string, meta: AttachmentMeta, lineage: string[] = ["s1"]) 
 describe("attachment resume (ADR-0026, #392)", () => {
   test("resume reidrata a mesma imagem e o snapshot não persiste base64", async () => {
     const { session, artifact, meta, bodies, stop } = setup();
-    const saved = artifact();
-    const chat = session();
+    const saved = artifact(), chat = session();
     try {
       chat.resume(snapshot("s2", meta(saved)));
       const user = chat.messages.find((message) => message.role === "user");
@@ -118,8 +117,7 @@ describe("attachment resume (ADR-0026, #392)", () => {
 
   test("compact preserva o metadado da imagem e remove os bytes", async () => {
     const { session, artifact, meta, stop } = setup();
-    const saved = artifact();
-    const chat = session();
+    const saved = artifact(), chat = session();
     try {
       chat.resume(snapshot("s2", meta(saved)));
       await chat.compact();

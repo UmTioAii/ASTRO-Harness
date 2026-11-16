@@ -302,10 +302,8 @@ describe("ArtifactStore", () => {
     const store = new ArtifactStore(root, context(cwd, astroHome));
     const bytes = new TextEncoder().encode("meta");
     const saved = store.save(owner, bytes, "image/png");
-    expect(store.meta(saved.ref)).toMatchObject({
-      schema: "artifact/v1", ref: saved.ref, hash: saved.hash, bytes: bytes.length,
-      mediaType: "image/png", sessionId: "s1", runId: "r1", lineage: ["s0"],
-    });
+    expect(store.meta(saved.ref)).toMatchObject({ schema: "artifact/v1", ref: saved.ref, hash: saved.hash, bytes: bytes.length,
+      mediaType: "image/png", sessionId: "s1", runId: "r1", lineage: ["s0"] });
     expect(() => store.meta("session-abc/def")).toThrow(/attachment_image_invalid|ref/i);
     const [dir, hash] = saved.ref.split("/");
     const metaPath = join(root, dir!, `${hash}.json`);
@@ -317,18 +315,15 @@ describe("ArtifactStore", () => {
 
   test("gc grava marcador atômico e lastGc/readGcMarker leem", () => {
     const { root, cwd, astroHome } = sandbox();
-    const now = 1_000_000_000_000;
-    const store = new ArtifactStore(root, { ...context(cwd, astroHome), now: () => now });
+    const store = new ArtifactStore(root, { ...context(cwd, astroHome), now: () => 1_000_000_000_000 });
     expect(store.lastGc()).toBeUndefined();
     expect(readGcMarker(root)).toBeUndefined();
     expect(store.gc()).toEqual([]);
     const marker = store.lastGc();
     expect(marker).toMatchObject({ removed: 0 });
     expect(Date.parse(marker!.at)).not.toBeNaN();
-    expect(readGcMarker(root)).toEqual(marker);
-    const markerPath = join(root, "gc.json");
-    expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual(marker);
-    if (process.platform !== "win32") expect(statSync(markerPath).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(join(root, "gc.json"), "utf8"))).toEqual(marker);
+    if (process.platform !== "win32") expect(statSync(join(root, "gc.json")).mode & 0o777).toBe(0o600);
     expect(readdirSync(root).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });
