@@ -3,7 +3,7 @@
  * config, credenciais por NOME e ASTRO_HOME. Nunca imprime valor de segredo (I-03).
  */
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -281,22 +281,28 @@ function readArtifactUsage(root: string): { usageBytes: number; artifacts: numbe
   return { usageBytes, artifacts };
 }
 
-/** `accessSync` não reflete ACL do Windows nem o bit de execução POSIX; prova a escrita. */
+/** `accessSync` não reflete ACL do Windows nem o bit de execução POSIX; prova escrita/leitura/listagem. */
 function writableDirectory(root: string): boolean {
   const probe = join(root, `.doctor-${randomUUID()}.tmp`);
   try {
-    writeFileSync(probe, "", { flag: "wx", mode: 0o600 });
-    unlinkSync(probe);
+    // O store cria um subdiretório por chave antes de gravar; no Windows AD e WD são direitos distintos.
+    mkdirSync(probe, { mode: 0o700 });
+    const file = join(probe, "probe");
+    writeFileSync(file, "", { flag: "wx", mode: 0o600 });
+    if (!readdirSync(root).some((name) => name.startsWith(".doctor-"))) return false;
+    readFileSync(file);
     return true;
   } catch {
-    try { unlinkSync(probe); } catch { /* probe não chegou a existir */ }
     return false;
+  } finally {
+    try { rmSync(probe, { recursive: true, force: true }); } catch { /* melhor esforço */ }
   }
 }
 
 function collectAttachmentFacts(
   env: NodeJS.ProcessEnv,
   checkPrivate?: (path: string) => boolean,
+  probeWritable?: (path: string) => boolean,
 ): DoctorFacts["attachments"] {
   const config = readAttachmentConfig(env);
   const astroHome = resolveAstroHome(env);
@@ -314,7 +320,7 @@ function collectAttachmentFacts(
         return { ...base, exists: true, invalidReason: `raiz de artefato não é um diretório: ${root}` };
       }
       accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
-      if (!writableDirectory(root)) {
+      if (!(probeWritable ?? writableDirectory)(root)) {
         return { ...base, exists: true, invalidReason: `raiz de artefato não é gravável: ${root}` };
       }
     } catch (error) {
@@ -340,7 +346,11 @@ function collectAttachmentFacts(
 /** Coleta fatos reais do checkout e do ambiente atual (env/checkPrivate injetáveis). */
 export function collectFacts(
   root: string,
-  options: { env?: NodeJS.ProcessEnv; checkPrivate?: (path: string) => boolean } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    checkPrivate?: (path: string) => boolean;
+    probeWritable?: (path: string) => boolean;
+  } = {},
 ): DoctorFacts {
   const env = options.env ?? process.env;
   return {
@@ -351,7 +361,7 @@ export function collectFacts(
     artifacts: ARTIFACTS.map((path) => ({ path, exists: existsSync(join(root, path)) })),
     config: readConfig(),
     astroHome: readAstroHome(env),
-    attachments: collectAttachmentFacts(env, options.checkPrivate),
+    attachments: collectAttachmentFacts(env, options.checkPrivate, options.probeWritable),
     env,
   };
 }
