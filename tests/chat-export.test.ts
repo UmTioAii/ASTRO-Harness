@@ -42,6 +42,19 @@ describe("exportar sessão em Markdown (T2, #63)", () => {
     expect(readFileSync(path, "utf8")).toContain("olá");
   });
 
+  test("exporta metadados de anexo e nunca o conteúdo/base64", () => {
+    const markdown = renderMarkdown(snapshot({ messages: [
+      { role: "user", content: "olhe", attachments: [
+        { kind: "image", name: "a.png", sizeBytes: 70, mediaType: "image/png", ref: "session-abc/def", hash: "h" },
+        { kind: "text", name: "notas.txt", sizeBytes: 12, mediaType: "text/plain", range: { start: 1, end: 2 } },
+      ] },
+    ] }));
+    expect(markdown).toContain("- image a.png (70 bytes, image/png) - ref session-abc/def");
+    expect(markdown).toContain("- text notas.txt (12 bytes, text/plain) - linhas 1-2");
+    expect(markdown).not.toContain("dataBase64");
+    expect(markdown).not.toContain("iVBOR");
+  });
+
   test("aceita caminho relativo dentro do cwd e recusa fora", () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-export-rel-"));
     const path = exportSession(snapshot(), cwd, "notas/transcript.md");
