@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectFacts, runChecks } from "../scripts/doctor";
@@ -39,12 +39,37 @@ describe("doctor de anexos (#392)", () => {
 
   test("raiz inválida vira fail com o motivo redigido", () => {
     const { astroHome } = sandbox();
-    const root = join(process.cwd(), "attachments");
+    const secret = ["sk", "-", "live", "-", "SECRET", "123456789"].join("");
+    const root = join(process.cwd(), secret);
     const env = envFor(astroHome, root);
     const report = runChecks(collectFacts(process.cwd(), { env, checkPrivate: () => true }));
     const check = report.checks.find((item) => item.label === "anexos");
     expect(check?.level).toBe("fail");
     expect(check?.detail).toContain("fora do cwd");
+    expect(check?.detail).not.toContain(secret);
+  });
+
+  test("raiz que é arquivo vira fail, não ok", () => {
+    const { base, astroHome } = sandbox();
+    const root = join(base, "not-a-directory");
+    writeFileSync(root, "x");
+    const env = envFor(astroHome, root);
+    const report = runChecks(collectFacts(process.cwd(), { env, checkPrivate: () => true }));
+    const check = report.checks.find((item) => item.label === "anexos");
+    expect(check?.level).toBe("fail");
+    expect(check?.detail).toContain("diretório");
+  });
+
+  test("lê TTL e teto da config global efetiva", () => {
+    const { astroHome, root } = sandbox();
+    writeFileSync(join(astroHome, "config.json"), JSON.stringify({
+      providers: { p: { kind: "openai-compat", baseUrl: "http://127.0.0.1:1/v1", credentialRef: "KEY" } },
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "p/m1", tools: [] },
+      attachments: { artifactTtlDays: 30, artifactMaxBytes: 4096 },
+    }));
+    const facts = collectFacts(process.cwd(), { env: envFor(astroHome, root), checkPrivate: () => true });
+    expect(facts.attachments).toMatchObject({ ttlDays: 30, maxBytes: 4096 });
   });
 
   test("raiz válida reporta uso, artefatos e último GC", () => {

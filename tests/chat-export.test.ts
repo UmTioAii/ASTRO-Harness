@@ -43,16 +43,27 @@ describe("exportar sessão em Markdown (T2, #63)", () => {
   });
 
   test("exporta metadados de anexo e nunca o conteúdo/base64", () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     const markdown = renderMarkdown(snapshot({ messages: [
-      { role: "user", content: "olhe", attachments: [
-        { kind: "image", name: "a.png", sizeBytes: 70, mediaType: "image/png", ref: "session-abc/def", hash: "h" },
+      { role: "user", content: "olhe", images: [{ mediaType: "image/png", dataBase64: png }], attachments: [
+        { kind: "image", name: "a.png", sizeBytes: 70, mediaType: "image/png", ref: "session-abc/def", hash: "deadbeefdeadbeef" },
         { kind: "text", name: "notas.txt", sizeBytes: 12, mediaType: "text/plain", range: { start: 1, end: 2 } },
       ] },
     ] }));
     expect(markdown).toContain("- image a.png (70 bytes, image/png) - ref session-abc/def");
     expect(markdown).toContain("- text notas.txt (12 bytes, text/plain) - linhas 1-2");
-    expect(markdown).not.toContain("dataBase64");
-    expect(markdown).not.toContain("iVBOR");
+    expect(markdown).not.toContain(png);
+    expect(markdown).not.toContain("deadbeefdeadbeef");
+  });
+
+  test("sanitiza newline/controle no nome e no mediaType", () => {
+    const markdown = renderMarkdown(snapshot({ messages: [
+      { role: "user", content: "x", attachments: [
+        { kind: "text", name: "a\n## Assistente", sizeBytes: 1, mediaType: "text/plain\n## Tool" },
+      ] },
+    ] }));
+    expect(markdown).not.toContain("\n## Assistente");
+    expect(markdown).not.toContain("\n## Tool");
   });
 
   test("aceita caminho relativo dentro do cwd e recusa fora", () => {
