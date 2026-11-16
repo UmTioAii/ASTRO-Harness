@@ -6,6 +6,8 @@ import { redactSecrets } from "../sanitize-external";
 import { MAX_SESSION_BYTES, sanitizeSessionName, SessionStore, sanitizeSessionRecord, type SessionRecord } from "./store";
 
 const DATABASE_SCHEMA_VERSION = 3;
+/** Stamp de `SessionStore.write` (startedAt com `:`/`.` trocados por `-`). */
+const LEGACY_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3})?(?:Z|[+-]\d{2}-\d{2})$/;
 
 interface SessionRow {
   record_json: string;
@@ -209,6 +211,8 @@ export class SessionApi {
     try {
       for (const name of readdirSync(dir)) {
         if (!name.endsWith(suffix)) continue;
+        // `<stamp>-<id>.json`: sem o stamp exato, `my-s1` casaria com o id `s1`.
+        if (!LEGACY_STAMP.test(name.slice(0, -suffix.length))) continue;
         try { unlinkSync(join(dir, name)); } catch { /* confirmado abaixo */ }
       }
       return !readdirSync(dir).some((name) => name.endsWith(suffix));
