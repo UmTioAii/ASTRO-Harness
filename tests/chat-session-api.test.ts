@@ -287,13 +287,14 @@ describe("session API JSON migration", () => {
       const apiInstance = new SessionApi(astroDir);
       api = apiInstance;
       expect(apiInstance.delete("deleted-session")).toBe(true);
-      expect(legacy.list().map(({ id }) => id)).toEqual(["deleted-session"]); // o store JSON não é modificado (#366)
+      expect(legacy.list().map(({ id }) => id)).toEqual([]); // exclusão explícita purga o JSON legado (#428)
       legacy.write(makeRecord({ id: "new-json-session", turns: 2 }));
 
       expect(apiInstance.list().map(({ id }) => id)).toEqual(["new-json-session"]);
       expect(() => apiInstance.load("deleted-session")).toThrow(/não encontrada/);
       apiInstance.close();
       api = undefined;
+      rmSync(join(astroDir, "sessions.db"), { force: true });
 
       const reopenedApi = new SessionApi(astroDir);
       reopened = reopenedApi;
@@ -302,6 +303,23 @@ describe("session API JSON migration", () => {
     } finally {
       api?.close();
       reopened?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("save refuses a tombstoned session; create can recreate it (#428)", () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-session-api-delete-save-"));
+    const api = new SessionApi(join(root, ".astro"));
+    try {
+      const record = makeRecord({ id: "deleted-save", turns: 1 });
+      api.create(record);
+      expect(api.delete("deleted-save")).toBe(true);
+      expect(() => api.save({ ...record, turns: 2 })).toThrow(/excluída|tombstone/i);
+      expect(api.list()).toEqual([]);
+      expect(api.create(record)).toMatchObject({ id: "deleted-save" });
+      expect(api.list()).toHaveLength(1);
+    } finally {
+      api.close();
       rmSync(root, { recursive: true, force: true });
     }
   });
