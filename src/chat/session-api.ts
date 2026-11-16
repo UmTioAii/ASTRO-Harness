@@ -58,7 +58,7 @@ export function openSessionApi(astroDir: string): SessionApi | undefined {
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error));
     console.error(
-      `aviso: sessões SQLite indisponíveis (${message}); /sessions e /resume desativados`,
+      `aviso: sessões SQLite indisponíveis (${message}); /sessions, /resume, auto-save e /save desativados; use /export para salvar o transcript`,
     );
     return undefined;
   }
@@ -130,9 +130,15 @@ export class SessionApi {
 
   /** Cria ou substitui uma sessão com a mesma sanitização de escrita do JSON v1. */
   save(value: SessionRecord): SessionRecord {
+    // exclusão explícita é definitiva para autosave; `create` é a recriação explícita (#428)
+    if (this.#isTombstoned(value.id)) throw new Error(`sessão excluída: ${value.id}`);
     // o snapshot do runtime não carrega `name`: o nome dado no rename sobrevive ao auto-save
     const name = value.name ?? this.#storedName(value.id);
     return this.#writeRecord(this.#prepare(name === undefined ? value : { ...value, name }), true);
+  }
+
+  #isTombstoned(id: string): boolean {
+    return this.#db.query("SELECT id FROM session_tombstones WHERE id = ?").get(id) !== null;
   }
 
   /** Nome já gravado da sessão; `undefined` quando não há nome ou não há sessão. */
@@ -184,7 +190,16 @@ export class SessionApi {
       }
       return deleted;
     });
-    return transaction();
+    const deleted = transaction();
+    if (deleted) {
+      try {
+        // exclusão explícita também purga a cópia JSON legada em texto plano (#428)
+        new SessionStore(join(this.astroDir, "sessions")).deleteById(id);
+      } catch {
+        // tombstone ainda impede a reimportação; a purga é melhor esforço
+      }
+    }
+    return deleted;
   }
 
   close(): void {
