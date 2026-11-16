@@ -347,6 +347,24 @@ describe("session API JSON migration", () => {
     }
   });
 
+  test("delete não remove a cópia legada de outro id com sufixo parecido (#428)", () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-session-api-suffix-"));
+    const astroDir = join(root, ".astro");
+    const legacy = new SessionStore(join(astroDir, "sessions"));
+    legacy.write(makeRecord({ id: "s1", turns: 1 }));
+    legacy.write(makeRecord({ id: "my-s1", turns: 1 }));
+    const api = new SessionApi(astroDir);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(api.delete("s1")).toBe(true);
+      expect(legacy.list().map(({ id }) => id)).toEqual(["my-s1"]);
+    } finally {
+      warning.mockRestore();
+      api.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("save refuses a tombstoned session; create can recreate it (#428)", () => {
     const root = mkdtempSync(join(tmpdir(), "astro-session-api-delete-save-"));
     const api = new SessionApi(join(root, ".astro"));
