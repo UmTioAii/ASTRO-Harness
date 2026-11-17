@@ -209,10 +209,12 @@ function sanitizeValue(value: unknown, key?: string, attachmentMeta = false, har
   }
   const field = (key ?? "").toLowerCase();
   if (field === "ref") {
-    return attachmentMeta && ARTIFACT_REF_PATTERN.test(value) ? value : "[REDACTED]";
+    if (attachmentMeta && ARTIFACT_REF_PATTERN.test(value)) return value;
+    return ARTIFACT_REF_PATTERN.test(value) ? "[REDACTED]" : redactSecrets(value);
   }
   if (field === "hash") {
-    return attachmentMeta && SHA256_HEX.test(value) ? value : "[REDACTED]";
+    if (attachmentMeta && SHA256_HEX.test(value)) return value;
+    return SHA256_HEX.test(value) ? "[REDACTED]" : redactSecrets(value);
   }
   return redactSecrets(value);
 }

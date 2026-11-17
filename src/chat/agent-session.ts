@@ -629,8 +629,12 @@ export class AgentSession {
       // (assistant) fica no store/export, mas não vira image_url de assistant.
       if (message.role !== "user") return clean;
       const images: ImagePart[] = [];
+      const kept: AttachmentMeta[] = [];
       for (const attachment of message.attachments ?? []) {
-        if (attachment.kind !== "image" || attachment.ref === undefined) continue;
+        if (attachment.kind !== "image" || attachment.ref === undefined) {
+          kept.push(attachment);
+          continue;
+        }
         try {
           const meta = store.meta(attachment.ref);
           const allowed = meta.sessionId !== undefined && lineage.includes(meta.sessionId);
@@ -639,13 +643,14 @@ export class AgentSession {
           }
           const bytes = store.read(attachment.ref);
           images.push({ mediaType: meta.mediaType, dataBase64: Buffer.from(bytes).toString("base64") });
+          kept.push(attachment);
         } catch (error) {
-          // Snapshot antigo com ref redigido ou artefato ausente/expirado não
-          // pode derrubar o resume: descarta a imagem, avisa e mantém a
-          // sessão retomável (#252). Integridade/linhagem continuam fatais.
+          // Snapshot antigo com ref redigido ou artefato/sidecar ausente não
+          // pode derrubar o resume: descarta a imagem e o metadado, avisa e
+          // mantém a sessão retomável (#252). Integridade/linhagem são fatais.
           const unavailable = error instanceof AttachmentError
-            && error.code === "attachment_image_invalid"
-            && (attachment.ref.includes("[REDACTED]") || /ausente|expirado/i.test(error.message));
+            && (error.code === "attachment_artifact_missing"
+              || (error.code === "attachment_image_invalid" && attachment.ref.includes("[REDACTED]")));
           if (unavailable) {
             console.warn("aviso: imagem indisponível ignorada ao retomar a sessão");
             continue;
@@ -653,7 +658,9 @@ export class AgentSession {
           throw error;
         }
       }
-      return images.length === 0 ? clean : { ...clean, images };
+      const { attachments: _attachments, ...withoutAttachments } = clean;
+      const base = kept.length === 0 ? withoutAttachments : { ...clean, attachments: kept };
+      return images.length === 0 ? base : { ...base, images };
     });
   }
 

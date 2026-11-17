@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
-import { ARTIFACT_KEY_PATTERN, ARTIFACT_REF_PATTERN } from "../internal-ids";
+import { ARTIFACT_KEY_PATTERN, ARTIFACT_REF_PATTERN, SHA256_HEX } from "../internal-ids";
 import { canonicalize, isWithin } from "../tools/paths";
 import { defaultCheckPrivate, hardenWindowsAcl, type WindowsAcl, windowsAclIsPrivate } from "./acl";
 import { AttachmentError, MAX_ATTACHMENT_BYTES } from "./model";
@@ -212,7 +212,7 @@ export class ArtifactStore {
     let total = 0;
     for (const key of this.#keys()) {
       for (const name of readdirSync(join(this.root, key))) {
-        if (!/^[a-f0-9]{64}$/.test(name)) continue;
+        if (!SHA256_HEX.test(name)) continue;
         total += statSync(join(this.root, key, name)).size;
       }
     }
@@ -267,7 +267,7 @@ export class ArtifactStore {
     try {
       meta = JSON.parse(readFileSync(path, "utf8")) as ArtifactMeta;
     } catch {
-      throw new AttachmentError("attachment_image_invalid", `metadado ausente ou ilegível: ${ref}`);
+      throw new AttachmentError("attachment_artifact_missing", `metadado ausente ou ilegível: ${ref}`);
     }
     if (
       meta === null || typeof meta !== "object" || meta.schema !== "artifact/v1" ||
@@ -303,7 +303,7 @@ export class ArtifactStore {
     try {
       bytes = new Uint8Array(readFileSync(path));
     } catch {
-      throw new AttachmentError("attachment_image_invalid", `artefato ausente ou expirado: ${ref}`);
+      throw new AttachmentError("attachment_artifact_missing", `artefato ausente ou expirado: ${ref}`);
     }
     if (sha256(bytes) !== hash) {
       throw new AttachmentError("attachment_image_invalid", `hash do artefato divergente: ${ref}`);
@@ -319,7 +319,7 @@ export class ArtifactStore {
     for (const key of this.#keys()) {
       const dir = join(this.root, key);
       for (const name of readdirSync(dir)) {
-        if (!/^[a-f0-9]{64}$/.test(name)) continue;
+        if (!SHA256_HEX.test(name)) continue;
         const ref = `${key}/${name}`;
         if (keep.has(ref)) continue;
         const metaPath = join(dir, `${name}.json`);
