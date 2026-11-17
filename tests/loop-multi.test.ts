@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
-import { checkpointPath, loadCheckpoint, NoProgressError, saveCheckpoint, type CheckpointV1 } from "../src/loop-guard";
+import {
+  checkpointPath,
+  encodeCheckpointId,
+  findCheckpointAgents,
+  loadCheckpoint,
+  NoProgressError,
+  saveCheckpoint,
+  type CheckpointV1,
+} from "../src/loop-guard";
 import type { CompletionRequest, CompletionResponse, Provider } from "../src/providers/types";
 import type { AgentEntry, ModelEntry } from "../src/core/registry";
 import { runMultiAgentSession, type MultiAgentSessionOptions } from "../src/core/session";
@@ -82,6 +90,16 @@ describe("checkpoint com nome de agent fora do alfabeto seguro (#135)", () => {
     expect(() => checkpointPath(cwd, "r1", "a/b")).toThrow();
     expect(() => checkpointPath(cwd, "../x", "default")).toThrow();
   });
+
+  test("findCheckpointAgents devolve o nome original e ignora diretório com caractere de formatação", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-loop-list-"));
+    const cp: CheckpointV1 = {
+      schema: "checkpoint/v1", summary: "s", changedFiles: [], nextStep: "n", createdAt: new Date().toISOString(),
+    };
+    saveCheckpoint(cp, checkpointPath(cwd, "run.1", "code_reviewer"));
+    saveCheckpoint(cp, join(cwd, ".astro", "sessions", encodeCheckpointId("run.1"), encodeCheckpointId("rev\u202Esec"), "checkpoint.json"));
+    expect(findCheckpointAgents(cwd, "run.1")).toEqual(["code_reviewer"]);
+  });
 });
 
 describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
@@ -106,7 +124,7 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
     expect(existsSync(path)).toBe(true);
     expect(existsSync(checkpointPath(s.cwd, "r1", "planner"))).toBe(false);
     const checkpoint = JSON.parse(readFileSync(path, "utf8")) as CheckpointV1;
-    expect(checkpoint.changedFiles).toEqual(["a.txt"]);
+    expect(checkpoint.changedFiles).toEqual(["a.txt", "b.txt"]); // inclui o arquivo executado no próprio turno
     const event = s.audit.readAll().find((e) => e.tipo === "loop.checkpoint");
     expect(event?.agent).toBe("coder");
     expect(event?.payload).toMatchObject({ step: 3, trigger: "turns" });
@@ -151,6 +169,67 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
     expect(result.final).toBe("fim");
     expect(result.steps).toBe(3);
     expect(s.audit.readAll().filter((e) => e.tipo === "loop.no_progress")).toHaveLength(1);
+  });
+
+  test("checkpoint do primeiro turno já inclui o arquivo executado pelas tools", async () => {
+    const agents: Record<string, AgentEntry> = {
+      coder: { model: "openai/gpt-4o-mini", maxSteps: 2, tools: ["write_file"], systemPrompt: "c" },
+    };
+    const s = setup([
+      resp({ content: "editando", toolCalls: [write("c1", "first.txt")] }),
+      resp({ content: "fim" }),
+    ], agents, "coder");
+    s.opts.checkpointAt = 0.5; // ceil(2 * 0.5) = turno 1
+
+    await runMultiAgentSession(s.opts, "entregue");
+
+    const checkpoint = JSON.parse(readFileSync(checkpointPath(s.cwd, "r1", "coder"), "utf8")) as CheckpointV1;
+    expect(checkpoint.changedFiles).toEqual(["first.txt"]);
+  });
+
+  test("falha de I/O do checkpoint não queima o handoff já recebido", async () => {
+    const agents: Record<string, AgentEntry> = {
+      planner: { model: "openai/gpt-4o-mini", maxSteps: 2, tools: ["handoff"], systemPrompt: "p" },
+      coder: { model: "openai/gpt-4o-mini", maxSteps: 2, tools: ["write_file"], systemPrompt: "c" },
+    };
+    const s = setup([
+      resp({ toolCalls: [handoff("h1", "coder")] }),
+      resp({ content: "fim" }),
+    ], agents, "planner");
+    s.opts.checkpointAt = 0.5; // planner: turno 1, mas `.astro` é arquivo e a gravação falha
+    writeFileSync(join(s.cwd, ".astro"), "não é diretório");
+
+    const result = await runMultiAgentSession(s.opts, "entregue");
+
+    expect(result.final).toBe("fim");
+    const events = s.audit.readAll();
+    expect(events.some((e) => e.tipo === "handoff.failed")).toBe(false);
+    const error = events.find((e) => e.tipo === "loop.checkpoint_error");
+    expect(error?.agent).toBe("planner");
+    expect(Object.keys(error!.payload).sort()).toEqual(["code", "step"]);
+    expect(error!.payload).toMatchObject({ step: 1 });
+  });
+
+  test("handoff ping-pong conta o segmento do emissor e para por não-progresso", async () => {
+    const agents: Record<string, AgentEntry> = {
+      planner: { model: "openai/gpt-4o-mini", maxSteps: 5, tools: ["handoff"], systemPrompt: "p" },
+      coder: { model: "openai/gpt-4o-mini", maxSteps: 5, tools: ["handoff"], systemPrompt: "c" },
+    };
+    const s = setup([
+      resp({ toolCalls: [handoff("h1", "coder")] }),
+      resp({ toolCalls: [handoff("h2", "planner")] }),
+      resp({ toolCalls: [handoff("h3", "coder")] }),
+      resp({ content: "fim" }),
+    ], agents, "planner");
+    s.opts.noProgressSegments = 2;
+
+    const error = await runMultiAgentSession(s.opts, "ping-pong").catch((e) => e as Error);
+
+    expect(error).toBeInstanceOf(NoProgressError);
+    const events = s.audit.readAll();
+    expect(events.some((e) => e.tipo === "handoff.failed")).toBe(false);
+    expect(s.ledger.lastState("r1")?.state).toBe("interrupted");
+    expect(s.ledger.lastState("r1")?.reason).toBe("no_progress");
   });
 });
 
