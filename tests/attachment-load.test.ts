@@ -136,6 +136,40 @@ describe("loadAttachment", () => {
     expect(attachment.data).not.toContain("MIIEow");
   });
 
+  test("última linha sem newline no caminho de streaming entra na faixa", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "sem-nl.txt"), "um\ndois\ntres");
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "sem-nl.txt",
+      range: "3:3",
+      maxBytes: 8,
+    });
+    expect(attachment.data).toBe("tres");
+    expect(attachment.range).toEqual({ start: 3, end: 3 });
+  });
+
+  test("marcador PEM cortado pela fronteira do chunk não vaza o corpo", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "fronteira.txt"), [
+      "a".repeat(65_532), // linha 1 termina 3 bytes antes do chunk de 64 KiB
+      PEM_BEGIN, // linha 2: só "---" cabe no primeiro chunk
+      PEM_BODY[0]!, // linha 3
+      PEM_BODY[1]!, // linha 4
+      PEM_END,
+      "z".repeat(5_000),
+    ].join("\n"));
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "fronteira.txt",
+      range: "3:4",
+      maxBytes: 70_000,
+    });
+    expect(attachment.data).toBe("[REDACTED]\n[REDACTED]");
+    expect(attachment.range).toEqual({ start: 3, end: 4 });
+    expect(attachment.data).not.toContain("MIIEow");
+  });
+
   test("hard-block em .env sem override", async () => {
     const { cwd, astroHome } = sandbox();
     writeFileSync(join(cwd, ".env"), "KEY=1");

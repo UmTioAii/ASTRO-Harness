@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentSession, type SendTurnOptions, type TurnResult } from "../src/chat/agent-session";
 import { runRepl, type ChatSession, type ReplIO } from "../src/chat/repl";
 import { loadAttachment } from "../src/attachments/load";
 import type { AttachmentMeta, LoadedAttachment } from "../src/attachments/model";
+import { canonicalize } from "../src/tools/paths";
 import { FAKE_PRIVATE_ACL } from "./setup";
 
 class ScriptedIO implements ReplIO {
@@ -320,6 +321,33 @@ describe("protectedPaths da config no /attach (ADR-0026, #392)", () => {
       await runRepl(session, io, { cwd });
       expect(io.outputs.join("\n")).toContain("bloqueado");
       expect(io.outputs.join("\n")).not.toContain("anexo adicionado");
+    } finally {
+      session.close();
+    }
+  });
+
+  test("attachmentProtectedPaths devolve caminhos canônicos", () => {
+    const base = sandbox();
+    const cwd = join(base, "work"), home = join(base, "home");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const state = join(cwd, "real-state");
+    mkdirSync(state);
+    symlinkSync(state, join(cwd, "state-link"), process.platform === "win32" ? "junction" : "dir");
+    const configPath = join(cwd, "astro.config.json");
+    writeFileSync(configPath, JSON.stringify({
+      providers: { p: { kind: "openai-compat", baseUrl: "http://127.0.0.1:1/v1", credentialRef: "KEY" } },
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "p/m1", maxSteps: 1, tools: [] },
+      paths: { ledger: "state-link/ledger.jsonl", audit: "state-link/audit.jsonl" },
+    }));
+    const session = new AgentSession({ configPath, cwd, env: { ASTRO_HOME: home, KEY: "k" } });
+    try {
+      const real = canonicalize(state);
+      expect(session.attachmentProtectedPaths()).toEqual([
+        join(real, "ledger.jsonl"),
+        join(real, "audit.jsonl"),
+      ]);
     } finally {
       session.close();
     }
