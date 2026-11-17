@@ -187,6 +187,20 @@ describe("loadAttachment", () => {
       loadAttachment({ ...base(cwd, astroHome), path: "linhas.txt", range: "100:100", maxBytes: 16 }),
     ).rejects.toThrow(/faixa.*teto de leitura/);
   });
+
+  test("range de arquivo grande rejeita binário na faixa selecionada", async () => {
+    const { cwd, astroHome } = sandbox();
+    const target = 100_000;
+    for (const [name, byte] of [["nul.txt", 0x00], ["utf8.txt", 0xff]] as const) {
+      const content = Buffer.alloc(200_000, "linha\n");
+      content[target] = byte;
+      writeFileSync(join(cwd, name), content);
+      const line = Math.floor(target / 6) + 1;
+      await expect(
+        loadAttachment({ ...base(cwd, astroHome), path: name, range: `${line}:${line}`, maxBytes: target }),
+      ).rejects.toMatchObject({ code: "attachment_unsupported_binary" });
+    }
+  });
 });
 
 describe("loadPastedText", () => {
