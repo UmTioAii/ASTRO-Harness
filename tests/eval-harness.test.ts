@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   compareFile,
   evalFailsThreshold,
@@ -12,8 +13,53 @@ import {
   type CaseResult,
   type EvalReport,
 } from "../src/eval/harness";
+import { runScenario, type ScenarioSpec } from "../src/eval/scenario";
 
 const GOLDEN_ROOT = join(import.meta.dir, "..", "eval", "golden");
+
+interface ScenarioCaseOptions {
+  task?: string;
+  expected?: Record<string, string>;
+  fixtures?: Record<string, string>;
+}
+
+/** Cria um case temporário com meta/task/scenario e devolve o diretório. */
+function writeScenarioCase(
+  root: string,
+  name: string,
+  scenario: ScenarioSpec,
+  opts: ScenarioCaseOptions = {},
+): string {
+  const dir = join(root, name);
+  mkdirSync(join(dir, "expected"), { recursive: true });
+  mkdirSync(join(dir, "fixtures"), { recursive: true });
+  const expected = opts.expected ?? {};
+  for (const [file, content] of Object.entries(expected)) {
+    mkdirSync(dirname(join(dir, "expected", file)), { recursive: true });
+    writeFileSync(join(dir, "expected", file), content);
+  }
+  for (const [file, content] of Object.entries(opts.fixtures ?? {})) {
+    writeFileSync(join(dir, "fixtures", file), content);
+  }
+  writeFileSync(join(dir, "task.md"), opts.task ?? "tarefa do cenário\n");
+  writeFileSync(join(dir, "meta.json"), JSON.stringify({
+    schema: 1, id: name, category: "skills", difficulty: 2, tags: ["writing-code"], files: Object.keys(expected),
+  }));
+  writeFileSync(join(dir, "scenario.json"), JSON.stringify(scenario));
+  return dir;
+}
+
+async function runTempCase(root: string, name: string): Promise<CaseResult> {
+  const golden = listGoldenCases(root).find((entry) => entry.id === name);
+  if (golden === undefined) throw new Error(`case temporário "${name}" não encontrado`);
+  return runCase(golden, { mock: true });
+}
+
+const SKILL_OK = [
+  "---", "name: verify", "description: Verifica a skill", "version: 1.0.0",
+  "permissions:", "  tools: [write_file]", "---",
+  "Confirme a skill instalada.", "",
+].join("\n");
 
 describe("eval harness (F5-2)", () => {
   test("listGoldenCases devolve os 65 cases com meta", () => {
@@ -67,59 +113,300 @@ describe("eval harness (F5-2)", () => {
 
   test("runCase com scenario.seed/sidecars instala a skill e verifica o sha256", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-scenario-seed-"));
-    const dir = join(root, "01-skills");
-    mkdirSync(join(dir, "expected", "out"), { recursive: true });
-    mkdirSync(join(dir, "fixtures"), { recursive: true });
-    writeFileSync(join(dir, "task.md"), "/verify conferir a skill instalada\n");
-    writeFileSync(join(dir, "expected", "out", "ok.txt"), "ok\n");
-    writeFileSync(join(dir, "fixtures", "verify.md"), [
-      "---", "name: verify", "description: Verifica a skill", "version: 1.0.0",
-      "permissions:", "  tools: [write_file]", "---",
-      "Confirme a skill instalada.", "",
-    ].join("\n"));
-    writeFileSync(join(dir, "meta.json"), JSON.stringify({
-      schema: 1, id: "scenario-seed", category: "skills", difficulty: 2, tags: ["writing-code"], files: ["out/ok.txt"],
-    }));
-    writeFileSync(join(dir, "scenario.json"), JSON.stringify({
+    writeScenarioCase(root, "01-skills", {
       schema: 1,
       kind: "app",
       seed: [{ from: "fixtures/verify.md", to: ".astro/skills/verify/SKILL.md" }],
-      sidecars: [".astro/skills/verify/SKILL.md"],
+      sidecars: [".astro/skills/verify"],
       turns: [
         { toolCalls: [{ name: "write_file", arguments: { path: "out/ok.txt", content: "ok\n" } }] },
         { content: "seed ok" },
       ],
       expect: { final: "seed ok", audit: ["skill.loaded"] },
-    }));
+    }, { task: "/verify conferir a skill instalada\n", expected: { "out/ok.txt": "ok\n" }, fixtures: { "verify.md": SKILL_OK } });
 
-    const [golden] = listGoldenCases(root);
-    const result = await runCase(golden!, { mock: true });
+    const result = await runTempCase(root, "01-skills");
     expect(result.diffSummary).toEqual([]);
     expect(result.passed).toBe(true);
   }, 30000);
 
-  test("runCase recusa seed que escapa do workspace", async () => {
-    const root = mkdtempSync(join(tmpdir(), "astro-scenario-escape-"));
-    const dir = join(root, "01-escape");
-    mkdirSync(join(dir, "expected"), { recursive: true });
-    writeFileSync(join(dir, "task.md"), "cenário com seed fora do workspace\n");
-    writeFileSync(join(dir, "expected", "out.txt"), "ok\n");
-    writeFileSync(join(dir, "meta.json"), JSON.stringify({
-      schema: 1, id: "scenario-escape", category: "skills", difficulty: 2, tags: ["writing-code"], files: ["out.txt"],
-    }));
-    writeFileSync(join(dir, "scenario.json"), JSON.stringify({
+  test("sidecar é gravado no contrato <skill>/.sha256", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-sidecar-contract-"));
+    const caseDir = writeScenarioCase(root, "01-sidecar", {
       schema: 1,
       kind: "app",
-      seed: [{ from: "meta.json", to: "../escape.json" }],
-      turns: [{ content: "não deveria rodar" }],
-      expect: { final: "não deveria rodar" },
-    }));
+      seed: [{ from: "fixtures/verify.md", to: ".astro/skills/verify/SKILL.md" }],
+      sidecars: [".astro/skills/verify"],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    }, { fixtures: { "verify.md": SKILL_OK } });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-sidecar-cwd-"));
 
-    const [golden] = listGoldenCases(root);
-    const result = await runCase(golden!, { mock: true });
-    expect(result.passed).toBe(false);
-    expect(result.diffSummary.join("\n")).toContain("fora do workspace");
+    const result = await runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa comum" },
+    );
+    expect(result.diffSummary).toEqual([]);
+    const skillFile = join(cwd, ".astro", "skills", "verify", "SKILL.md");
+    const sidecar = join(cwd, ".astro", "skills", "verify", ".sha256");
+    expect(existsSync(sidecar)).toBe(true);
+    expect(readFileSync(sidecar, "utf8").trim())
+      .toBe(createHash("sha256").update(readFileSync(skillFile)).digest("hex"));
+  }, 30000);
+
+  test("sidecar obsoleto faz a skill ser ignorada", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-sidecar-stale-"));
+    writeScenarioCase(root, "01-stale", {
+      schema: 1,
+      kind: "app",
+      seed: [
+        { from: "fixtures/verify.md", to: ".astro/skills/verify/SKILL.md" },
+        { from: "fixtures/stale.sha256", to: ".astro/skills/verify/.sha256" },
+      ],
+      turns: [],
+      expect: { error: "não encontrada", auditAbsent: ["skill.loaded"] },
+    }, {
+      task: "/verify conferir a skill instalada\n",
+      fixtures: { "verify.md": SKILL_OK, "stale.sha256": `${"0".repeat(64)}\n` },
+    });
+
+    const result = await runTempCase(root, "01-stale");
+    expect(result.passed).toBe(true);
+  }, 30000);
+
+  test("scenario.seed.from não pode escapar do caseDir", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-seed-from-"));
+    const caseDir = join(root, "case");
+    mkdirSync(caseDir, { recursive: true });
+    writeFileSync(join(root, "host-secret.txt"), "host secret\n");
+    const cwd = mkdtempSync(join(tmpdir(), "astro-seed-from-cwd-"));
+    const spec: ScenarioSpec = {
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "../host-secret.txt", to: "stolen.txt" }],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    };
+
+    await expect(runScenario(spec, { cwd, caseDir, task: "tarefa" })).rejects.toThrow(/fora do diretório/);
+    expect(existsSync(join(cwd, "stolen.txt"))).toBe(false);
   });
+
+  test("scenario.seed.from recusa source que é link, mesmo dentro do caseDir", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-seed-link-"));
+    const caseDir = join(root, "case");
+    mkdirSync(join(caseDir, "fixtures", "real"), { recursive: true });
+    writeFileSync(join(caseDir, "fixtures", "real", "secret.txt"), "secret\n");
+    symlinkSync(join(caseDir, "fixtures", "real"), join(caseDir, "fixtures", "linked"), "junction");
+    const cwd = mkdtempSync(join(tmpdir(), "astro-seed-link-cwd-"));
+    const spec: ScenarioSpec = {
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "fixtures/linked", to: "stolen" }],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    };
+
+    await expect(runScenario(spec, { cwd, caseDir, task: "tarefa" })).rejects.toThrow(/link/i);
+    expect(existsSync(join(cwd, "stolen"))).toBe(false);
+  });
+
+  test("scenario.seed.to não escreve através de junction dentro do cwd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-seed-to-link-"));
+    const caseDir = writeScenarioCase(root, "01-dest", {
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "fixtures/ok.txt", to: "link/stolen.txt" }],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    }, { fixtures: { "ok.txt": "ok\n" } });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-seed-to-cwd-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-seed-to-out-"));
+    symlinkSync(outside, join(cwd, "link"), "junction");
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/fora do diretório/);
+    expect(existsSync(join(outside, "stolen.txt"))).toBe(false);
+  });
+
+  test("sidecars não lê nem escreve através de junction dentro do cwd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-sidecar-link-"));
+    const caseDir = writeScenarioCase(root, "01-sidecar-link", {
+      schema: 1,
+      kind: "app",
+      sidecars: ["link"],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-sidecar-link-cwd-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-sidecar-link-out-"));
+    writeFileSync(join(outside, "SKILL.md"), SKILL_OK);
+    symlinkSync(outside, join(cwd, "link"), "junction");
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/fora do diretório/);
+    expect(existsSync(join(outside, ".sha256"))).toBe(false);
+  });
+
+  test("absentFiles é confinado ao workspace", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-absent-"));
+    const cwd = mkdtempSync(join(tmpdir(), "astro-absent-cwd-"));
+    const outside = join(dirname(cwd), "astro-absent-outside.txt");
+    writeFileSync(outside, "não inspecionar\n");
+    const caseDir = writeScenarioCase(root, "01-absent", {
+      schema: 1,
+      kind: "app",
+      turns: [{ content: "ok" }],
+      expect: { final: "ok", absentFiles: ["../astro-absent-outside.txt"] },
+    });
+
+    const result = await runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    );
+    expect(result.diffSummary.join("\n")).toContain("fora do diretório");
+    expect(result.diffSummary.join("\n")).not.toContain("não deveria existir");
+  });
+
+  test("runCase recusa URL não-loopback em mcpServers", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-url-mcp-"));
+    const caseDir = writeScenarioCase(root, "01-url", {
+      schema: 1,
+      kind: "app",
+      config: { mcpServers: { bad: { transport: "http", url: "https://example.com/mcp", timeoutMs: 100, enabled: false } } },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-url-mcp-cwd-"));
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/loopback/);
+  });
+
+  test("runCase recusa web_fetch para URL pública antes de qualquer rede", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-url-fetch-"));
+    const caseDir = writeScenarioCase(root, "01-fetch", {
+      schema: 1,
+      kind: "app",
+      config: { agent: { model: "mock/mock-1", maxSteps: 4, tools: ["web_fetch", "write_file"] } },
+      turns: [
+        { toolCalls: [{ name: "web_fetch", arguments: { url: "https://example.com/" } }] },
+        { content: "ok" },
+      ],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-url-fetch-cwd-"));
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("network blocked");
+    }) as typeof fetch;
+    try {
+      await expect(runScenario(
+        JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+        { cwd, caseDir, task: "tarefa" },
+      )).rejects.toThrow(/loopback/);
+      expect(fetchCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("runCase isola a config global do ASTRO_HOME", async () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ run: { maxTurns: 1 } }));
+    const root = mkdtempSync(join(tmpdir(), "astro-global-case-"));
+    writeScenarioCase(root, "01-global", {
+      schema: 1,
+      kind: "app",
+      turns: [{ content: "um" }, { content: "dois" }],
+      expect: { final: "dois", requests: 2 },
+    });
+    const previousHome = process.env.ASTRO_HOME;
+    const previousNoGlobal = process.env.ASTRO_NO_GLOBAL_CONFIG;
+    process.env.ASTRO_HOME = home;
+    delete process.env.ASTRO_NO_GLOBAL_CONFIG;
+    try {
+      const result = await runTempCase(root, "01-global");
+      expect(result.diffSummary).toEqual([]);
+      expect(result.passed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.ASTRO_HOME;
+      else process.env.ASTRO_HOME = previousHome;
+      if (previousNoGlobal === undefined) delete process.env.ASTRO_NO_GLOBAL_CONFIG;
+      else process.env.ASTRO_NO_GLOBAL_CONFIG = previousNoGlobal;
+    }
+  }, 30000);
+
+  test("runCase não carrega skills do ~/.astro/skills do host", async () => {
+    const hostHome = mkdtempSync(join(tmpdir(), "astro-host-home-"));
+    mkdirSync(join(hostHome, ".astro", "skills", "verify"), { recursive: true });
+    writeFileSync(join(hostHome, ".astro", "skills", "verify", "SKILL.md"), SKILL_OK);
+    const root = mkdtempSync(join(tmpdir(), "astro-host-skill-case-"));
+    writeScenarioCase(root, "01-host-skill", {
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "fixtures/verify.md", to: ".astro/skills/verify/SKILL.md" }],
+      turns: [
+        { toolCalls: [{ name: "write_file", arguments: { path: "out/ok.txt", content: "ok\n" } }] },
+        { content: "ok" },
+      ],
+      expect: { final: "ok", audit: ["skill.loaded"] },
+    }, {
+      task: "/verify conferir a skill instalada\n",
+      expected: { "out/ok.txt": "ok\n" },
+      fixtures: { "verify.md": SKILL_OK },
+    });
+    const previousHome = process.env.HOME;
+    const previousProfile = process.env.USERPROFILE;
+    process.env.HOME = hostHome;
+    process.env.USERPROFILE = hostHome;
+    try {
+      const result = await runTempCase(root, "01-host-skill");
+      expect(result.diffSummary).toEqual([]);
+      expect(result.passed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousProfile;
+    }
+  }, 30000);
+
+  test("runCase detecta vazamento de env no audit e no ledger", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-leak-"));
+    writeScenarioCase(root, "01-leak", {
+      schema: 1,
+      kind: "app",
+      env: { EVAL_AUDIT_LEAK: "audit-leak-value-9f3a", EVAL_LEDGER_LEAK: "ledger-leak-value-7c1b" },
+      seed: [
+        { from: "fixtures/audit.jsonl", to: ".astro/audit.jsonl" },
+        { from: "fixtures/ledger.jsonl", to: ".astro/ledger.jsonl" },
+      ],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    }, {
+      fixtures: {
+        "audit.jsonl": `${JSON.stringify({ seq: 1, run: "seeded", agent: "x", tipo: "seeded", payload: { value: "audit-leak-value-9f3a" } })}\n`,
+        "ledger.jsonl": `${JSON.stringify({
+          schemaVersion: 3, ts: "2026-01-01T00:00:00.000Z", run: "seeded", kind: "run_state",
+          state: "completed", reason: "ledger-leak-value-7c1b", seq: 1,
+        })}\n`,
+      },
+    });
+
+    const result = await runTempCase(root, "01-leak");
+    expect(result.passed).toBe(false);
+    expect(result.diffSummary.join("\n")).toContain("EVAL_AUDIT_LEAK");
+    expect(result.diffSummary.join("\n")).toContain("EVAL_LEDGER_LEAK");
+  }, 30000);
 
   test("runCase detecta divergência quando o esperado é sabotado", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-sabot-"));
