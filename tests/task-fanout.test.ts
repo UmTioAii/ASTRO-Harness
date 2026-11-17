@@ -9,7 +9,12 @@ import { createTaskTool, type TaskDelegator } from "../src/tools/task";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function setup(opts: { parallel?: boolean; delegate?: TaskDelegator; activeCount?: () => number } = {}) {
+function setup(opts: {
+  parallel?: boolean;
+  delegate?: TaskDelegator;
+  activeCount?: () => number;
+  maxActive?: number;
+} = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "astro-task-fanout-"));
   const audit = new Auditor(join(cwd, "audit.jsonl"));
   const probe = { active: 0, max: 0, calls: [] as Array<{ agent: string; prompt: string }> };
@@ -29,7 +34,7 @@ function setup(opts: { parallel?: boolean; delegate?: TaskDelegator; activeCount
     knownAgents: () => ["a", "b"],
     delegate,
     ...(opts.parallel === undefined ? {} : { parallel: opts.parallel }),
-    maxActive: 2,
+    maxActive: opts.maxActive ?? 2,
     accountOf: (agent) => `account-${agent}`,
     ...(opts.activeCount === undefined ? {} : { activeCount: opts.activeCount }),
   });
@@ -148,12 +153,30 @@ describe("task fan-out (A11)", () => {
   });
 
   test("task single também respeita o teto antes de auditar ou delegar", async () => {
-    const { tool, audit, probe, ctx } = setup({ activeCount: () => 2 });
+    const { tool, audit, probe, ctx } = setup({ parallel: true, activeCount: () => 2 });
     const result = await tool.execute({ agent: "a", prompt: "um" }, ctx);
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.output).error).toBe("spawn_limit_exceeded");
     expect(audit.readAll().filter((event) => event.tipo === "task.delegated")).toHaveLength(0);
     expect(probe.calls).toHaveLength(0);
+  });
+
+  test("serial single com lock do pai e maxActive=1 delega normalmente (#451)", async () => {
+    const { tool, audit, probe, ctx } = setup({ maxActive: 1, activeCount: () => 1 });
+    const result = await tool.execute({ agent: "a", prompt: "um" }, ctx);
+    expect(result.isError).not.toBe(true);
+    expect(result.output).toBe("a:um");
+    expect(probe.calls).toHaveLength(1);
+    expect(audit.readAll().filter((event) => event.tipo === "task.delegated")).toHaveLength(1);
+  });
+
+  test("serial tasks com a flag desligada não é barrado por slot", async () => {
+    const { tool, probe, ctx } = setup({ maxActive: 1, activeCount: () => 1 });
+    const result = await tool.execute({
+      tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
+    }, ctx);
+    expect(JSON.parse(result.output).tasks.map((item: { status: string }) => item.status)).toEqual(["ok", "ok"]);
+    expect(probe.max).toBe(1);
   });
 
   test("fan-out também recusa sem slot antes de auditar ou delegar", async () => {
