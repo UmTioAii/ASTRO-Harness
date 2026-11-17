@@ -61,6 +61,23 @@ export interface BenchOptions {
   outDir?: string;
 }
 
+/**
+ * Filtra modelos com a mesma sintaxe do `astro bench --models`: substrings de
+ * `provider/model` separadas por vírgula. Filtro vazio ou ausente devolve
+ * todos; sem correspondência devolve lista vazia.
+ */
+export function filterModels(
+  models: readonly ModelEntry[],
+  filter: string | undefined,
+): ModelEntry[] {
+  const terms = (filter ?? "")
+    .split(",")
+    .map((term) => term.trim())
+    .filter((term) => term !== "");
+  if (terms.length === 0) return [...models];
+  return models.filter((m) => terms.some((term) => `${m.provider}/${m.id}`.includes(term)));
+}
+
 function percentile(sorted: readonly number[], p: number): number {
   if (sorted.length === 0) return 0;
   const index = Math.min(Math.ceil((p / 100) * sorted.length) - 1, sorted.length - 1);
