@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { benchModel, filterModels, formatBenchTable, formatMarkdown, runBenchmark, selectBenchModels, type BenchReport } from "../src/eval/bench";
+import { benchModel, filterModels, formatBenchTable, formatMarkdown, runBenchmark, selectBenchModels, summarizeBench, type BenchModelResult, type BenchReport } from "../src/eval/bench";
 import type { ModelEntry } from "../src/registry";
 import type { CompletionResponse, Provider } from "../src/provider/types";
 
@@ -12,6 +12,24 @@ const model = (over: Partial<ModelEntry> = {}): ModelEntry => ({
   tags: ["writing-code", "fast"],
   context: 128000,
   status: "active",
+  ...over,
+});
+
+/** Resultado de bench para testar sumário e formatação sem chamar provider. */
+const benchResult = (over: Partial<BenchModelResult> = {}): BenchModelResult => ({
+  model: "mock/bench-model",
+  provider: "mock",
+  tags: [],
+  runs: 1,
+  successRate: 1,
+  completed: 5,
+  total: 5,
+  latencyMs: { min: 1, p50: 2, p95: 3, max: 4 },
+  tokensInAvg: 10,
+  tokensOutAvg: 20,
+  tokensPerSec: 100,
+  costPer1kOutUsd: null,
+  ttftMs: null,
   ...over,
 });
 
@@ -184,6 +202,11 @@ describe("benchmark de providers (F5-4)", () => {
     expect(md).toContain("n/d"); // custo null → n/d
     const json = JSON.parse(readFileSync(join(outDir, `bench-${date}.json`), "utf8")) as BenchReport;
     expect(json.schema).toBe(2);
+    expect(json.summary).toEqual({
+      fastest: "mock/bench-model",
+      cheapest: null,
+      highestSuccessRate: "mock/bench-model",
+    });
     expect(json.results).toHaveLength(1);
     expect(json.prompts).toBeGreaterThan(0);
     expect(json.results[0]?.successRate).toBe(1);
@@ -208,9 +231,48 @@ describe("benchmark de providers (F5-4)", () => {
     expect(json).toContain('"total": 5');
   });
 
+  test("summarizeBench escolhe rápido, barato e maior sucesso com empate estável", () => {
+    const slow = benchResult({
+      model: "a/slow",
+      latencyMs: { min: 1, p50: 30, p95: 31, max: 32 },
+      costPer1kOutUsd: 2,
+      successRate: 1,
+    });
+    const fast = benchResult({
+      model: "b/fast",
+      latencyMs: { min: 1, p50: 10, p95: 11, max: 12 },
+      costPer1kOutUsd: 3,
+      successRate: 0.8,
+      completed: 4,
+      total: 5,
+    });
+    const cheap = benchResult({
+      model: "c/cheap",
+      latencyMs: { min: 1, p50: 20, p95: 21, max: 22 },
+      costPer1kOutUsd: 1,
+      successRate: 0.8,
+      completed: 4,
+      total: 5,
+    });
+    const summary = summarizeBench([slow, fast, cheap]);
+    expect(summary).toEqual({ fastest: "b/fast", cheapest: "c/cheap", highestSuccessRate: "a/slow" });
+    // Empate mantém o primeiro resultado da lista.
+    const tie = summarizeBench([slow, benchResult({ ...slow, model: "d/tie" })]);
+    expect(tie).toEqual({ fastest: "a/slow", cheapest: "a/slow", highestSuccessRate: "a/slow" });
+  });
+
+  test("summarizeBench devolve null sem resultados e ignora custo não verificado", () => {
+    expect(summarizeBench([])).toEqual({ fastest: null, cheapest: null, highestSuccessRate: null });
+    const unpriced = benchResult({ model: "a/unpriced", costPer1kOutUsd: null });
+    const priced = benchResult({ model: "b/priced", costPer1kOutUsd: 5 });
+    expect(summarizeBench([unpriced, priced]).cheapest).toBe("b/priced");
+    expect(summarizeBench([unpriced]).cheapest).toBeNull();
+  });
+
   test("formatMarkdown inclui todos os modelos e tags", () => {
     const report: BenchReport = {
       schema: 2, date: "2026-10-23", prompts: 5,
+      summary: { fastest: "a/1", cheapest: "a/1", highestSuccessRate: "b/2" },
       results: [
         {
           model: "a/1", provider: "a", tags: ["fast"], runs: 1,
@@ -238,11 +300,29 @@ describe("benchmark de providers (F5-4)", () => {
     expect(md).toContain("80% (4/5)");
     expect(md).toContain("100% (5/5)");
     expect(md).toContain("Sucesso agregado: 90% (9/10)");
+    expect(md).toContain("## Sumário");
+    expect(md).toContain("- Mais rápido: `a/1` (p50 2ms)");
+    expect(md).toContain("- Mais barato: `a/1` (US$ 1.5000/1k out)");
+    expect(md).toContain("- Maior success rate: `b/2` (100% (5/5))");
+  });
+
+  test("formatMarkdown com relatório vazio mostra sumário n/d", () => {
+    const report: BenchReport = {
+      schema: 2, date: "2026-10-23", prompts: 5,
+      summary: { fastest: null, cheapest: null, highestSuccessRate: null },
+      results: [],
+    };
+    const md = formatMarkdown(report);
+    expect(md).toContain("- Mais rápido: n/d");
+    expect(md).toContain("- Mais barato: n/d");
+    expect(md).toContain("- Maior success rate: n/d");
+    expect(md).toContain("Sucesso agregado: 0% (0/0)");
   });
 
   test("formatBenchTable mostra a taxa de sucesso por modelo", () => {
     const report: BenchReport = {
       schema: 2, date: "2026-10-23", prompts: 5,
+      summary: { fastest: "a/1", cheapest: "a/1", highestSuccessRate: "a/1" },
       results: [
         {
           model: "a/1", provider: "a", tags: ["fast"], runs: 1,
