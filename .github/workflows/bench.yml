@@ -41,7 +41,13 @@ jobs:
           NIGHTLY_MODELS: ${{ vars.BENCH_MODELS }}
         run: |
           models="$DISPATCH_MODELS"
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then models="$NIGHTLY_MODELS"; fi
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            if [ -z "$NIGHTLY_MODELS" ]; then
+              echo "::error::defina BENCH_MODELS (filtro não vazio) para o nightly; sem filtro o bench usaria todos os modelos e gastaria quota real"
+              exit 1
+            fi
+            models="$NIGHTLY_MODELS"
+          fi
           args=(--runs "$BENCH_RUNS")
           if [ -n "$models" ]; then args+=(--models "$models"); fi
           bun src/cli.ts bench "${args[@]}"
