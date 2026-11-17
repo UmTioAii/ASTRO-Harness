@@ -33,6 +33,8 @@ export interface TaskToolDeps {
   parallel?: boolean;
   /** Teto de jobs simultâneos; default 2 (ADR-0008 A2). */
   maxActive?: number;
+  /** Locks vivos do run (pai incluso); o teto desconta esses slots (A2/A4). */
+  activeCount?(): number;
   /** Conta do agente alvo; jobs da mesma conta são serializados (A4). */
   accountOf?(agent: string): string;
 }
@@ -144,6 +146,19 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           if (typeof parsed === "string") return invalid(parsed);
           tasks.push(parsed);
         }
+        // A2/A4: `maxActive` conta agentes vivos (o pai já segura um lock).
+        const maxActive = deps.maxActive ?? 2;
+        const live = deps.activeCount?.() ?? 0;
+        const available = maxActive - live;
+        if (available < 1) {
+          return {
+            output: JSON.stringify({
+              error: "spawn_limit_exceeded",
+              message: `teto de ${maxActive} agentes ativos por run atingido`,
+            }),
+            isError: true,
+          };
+        }
         tasks.forEach((task, index) => {
           deps.audit.append({
             run: ctx.run,
@@ -158,6 +173,10 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           });
         });
 
+        const parallel = deps.parallel === true;
+        const isFatal = (error: unknown): boolean =>
+          error instanceof PermissionPendingError || error instanceof NoProgressError;
+
         let fatal: unknown;
         const jobs: FanOutJob<string>[] = tasks.map((task, index) => ({
           id: `t${index + 1}`,
@@ -166,31 +185,32 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
             try {
               return await delegation(task, signal);
             } catch (error) {
-              // Pausa de permissão/não-progresso interrompe o run pai (I-19);
-              // os irmãos terminam antes de o erro subir.
-              if (error instanceof PermissionPendingError || error instanceof NoProgressError) fatal ??= error;
+              if (isFatal(error)) fatal ??= error;
               throw error;
             }
           },
         }));
         const results = await runFanOut(jobs, {
-          parallel: deps.parallel === true,
-          maxActive: deps.maxActive ?? 2,
+          parallel,
+          maxActive: parallel ? available : 1,
+          ...(parallel ? {} : { stopOnError: isFatal }),
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
         });
+        if (ctx.signal?.aborted === true) {
+          const reason = ctx.signal.reason;
+          throw reason instanceof Error ? reason : new DOMException("aborted", "AbortError");
+        }
         if (fatal !== undefined) throw fatal;
-        return {
-          output: JSON.stringify({
-            tasks: results.map((result, index) => ({
-              taskId: result.id,
-              agent: tasks[index]!.agent,
-              ...(result.ok
-                ? { status: "ok", output: result.value }
-                : { status: "error", error: result.error }),
-            })),
-          }),
-          isError: false,
-        };
+        const output = JSON.stringify({
+          tasks: results.map((result, index) => ({
+            taskId: result.id,
+            agent: tasks[index]!.agent,
+            ...(result.ok
+              ? { status: "ok", output: result.value }
+              : { status: "error", error: result.error }),
+          })),
+        });
+        return { output, isError: results.every((result) => !result.ok) };
       }
 
       const agent = typeof raw.agent === "string" ? raw.agent.trim() : "";

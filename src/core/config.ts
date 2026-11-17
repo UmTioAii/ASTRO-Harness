@@ -418,19 +418,8 @@ function expectBoolean(value: unknown, field: string): boolean {
  * `kind` para provider de plugin. Sem chave, o próprio provider é a conta.
  */
 export function providerAccountRefFor(name: string, provider: ProviderConfig): string {
-  const raw = provider as { kind: string; credentialRef?: unknown; credentialsPath?: unknown };
-  if (raw.kind === "openai-compat") {
-    return typeof raw.credentialRef === "string" && raw.credentialRef.length > 0
-      ? raw.credentialRef
-      : `provider:${name}`;
-  }
-  if (raw.kind === "codex-oauth") {
-    return typeof raw.credentialsPath === "string"
-      ? expandHome(raw.credentialsPath)
-      : `provider:${name}`;
-  }
-  if (typeof raw.credentialRef === "string") return raw.credentialRef;
-  return raw.kind;
+  const credentialRef = providerCredentialRefFor(provider);
+  return credentialRef !== undefined && credentialRef.length > 0 ? credentialRef : `provider:${name}`;
 }
 
 /**

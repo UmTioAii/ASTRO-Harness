@@ -206,7 +206,9 @@ function providerIdentity(
   }
   const rawCredentialRef = providerConfig.credentialRef;
   return {
-    credentialRef: typeof rawCredentialRef === "string" ? rawCredentialRef : providerConfig.kind,
+    credentialRef: typeof rawCredentialRef === "string" && rawCredentialRef.length > 0
+      ? rawCredentialRef
+      : providerConfig.kind,
     quotaDomain,
   };
 }
@@ -854,6 +856,39 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       providerFor: (target) => providerForModel(target),
     });
   };
+  /**
+   * Provider escopado ao run do filho (A11): locks, fallback e move usam o
+   * childRun/agent do filho, nunca as closures do run pai. Sem cache
+   * compartilhado entre filhos: cada delegação monta a própria cadeia.
+   */
+  const providerForChild = (
+    m: ModelEntry,
+    profile: string | undefined,
+    routing: ModelRouting | undefined,
+    childRun: string,
+    childAgent: string,
+  ): Provider => {
+    const build = (target: ModelEntry, targetProfile: string | undefined): Provider => {
+      const built = (config.providers[target.provider]?.fallback ?? []).length > 0
+        ? providerChain(
+            config, target, env, loaded.providerFactories, audit, childRun, ledger,
+            quotaLimits, targetProfile, approveSwap, () => childAgent, priceOf,
+          )
+        : createGuardedProvider(
+            config, target, env, loaded.providerFactories, audit, childRun, ledger,
+            quotaLimits, targetProfile, () => childAgent,
+          );
+      return withCache(built, cacheScope(target));
+    };
+    const base = build(m, profile);
+    if (routing === undefined || profile !== undefined) return base;
+    return createRoutedProvider({
+      routing,
+      fallback: m,
+      resolve: (key) => registry.require(key),
+      providerFor: (target) => build(target, undefined),
+    });
+  };
 
   // O shell não deve ver chaves de nenhum provider configurado, mesmo inativo
   const secretEnvNames: string[] = [];
@@ -923,6 +958,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     knownAgents: () => registry.listAgentNames(),
     parallel: config.spawn?.parallel === true,
     maxActive: config.maxActive ?? 2,
+    activeCount: () => activeLocks(ledger).filter((lock) => lock.run === redactSecrets(run)).length,
     accountOf: (agent) => {
       const target = registry.requireAgent(agent);
       const targetModel = registry.resolveModel(target);
@@ -962,13 +998,16 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       // Run própria para o filho: não sobrescreve o estado do run pai no ledger.
       const childRun = `${run}.task.${randomUUID()}`;
       const targetIdentity = providerIdentity(config, targetModel.provider);
+      const childProvider = sameAccount
+        ? providerFor(targetModel, target.profile, target.modelRouting)
+        : providerForChild(targetModel, target.profile, target.modelRouting, childRun, agent);
       const result = await runSession({
         run: childRun,
         agent,
         ...(targetIdentity.credentialRef === undefined ? {} : { credentialRef: targetIdentity.credentialRef }),
         quotaDomain: targetIdentity.quotaDomain,
         cwd,
-        provider: providerFor(targetModel, target.profile, target.modelRouting),
+        provider: childProvider,
         model: targetModel,
         executor,
         ledger,
@@ -992,6 +1031,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ...(signal === undefined ? {} : { signal }),
         ...(quotaLimits === undefined ? {} : { quotaLimits }),
         ...(budget === undefined ? {} : { budget }),
+        ...(budget === undefined ? {} : { budgetReserve: (m: ModelEntry, profile?: string) => reserveForCall(config, registry, m, profile) }),
         ...(resolveIdentity === undefined ? {} : { resolveIdentity }),
         ...(target.profile === undefined ? {} : { agentProfile: target.profile }),
       }, prompt);

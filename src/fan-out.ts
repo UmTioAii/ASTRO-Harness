@@ -22,6 +22,8 @@ export interface FanOutOptions {
   /** Teto de jobs simultâneos; inteiro positivo. */
   maxActive: number;
   signal?: AbortSignal;
+  /** Só no caminho serial: interrompe a fila (ex.: pausa de permissão). */
+  stopOnError?: (error: unknown) => boolean;
 }
 
 function errorMessage(error: unknown): string {
@@ -50,7 +52,7 @@ export async function runFanOut<T>(
   };
   opts.signal?.addEventListener("abort", abortAll, { once: true });
 
-  const runOne = async (job: FanOutJob<T>, index: number): Promise<void> => {
+  const runOne = async (job: FanOutJob<T>, index: number, stopOnError?: (error: unknown) => boolean): Promise<void> => {
     if (opts.signal?.aborted === true) {
       results[index] = { id: job.id, ok: false, error: "aborted" };
       return;
@@ -59,12 +61,13 @@ export async function runFanOut<T>(
       results[index] = { id: job.id, ok: true, value: await job.run(controllers[index]!.signal) };
     } catch (error) {
       results[index] = { id: job.id, ok: false, error: errorMessage(error) };
+      if (stopOnError?.(error) === true) throw error;
     }
   };
 
   try {
     if (!opts.parallel) {
-      for (const [index, job] of jobs.entries()) await runOne(job, index);
+      for (const [index, job] of jobs.entries()) await runOne(job, index, opts.stopOnError);
       return results;
     }
 
@@ -80,7 +83,7 @@ export async function runFanOut<T>(
     let active = 0;
     const waiters: Array<() => void> = [];
     const acquire = async (): Promise<void> => {
-      if (active >= opts.maxActive) await new Promise<void>((resolve) => waiters.push(resolve));
+      while (active >= opts.maxActive) await new Promise<void>((resolve) => waiters.push(resolve));
       active++;
     };
     const release = (): void => {
