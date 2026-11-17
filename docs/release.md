@@ -44,13 +44,13 @@ bun run smoke
 
 ## 4. Pacote e instalação limpa
 
-Depois do merge, crie a tag no commit do merge e trabalhe nela (em estável, remova `--prerelease`); §1 e §4–§8 no mesmo shell, sem worktree sujo:
+Depois do merge, na raiz do repo, crie a tag no commit do merge e trabalhe nela (em estável, remova `--prerelease`; `<notas.md>` fora do repo, senão a árvore suja aborta após o Release); §1 e §4–§8 no mesmo shell, sem worktree sujo:
 
 ```bash
-MERGE=$(gh pr view <pr-do-bump> --json mergeCommit -q .mergeCommit.oid)   # PR do bump
-gh release create "v<versão>" --target "$MERGE" --prerelease --notes-file <notas.md>
-git fetch --tags --force && git switch --detach "v$(npm pkg get version | tr -d '"')"
-[ "$(git describe --tags --exact-match)" = "v$(npm pkg get version | tr -d '"')" ] && [ -z "$(git status --porcelain)" ] || exit 1   # tag = versão; árvore limpa
+MERGE=$(gh pr view "<pr-do-bump>" --json mergeCommit -q .mergeCommit.oid) && TAG="v$(npm pkg get version | tr -d '"')" && [ -n "$MERGE" ] || exit 1   # PR do bump
+gh release create "$TAG" --target "$MERGE" --prerelease --notes-file "<notas.md>"
+git fetch --tags --force && git switch --detach "$TAG"
+[ "$(git rev-parse HEAD)" = "$MERGE" ] && [ "$(git describe --tags --exact-match)" = "$TAG" ] && [ -z "$(git status --porcelain)" ] || exit 1   # merge/tag/árvore limpa
 bun install --frozen-lockfile
 npm pack --dry-run                  # lista: dist/, README.md, LICENSE, package.json
 PACKDIR=$(mktemp -d) && npm pack --pack-destination "$PACKDIR"
@@ -86,7 +86,7 @@ createServer((req, res) => {
 }).listen(8787, "127.0.0.1", () => console.log("mock: http://127.0.0.1:8787/v1"));
 ```
 
-No diretório limpo do §4 (mesmo shell, terminal interativo). O mock é loopback; o opt-in abaixo vale só para este processo e desliga a recusa de loopback e faixas privadas (RFC1918, CGNAT, ULA) em toda saída do `astro` (provider, `web_fetch`, webhook, MCP, telemetria, skill); metadados e link-local seguem bloqueados (`src/url-safety.ts`; `docs/web-tools.md`, `I-11`):
+No diretório limpo do §4 (mesmo shell, terminal interativo). O mock é loopback; o opt-in abaixo vale só para este processo e libera loopback, RFC1918 e ULA em toda saída do `astro` (provider, `web_fetch`, webhook, MCP, telemetria, skill); CGNAT (100.64/10), metadados e link-local seguem bloqueados (`src/url-safety.ts`; `docs/web-tools.md`, `I-11`):
 
 ```bash
 node mock-openai.mjs &
@@ -109,7 +109,7 @@ ASTRO_ALLOW_PRIVATE_URLS=1 ./node_modules/.bin/astro    # opt-in de dev: só nes
 Publique o `.tgz` já testado, com a tag de pré-release:
 
 ```bash
-[ -f "$TARBALL" ] || exit 1
+[ -n "$TAG" ] && [ -f "$TARBALL" ] && printf '%s' "$TARBALL" | grep -Fq "${TAG#v}" || exit 1
 npm publish "$TARBALL" --tag alpha "--@umtioai:registry=https://registry.npmjs.org/"
 ```
 
