@@ -142,9 +142,30 @@ function safeLink(href: string, label: string, format: WebFetchFormat): string {
   return format === "markdown" ? `[${label}](${target})` : label;
 }
 
+/**
+ * Bloco raw cortado pelo cap (sem `</script>`/`</style>`) vai até o EOF: o
+ * resto da resposta é conteúdo do bloco, nunca texto da página. Sem isso, só
+ * remover a tag de abertura devolveria o JS/CSS cru (#57).
+ */
+function dropUnterminatedRawBlocks(html: string): string {
+  const open = /<(script|style)\b[^>]*>/gi;
+  let searchFrom = 0;
+  for (;;) {
+    open.lastIndex = searchFrom;
+    const match = open.exec(html);
+    if (match === null) return html;
+    const close = new RegExp(`</${match[1]}\\s*>`, "gi");
+    close.lastIndex = open.lastIndex;
+    const closing = close.exec(html);
+    if (closing === null) return html.slice(0, match.index);
+    searchFrom = closing.index + closing[0].length;
+  }
+}
+
 /** Remove blocos perigosos e converte a estrutura básica em markdown/texto. */
 export function htmlToText(html: string, format: WebFetchFormat): string {
   let text = html.replace(/<!doctype[^>]*>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  text = dropUnterminatedRawBlocks(text);
   text = text.replace(BLOCKS, "").replace(SELF_CLOSING_BLOCKS, "");
   text = text.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level: string, inner: string) => (
     format === "markdown" ? `\n${"#".repeat(Number(level))} ${stripTags(inner).trim()}\n` : `\n${stripTags(inner).trim()}\n`
