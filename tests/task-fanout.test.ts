@@ -170,6 +170,36 @@ describe("task fan-out (A11)", () => {
     expect(audit.readAll().filter((event) => event.tipo === "task.delegated")).toHaveLength(1);
   });
 
+  test("serial não consulta activeCount nem o ledger", async () => {
+    let reads = 0;
+    const { tool, ctx } = setup({
+      activeCount: () => {
+        reads++;
+        throw new Error("ledger lido no caminho serial");
+      },
+    });
+    const result = await tool.execute({ agent: "a", prompt: "um" }, ctx);
+    expect(result.output).toBe("a:um");
+    expect(reads).toBe(0);
+  });
+
+  test("single gated com um slot livre delega", async () => {
+    const { tool, probe, ctx } = setup({ parallel: true, activeCount: () => 1 });
+    const result = await tool.execute({ agent: "a", prompt: "um" }, ctx);
+    expect(result.isError).not.toBe(true);
+    expect(result.output).toBe("a:um");
+    expect(probe.calls).toHaveLength(1);
+  });
+
+  test("maxActive/live fracionários normalizam sem RangeError", async () => {
+    const { tool, ctx } = setup({ parallel: true, maxActive: 2.5, activeCount: () => 1.2 });
+    const result = await tool.execute({
+      tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
+    }, ctx);
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(result.output).tasks.map((item: { status: string }) => item.status)).toEqual(["ok", "ok"]);
+  });
+
   test("serial tasks com a flag desligada não é barrado por slot", async () => {
     const { tool, probe, ctx } = setup({ maxActive: 1, activeCount: () => 1 });
     const result = await tool.execute({
