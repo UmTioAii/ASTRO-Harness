@@ -292,6 +292,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           cwd,
           astroHome: resolveAstroHome(),
           showHidden: session.attachmentsShowHidden?.() === true,
+          ...(session.attachmentProtectedPaths === undefined ? {} : { protectedPaths: session.attachmentProtectedPaths() }),
           confirmOutsideCwd: async (absolute) =>
             approvals === undefined
               ? false

@@ -8,7 +8,7 @@ import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } fr
 import { homedir, userInfo } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { classifyPath, createPathClassifier, type PathClassifierContext } from "../path-class";
-import { redactSecrets } from "../sanitize-external";
+import { redactSecrets, PRIVATE_KEY_BEGIN, PRIVATE_KEY_END } from "../sanitize-external";
 import { canonicalize, realpathPreservingDots } from "../tools/paths";
 import {
   assertAttachmentSize,
@@ -27,6 +27,22 @@ export { AttachmentError };
 
 /** Chunk de leitura do range em arquivo acima do teto (ADR-0026). */
 const READ_CHUNK_BYTES = 64 * 1024;
+
+/** Substituto de cada linha de um bloco PEM selecionado por faixa (preserva numeração). */
+const REDACTED = "[REDACTED]";
+
+/**
+ * Estado de span PEM por linha (I-03): um `range` que começa no interior de um
+ * bloco não vê o BEGIN, então `redactSecrets` não o cobre. Aqui toda linha do
+ * span vira `[REDACTED]`, mantendo a contagem de linhas original.
+ */
+function pemLineState(line: string, inside: boolean): { secret: boolean; inside: boolean } {
+  const begin = PRIVATE_KEY_BEGIN.test(line);
+  const end = PRIVATE_KEY_END.test(line);
+  if (!inside && !begin) return { secret: false, inside: false };
+  // BEGIN e END na mesma linha fecham um span completo.
+  return { secret: true, inside: !end };
+}
 
 /** Entrada de `loadAttachment`; `confirmOutsideCwd` é injetado pela superfície. */
 export interface LoadAttachmentInput {
@@ -158,6 +174,7 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
     let skippedBytes = 0;
     let line = 1;
     let lastLine = 1;
+    let pemInside = false;
     let done = false;
     const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
     while (!done) {
@@ -172,10 +189,18 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
         const newline = view.indexOf(0x0a, cursor);
         const end = newline === -1 ? read : newline;
         const length = end - cursor;
+        // O span PEM é rastreado mesmo em linhas ignoradas: o BEGIN pode estar antes da faixa.
+        // `-` filtra o decode para as poucas linhas que podem conter um marcador.
+        const lineText = view.subarray(cursor, end).includes(0x2d) ? view.toString("latin1", cursor, end) : "";
+        const pem = pemLineState(lineText, pemInside);
+        pemInside = pem.inside;
         if (line >= requested.start && line <= requested.end) {
-          if (outputBytes + length > limit) throw rangeTooLarge(spec, limit, real);
-          view.copy(output, outputBytes, cursor, end);
-          outputBytes += length;
+          const payload = pem.secret ? Buffer.from(REDACTED, "utf8") : null;
+          const payloadBytes = payload === null ? length : payload.length;
+          if (outputBytes + payloadBytes > limit) throw rangeTooLarge(spec, limit, real);
+          if (payload === null) view.copy(output, outputBytes, cursor, end);
+          else payload.copy(output, outputBytes);
+          outputBytes += payloadBytes;
         } else {
           skippedBytes += length;
         }
@@ -323,14 +348,23 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
   }
 
   // Ordem do ADR-0026 (mesma de `readTextRange`): fatiar → redigir → medir.
-  // Redigir antes de fatiar colapsa bloco multi-linha (PEM) e desloca `start`/`end`.
+  // O span PEM é marcado sobre o texto inteiro antes de fatiar: um range que
+  // começa no interior do bloco não vê o BEGIN e vazaria o corpo da chave (I-03).
   const rawText = Buffer.from(bytes).toString("utf8");
   let text = rawText;
   let range: LoadedAttachment["range"];
   if (rangeSpec !== undefined) {
     const lines = rawText.split("\n");
-    range = parseRange(rangeSpec, lines.length);
-    text = lines.slice(range.start - 1, range.end).join("\n");
+    const parsed = parseRange(rangeSpec, lines.length);
+    range = parsed;
+    let pemInside = false;
+    const selected: string[] = [];
+    lines.forEach((line, index) => {
+      const pem = pemLineState(line, pemInside);
+      pemInside = pem.inside;
+      if (index + 1 >= parsed.start && index + 1 <= parsed.end) selected.push(pem.secret ? REDACTED : line);
+    });
+    text = selected.join("\n");
   }
   text = redactSecrets(text);
   const sizeBytes = Buffer.byteLength(text, "utf8");

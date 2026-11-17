@@ -53,9 +53,13 @@ const REDACT_ENV = new RegExp(
 
 const REDACTED = "[REDACTED]";
 
+/** Marcadores de bloco PEM; `REDACT_PEM` e os leitores por faixa usam o mesmo par. */
+export const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+export const PRIVATE_KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
+
 // JWT (header eyJ…, reusa o prefixo de `src/secrets.ts`) e bloco PEM de chave privada.
 const REDACT_JWT = new RegExp(`\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b`, "g");
-const REDACT_PEM = new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----`, "g");
+const REDACT_PEM = new RegExp(`${PRIVATE_KEY_BEGIN.source}[\\s\\S]*?${PRIVATE_KEY_END.source}`, "g");
 // Hex (#252): chave/token em hex não tem prefixo nem JWT/PEM. 64+ hex é
 // redigido sem contexto. SHA-1/git (40) só com rótulo de credencial, para
 // `git log`/`commit <sha>` continuarem legíveis; 32 hex (MD5/checksum) fica

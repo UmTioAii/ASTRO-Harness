@@ -355,6 +355,14 @@ export class AgentSession {
     return this.#config.attachments.directory.showHidden;
   }
 
+  /** Ledger e audit resolvidos: estado do harness que nunca entra como anexo (I-11, #392). */
+  attachmentProtectedPaths(): readonly string[] {
+    return [
+      resolvePath(this.#cwd, this.#config.paths.ledger),
+      resolvePath(this.#cwd, this.#config.paths.audit),
+    ];
+  }
+
   /**
    * Troca `permissions.mode` pela tela `/config` (#273): persiste no arquivo
    * primeiro (atômico e validado); se a escrita falhar, o runtime não muda.
