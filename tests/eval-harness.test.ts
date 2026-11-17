@@ -65,6 +65,39 @@ describe("eval harness (F5-2)", () => {
     expect(saved.total).toBe(65);
   }, 30000);
 
+  test("runCase com scenario.seed/sidecars instala a skill e verifica o sha256", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-scenario-seed-"));
+    const dir = join(root, "01-skills");
+    mkdirSync(join(dir, "expected", "out"), { recursive: true });
+    mkdirSync(join(dir, "fixtures"), { recursive: true });
+    writeFileSync(join(dir, "task.md"), "/verify conferir a skill instalada\n");
+    writeFileSync(join(dir, "expected", "out", "ok.txt"), "ok\n");
+    writeFileSync(join(dir, "fixtures", "verify.md"), [
+      "---", "name: verify", "description: Verifica a skill", "version: 1.0.0",
+      "permissions:", "  tools: [write_file]", "---",
+      "Confirme a skill instalada.", "",
+    ].join("\n"));
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({
+      schema: 1, id: "scenario-seed", category: "skills", difficulty: 2, tags: ["writing-code"], files: ["out/ok.txt"],
+    }));
+    writeFileSync(join(dir, "scenario.json"), JSON.stringify({
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "fixtures/verify.md", to: ".astro/skills/verify/SKILL.md" }],
+      sidecars: [".astro/skills/verify/SKILL.md"],
+      turns: [
+        { toolCalls: [{ name: "write_file", arguments: { path: "out/ok.txt", content: "ok\n" } }] },
+        { content: "seed ok" },
+      ],
+      expect: { final: "seed ok", audit: ["skill.loaded"] },
+    }));
+
+    const [golden] = listGoldenCases(root);
+    const result = await runCase(golden!, { mock: true });
+    expect(result.diffSummary).toEqual([]);
+    expect(result.passed).toBe(true);
+  }, 30000);
+
   test("runCase detecta divergência quando o esperado é sabotado", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-sabot-"));
     const dir = join(root, "01-case"); // listGoldenCases espera subdiretórios
