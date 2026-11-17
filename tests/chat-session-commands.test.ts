@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HELP_TEXT, parseCommand } from "../src/chat/commands";
 import { runRepl, type ChatSession, type ReplIO } from "../src/chat/repl";
 import type { SessionSnapshot, TurnResult } from "../src/chat/agent-session";
 import { SessionApi } from "../src/chat/session-api";
-import type { SessionRecord } from "../src/chat/store";
+import { SessionStore, type SessionRecord } from "../src/chat/store";
 import { nodeReplOptions } from "../src/chat/node-io";
 
 class ScriptedIO implements ReplIO {
@@ -177,5 +177,97 @@ describe("comandos de sessão e estilo do chat (T1.5, #173)", () => {
     await runRepl(new FakeSession(), io, { sessionApi });
     expect(io.outputs.filter((item) => item.startsWith("erro:"))).toHaveLength(2);
     sessionApi.close();
+  });
+});
+
+function savedRecord(id: string, startedAt: string, content = "conteúdo"): SessionRecord {
+  return {
+    schemaVersion: 1, id, startedAt, model: "p/m1",
+    messages: [{ role: "user", content }], turns: 1, tokensIn: 10, tokensOut: 5, costUsd: null,
+  };
+}
+
+describe("/sessions delete (#366)", () => {
+  test("exclui por número e por id, purgando a cópia JSON legada e sem ecoar prompt", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-chat-delete-"));
+    const astroDir = join(dir, ".astro");
+    const legacy = new SessionStore(join(astroDir, "sessions"));
+    legacy.write(savedRecord("old", "2026-10-01T10:00:00.000Z", "prompt privado do old"));
+    legacy.write(savedRecord("new", "2026-10-02T10:00:00.000Z", "prompt privado do new"));
+    const sessionApi = new SessionApi(astroDir);
+    const io = new ScriptedIO(["/sessions delete 2", "s", "/sessions delete new", "s", "/exit"]);
+    try {
+      await runRepl(new FakeSession(), io, { sessionApi, interactive: true });
+
+      expect(io.outputs).toContain("sessão excluída: old");
+      expect(io.outputs).toContain("sessão excluída: new");
+      expect(sessionApi.list().map(({ id }) => id)).not.toContain("old");
+      expect(sessionApi.list().map(({ id }) => id)).not.toContain("new");
+      expect(legacy.list()).toEqual([]);
+      expect(io.outputs.join("\n")).not.toContain("prompt privado");
+    } finally {
+      sessionApi.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancelar a confirmação mantém a sessão e a cópia legada", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-chat-delete-cancel-"));
+    const astroDir = join(dir, ".astro");
+    const legacy = new SessionStore(join(astroDir, "sessions"));
+    legacy.write(savedRecord("keep", "2026-10-01T10:00:00.000Z"));
+    const sessionApi = new SessionApi(astroDir);
+    const io = new ScriptedIO(["/sessions delete 1", "n", "/exit"]);
+    try {
+      await runRepl(new FakeSession(), io, { sessionApi, interactive: true });
+
+      expect(io.outputs).toContain("exclusão cancelada: keep");
+      expect(sessionApi.load("keep").id).toBe("keep");
+      expect(legacy.list().map(({ id }) => id)).toEqual(["keep"]);
+    } finally {
+      sessionApi.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("recusa excluir a sessão atual e valida uso e índice", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-chat-delete-current-"));
+    const sessionApi = new SessionApi(join(dir, ".astro"));
+    const io = new ScriptedIO(["/sessions delete", "/sessions delete 9", "/sessions delete 1", "/exit"]);
+    try {
+      sessionApi.create(savedRecord("s1", "2026-10-28T12:00:00.000Z"));
+      await runRepl(new FakeSession(), io, { sessionApi, interactive: true });
+
+      expect(io.outputs).toContain("uso: /sessions delete <número|id>");
+      expect(io.outputs).toContain("índice fora da lista; use /sessions");
+      expect(io.outputs).toContain("não é possível excluir a sessão atual");
+      expect(sessionApi.list().map(({ id }) => id)).toEqual(["s1"]);
+    } finally {
+      sessionApi.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("falha da exclusão vira erro redigido", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-chat-delete-error-"));
+    const astroDir = join(dir, ".astro");
+    new SessionStore(join(astroDir, "sessions")).write(savedRecord("other", "2026-10-01T10:00:00.000Z"));
+    class FailingApi extends SessionApi {
+      override delete(): boolean {
+        throw new Error("falha apiKey=SEGREDO123");
+      }
+    }
+    const sessionApi = new FailingApi(astroDir);
+    const io = new ScriptedIO(["/sessions delete 1", "s", "/exit"]);
+    try {
+      await runRepl(new FakeSession(), io, { sessionApi, interactive: true });
+
+      const error = io.outputs.find((item) => item.startsWith("erro:"))!;
+      expect(error).toContain("falha");
+      expect(error).not.toContain("SEGREDO123");
+    } finally {
+      sessionApi.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
