@@ -61,21 +61,31 @@ export interface BenchOptions {
   outDir?: string;
 }
 
+/** Termos do filtro, sem espaços nas pontas nem entradas vazias. */
+function filterTerms(filter: string | undefined): string[] {
+  return (filter ?? "")
+    .split(",")
+    .map((term) => term.trim())
+    .filter((term) => term !== "");
+}
+
 /**
- * Filtra modelos com a mesma sintaxe do `astro bench --models`: substrings de
- * `provider/model` separadas por vírgula. Filtro vazio ou ausente devolve
- * todos; sem correspondência devolve lista vazia.
+ * Filtra modelos com a mesma sintaxe do `astro bench --models`: termos
+ * separados por vírgula. Termo sem `/` casa o provider exato; termo com `/`
+ * é substring de `provider/model`. Filtro vazio ou ausente devolve todos;
+ * sem correspondência devolve lista vazia.
  */
 export function filterModels(
   models: readonly ModelEntry[],
   filter: string | undefined,
 ): ModelEntry[] {
-  const terms = (filter ?? "")
-    .split(",")
-    .map((term) => term.trim())
-    .filter((term) => term !== "");
+  const terms = filterTerms(filter);
   if (terms.length === 0) return [...models];
-  return models.filter((m) => terms.some((term) => `${m.provider}/${m.id}`.includes(term)));
+  return models.filter((m) =>
+    terms.some((term) =>
+      term.includes("/") ? `${m.provider}/${m.id}`.includes(term) : m.provider === term,
+    ),
+  );
 }
 
 export type BenchModelSelection =
@@ -92,10 +102,13 @@ export function selectBenchModels(
   filter: string | undefined,
 ): BenchModelSelection {
   const selected = filterModels(models, filter);
-  if (selected.length === 0) {
-    return { ok: false, error: "nenhum modelo ativo corresponde ao filtro" };
-  }
-  return { ok: true, models: selected };
+  if (selected.length > 0) return { ok: true, models: selected };
+  return {
+    ok: false,
+    error: filterTerms(filter).length > 0
+      ? "nenhum modelo ativo corresponde ao filtro"
+      : "nenhum modelo ativo na configuração",
+  };
 }
 
 function percentile(sorted: readonly number[], p: number): number {

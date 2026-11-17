@@ -38,12 +38,13 @@ Objetivo: como `astro eval` e `astro bench` medem qualidade e desempenho, com fo
 
 ### Filtro de provider/modelo
 
-`--models` aceita substrings de `provider/model`, separadas por vírgula; o filtro vazio ou ausente seleciona todos os modelos ativos.
+`--models` aceita termos separados por vírgula. Termo sem `/` casa o provider exato; termo com `/` é substring de `provider/model`. Filtro vazio, ausente ou só com espaços/vírgulas seleciona todos os modelos ativos.
 
 | Filtro | Seleciona |
 |---|---|
-| `nvidia` | Todos os modelos do provider `nvidia` |
+| `nvidia` | Modelos cujo provider é exatamente `nvidia` (não pega id de outro provider) |
 | `openrouter/llama` | Modelos do `openrouter` cujo id contém `llama` |
+| `/llama` | Qualquer provider cujo id contém `llama` |
 | `nvidia,openrouter` | União dos dois providers |
 
 A mesma regra vive em `filterModels`/`selectBenchModels` (`src/eval/bench.ts`): o CLI usa `selectBenchModels`, e testes e matriz usam o mesmo predicado.

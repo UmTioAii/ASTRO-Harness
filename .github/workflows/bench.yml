@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       models:
-        description: "Filtro de provider/modelo (substring de provider/model, vírgula separa)"
+        description: "Filtro de provider/modelo (provider exato ou substring de provider/model, vírgula separa)"
         required: false
         default: ""
       runs:
