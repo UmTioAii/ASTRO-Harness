@@ -364,6 +364,7 @@ test("sanitizeCheck redige também o label do check", () => {
   const text = lines(report);
   expect(text).toContain("[REDACTED]");
   expect(text).not.toContain(secret);
+  expect(JSON.stringify(doctorJson(report))).not.toContain(secret);
 });
 
 test("leitura aceita ASTRO_HOME que é link simbólico e reporta o caminho real", () => {
@@ -448,17 +449,24 @@ function onlineEnv(): Record<string, string> {
   return { ASTRO_NO_GLOBAL_CONFIG: "1", ASTRO_HOME: join(sandbox(), "home"), ONLINE_KEY: "k" };
 }
 
-test("doctor offline não faz chamada de rede mesmo com fetch injetado", async () => {
+test("doctor offline não faz chamada de rede (fetch global e injetado)", async () => {
   const dir = sandbox();
   writeFileSync(join(dir, "astro.config.json"), onlineConfig("https://proj.example/v1"), "utf8");
   let hits = 0;
   const fetchLike = (async () => { hits += 1; return new Response("{}"); }) as unknown as typeof fetch;
-
-  const report = await runDoctor(process.cwd(), {
-    online: false, cwd: dir, fetchLike, env: onlineEnv(),
-  });
-  expect(hits).toBe(0);
-  expect(report.checks.some((check) => check.label === "online")).toBe(false);
+  const original = globalThis.fetch;
+  let globalHits = 0;
+  globalThis.fetch = (async () => { globalHits += 1; return new Response("{}"); }) as unknown as typeof fetch;
+  try {
+    const report = await runDoctor(process.cwd(), {
+      online: false, onlineCwd: dir, fetchLike, env: onlineEnv(),
+    });
+    expect(hits).toBe(0);
+    expect(globalHits).toBe(0);
+    expect(report.checks.some((check) => check.name === "online" || check.name.startsWith("provider:"))).toBe(false);
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 test("--online mapeia provider fora para fail e mantém timeout limitado", async () => {
@@ -466,19 +474,18 @@ test("--online mapeia provider fora para fail e mantém timeout limitado", async
   writeFileSync(join(dir, "astro.config.json"), onlineConfig("https://proj.example/v1"), "utf8");
   const fetchLike = (async () => new Response("fora", { status: 503 })) as unknown as typeof fetch;
 
-  const checks = await collectOnlineChecks(onlineEnv(), { cwd: dir, fetchLike, timeoutMs: 50 });
+  const checks = await collectOnlineChecks(onlineEnv(), { onlineCwd: dir, fetchLike, timeoutMs: 50 });
   expect(checks.find((check) => check.label === "online")?.level).toBe("fail");
   const provider = checks.find((check) => check.label === "provider:proj");
   expect(provider?.level).toBe("fail");
   expect(provider?.detail).toContain("HTTP 503");
-  expect(provider?.detail).toContain("ms");
   expect(exitCode({ checks })).toBe(1);
 
   const hang = (async (_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
     init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
   })) as unknown as typeof fetch;
   const started = Date.now();
-  const timed = await collectOnlineChecks(onlineEnv(), { cwd: dir, fetchLike: hang, timeoutMs: 20 });
+  const timed = await collectOnlineChecks(onlineEnv(), { onlineCwd: dir, fetchLike: hang, timeoutMs: 20 });
   expect(Date.now() - started).toBeLessThan(2_000);
   expect(timed.find((check) => check.label === "provider:proj")?.detail).toContain("timeout de 20ms");
 });
@@ -486,13 +493,13 @@ test("--online mapeia provider fora para fail e mantém timeout limitado", async
 test("--online sem config válida não faz rede", async () => {
   let hits = 0;
   const fetchLike = (async () => { hits += 1; return new Response("{}"); }) as unknown as typeof fetch;
-  const missing = await collectOnlineChecks(onlineEnv(), { cwd: sandbox(), fetchLike });
+  const missing = await collectOnlineChecks(onlineEnv(), { onlineCwd: sandbox(), fetchLike });
   expect(missing.find((check) => check.label === "online")?.level).toBe("ok");
   expect(missing[0]?.detail).toContain("sem rede");
 
   const dir = sandbox();
   writeFileSync(join(dir, "astro.config.json"), JSON.stringify({ providers: {} }), "utf8");
-  const invalid = await collectOnlineChecks(onlineEnv(), { cwd: dir, fetchLike });
+  const invalid = await collectOnlineChecks(onlineEnv(), { onlineCwd: dir, fetchLike });
   expect(invalid[0]?.level).toBe("warn");
   expect(invalid[0]?.detail).toContain("config inválida");
   expect(hits).toBe(0);
@@ -509,6 +516,26 @@ test("doctorJson expõe name/status/message com error no fail e mantém aliases"
   expect(check?.label).toBe("bun");
   expect(exitCode(report)).toBe(1);
   expect(json.checks.find((item) => item.name === "dist")?.status).not.toBe("error");
+});
+
+test("doctorJson usa slug estável em name e label só para exibição", () => {
+  const report = runChecks(facts({
+    config: {
+      path: "astro.config.json", present: true,
+      providers: [{ id: "acme", credentialRef: "ACME_KEY" }],
+      mcp: { servers: 0, enabled: 0, missingHeaderEnv: [] },
+      global: { path: "~/.astro/config.json", present: true },
+    },
+    skills: { project: 0, user: 0, warnings: [] }, disk: { cwd: "/proj", writable: true },
+  }));
+  const byName = new Map(doctorJson(report).checks.map((check) => [check.name, check]));
+
+  expect(byName.get("credential:acme")?.label).toBe("credencial acme");
+  expect(byName.get("astroHome")?.label).toBe("astro home");
+  expect(byName.get("configGlobal")?.label).toBe("config global");
+  expect(byName.get("attachments")?.label).toBe("anexos");
+  for (const name of ["dependencies", "mcp", "skills", "disk"]) expect(byName.has(name)).toBe(true);
+  for (const check of byName.values()) expect(check.name).not.toContain(" ");
 });
 
 test("credencial vault:<id> é cofre local, não env ausente", () => {

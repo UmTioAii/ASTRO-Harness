@@ -81,7 +81,7 @@ describe("astro doctor CLI (#61)", () => {
     expect(out).toContain("astro doctor [--json] [--fix] [--online]");
   });
 
-  test("--online sem credencial vira check error e exit 1, sem rede", async () => {
+  test("--online sem credencial agrega degraded como error e exit 1, sem rede", async () => {
     const dir = sandbox();
     writeFileSync(join(dir, "astro.config.json"), JSON.stringify({
       providers: {
