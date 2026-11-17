@@ -102,8 +102,10 @@ describe("checkpoint com nome de agent fora do alfabeto seguro (#135)", () => {
   });
 });
 
+// O loop multi grava checkpoint em disco (uma vez por agente) além de ledger/audit
+// por step e handoffs reais; o default de 5 s não cobre o Windows CI.
 describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
-  test("handoff troca o agent ativo e o checkpoint é do agente que está executando", async () => {
+  test("handoff troca o agent ativo e o checkpoint é do agente que está executando", { timeout: 30_000 }, async () => {
     const agents: Record<string, AgentEntry> = {
       planner: { model: "openai/gpt-4o-mini", maxSteps: 4, tools: ["handoff"], systemPrompt: "p" },
       coder: { model: "openai/gpt-4o-mini", maxSteps: 4, tools: ["write_file"], systemPrompt: "c" },
@@ -125,12 +127,13 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
     expect(existsSync(checkpointPath(s.cwd, "r1", "planner"))).toBe(false);
     const checkpoint = JSON.parse(readFileSync(path, "utf8")) as CheckpointV1;
     expect(checkpoint.changedFiles).toEqual(["a.txt", "b.txt"]); // inclui o arquivo executado no próprio turno
-    const event = s.audit.readAll().find((e) => e.tipo === "loop.checkpoint");
-    expect(event?.agent).toBe("coder");
-    expect(event?.payload).toMatchObject({ step: 3, trigger: "turns" });
+    const event = s.audit.readAll().filter((e) => e.tipo === "loop.checkpoint");
+    expect(event).toHaveLength(1); // uma gravação por agente, não uma por step/tool
+    expect(event[0]?.agent).toBe("coder");
+    expect(event[0]?.payload).toMatchObject({ step: 3, trigger: "turns" });
   });
 
-  test("não-progresso no multi-agent sem decider → NoProgressError e estado interrupted", async () => {
+  test("não-progresso no multi-agent sem decider → NoProgressError e estado interrupted", { timeout: 30_000 }, async () => {
     const agents: Record<string, AgentEntry> = {
       coder: { model: "openai/gpt-4o-mini", maxSteps: 5, tools: ["write_file"], systemPrompt: "c" },
     };
@@ -152,7 +155,7 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
     expect(s.ledger.lastState("r1")?.reason).toBe("no_progress");
   });
 
-  test("onNoProgress=true no multi-agent continua e reseta a sequência", async () => {
+  test("onNoProgress=true no multi-agent continua e reseta a sequência", { timeout: 30_000 }, async () => {
     const agents: Record<string, AgentEntry> = {
       coder: { model: "openai/gpt-4o-mini", maxSteps: 5, tools: ["write_file"], systemPrompt: "c" },
     };
@@ -171,7 +174,7 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
     expect(s.audit.readAll().filter((e) => e.tipo === "loop.no_progress")).toHaveLength(1);
   });
 
-  test("checkpoint do primeiro turno já inclui o arquivo executado pelas tools", async () => {
+  test("checkpoint do primeiro turno já inclui o arquivo executado pelas tools", { timeout: 30_000 }, async () => {
     const agents: Record<string, AgentEntry> = {
       coder: { model: "openai/gpt-4o-mini", maxSteps: 2, tools: ["write_file"], systemPrompt: "c" },
     };
@@ -187,7 +190,7 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
     expect(checkpoint.changedFiles).toEqual(["first.txt"]);
   });
 
-  test("falha de I/O do checkpoint não queima o handoff já recebido", async () => {
+  test("falha de I/O do checkpoint não queima o handoff já recebido", { timeout: 30_000 }, async () => {
     const agents: Record<string, AgentEntry> = {
       planner: { model: "openai/gpt-4o-mini", maxSteps: 2, tools: ["handoff"], systemPrompt: "p" },
       coder: { model: "openai/gpt-4o-mini", maxSteps: 2, tools: ["write_file"], systemPrompt: "c" },
@@ -210,7 +213,7 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
     expect(error!.payload).toMatchObject({ step: 1 });
   });
 
-  test("handoff ping-pong conta o segmento do emissor e para por não-progresso", async () => {
+  test("handoff ping-pong conta o segmento do emissor e para por não-progresso", { timeout: 30_000 }, async () => {
     const agents: Record<string, AgentEntry> = {
       planner: { model: "openai/gpt-4o-mini", maxSteps: 5, tools: ["handoff"], systemPrompt: "p" },
       coder: { model: "openai/gpt-4o-mini", maxSteps: 5, tools: ["handoff"], systemPrompt: "c" },
@@ -234,7 +237,7 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
 });
 
 describe("runTask: config.run chega ao multi-agent e ao filho da task (#135)", () => {
-  test("agent code_reviewer com checkpointAt não morre no caminho e grava o checkpoint", async () => {
+  test("agent code_reviewer com checkpointAt não morre no caminho e grava o checkpoint", { timeout: 30_000 }, async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-loop-app-"));
     let calls = 0;
     const server = Bun.serve({
@@ -278,7 +281,7 @@ describe("runTask: config.run chega ao multi-agent e ao filho da task (#135)", (
     }
   });
 
-  test("filho da task herda checkpointAt/noProgressSegments e o decider do pai", async () => {
+  test("filho da task herda checkpointAt/noProgressSegments e o decider do pai", { timeout: 30_000 }, async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-loop-task-"));
     let childCalls = 0;
     const server = Bun.serve({
