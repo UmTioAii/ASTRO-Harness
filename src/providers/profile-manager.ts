@@ -31,6 +31,15 @@ export interface ProfileView extends ProviderProfile {
   source: ProviderSource;
 }
 
+/** Escrita de perfil recusada porque a camada global está desligada (#459). */
+export class GlobalStoreDisabledError extends Error {
+  override name = "GlobalStoreDisabledError";
+  readonly code = "global_store_disabled";
+  constructor() {
+    super("camada global desligada (--no-global-config); /provider não grava perfis");
+  }
+}
+
 export interface ProfileManagerOptions {
   storePath?: string;
   project?: AstroConfig;
@@ -263,6 +272,11 @@ export class ProfileManager {
   }
 
   #save(store: ProviderStore): void {
+    // Sem a camada global, a leitura é vazia (`readGlobalProfileStore`): gravar no
+    // `providers.json` produziria um perfil que ninguém lê (#459).
+    if (!this.#storeInjected && this.#env.ASTRO_NO_GLOBAL_CONFIG === "1") {
+      throw new GlobalStoreDisabledError();
+    }
     saveProfileStore(store, this.#storePath);
     this.#store = store;
   }

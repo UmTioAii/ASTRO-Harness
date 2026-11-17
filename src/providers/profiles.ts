@@ -747,12 +747,13 @@ export function loadEffectiveConfig(
     throw new ConfigError(`config inválida: "agent.model" referencia o modelo "${declaredAgent.model}", que não está declarado em "models"`);
   }
   // Store legado só é lido com store injetado ou antes da migração; depois dela a
-  // fonte é `config.json` e o legado aposentado nunca mais é lido (#459).
+  // fonte é `config.json` e o legado aposentado nunca mais é lido (#459). Sem a
+  // camada global (`--no-global-config` via env ou opção) o store também é omitido.
   const store = opts.storePath !== undefined
     ? loadProfileStore(opts.storePath)
     : useGlobal
       ? loadGlobalProfileStore(homeEnv)
-      : readGlobalProfileStore(homeEnv);
+      : readGlobalProfileStore({ ...homeEnv, ASTRO_NO_GLOBAL_CONFIG: "1" });
   const envProfile = profileFromEnv(env);
   return resolveEffectiveConfig({
     ...(project === undefined ? {} : { project }),
