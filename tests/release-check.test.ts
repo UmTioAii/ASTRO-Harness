@@ -1,19 +1,24 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  EXPECTED_PACKAGE,
   buildSummary,
   cleanupOnSignal,
   createPlan,
   executePlan,
+  installedAstroBin,
   parseArgs,
   prepareTempDir,
   removeTempDir,
+  resolveStepBinary,
+  runPlannedStep,
   stepEnv,
   tailForFailure,
   tarballFileName,
   tempDirPrefix,
+  verifyInstalledPackage,
   type StepResult,
 } from "../scripts/release-check";
 
@@ -40,7 +45,9 @@ test("tarball npm usa o nome sanitizado do pacote", () => {
 
 test("PEM que cruza a janela de corte ainda é redigido", () => {
   const body = "SENTINEL-PEM-BODY".repeat(1200);
-  const output = `${"x".repeat(20_000)}-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`;
+  const begin = ["-----BEGIN ", "PRIVATE KEY-----"].join("");
+  const end = ["-----END ", "PRIVATE KEY-----"].join("");
+  const output = `${"x".repeat(20_000)}${begin}\n${body}\n${end}`;
 
   const tail = tailForFailure(output);
 
@@ -48,7 +55,7 @@ test("PEM que cruza a janela de corte ainda é redigido", () => {
   expect(tail).not.toContain("SENTINEL-PEM-BODY");
 }, 5000);
 
-test("plano padrão roda qualidade, build, smoke, pack, instalação e help", () => {
+test("plano padrão roda qualidade, build, smoke, pack, instalação, identidade e help", () => {
   const plan = createPlan(base);
 
   expect(plan.steps.map((step) => step.id)).toEqual([
@@ -58,6 +65,7 @@ test("plano padrão roda qualidade, build, smoke, pack, instalação e help", ()
     "smoke",
     "pack",
     "install",
+    "identity",
     "help",
   ]);
   expect(plan.steps.map((step) => step.display)).toEqual([
@@ -67,13 +75,16 @@ test("plano padrão roda qualidade, build, smoke, pack, instalação e help", ()
     "bun run smoke",
     `npm pack --pack-destination ${plan.tempDir}`,
     `npm install --no-save --no-audit --no-fund ${plan.tarball}`,
-    "npx --no-install astro --help",
+    `verificar identidade de ${EXPECTED_PACKAGE}`,
+    `${installedAstroBin(plan.tempDir)} --help`,
   ]);
   expect(plan.tarball).toBe(
     join(plan.tempDir, "umtioai-astro-harness-0.1.0-alpha.3.tgz"),
   );
   expect(plan.steps.find((step) => step.id === "install")?.cwd).toBe(plan.tempDir);
+  expect(plan.steps.find((step) => step.id === "identity")?.cwd).toBe(plan.tempDir);
   expect(plan.steps.find((step) => step.id === "help")?.cwd).toBe(plan.tempDir);
+  expect(plan.steps.find((step) => step.id === "help")?.bin).toBe(installedAstroBin(plan.tempDir));
   expect(plan.steps.some((step) => /publish/.test(`${step.bin} ${step.args.join(" ")}`))).toBe(false);
 }, 5000);
 
@@ -86,11 +97,19 @@ test("--skip-tests remove typecheck e bun test do plano", () => {
     "smoke",
     "pack",
     "install",
+    "identity",
     "help",
   ]);
 }, 5000);
 
-test("pack, install e help usam ambiente sanitizado; bun herda o ambiente", () => {
+test("createPlan recusa tempDir fora da raiz e irmão com prefixo", () => {
+  expect(() => createPlan({ ...base, tempDir: join(root, "..", "victim") })).toThrow("fora da raiz");
+  expect(() => createPlan({ ...base, tempDir: join(root, "astro-release-check-sibling") })).toThrow(
+    "fora da raiz",
+  );
+}, 5000);
+
+test("pack, install e help usam ambiente sanitizado; bun e identidade herdam", () => {
   const plan = createPlan(base);
 
   expect(plan.steps.filter((step) => step.envMode === "sanitized").map((step) => step.id)).toEqual([
@@ -103,6 +122,7 @@ test("pack, install e help usam ambiente sanitizado; bun herda o ambiente", () =
     "test",
     "build",
     "smoke",
+    "identity",
   ]);
 }, 5000);
 
@@ -140,6 +160,51 @@ test("ambiente das etapas npm não leva token nem chave de provider", () => {
   expect(env.npm_config__authToken).toBeUndefined();
   expect(env.ASTRO_HOME).toBeUndefined();
   expect(env.UNRELATED).toBeUndefined();
+}, 5000);
+
+test("help usa o binário local e falha sem ele mesmo com astro global no PATH", () => {
+  const plan = createPlan(base);
+  const help = plan.steps.find((step) => step.id === "help")!;
+  const fakeGlobal = process.platform === "win32" ? "C:\\fake\\astro.cmd" : "/fake/astro";
+
+  expect(help.bin).toBe(installedAstroBin(base.tempDir));
+  expect(resolveStepBinary(help, { exists: () => false, which: () => fakeGlobal })).toBeNull();
+
+  const outcome = runPlannedStep(help, { exists: () => false, which: () => fakeGlobal });
+  expect(outcome.exitCode).toBeNull();
+  expect(outcome.error).toContain("não encontrado");
+}, 5000);
+
+test("identidade instalada precisa ser @umtioai/astro-harness", () => {
+  const temp = mkdtempSync(join(tmpdir(), "astro-release-identity-"));
+  const pkgDir = join(temp, "node_modules", "@umtioai", "astro-harness");
+  const manifest = join(pkgDir, "package.json");
+  mkdirSync(pkgDir, { recursive: true });
+
+  try {
+    writeFileSync(manifest, JSON.stringify({ name: EXPECTED_PACKAGE }));
+    expect(() => verifyInstalledPackage(temp, EXPECTED_PACKAGE)).not.toThrow();
+
+    writeFileSync(manifest, JSON.stringify({ name: "@umtioaii/astro-harness" }));
+    expect(() => verifyInstalledPackage(temp, "@umtioai/astro-harness")).toThrow("identidade");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}, 5000);
+
+test("CLI redige argumento desconhecido e sai 2", () => {
+  const fakeKey = `${["s", "k", "-"].join("")}sentinel-release-check-key`;
+  const proc = Bun.spawnSync({
+    cmd: [process.execPath, join(root, "scripts", "release-check.ts"), `--api-key=${fakeKey}`],
+    cwd: root,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stderr = proc.stderr.toString();
+
+  expect(proc.exitCode).toBe(2);
+  expect(stderr).toContain("--api-key=[REDACTED]");
+  expect(stderr).not.toContain(fakeKey);
 }, 5000);
 
 test("argumentos desconhecidos falham em vez de ignorar", () => {
@@ -206,9 +271,34 @@ test("falha fecha o gate, marca o resto como skipped e sempre limpa o temporári
     "skipped",
     "skipped",
     "skipped",
+    "skipped",
   ]);
   expect(removed).toBe(plan.tempDir);
   expect(JSON.stringify(summary)).not.toContain("SENTINEL-NAO-PODE-VAZAR");
+}, 5000);
+
+test("sucesso também limpa o temporário", () => {
+  const plan = createPlan({ ...base, skipTests: true });
+  let removed = "";
+
+  const summary = executePlan(plan, {
+    spawn: () => ({ exitCode: 0, output: "" }),
+    removeTemp: (dir) => {
+      removed = dir;
+    },
+    log: () => {},
+  });
+
+  expect(summary.ok).toBe(true);
+  expect(summary.steps.map((step) => step.status)).toEqual([
+    "passed",
+    "passed",
+    "passed",
+    "passed",
+    "passed",
+    "passed",
+  ]);
+  expect(removed).toBe(plan.tempDir);
 }, 5000);
 
 test("falha na limpeza também fecha o gate", () => {
