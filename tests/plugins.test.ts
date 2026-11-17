@@ -92,7 +92,7 @@ function writeRunConfig(dir: string, plugins: string[], baseUrl: string): string
   return path;
 }
 
-async function withOkProvider(fn: (baseUrl: string) => Promise<void>): Promise<void> {
+async function withOkProvider<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
   const server = Bun.serve({
     port: 0,
     fetch: () => Response.json({
@@ -101,7 +101,7 @@ async function withOkProvider(fn: (baseUrl: string) => Promise<void>): Promise<v
     }),
   });
   try {
-    await fn(`http://127.0.0.1:${server.port}/v1`);
+    return await fn(`http://127.0.0.1:${server.port}/v1`);
   } finally {
     server.stop(true);
   }
@@ -115,7 +115,7 @@ describe("plugin system (F7-1)", () => {
 
   test("loadPlugins carrega tool e provider factory de arquivo .ts", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-plugin-"));
-    const loaded = await loadPlugins([writePlugin(dir)]);
+    const loaded = await loadPlugins([writePlugin(dir)], { localTrusted: true });
     expect(loaded.tools).toHaveLength(1);
     expect(loaded.tools[0]!.manifest.name).toBe("sql_query");
     expect(loaded.providerFactories.size).toBe(1);
@@ -124,7 +124,7 @@ describe("plugin system (F7-1)", () => {
 
   test("plugin com path inexistente: warn isolado, segue sem ele", async () => {
     const warnings: string[] = [];
-    const loaded = await loadPlugins(["./plugin-fantasma.ts"], { warn: (m) => warnings.push(m) });
+    const loaded = await loadPlugins(["./plugin-fantasma.ts"], { warn: (m) => warnings.push(m), localTrusted: true });
     expect(loaded.tools).toHaveLength(0);
     expect(loaded.providerFactories.size).toBe(0);
     expect(warnings.some((w) => w.includes("plugin-fantasma"))).toBe(true);
@@ -135,7 +135,7 @@ describe("plugin system (F7-1)", () => {
     const bad = join(dir, "bad-plugin.ts");
     writeFileSync(bad, "export const outra = 1;\n", "utf8");
     const warnings: string[] = [];
-    const loaded = await loadPlugins([bad], { warn: (m) => warnings.push(m) });
+    const loaded = await loadPlugins([bad], { warn: (m) => warnings.push(m), localTrusted: true });
     expect(loaded.tools).toHaveLength(0);
     expect(warnings.some((w) => w.includes("não exporta"))).toBe(true);
   });
@@ -146,7 +146,7 @@ describe("plugin system (F7-1)", () => {
       bq: { kind: "bigquery", credentialRef: "BQ_KEY", dataset: "meu" },
     });
 
-    const report = await runTask({ configPath, task: "consulte o banco", cwd: dir, env: testEnv({ BQ_KEY: "k", BQ_STUB: "stub-ok" }) });
+    const report = await runTask({ configPath, task: "consulte o banco", cwd: dir, env: testEnv({ BQ_KEY: "k", BQ_STUB: "stub-ok" }), trustAsk: () => true });
     // provider do plugin respondeu
     expect(report.final).toContain("resposta do bigquery: stub-ok");
     expect(report.tokensIn).toBe(7);
@@ -197,7 +197,7 @@ describe("plugin trust (I-13, #255)", () => {
   test("caminho local não exige allowlist", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-plugin-"));
     const warnings: string[] = [];
-    const loaded = await loadPlugins([writePlugin(dir)], { warn: (m) => warnings.push(m) });
+    const loaded = await loadPlugins([writePlugin(dir)], { warn: (m) => warnings.push(m), localTrusted: true });
     expect(loaded.tools).toHaveLength(1);
     expect(warnings).toHaveLength(0);
   });

@@ -37,6 +37,20 @@ function isLocalEntry(entry: string): boolean {
   return entry.startsWith(".") || isAbsolute(entry);
 }
 
+/** Opções do carregamento de plugins. */
+export interface LoadPluginsOptions {
+  warn?: (msg: string) => void;
+  /** Allowlist de pacotes remotos (`ASTRO_PLUGIN_ALLOWLIST`). */
+  allowlist?: ReadonlySet<string>;
+  /**
+   * Caminho local só carrega depois do trust do cwd (#255). Default `false`
+   * (fail closed): o app passa o resultado de `ensureTrustedCwd`.
+   */
+  localTrusted?: boolean;
+  /** Base dos caminhos relativos; default `process.cwd()` (o app passa o cwd do run). */
+  baseDir?: string;
+}
+
 /** Allowlist de plugins remotos; vem do env, nunca da config (que pode ser puxada de registry). */
 export function pluginAllowlistFromEnv(env: NodeJS.ProcessEnv = process.env): Set<string> {
   return new Set(
@@ -48,10 +62,10 @@ export function pluginAllowlistFromEnv(env: NodeJS.ProcessEnv = process.env): Se
 }
 
 /** Resolve a entrada da config: caminho absoluto/relativo vira import direto. */
-async function importPlugin(entry: string): Promise<unknown> {
+async function importPlugin(entry: string, baseDir: string): Promise<unknown> {
   const isPath = isLocalEntry(entry);
   if (isPath) {
-    const absolute = resolve(entry);
+    const absolute = resolve(baseDir, entry);
     return import(absolute);
   }
   return import(entry);
@@ -80,21 +94,29 @@ function isPluginDefinition(value: unknown): value is PluginDefinition {
 /** Carrega os plugins declarados; falhas isoladas (warn e segue). */
 export async function loadPlugins(
   entries: readonly string[],
-  opts: { warn?: (msg: string) => void; allowlist?: ReadonlySet<string> } = {},
+  opts: LoadPluginsOptions = {},
 ): Promise<LoadedPlugins> {
   const warn = opts.warn ?? ((msg) => console.warn(msg));
   const allowlist = opts.allowlist ?? new Set<string>();
+  const baseDir = opts.baseDir ?? process.cwd();
   const tools: Tool[] = [];
   const providerFactories = new Map<string, PluginProviderFactory>();
 
   for (const entry of entries) {
-    if (!isLocalEntry(entry) && !allowlist.has(entry)) {
+    const local = isLocalEntry(entry);
+    if (!local && !allowlist.has(entry)) {
       // fail closed: pacote remoto só carrega com aprovação local explícita
       warn(`plugin remoto "${entry}" não está em ASTRO_PLUGIN_ALLOWLIST; ignorado`);
       continue;
     }
+    if (local && opts.localTrusted !== true) {
+      // #255: importar executaria código do projeto ANTES do trust. Sem TTY e
+      // pasta não confiável, o plugin local não carrega.
+      warn(`plugin local "${entry}" não carrega: pasta do projeto não confiável (trust pendente); ignorado`);
+      continue;
+    }
     try {
-      const mod = await importPlugin(entry);
+      const mod = await importPlugin(entry, baseDir);
       const definition = extractDefinition(mod);
       if (definition === null) {
         warn(`plugin "${entry}" não exporta definePlugin/plugin válido; ignorado`);
