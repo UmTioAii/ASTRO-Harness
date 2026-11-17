@@ -1,0 +1,66 @@
+# Eval e bench de providers
+
+Objetivo: como `astro eval` e `astro bench` medem qualidade e desempenho, com foco na success rate do bench e nos filtros de provider/modelo.
+
+| Cobre | Não cobre |
+|---|---|
+| `eval` (gate mock), `bench` (providers reais), success rate, filtro `--models`, saídas e agendamento de CI | Conteúdo dos golden cases, política de merge (`docs/ci.md`) e decisões de rotação de modelos |
+
+## Comandos
+
+| Comando | O que faz | Saída |
+|---|---|---|
+| `bun src/cli.ts eval --threshold 0.85` | Roda o golden dataset em modo mock e compara com o baseline | `eval-report.json`; exit 1 abaixo do threshold ou com regressão |
+| `bun src/cli.ts bench --models <filtro> --runs <n>` | Mede cada modelo com a mesma suíte de prompts | `eval/bench-<data>.{json,md}` |
+
+- `eval`: determinístico, sem provider real; é o gate de regressão no CI.
+- `bench`: chama providers reais e consome quota; nunca roda em PR.
+
+## Bench
+
+### Métricas
+
+| Métrica | Definição |
+|---|---|
+| `successRate` | `completed / total`; `completed` são as chamadas que devolveram resposta |
+| `completed`, `total` | Chamadas concluídas e tentadas (`runs` × prompts da suíte) |
+| `latencyMs` | `min`, `p50`, `p95` e `max` só das chamadas concluídas |
+| `tokensInAvg`, `tokensOutAvg` | Média por chamada concluída |
+| `tokensPerSec` | Tokens de saída divididos pela latência média |
+| `costPer1kOutUsd` | Preço de saída por 1k tokens; `null` sem `price.verificado` |
+| `ttftMs` | `null` até o contrato `Provider` expor streaming |
+
+- Falha de um prompt não interrompe a suíte: entra em `successRate` e fica fora de latência e tokens.
+- O texto do erro não entra no relatório JSON/Markdown (I-03).
+- Se nenhum prompt completar, `benchModel` propaga o erro do provider e nenhum relatório é gravado.
+- O Markdown traz `Sucesso` por modelo (`80% (4/5)`) e `Sucesso agregado: N% (completed/total)`.
+
+### Filtro de provider/modelo
+
+`--models` aceita substrings de `provider/model`, separadas por vírgula; o filtro vazio ou ausente seleciona todos os modelos ativos.
+
+| Filtro | Seleciona |
+|---|---|
+| `nvidia` | Todos os modelos do provider `nvidia` |
+| `openrouter/llama` | Modelos do `openrouter` cujo id contém `llama` |
+| `nvidia,openrouter` | União dos dois providers |
+
+A mesma regra vive em `filterModels` (`src/eval/bench.ts`), usada pelos testes e pela matriz de CI.
+
+## CI
+
+`bench.yml`:
+
+- Manual: `workflow_dispatch` com os inputs `models` (filtro) e `runs` (repetições).
+- Nightly opcional: `schedule` às 03:00 UTC; o job só executa com a variable de repositório `BENCH_NIGHTLY=true`.
+- No nightly, o filtro vem da variable `BENCH_MODELS`, na mesma sintaxe de `--models`.
+- `NVIDIA_API_KEY` e `OPENROUTER_API_KEY` só existem nesse workflow; PR nunca recebe provider real.
+
+`ci.yml`:
+
+- `eval` continua sendo o gate required (Ubuntu, threshold 0.85) com o golden dataset mock.
+- `bench-mock` roda a matriz OS × filtro (`nvidia`, `openrouter`) sobre `tests/bench.test.ts`, sem quota de provider.
+
+## Referências
+
+#59, F5-4, I-03, `docs/ci.md`, `docs/roadmap-complementar.md`.
