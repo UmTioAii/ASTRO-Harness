@@ -127,12 +127,20 @@ function percentile(sorted: readonly number[], p: number): number {
   return sorted[index]!;
 }
 
+/** Valida `runs` para chamadas de biblioteca; o CLI já valida o flag. */
+function assertRuns(runs: number): void {
+  if (!Number.isInteger(runs) || runs < 1) {
+    throw new RangeError(`runs deve ser inteiro >= 1 (recebido: ${runs})`);
+  }
+}
+
 /** Executa a suite para um modelo e devolve as métricas agregadas. */
 export async function benchModel(
   model: ModelEntry,
   providerFor: BenchOptions["providerFor"],
   runs: number,
 ): Promise<BenchModelResult> {
+  assertRuns(runs);
   const provider = providerFor(model);
   const latencies: number[] = [];
   let tokensInTotal = 0;
@@ -225,6 +233,7 @@ export function summarizeBench(results: readonly BenchModelResult[]): BenchSumma
 /** Roda o benchmark para todos os modelos informados. */
 export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
   const runs = opts.runs ?? 1;
+  assertRuns(runs);
   const results: BenchModelResult[] = [];
   for (const model of opts.models) {
     results.push(await benchModel(model, opts.providerFor, runs));
