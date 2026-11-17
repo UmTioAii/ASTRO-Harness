@@ -289,6 +289,23 @@ describe("eval harness (F5-2)", () => {
     )).rejects.toThrow(/loopback/);
   });
 
+  test("runCase recusa placeholder embutido em URL pública", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-url-placeholder-"));
+    const caseDir = writeScenarioCase(root, "01-placeholder", {
+      schema: 1,
+      kind: "app",
+      config: { mcpServers: { bad: { transport: "http", url: "https://example.com/{{mcpUrl}}", timeoutMs: 100, enabled: false } } },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-url-placeholder-cwd-"));
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/placeholder/);
+  });
+
   test("runCase recusa web_fetch para URL pública antes de qualquer rede", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-url-fetch-"));
     const caseDir = writeScenarioCase(root, "01-fetch", {
@@ -307,7 +324,7 @@ describe("eval harness (F5-2)", () => {
     globalThis.fetch = (async () => {
       fetchCalls += 1;
       throw new Error("network blocked");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     try {
       await expect(runScenario(
         JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
@@ -326,7 +343,10 @@ describe("eval harness (F5-2)", () => {
     writeScenarioCase(root, "01-global", {
       schema: 1,
       kind: "app",
-      turns: [{ content: "um" }, { content: "dois" }],
+      turns: [
+        { toolCalls: [{ name: "write_file", arguments: { path: "out/first.txt", content: "primeiro\n" } }] },
+        { content: "dois" },
+      ],
       expect: { final: "dois", requests: 2 },
     });
     const previousHome = process.env.ASTRO_HOME;

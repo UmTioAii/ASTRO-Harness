@@ -5,11 +5,12 @@
  * (allowlist, ledger, audit, fallback, multi-agent) contra servidores loopback.
  */
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { runTask } from "../app";
 import { validateConfig } from "../config";
 import { runHealthCheck, type HealthReport } from "../health";
+import { resolveWithin } from "../tools/paths";
 
 export interface ScenarioToolCall {
   name: string;
@@ -76,7 +77,7 @@ export interface ScenarioSpec {
   env?: Record<string, string>;
   /** Arquivos do case copiados para o cwd antes do run (`.astro/` é gitignored). */
   seed?: Array<{ from: string; to: string }>;
-  /** Destinos cujo `.sha256` é calculado dos bytes copiados (install-verify). */
+  /** Diretórios de skill cujo `.sha256` é calculado dos bytes de `SKILL.md`. */
   sidecars?: string[];
   turns?: ScenarioTurn[];
   mcp?: ScenarioMcpServer;
@@ -149,6 +150,86 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
     out[key] = isRecord(current) && isRecord(value) ? deepMerge(current, value) : value;
   }
   return out;
+}
+
+/** Placeholders de URL que o runner resolve para servidores loopback próprios. */
+const URL_PLACEHOLDERS = new Set(["providerUrl", "providerDownUrl", "mcpUrl", "searchUrl", "pageUrl"]);
+
+/** URL de fixture só aponta para loopback; o resto da rede fica fora do golden. */
+function assertLoopbackUrl(raw: string, field: string): void {
+  const placeholder = /^\{\{([A-Za-z0-9_]+)\}\}$/.exec(raw);
+  if (placeholder !== null) {
+    if (!URL_PLACEHOLDERS.has(placeholder[1]!)) {
+      throw new Error(`cenário com placeholder de URL desconhecido em ${field}: ${raw}`);
+    }
+    return; // resolvido para 127.0.0.1 pelo próprio runner
+  }
+  if (raw.includes("{{")) {
+    throw new Error(`cenário com placeholder de URL não suportado em ${field}: ${raw}`);
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`cenário com URL inválida em ${field}: ${raw}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`cenário com URL não-http em ${field}: ${raw}`);
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const loopback = host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+  if (!loopback) throw new Error(`cenário com URL não-loopback em ${field}: ${raw}`);
+}
+
+function configUrls(config: Record<string, unknown> | undefined): Array<{ field: string; url: string }> {
+  if (config === undefined) return [];
+  const urls: Array<{ field: string; url: string }> = [];
+  const add = (field: string, value: unknown): void => {
+    if (typeof value === "string") urls.push({ field, url: value });
+  };
+  if (isRecord(config.providers)) {
+    for (const [name, provider] of Object.entries(config.providers)) {
+      if (isRecord(provider)) add(`providers.${name}.baseUrl`, provider.baseUrl);
+    }
+  }
+  if (isRecord(config.mcpServers)) {
+    for (const [name, server] of Object.entries(config.mcpServers)) {
+      if (isRecord(server)) add(`mcpServers.${name}.url`, server.url);
+    }
+  }
+  if (isRecord(config.webSearch)) add("webSearch.baseUrl", config.webSearch.baseUrl);
+  if (isRecord(config.team)) add("team.auditWebhook", config.team.auditWebhook);
+  if (isRecord(config.telemetry)) add("telemetry.endpoint", config.telemetry.endpoint);
+  return urls;
+}
+
+/** Recusa qualquer URL de fixture que não seja loopback (I-11, sem rede real). */
+function assertLoopbackFixtures(spec: ScenarioSpec): void {
+  for (const { field, url } of configUrls(spec.config)) assertLoopbackUrl(url, field);
+  for (const [index, turn] of (spec.turns ?? []).entries()) {
+    for (const [callIndex, call] of (turn.toolCalls ?? []).entries()) {
+      const raw = call.arguments.url;
+      if (raw === undefined) continue;
+      const field = `turns[${index}].toolCalls[${callIndex}].url`;
+      if (typeof raw !== "string") throw new Error(`cenário com URL inválida em ${field}`);
+      assertLoopbackUrl(raw, field);
+    }
+  }
+}
+
+/** Nomes de env cujo valor aparece no texto observado (audit/ledger). */
+function leakedEnvNames(env: Record<string, string>, texts: readonly string[]): string[] {
+  const combined = texts.join("\n");
+  const leaked: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (value.length === 0) continue;
+    // Valor curto só casa como token JSON exato; evita falso positivo em números/booleanos.
+    const found = value.length >= 4
+      ? combined.includes(value)
+      : combined.includes(JSON.stringify(value));
+    if (found) leaked.push(name);
+  }
+  return leaked;
 }
 
 /** Provider OpenAI-compat determinístico: uma resposta por turno declarado. */
@@ -340,7 +421,11 @@ function checkExpectations(expect: ScenarioExpectations, obs: Observation): stri
     if (!obs.agents.includes(agent)) diff.push(`agente "${agent}" ausente (${obs.agents.join(", ")})`);
   }
   for (const file of expect.absentFiles ?? []) {
-    if (existsSync(join(obs.cwd, file))) diff.push(`${file}: não deveria existir`);
+    try {
+      if (existsSync(resolveWithin(obs.cwd, file))) diff.push(`${file}: não deveria existir`);
+    } catch (error) {
+      diff.push(`absentFiles: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   if (expect.health !== undefined) {
     if (obs.health === undefined) diff.push("health: relatório ausente");
@@ -358,16 +443,6 @@ function checkExpectations(expect: ScenarioExpectations, obs: Observation): stri
   return diff;
 }
 
-/** Caminho relativo confinado ao cwd do case (seed/sidecar nunca escapa). */
-function within(cwd: string, relativePath: string): string {
-  const destination = resolve(cwd, relativePath);
-  const rel = relative(cwd, destination);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-    throw new Error(`cenário com caminho fora do workspace: ${relativePath}`);
-  }
-  return destination;
-}
-
 /** Executa um `scenario.json`; o harness compara os arquivos esperados depois. */
 export async function runScenario(
   spec: ScenarioSpec,
@@ -377,24 +452,50 @@ export async function runScenario(
   const kind = spec.kind ?? "app";
   if (kind !== "app" && kind !== "health") throw new Error(`scenario kind inválido: ${String(kind)}`);
   if (kind === "app" && !Array.isArray(spec.turns)) throw new Error("scenario app exige turns[]");
+  assertLoopbackFixtures(spec);
 
   const servers: MockServer[] = [];
   const providerState: ProviderState = { bodies: [], models: [], calls: 0 };
   const searchState: SearchState = { requests: 0 };
   const vars: Record<string, string> = {};
+  const scenarioEnv: Record<string, string> = { EVAL_KEY: "eval-provider-secret", ...spec.env };
+  const evalHome = join(opts.cwd, ".astro", "eval-home");
+  const env: Record<string, string> = {
+    ...scenarioEnv,
+    ASTRO_HOME: evalHome,
+    ASTRO_NO_GLOBAL_CONFIG: "1",
+  };
   // Os mocks falam loopback; a config do golden não deve ir à rede pública (I-11).
   const previousPrivate = process.env.ASTRO_ALLOW_PRIVATE_URLS;
+  const previousHome = process.env.ASTRO_HOME;
+  const previousNoGlobal = process.env.ASTRO_NO_GLOBAL_CONFIG;
   process.env.ASTRO_ALLOW_PRIVATE_URLS = "1";
+  process.env.ASTRO_HOME = evalHome;
+  process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
   try {
     for (const entry of spec.seed ?? []) {
-      const destination = within(opts.cwd, entry.to);
+      // Fonte: só dentro do caseDir e nunca um link (symlink/junction).
+      const source = resolveWithin(opts.caseDir, entry.from);
+      if (lstatSync(source).isSymbolicLink()) {
+        throw new Error(`cenário seed.from não pode ser link: ${entry.from}`);
+      }
+      const destination = resolveWithin(opts.cwd, entry.to);
       mkdirSync(dirname(destination), { recursive: true });
-      cpSync(join(opts.caseDir, entry.from), destination);
+      cpSync(source, destination);
     }
-    for (const relativePath of spec.sidecars ?? []) {
-      const destination = within(opts.cwd, relativePath);
-      const digest = createHash("sha256").update(readFileSync(destination)).digest("hex");
-      writeFileSync(`${destination}.sha256`, `${digest}\n`, "utf8");
+    for (const relativeDir of spec.sidecars ?? []) {
+      const skillDir = resolveWithin(opts.cwd, relativeDir); // recusa junction/symlink antes de ler
+      const skillFile = join(skillDir, "SKILL.md");
+      const sidecar = resolveWithin(opts.cwd, join(relativeDir, ".sha256"));
+      if (lstatSync(skillFile).isSymbolicLink()) {
+        throw new Error(`cenário sidecar com SKILL.md link: ${relativeDir}`);
+      }
+      if (existsSync(sidecar) && lstatSync(sidecar).isSymbolicLink()) {
+        throw new Error(`cenário sidecar não pode ser link: ${relativeDir}/.sha256`);
+      }
+      // Contrato do loader/installer: <skillDir>/.sha256, digest de SKILL.md.
+      const digest = createHash("sha256").update(readFileSync(skillFile)).digest("hex");
+      writeFileSync(sidecar, `${digest}\n`, "utf8");
     }
     const page = spec.page === undefined ? undefined : startPage(spec.page);
     if (page !== undefined) { servers.push(page.server); vars.pageUrl = page.url; }
@@ -415,7 +516,6 @@ export async function runScenario(
     const configPath = join(opts.cwd, "astro.config.json");
     writeFileSync(configPath, JSON.stringify(rawConfig, null, 2), "utf8");
 
-    const env: Record<string, string> = { EVAL_KEY: "eval-provider-secret", ...spec.env };
     let report: Awaited<ReturnType<typeof runTask>> | undefined;
     let error: string | undefined;
     let health: HealthReport | undefined;
@@ -433,6 +533,8 @@ export async function runScenario(
           approveSwap: () => true,
           // O golden usa sempre o provider/mock do scenario.json, nunca a seleção salva no ASTRO_HOME.
           ignoreStoredSelection: true,
+          // Skills do usuário ficam dentro do case; nunca ~/.astro/skills do host.
+          skillsUserRoot: join(opts.cwd, ".astro", "user-skills"),
         });
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
@@ -440,6 +542,8 @@ export async function runScenario(
     }
 
     const audit = readAudit(opts.cwd);
+    const ledgerPath = join(opts.cwd, ".astro", "ledger.jsonl");
+    const ledgerText = existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8") : "";
     const observation: Observation = {
       cwd: opts.cwd,
       ...(report === undefined ? {} : { final: report.final }),
@@ -453,11 +557,9 @@ export async function runScenario(
       ...(health === undefined ? {} : { health }),
     };
     const diffSummary = checkExpectations(spec.expect ?? {}, observation);
-    // I-03: valor de credencial de cenário nunca pode aparecer no audit.
-    for (const [name, value] of Object.entries(env)) {
-      if (/KEY$/i.test(name) && value.length >= 8 && audit.text.includes(value)) {
-        diffSummary.push(`segredo de "${name}" apareceu no audit`);
-      }
+    // I-03: todo valor de env do cenário, no audit e no ledger.
+    for (const name of leakedEnvNames(scenarioEnv, [audit.text, ledgerText])) {
+      diffSummary.push(`segredo de "${name}" apareceu no audit/ledger`);
     }
     return { tokens: report === undefined ? 0 : report.tokensIn + report.tokensOut, diffSummary };
   } finally {
@@ -466,5 +568,9 @@ export async function runScenario(
     }
     if (previousPrivate === undefined) delete process.env.ASTRO_ALLOW_PRIVATE_URLS;
     else process.env.ASTRO_ALLOW_PRIVATE_URLS = previousPrivate;
+    if (previousHome === undefined) delete process.env.ASTRO_HOME;
+    else process.env.ASTRO_HOME = previousHome;
+    if (previousNoGlobal === undefined) delete process.env.ASTRO_NO_GLOBAL_CONFIG;
+    else process.env.ASTRO_NO_GLOBAL_CONFIG = previousNoGlobal;
   }
 }

@@ -11,7 +11,7 @@
     }
   ],
   "sidecars": [
-    ".astro/skills/verify/SKILL.md"
+    ".astro/skills/verify"
   ],
   "turns": [
     {
