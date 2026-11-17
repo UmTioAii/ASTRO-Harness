@@ -227,14 +227,8 @@ export function decodedImageBytes(dimensions: { width: number; height: number })
   return dimensions.width * dimensions.height * 4;
 }
 
-/** Valida MPx, lado maior e bytes decodificados antes de qualquer decodificação. */
-export function assertImageLimits(header: Uint8Array, mediaType: string, decodedBytes: number): void {
-  if (decodedBytes > MAX_IMAGE_BYTES) {
-    throw new AttachmentError(
-      "attachment_image_invalid",
-      `imagem excede ${MAX_IMAGE_BYTES} bytes decodificados (${decodedBytes})`,
-    );
-  }
+/** Valida MPx, lado maior e bytes decodificados antes de qualquer decodificação; devolve os bytes decodificados. */
+export function assertImageLimits(header: Uint8Array, mediaType: string): number {
   const dimensions = imageDimensions(header, mediaType);
   if (dimensions === null || dimensions.width <= 0 || dimensions.height <= 0) {
     throw new AttachmentError("attachment_image_invalid", `header de imagem ilegível (${mediaType})`);
@@ -251,6 +245,14 @@ export function assertImageLimits(header: Uint8Array, mediaType: string, decoded
       `imagem excede ${MAX_IMAGE_SIDE} px no lado maior (${dimensions.width}x${dimensions.height})`,
     );
   }
+  const decodedBytes = decodedImageBytes(dimensions);
+  if (decodedBytes > MAX_IMAGE_BYTES) {
+    throw new AttachmentError(
+      "attachment_image_invalid",
+      `imagem excede ${MAX_IMAGE_BYTES} bytes decodificados (${decodedBytes})`,
+    );
+  }
+  return decodedBytes;
 }
 
 /** Garante o teto de 20 MiB por anexo. */
