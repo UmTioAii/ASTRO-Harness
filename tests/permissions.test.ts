@@ -355,6 +355,29 @@ describe("fail closed sem class (#264, P0)", () => {
     const denied = audit.readAll().filter((e) => e.tipo === "tool.denied");
     expect(denied.at(-1)?.payload).toMatchObject({ name: "raw_plugin", reason: "invalid_manifest" });
   });
+
+  test("tool com class desconhecida também não executa em ask", async () => {
+    let ran = false;
+    const tool = rawTool(() => { ran = true; });
+    (tool.manifest as { class?: string }).class = "root";
+    const cwd = mkdtempSync(join(tmpdir(), "astro-perm-unknown-class-"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    const executor = new ToolExecutor({
+      tools: [tool],
+      allow: ["raw_plugin"],
+      audit,
+      permissionMode: "ask",
+      approveTool: () => true,
+    });
+    const result = await executor.run(
+      { cwd, run: "r1", agent: "a" },
+      { id: "c1", name: "raw_plugin", arguments: "{}" },
+    );
+
+    expect(ran).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.code).toBe("invalid_manifest");
+  });
 });
 
 describe("ask sem TTY (#262)", () => {
