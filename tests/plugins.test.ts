@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { validateConfig } from "../src/core/config";
 import { definePlugin, loadPlugins, pluginAllowlistFromEnv } from "../src/plugins";
 import { runTask } from "../src/core/app";
@@ -244,6 +245,7 @@ describe("plugin trust order (#255, P0)", () => {
     dir: string,
     pluginEntry: string,
     trustAsk?: () => boolean,
+    extraEnv: Record<string, string> = {},
   ): Promise<{ report: Awaited<ReturnType<typeof runTask>>; warnings: string[] }> {
     return withOkProvider(async (baseUrl) => {
       const configPath = writeRunConfig(dir, [pluginEntry], baseUrl);
@@ -252,7 +254,7 @@ describe("plugin trust order (#255, P0)", () => {
       console.warn = (message?: unknown) => { warnings.push(String(message)); };
       try {
         const report = await runTask({
-          configPath, task: "x", cwd: dir, env: testEnv({ TEST_KEY: "k" }),
+          configPath, task: "x", cwd: dir, env: testEnv({ TEST_KEY: "k", ...extraEnv }),
           ...(trustAsk === undefined ? {} : { trustAsk }),
         });
         return { report, warnings };
@@ -296,5 +298,31 @@ describe("plugin trust order (#255, P0)", () => {
     const { report } = await runPluginTask(dir, `./${basename(entry)}`, () => true);
     expect(report.final).toBe("ok");
     expect(existsSync(marker)).toBe(true);
+  });
+
+  test("trust do cwd não carrega plugin local fora da pasta", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-inside-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-plugin-outside-"));
+    const { entry, marker } = writeMarkerPlugin(outside);
+    const { report, warnings } = await runPluginTask(dir, entry, () => true);
+    expect(report.final).toBe("ok");
+    expect(existsSync(marker)).toBe(false); // trust da pasta não cobre código externo
+    expect(warnings.join("\n")).toMatch(/fora do cwd|fora da pasta|fora do projeto/i);
+  });
+
+  test("runTask usa ASTRO_PLUGIN_ALLOWLIST do env do run, não do process.env", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-run-env-"));
+    const { entry, marker } = writeMarkerPlugin(dir);
+    const fileUrl = pathToFileURL(entry).href;
+    const original = process.env.ASTRO_PLUGIN_ALLOWLIST;
+    delete process.env.ASTRO_PLUGIN_ALLOWLIST;
+    try {
+      const { report } = await runPluginTask(dir, fileUrl, undefined, { ASTRO_PLUGIN_ALLOWLIST: fileUrl });
+      expect(report.final).toBe("ok");
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env.ASTRO_PLUGIN_ALLOWLIST;
+      else process.env.ASTRO_PLUGIN_ALLOWLIST = original;
+    }
   });
 });
