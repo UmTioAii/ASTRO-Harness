@@ -79,7 +79,7 @@
     "final": "fallback ok",
     "audit": [
       "provider.failure",
-      "provider.success",
+      "provider.complete",
       "agent.lock.moved"
     ],
     "models": [
