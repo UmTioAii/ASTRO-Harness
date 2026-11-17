@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { validateConfig } from "../src/core/config";
 import { definePlugin, loadPlugins, pluginAllowlistFromEnv } from "../src/plugins";
 import { runTask } from "../src/core/app";
@@ -63,6 +63,48 @@ function writeConfig(dir: string, plugins: string[], providers: Record<string, u
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }, null, 2));
   return path;
+}
+
+/** Plugin cujo import grava um marcador: prova se o módulo foi EXECUTADO, não só registrado. */
+function writeMarkerPlugin(dir: string): { entry: string; marker: string } {
+  const marker = join(dir, "plugin-executed.txt");
+  const entry = join(dir, "marker-plugin.ts");
+  writeFileSync(entry, `
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(marker)}, "executou");
+export function definePlugin() {
+  return { name: "marker-plugin", tools: [] };
+}
+`, "utf8");
+  return { entry, marker };
+}
+
+/** Config mínima de run (provider mock HTTP) com plugins declarados. */
+function writeRunConfig(dir: string, plugins: string[], baseUrl: string): string {
+  const path = join(dir, "astro.config.json");
+  writeFileSync(path, JSON.stringify({
+    providers: { mock: { kind: "openai-compat", baseUrl, credentialRef: "TEST_KEY" } },
+    models: [{ provider: "mock", id: "mock-1", tags: ["writing-code"], context: 4096 }],
+    agent: { model: "mock/mock-1", maxSteps: 1, tools: [] },
+    plugins,
+    paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+  }, null, 2));
+  return path;
+}
+
+async function withOkProvider(fn: (baseUrl: string) => Promise<void>): Promise<void> {
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => Response.json({
+      choices: [{ message: { content: "ok" } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }),
+  });
+  try {
+    await fn(`http://127.0.0.1:${server.port}/v1`);
+  } finally {
+    server.stop(true);
+  }
 }
 
 describe("plugin system (F7-1)", () => {
@@ -163,5 +205,65 @@ describe("plugin trust (I-13, #255)", () => {
   test("allowlist do env é lista separada por vírgula", () => {
     expect([...pluginAllowlistFromEnv({ ASTRO_PLUGIN_ALLOWLIST: "a, b ,," })]).toEqual(["a", "b"]);
     expect([...pluginAllowlistFromEnv({})]).toEqual([]);
+  });
+});
+
+describe("plugin trust order (#255, P0)", () => {
+  async function runPluginTask(
+    dir: string,
+    pluginEntry: string,
+    trustAsk?: () => boolean,
+  ): Promise<{ report: Awaited<ReturnType<typeof runTask>>; warnings: string[] }> {
+    return withOkProvider(async (baseUrl) => {
+      const configPath = writeRunConfig(dir, [pluginEntry], baseUrl);
+      const warnings: string[] = [];
+      const original = console.warn;
+      console.warn = (message?: unknown) => { warnings.push(String(message)); };
+      try {
+        const report = await runTask({
+          configPath, task: "x", cwd: dir, env: testEnv({ TEST_KEY: "k" }),
+          ...(trustAsk === undefined ? {} : { trustAsk }),
+        });
+        return { report, warnings };
+      } finally {
+        console.warn = original;
+      }
+    });
+  }
+
+  test("loadPlugins não importa caminho local sem trust do cwd", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-untrusted-"));
+    const { entry, marker } = writeMarkerPlugin(dir);
+    const warnings: string[] = [];
+    const loaded = await loadPlugins([entry], { warn: (m) => warnings.push(m) });
+    expect(loaded.tools).toHaveLength(0);
+    expect(existsSync(marker)).toBe(false); // import executaria o módulo antes da aprovação
+    expect(warnings.join("\n")).toMatch(/trust|confiável/i);
+  });
+
+  test("runTask sem trust e sem TTY não executa plugin local absoluto", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-untrusted-run-"));
+    const { entry, marker } = writeMarkerPlugin(dir);
+    const { report, warnings } = await runPluginTask(dir, entry);
+    expect(report.final).toBe("ok");
+    expect(existsSync(marker)).toBe(false);
+    expect(warnings.join("\n")).toMatch(/trust|confiável/i);
+  });
+
+  test("config com plugins relativos em pasta não confiável não executa o plugin", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-untrusted-rel-"));
+    const { entry, marker } = writeMarkerPlugin(dir);
+    const { report, warnings } = await runPluginTask(dir, `./${basename(entry)}`);
+    expect(report.final).toBe("ok");
+    expect(existsSync(marker)).toBe(false);
+    expect(warnings.join("\n")).toMatch(/trust|confiável/i);
+  });
+
+  test("runTask com trust aprovado carrega o plugin local relativo", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-trusted-run-"));
+    const { entry, marker } = writeMarkerPlugin(dir);
+    const { report } = await runPluginTask(dir, `./${basename(entry)}`, () => true);
+    expect(report.final).toBe("ok");
+    expect(existsSync(marker)).toBe(true);
   });
 });
