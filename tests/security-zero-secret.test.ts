@@ -6,7 +6,7 @@
  * passam quando o valor tem marca óbvia de teste; um segredo real não tem.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { Auditor } from "../src/audit";
@@ -173,5 +173,20 @@ describe("I-03 zero segredos", () => {
 
   test("varredura é determinística", () => {
     expect(scanRepo()).toEqual(scanRepo());
+  }, 30_000);
+
+  test("worktree local em .worktrees/ não é varrido (falso positivo local)", () => {
+    const dir = join(ROOT, ".worktrees");
+    const existed = existsSync(dir);
+    mkdirSync(dir, { recursive: true });
+    const leak = join(dir, "leak-do-not-scan.txt");
+    writeFileSync(leak, syntheticKey());
+    try {
+      const findings = scanRepo().filter((finding) => finding.file.startsWith(".worktrees/"));
+      expect(findings).toEqual([]);
+    } finally {
+      rmSync(leak, { force: true });
+      if (!existed) rmSync(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 });
