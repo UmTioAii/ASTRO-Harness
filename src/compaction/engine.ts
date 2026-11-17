@@ -172,7 +172,9 @@ export interface CompactInput {
   /** Orçamento da parte recente; default 15.000 tokens (CMP-2). */
   recentBudget?: number;
   /** Resumo sem tools; recebe system de instrução + histórico reduzido. */
-  summarize: (messages: ChatMessage[]) => Promise<string>;
+  summarize: (messages: ChatMessage[], signal?: AbortSignal) => Promise<string>;
+  /** Cancelamento do job de background (CMP-9). */
+  signal?: AbortSignal;
 }
 
 export interface CompactResult {
@@ -236,7 +238,7 @@ export async function compactSession(input: CompactInput): Promise<CompactResult
       { role: "system", content: SUMMARY_PROMPT },
       // ADR-0027: o resumidor recebe o histórico já redigido (I-03).
       ...reduction.messages.map(redactMessage),
-    ]);
+    ], input.signal);
 
   // ADR-0027: o artefato montado no contexto sai redigido (resumo também).
   const artifact = buildCompactionArtifact({

@@ -9,8 +9,10 @@ import type { Ledger } from "../ledger";
 import { ProviderError, type ChatMessage, type CompletionResponse } from "../providers/types";
 import {
   applyBackgroundCompaction,
+  PREWARM_MARGIN,
   type BackgroundCompaction,
   type BackgroundCompactor,
+  type CompactionIdentity,
 } from "./background";
 import {
   CompactionPausedError,
@@ -42,7 +44,7 @@ export interface CompactionRuntimeOptions {
   /** Completion real sobre as mensagens correntes. */
   complete: (messages: readonly ChatMessage[]) => Promise<CompletionResponse>;
   /** Resumo sem tools. */
-  summarize: (messages: ChatMessage[]) => Promise<string>;
+  summarize: (messages: ChatMessage[], signal?: AbortSignal) => Promise<string>;
   /** Chamado após uma compactação aplicada (ex.: atualizar histórico do agente). */
   onCompacted?: (messages: readonly ChatMessage[]) => void;
   /** Fila de compactação em background (CMP-9); ausente = sempre inline. */
@@ -59,6 +61,16 @@ export function isContextOverflow(error: unknown): boolean {
 }
 
 type CompactReason = "trigger" | "overflow";
+
+/** Identidade do job de background: invalida resumo de outro modelo/janela. */
+function identityOf(opts: CompactionRuntimeOptions): CompactionIdentity {
+  return {
+    provider: opts.provider(),
+    model: opts.model(),
+    window: opts.window(),
+    buffer: opts.compaction.buffer,
+  };
+}
 
 /** Overhead estimado do artefato no contexto compactado (tokens). */
 const ARTIFACT_OVERHEAD = 2_000;
@@ -104,6 +116,7 @@ async function applyCompaction(
       buffer: opts.compaction.buffer,
       provider: opts.provider(),
       summarize: opts.summarize,
+      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
     });
     if (result.olderCount === 0) {
       // Nada anterior para substituir (ex.: primeira tarefa já grande): não há
@@ -172,9 +185,6 @@ function applyReadyCompaction(
   });
 }
 
-/** Folga de pré-aquecimento antes do gatilho (tokens). */
-const PREWARM_MARGIN = 2_000;
-
 /**
  * Pré-aquece a compactação depois de um step que ainda vai chamar o provider.
  * O snapshot é do prefixo atual; a cauda nova é preservada na aplicação.
@@ -195,17 +205,18 @@ function scheduleCompaction(
   // Sem histórico antigo ou sem projeção para sair do gatilho, resumir de novo
   // não reduziria o contexto: deixa o inline decidir.
   if (!projectionCanClear(messages, opts)) return;
-  const provider = opts.provider();
+  const identity = identityOf(opts);
   const summarize = opts.summarize;
   try {
-    background.schedule(opts.agent(), messages, (snapshot) => compactSession({
+    background.schedule(opts.agent(), messages, tokens, identity, (snapshot, signal) => compactSession({
       run: opts.run,
       messages: snapshot,
       window,
       buffer: opts.compaction.buffer,
-      provider,
+      provider: identity.provider,
       summarize,
-    }));
+      signal,
+    }), opts.signal);
   } catch { /* pré-aquecimento nunca quebra o turno */ }
 }
 
@@ -217,7 +228,7 @@ export async function completeWithCompaction(
   throwIfAborted(opts.signal);
 
   if (shouldCompact(messages, opts.window(), opts.compaction.buffer, { provider: opts.provider() })) {
-    const ready = opts.background?.take(opts.agent(), messages);
+    const ready = opts.background?.take(opts.agent(), messages, identityOf(opts));
     if (ready !== undefined) applyReadyCompaction(messages, ready, opts, "trigger");
     else await applyCompaction(messages, opts, "trigger");
     throwIfAborted(opts.signal);
@@ -229,7 +240,7 @@ export async function completeWithCompaction(
     return response;
   } catch (error) {
     if (!isContextOverflow(error)) throw error;
-    const ready = opts.background?.take(opts.agent(), messages);
+    const ready = opts.background?.take(opts.agent(), messages, identityOf(opts));
     let compacted = true;
     if (ready !== undefined) applyReadyCompaction(messages, ready, opts, "overflow");
     else compacted = await applyCompaction(messages, opts, "overflow");

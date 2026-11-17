@@ -1,10 +1,12 @@
 /**
- * Fila de compactação em background (CMP-9): no máximo um job em voo, resultado
+ * Fila de compactação em background (CMP-9): um job em voo por run, resultado
  * persistido de forma atômica (tmp+rename) com marcador de prontidão. Sem
  * marcador válido o runtime cai no inline — nunca lê artefato parcial.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { isAbortError } from "../abort";
 import type { Auditor } from "../audit";
@@ -14,12 +16,24 @@ import { recordCompactionFailure } from "./breaker";
 import type { CompactResult } from "./engine";
 import { renderCompactionArtifact, type CompactionArtifactV1 } from "./types";
 
+/** Crescimento mínimo (tokens) para um novo pré-aquecimento (CMP-9). */
+export const PREWARM_MARGIN = 2_000;
+
 export type BackgroundCompactionResult =
   Pick<CompactResult, "artifact" | "reduction" | "originalTokens" | "returnedTokens" | "olderCount" | "recentStart">;
+
+/** Identidade que produziu o artefato; um resumo de outro modelo não é reaplicável. */
+export interface CompactionIdentity {
+  provider: string;
+  model: string;
+  window: number;
+  buffer: number | null;
+}
 
 export interface BackgroundCompaction extends BackgroundCompactionResult {
   snapshotKey: string;
   snapshotCount: number;
+  identity: CompactionIdentity;
 }
 
 export interface BackgroundCompactorOptions {
@@ -41,11 +55,28 @@ interface Marker {
   digest: string;
   snapshotKey: string;
   snapshotCount: number;
+  identity: CompactionIdentity;
+}
+
+/** Projeção canônica: ordem de chaves e `undefined` explícito não mudam o hash. */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    const item = (value as Record<string, unknown>)[key];
+    if (item !== undefined) out[key] = canonical(item);
+  }
+  return out;
 }
 
 /** Hash determinístico do prefixo do histórico; o conteúdo não é persistido. */
 export function snapshotKey(messages: readonly ChatMessage[]): string {
-  return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
+  return createHash("sha256").update(JSON.stringify(canonical(messages))).digest("hex");
+}
+
+function sameIdentity(a: CompactionIdentity, b: CompactionIdentity): boolean {
+  return a.provider === b.provider && a.model === b.model && a.window === b.window && a.buffer === b.buffer;
 }
 
 function safeName(value: string): string {
@@ -99,8 +130,9 @@ export function applyBackgroundCompaction(messages: ChatMessage[], job: Backgrou
 }
 
 /**
- * Fila limitada: um job em voo; snapshot concorrente é descartado. Falha conta
- * no breaker e é engolida (o próximo turno retenta inline).
+ * Fila limitada: um job em voo; pré-aquece uma vez por crescimento relevante.
+ * Falha conta no breaker uma vez por snapshot e é engolida (o próximo turno
+ * retenta inline).
  */
 export class BackgroundCompactor {
   readonly #dir: string;
@@ -109,6 +141,10 @@ export class BackgroundCompactor {
   readonly #audit: Auditor;
   #running: Promise<void> | undefined;
   #memory: { agent: string; job: BackgroundCompaction } | undefined;
+  #active: { agent: string; controller: AbortController } | undefined;
+  readonly #lastScheduled = new Map<string, number>();
+  readonly #failedKeys = new Set<string>();
+  readonly #agents = new Set<string>();
   #closed = false;
 
   constructor(opts: BackgroundCompactorOptions) {
@@ -118,25 +154,43 @@ export class BackgroundCompactor {
     this.#audit = opts.audit;
   }
 
-  /** Agenda um snapshot; profundidade 1 (o segundo snapshot concorrente é perdido). */
+  /** Agenda um snapshot; profundidade 1 e um pré-aquecimento por crescimento. */
   schedule(
     agent: string,
     messages: readonly ChatMessage[],
-    work: (snapshot: readonly ChatMessage[]) => Promise<BackgroundCompactionResult>,
+    tokens: number,
+    identity: CompactionIdentity,
+    work: (snapshot: readonly ChatMessage[], signal: AbortSignal) => Promise<BackgroundCompactionResult>,
+    signal?: AbortSignal,
   ): void {
-    if (this.#closed || this.#running !== undefined) return;
+    if (this.#closed || this.#running !== undefined || signal?.aborted === true) return;
+    const last = this.#lastScheduled.get(agent);
+    if (last !== undefined && tokens - last < PREWARM_MARGIN) return;
+    if (this.#hasReady(agent, messages, identity)) return;
+
+    this.#agents.add(agent);
+    this.#lastScheduled.set(agent, tokens);
     const snapshot = cloneMessages(messages);
     const key = snapshotKey(snapshot);
     const count = snapshot.length;
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    this.#active = { agent, controller };
     const task = (async () => {
       try {
-        const result = await work(snapshot);
-        if (result.olderCount === 0) return;
-        const job: BackgroundCompaction = { ...result, snapshotKey: key, snapshotCount: count };
+        const result = await work(snapshot, controller.signal);
+        if (controller.signal.aborted || this.#closed || result.olderCount === 0) return;
+        const job: BackgroundCompaction = { ...result, snapshotKey: key, snapshotCount: count, identity };
         this.#memory = { agent, job };
         try { this.#persist(agent, job); } catch { /* sem disco a memória ainda vale */ }
       } catch (error) {
-        if (isAbortError(error)) return;
+        if (controller.signal.aborted || isAbortError(error, controller.signal)) return;
+        // Uma falha por snapshot: tentativas em banda não podem abrir o breaker
+        // antes do gatilho real.
+        const failureId = `${agent}\u0000${key}`;
+        if (this.#failedKeys.has(failureId)) return;
+        this.#failedKeys.add(failureId);
         try {
           recordCompactionFailure(this.#ledger, this.#run, agent);
           this.#audit.append({
@@ -144,19 +198,34 @@ export class BackgroundCompactor {
             payload: { reason: "background", error: error instanceof Error ? error.name : "unknown" },
           });
         } catch { /* bookkeeping nunca vira unhandled rejection */ }
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
+        if (this.#active?.controller === controller) this.#active = undefined;
       }
     })();
     this.#running = task.finally(() => { this.#running = undefined; });
   }
 
-  /** Consome o artefato pronto (memória ou disco) se ele casar com o prefixo atual. */
-  take(agent: string, messages: readonly ChatMessage[]): BackgroundCompaction | undefined {
+  /** Consome o artefato pronto (memória ou disco) se prefixo e identidade casarem. */
+  take(
+    agent: string,
+    messages: readonly ChatMessage[],
+    identity: CompactionIdentity,
+  ): BackgroundCompaction | undefined {
+    this.#agents.add(agent);
+    // O contexto vai mudar (artefato aplicado ou inline): libera o próximo
+    // pré-aquecimento e cancela um job que ficaria obsoleto.
+    this.#lastScheduled.delete(agent);
+    if (this.#active?.agent === agent) this.#active.controller.abort();
     const memory = this.#memory;
     if (memory?.agent === agent) {
       this.#memory = undefined;
-      if (matches(memory.job, messages)) return memory.job;
+      if (sameIdentity(memory.job.identity, identity) && matches(memory.job, messages)) {
+        this.#clear(agent); // remove a cópia persistida do mesmo job
+        return memory.job;
+      }
     }
-    const job = this.#load(agent);
+    const job = this.#load(agent, identity);
     if (job === undefined) return undefined;
     this.#clear(agent);
     return matches(job, messages) ? job : undefined;
@@ -167,11 +236,24 @@ export class BackgroundCompactor {
     while (this.#running !== undefined) await this.#running;
   }
 
-  /** Para de agendar e aguarda o que já está em voo; artefatos prontos ficam no disco. */
+  /** Aguarda o job em voo e apaga artefatos não consumidos do run. */
   async close(): Promise<void> {
     this.#closed = true;
-    this.#memory = undefined;
     await this.drain();
+    this.#memory = undefined;
+    this.#lastScheduled.clear();
+    this.#failedKeys.clear();
+    for (const agent of this.#agents) this.#clear(agent);
+    this.#sweepTmp();
+  }
+
+  #hasReady(agent: string, messages: readonly ChatMessage[], identity: CompactionIdentity): boolean {
+    const memory = this.#memory;
+    if (memory?.agent === agent && sameIdentity(memory.job.identity, identity) && matches(memory.job, messages)) {
+      return true;
+    }
+    const disk = this.#load(agent, identity);
+    return disk !== undefined && matches(disk, messages);
   }
 
   #persist(agent: string, job: BackgroundCompaction): void {
@@ -185,11 +267,12 @@ export class BackgroundCompactor {
       digest: createHash("sha256").update(json).digest("hex"),
       snapshotKey: job.snapshotKey,
       snapshotCount: job.snapshotCount,
+      identity: job.identity,
     };
     atomicWrite(marker, JSON.stringify(ready));
   }
 
-  #load(agent: string): BackgroundCompaction | undefined {
+  #load(agent: string, identity: CompactionIdentity): BackgroundCompaction | undefined {
     const { artifact, marker } = compactionArtifactPaths(this.#dir, this.#run, agent);
     if (!existsSync(artifact) || !existsSync(marker)) return undefined;
     try {
@@ -201,6 +284,7 @@ export class BackgroundCompactor {
         && payload.artifact?.schemaVersion === 1 && payload.artifact.run === this.#run
         && ready.digest === createHash("sha256").update(raw).digest("hex")
         && ready.snapshotKey === payload.snapshotKey && ready.snapshotCount === payload.snapshotCount
+        && sameIdentity(payload.identity, identity) && sameIdentity(ready.identity, identity)
         && Number.isInteger(payload.recentStart) && payload.recentStart >= 0
         && payload.recentStart <= payload.snapshotCount;
       if (!valid) return undefined;
@@ -209,6 +293,7 @@ export class BackgroundCompactor {
         originalTokens: payload.originalTokens, returnedTokens: payload.returnedTokens,
         olderCount: payload.olderCount, recentStart: payload.recentStart,
         snapshotKey: payload.snapshotKey, snapshotCount: payload.snapshotCount,
+        identity: payload.identity,
       };
     } catch {
       return undefined; // parcial/corrompido: o turno cai no inline
@@ -219,6 +304,16 @@ export class BackgroundCompactor {
     const { artifact, marker } = compactionArtifactPaths(this.#dir, this.#run, agent);
     for (const path of [artifact, marker]) {
       try { unlinkSync(path); } catch { /* já consumido */ }
+    }
+  }
+
+  #sweepTmp(): void {
+    let entries: string[];
+    try { entries = readdirSync(this.#dir); } catch { return; }
+    const prefix = `${safeName(this.#run)}.`;
+    for (const name of entries) {
+      if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+      try { unlinkSync(join(this.#dir, name)); } catch { /* já removido */ }
     }
   }
 }

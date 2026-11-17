@@ -474,13 +474,13 @@ export async function runSession(
           ...(callSelection === undefined ? {} : { call: callSelection }),
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
         }, opts.signal),
-        summarize: (input) => opts.provider.complete({
+        summarize: (input, signal) => opts.provider.complete({
           model: opts.model.id,
           messages: safePrompt(input),
           tools: undefined,
           purpose: "cheap",
           ...(opts.agentProfile === undefined ? {} : { profile: opts.agentProfile }),
-        }, opts.signal).then((summary) => {
+        }, signal ?? opts.signal).then((summary) => {
           recordAuxUsage(summary, opts.model, opts.agent);
           return summary.content;
         }),
@@ -676,6 +676,8 @@ export async function runSession(
     throw error;
   } finally {
     await compactionBackground.close();
+    // O resumo em background grava usage no ledger; reavalia o teto depois de drenar (CMP-9).
+    checkCeiling(opts.agent);
   }
 }
 
@@ -1259,13 +1261,13 @@ export async function runMultiAgentSession(
           ...(stepCall === undefined ? {} : { call: stepCall }),
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
         }, opts.signal),
-        summarize: (input) => stepProvider.complete({
+        summarize: (input, signal) => stepProvider.complete({
           model: stepModel.id,
           messages: safePrompt(input),
           tools: undefined,
           purpose: "cheap",
           ...(stepProfile === undefined ? {} : { profile: stepProfile }),
-        }, opts.signal).then((summary) => {
+        }, signal ?? opts.signal).then((summary) => {
           recordAuxUsage(summary, stepModel, stepAgentName);
           return summary.content;
         }),
@@ -1487,6 +1489,8 @@ export async function runMultiAgentSession(
     throw error;
   } finally {
     await compactionBackground.close();
+    // O resumo em background grava usage no ledger; reavalia o teto depois de drenar (CMP-9).
+    checkCeiling(currentAgentName);
   }
 }
 
