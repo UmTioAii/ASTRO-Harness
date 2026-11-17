@@ -118,6 +118,19 @@ describe("benchmark de providers (F5-4)", () => {
     await expect(benchModel(model(), () => down, 1)).rejects.toThrow("provider fora do ar");
   });
 
+  test("benchModel e runBenchmark recusam runs < 1", async () => {
+    await expect(benchModel(model(), () => delayedProvider(1), 0)).rejects.toThrow(RangeError);
+    await expect(benchModel(model(), () => delayedProvider(1), 1.5)).rejects.toThrow(
+      "runs deve ser inteiro >= 1",
+    );
+    await expect(
+      runBenchmark({ models: [model()], runs: 0, providerFor: () => delayedProvider(1) }),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      runBenchmark({ models: [], runs: 0, providerFor: () => delayedProvider(1) }),
+    ).rejects.toThrow(RangeError);
+  });
+
   test("filtro de provider/modelo segue a sintaxe do --models", () => {
     const models = [
       model({ provider: "nvidia", id: "n1" }),
