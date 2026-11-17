@@ -321,6 +321,48 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
           io.write("sem persistência configurada");
           continue;
         }
+        if (command.delete !== undefined) {
+          try {
+            if (command.delete === "") {
+              io.write("uso: /sessions delete <número|id>");
+              continue;
+            }
+            const list = opts.sessionApi.list();
+            let chosen: SessionSummary | undefined;
+            if (/^\d+$/.test(command.delete)) {
+              chosen = list[Number(command.delete) - 1] ?? list.find((item) => item.id === command.delete);
+              if (chosen === undefined) {
+                io.write("índice fora da lista; use /sessions");
+                continue;
+              }
+            } else {
+              chosen = list.find((item) => item.id === command.delete);
+              if (chosen === undefined) {
+                io.write("sessão não encontrada; use /sessions");
+                continue;
+              }
+            }
+            if (chosen.id === session.snapshot().id) {
+              io.write("não é possível excluir a sessão atual");
+              continue;
+            }
+            if (opts.interactive !== true) {
+              io.write("exclusão exige confirmação interativa; use a TUI (/sessions, d)");
+              continue;
+            }
+            const answer = await readFresh(`excluir a sessão ${chosen.id}? [s/N] `);
+            if (!isYes(answer)) {
+              io.write(`exclusão cancelada: ${chosen.id}`);
+              continue;
+            }
+            const deleted = opts.sessionApi.delete(chosen.id);
+            storeList = opts.sessionApi.list();
+            io.write(deleted ? `sessão excluída: ${chosen.id}` : `sessão não encontrada: ${chosen.id}`);
+          } catch (error) {
+            io.write(`erro: ${messageOf(error)}`);
+          }
+          continue;
+        }
         try {
           storeList = opts.sessionApi.list();
           io.write(storeList.length === 0

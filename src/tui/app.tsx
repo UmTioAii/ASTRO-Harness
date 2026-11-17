@@ -676,6 +676,18 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
             return `erro: ${messageOf(error)}`;
           }
         }}
+        onDelete={(chosen) => {
+          if (sessionApi === undefined) return "sem persistência configurada";
+          // a sessão atual continua viva no auto-save: excluí-la a deixaria tombstoned (#428)
+          if (chosen.id === session.snapshot().id) return "não é possível excluir a sessão atual";
+          try {
+            const deleted = sessionApi.delete(chosen.id);
+            setSessionList(sessionApi.list());
+            return deleted ? undefined : "sessão não encontrada";
+          } catch (error) {
+            return `erro: ${messageOf(error)}`;
+          }
+        }}
       />
     );
   }
