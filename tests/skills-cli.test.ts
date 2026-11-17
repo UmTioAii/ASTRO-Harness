@@ -115,16 +115,11 @@ test("installer segue redirect de mesma origem quando o host é permitido (#256)
 test("installer limita a cadeia de redirects a 5 hops (#256)", async () => {
   const target = mkdtempSync(join(tmpdir(), "astro-skredir-max-"));
   let calls = 0;
-  const fetchFn = async () => {
-    calls += 1;
-    return new Response(null, { status: 302, headers: { location: `http://203.0.113.10/hop${calls}` } });
-  };
-  await expect(installSkill({
-    source: "http://203.0.113.10/SKILL.md",
-    root: target,
-    sourceKind: "user",
-    fetchFn,
-  })).rejects.toThrow(/redirect/);
+  const fetchFn = async () => new Response(null, {
+    status: 302, headers: { location: `http://203.0.113.10/hop${++calls}` },
+  });
+  await expect(installSkill({ source: "http://203.0.113.10/SKILL.md", root: target, sourceKind: "user", fetchFn }))
+    .rejects.toThrow(/redirect/);
   expect(calls).toBe(6); // origem + 5 redirects
 });
 
