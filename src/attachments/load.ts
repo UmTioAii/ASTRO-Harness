@@ -4,7 +4,7 @@
  * confirmação fora do cwd e limites. Consome `model.ts` (puro).
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { classifyPath, createPathClassifier, type PathClassifierContext } from "../path-class";
@@ -20,10 +20,15 @@ import {
   MAX_DIRECTORY_ENTRIES,
   parseRange,
   AttachmentError,
+  type AttachmentRange,
+  type DetectedKind,
   type LoadedAttachment,
 } from "./model";
 
 export { AttachmentError };
+
+/** Chunk de leitura do range em arquivo acima do teto (ADR-0026). */
+const READ_CHUNK_BYTES = 64 * 1024;
 
 /** Entrada de `loadAttachment`; `confirmOutsideCwd` é injetado pela superfície. */
 export interface LoadAttachmentInput {
@@ -104,6 +109,107 @@ function listDirectory(
   return lines.join("\n");
 }
 
+/** Lê até `length` bytes iniciais do arquivo sem carregar o restante. */
+function readHeader(real: string, length: number): Uint8Array {
+  const fd = openSync(real, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(length);
+    let offset = 0;
+    while (offset < length) {
+      const read = readSync(fd, buffer, offset, length - offset, offset);
+      if (read === 0) break;
+      offset += read;
+    }
+    return buffer.subarray(0, offset);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Header de arquivo grande pode terminar no meio de uma sequência UTF-8; corta até 3 bytes. */
+function detectHeaderKind(header: Uint8Array): DetectedKind | null {
+  if (header.includes(0)) return null;
+  for (let cut = 1; cut <= 3 && cut < header.length; cut += 1) {
+    const retry = detectKind(header.subarray(0, header.length - cut));
+    if (retry !== null) return retry;
+  }
+  return null;
+}
+
+/** Erro tipado do teto de leitura durante range (ADR-0026): nunca trunca em silêncio. */
+function rangeTooLarge(spec: string, limit: number, real: string): AttachmentError {
+  return new AttachmentError("attachment_too_large", `faixa "${spec}" excede o teto de leitura de ${limit} bytes`, real);
+}
+
+/**
+ * Lê só as linhas de `spec` de um arquivo acima do teto, em chunks, sem carregar
+ * o restante. `start` além do EOF é erro, `end` além do EOF clampa; o offset da
+ * linha `start` e o payload selecionado são limitados a `limit` (ADR-0026).
+ */
+function readTextRange(real: string, spec: string, limit: number): { data: string; range: AttachmentRange } {
+  const requested = parseRange(spec, Number.MAX_SAFE_INTEGER);
+  const fd = openSync(real, "r");
+  try {
+    const output = Buffer.allocUnsafe(limit);
+    let outputBytes = 0;
+    let selectedBytes = 0;
+    let skippedBytes = 0;
+    let line = 1;
+    let lastLine = 1;
+    let done = false;
+    const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+    while (!done) {
+      const read = readSync(fd, chunk, 0, READ_CHUNK_BYTES, null);
+      if (read === 0) break;
+      const view = chunk.subarray(0, read);
+      let cursor = 0;
+      while (cursor < read) {
+        const newline = view.indexOf(0x0a, cursor);
+        const end = newline === -1 ? read : newline;
+        const length = end - cursor;
+        if (line >= requested.start && line <= requested.end) {
+          if (selectedBytes + length > limit) throw rangeTooLarge(spec, limit, real);
+          view.copy(output, outputBytes, cursor, end);
+          outputBytes += length;
+          selectedBytes += length;
+        } else {
+          skippedBytes += length;
+          if (skippedBytes > limit) throw rangeTooLarge(spec, limit, real);
+        }
+        if (newline === -1) break;
+        if (line >= requested.start && line <= requested.end) {
+          if (selectedBytes + 1 > limit) throw rangeTooLarge(spec, limit, real);
+          selectedBytes += 1;
+          if (line < requested.end) output[outputBytes++] = 0x0a;
+        } else {
+          skippedBytes += 1;
+          if (skippedBytes > limit) throw rangeTooLarge(spec, limit, real);
+        }
+        line += 1;
+        lastLine = line;
+        cursor = newline + 1;
+        if (line > requested.end) {
+          done = true;
+          break;
+        }
+      }
+    }
+    if (lastLine < requested.start) {
+      throw new AttachmentError(
+        "attachment_range_invalid",
+        `faixa fora do arquivo: "${spec}" (o arquivo tem ${lastLine} linha(s))`,
+        real,
+      );
+    }
+    return {
+      data: redactSecrets(output.subarray(0, outputBytes).toString("utf8")),
+      range: { start: requested.start, end: Math.min(requested.end, lastLine) },
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * Carrega um anexo de `path`. Ordem: expande `~` → realpath → classify com
  * `artifactRoot: null` (a raiz de artefato é destino, nunca fonte) → hard-block
@@ -158,15 +264,16 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
   }
 
   const limit = input.maxBytes ?? MAX_ATTACHMENT_BYTES;
-  if (stats.size > limit) {
+  if (stats.size > limit && input.range === undefined) {
     throw new AttachmentError(
       "attachment_too_large",
       `anexo "${name}" excede ${limit} bytes (${stats.size})`,
       real,
     );
   }
-  const bytes = new Uint8Array(readFileSync(real));
-  const detected = detectKind(bytes);
+  const oversized = stats.size > limit;
+  const bytes = oversized ? readHeader(real, READ_CHUNK_BYTES) : new Uint8Array(readFileSync(real));
+  const detected = detectKind(bytes) ?? (oversized ? detectHeaderKind(bytes) : null);
   if (detected === null) {
     throw new AttachmentError("attachment_unsupported_binary", `tipo não suportado: ${name}`, real);
   }
@@ -187,6 +294,21 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
       mediaType: detected.mediaType,
       data: Buffer.from(bytes).toString("base64"),
       hash: sha256(bytes),
+    };
+  }
+
+  if (oversized) {
+    const ranged = readTextRange(real, input.range!, limit);
+    const sizeBytes = Buffer.byteLength(ranged.data, "utf8");
+    assertAttachmentSize(sizeBytes, name);
+    return {
+      kind: "text",
+      path: real,
+      name,
+      sizeBytes,
+      mediaType: detected.mediaType,
+      range: ranged.range,
+      data: ranged.data,
     };
   }
 
