@@ -60,8 +60,15 @@
       "tool.call",
       "run.completed"
     ],
-    "auditText": [
-      "\"status\":\"error\""
+    "auditEvents": [
+      {
+        "tipo": "mcp.call",
+        "payload": {
+          "server": "fs",
+          "tool": "read_file",
+          "status": "error"
+        }
+      }
     ],
     "requests": 2
   }

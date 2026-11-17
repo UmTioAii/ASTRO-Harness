@@ -43,7 +43,7 @@
           "name": "write_file",
           "arguments": {
             "path": "out/mcp.txt",
-            "content": "MCP-FS-CONTENT\n"
+            "content": "MCP-FS-OUTPUT\n"
           }
         }
       ]
@@ -63,7 +63,7 @@
       "\"status\":\"ok\""
     ],
     "requests": 2,
-    "requestsContain": [
+    "toolResultsContain": [
       "MCP-FS-CONTENT"
     ]
   }

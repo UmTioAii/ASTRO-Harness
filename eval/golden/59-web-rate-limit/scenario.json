@@ -43,7 +43,7 @@
           "name": "write_file",
           "arguments": {
             "path": "out/retry.txt",
-            "content": "RATE-LIMIT-OK\n"
+            "content": "RATE-LIMIT-OUTPUT\n"
           }
         }
       ]
@@ -62,7 +62,7 @@
       "\"status\":200"
     ],
     "requests": 2,
-    "requestsContain": [
+    "toolResultsContain": [
       "RATE-LIMIT-OK"
     ],
     "searchRequests": 2

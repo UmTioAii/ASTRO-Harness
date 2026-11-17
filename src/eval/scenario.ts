@@ -4,12 +4,12 @@
  * provider consome `turns` declarados no `scenario.json`; o app roda de verdade
  * (allowlist, ledger, audit, fallback, multi-agent) contra servidores loopback.
  */
-import { createHash } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runTask } from "../app";
 import { validateConfig } from "../config";
 import { runHealthCheck, type HealthReport } from "../health";
+import { parseSkill } from "../skills/loader";
 import { resolveWithin } from "../tools/paths";
 
 export interface ScenarioToolCall {
@@ -55,8 +55,12 @@ export interface ScenarioExpectations {
   requests?: number;
   /** Modelos enviados ao provider, na ordem. */
   models?: string[];
-  /** Substrings que precisam existir em algum request ao provider (resultado de tool). */
+  /** Substrings em qualquer request ao provider (prompt, tool_calls ou tool results). */
   requestsContain?: string[];
+  /** Substrings que precisam existir apenas em mensagens `role:"tool"` (resultado real da tool). */
+  toolResultsContain?: string[];
+  /** Eventos de audit com payload parcial obrigatório. */
+  auditEvents?: Array<{ tipo: string; payload?: Record<string, unknown> }>;
   /** Tools que não podem ser expostas ao modelo (allowlist). */
   toolsAbsent?: string[];
   /** Número exato de chamadas ao backend de web_search. */
@@ -107,7 +111,15 @@ interface SearchState {
 
 interface AuditEventLike {
   tipo?: unknown;
+  payload?: unknown;
 }
+
+/** Chaves aceitas em `expect`; typo falha fechado em vez de virar assertion ignorada. */
+const EXPECT_KEYS: ReadonlySet<string> = new Set([
+  "final", "error", "audit", "auditText", "auditAbsent", "auditTextAbsent",
+  "requests", "models", "requestsContain", "toolResultsContain", "auditEvents",
+  "toolsAbsent", "searchRequests", "agents", "absentFiles", "health",
+]);
 
 const BASE_CONFIG: Record<string, unknown> = {
   providers: {
@@ -230,6 +242,54 @@ function leakedEnvNames(env: Record<string, string>, texts: readonly string[]): 
     if (found) leaked.push(name);
   }
   return leaked;
+}
+
+function assertKnownExpectKeys(expect: ScenarioExpectations | undefined): void {
+  for (const key of Object.keys(expect ?? {})) {
+    if (!EXPECT_KEYS.has(key)) throw new Error(`cenário com expect desconhecido: ${key}`);
+  }
+}
+
+const UNRESOLVED_PLACEHOLDER = /\{\{[A-Za-z0-9_]+\}\}/;
+
+/** Depois da substituição, placeholder restante é erro (nunca vira texto literal). */
+function assertNoUnresolvedPlaceholders(value: unknown, field: string): void {
+  if (typeof value === "string") {
+    if (UNRESOLVED_PLACEHOLDER.test(value)) {
+      throw new Error(`cenário com placeholder não resolvido em ${field}: ${value}`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) assertNoUnresolvedPlaceholders(entry, `${field}[${index}]`);
+    return;
+  }
+  if (isRecord(value)) {
+    for (const [key, entry] of Object.entries(value)) assertNoUnresolvedPlaceholders(entry, `${field}.${key}`);
+  }
+}
+
+/** Texto apenas das mensagens `role:"tool"` enviadas ao provider. */
+function toolResultsText(bodies: unknown[]): string {
+  const parts: string[] = [];
+  for (const body of bodies) {
+    if (!isRecord(body) || !Array.isArray(body.messages)) continue;
+    for (const message of body.messages) {
+      if (!isRecord(message) || message.role !== "tool") continue;
+      if (typeof message.content === "string") parts.push(message.content);
+      else if (message.content !== undefined) parts.push(JSON.stringify(message.content));
+    }
+  }
+  return parts.join("\n");
+}
+
+function payloadMatches(actual: unknown, expected: Record<string, unknown> | undefined): boolean {
+  if (expected === undefined) return true;
+  if (!isRecord(actual)) return false;
+  return Object.entries(expected).every(([key, value]) =>
+    isRecord(value) && isRecord(actual[key])
+      ? payloadMatches(actual[key], value)
+      : JSON.stringify(actual[key]) === JSON.stringify(value));
 }
 
 /** Provider OpenAI-compat determinístico: uma resposta por turno declarado. */
@@ -366,6 +426,7 @@ interface Observation {
   models: string[];
   bodies: unknown[];
   searchRequests: number;
+  toolResultsText: string;
   agents: string[];
   health?: HealthReport;
 }
@@ -403,6 +464,14 @@ function checkExpectations(expect: ScenarioExpectations, obs: Observation): stri
   const bodiesText = JSON.stringify(obs.bodies);
   for (const needle of expect.requestsContain ?? []) {
     if (!bodiesText.includes(needle)) diff.push(`requests sem "${needle}"`);
+  }
+  for (const needle of expect.toolResultsContain ?? []) {
+    if (!obs.toolResultsText.includes(needle)) diff.push(`toolResultsContain: nenhum resultado de tool contém "${needle}"`);
+  }
+  for (const expected of expect.auditEvents ?? []) {
+    const found = obs.auditEvents.some((event) =>
+      event.tipo === expected.tipo && payloadMatches(event.payload, expected.payload));
+    if (!found) diff.push(`audit sem evento "${expected.tipo}" com payload esperado`);
   }
   const exposedTools = obs.bodies.flatMap((body) => {
     if (!isRecord(body) || !Array.isArray(body.tools)) return [];
@@ -452,6 +521,7 @@ export async function runScenario(
   const kind = spec.kind ?? "app";
   if (kind !== "app" && kind !== "health") throw new Error(`scenario kind inválido: ${String(kind)}`);
   if (kind === "app" && !Array.isArray(spec.turns)) throw new Error("scenario app exige turns[]");
+  assertKnownExpectKeys(spec.expect);
   assertLoopbackFixtures(spec);
 
   const servers: MockServer[] = [];
@@ -493,9 +563,9 @@ export async function runScenario(
       if (existsSync(sidecar) && lstatSync(sidecar).isSymbolicLink()) {
         throw new Error(`cenário sidecar não pode ser link: ${relativeDir}/.sha256`);
       }
-      // Contrato do loader/installer: <skillDir>/.sha256, digest de SKILL.md.
-      const digest = createHash("sha256").update(readFileSync(skillFile)).digest("hex");
-      writeFileSync(sidecar, `${digest}\n`, "utf8");
+      // Contrato do loader/installer: <skillDir>/.sha256, digest de SKILL.md (BOM removido).
+      const sidecarDigest = parseSkill(readFileSync(skillFile, "utf8"), "project", skillFile).manifest.sha256;
+      writeFileSync(sidecar, `${sidecarDigest}\n`, "utf8");
     }
     const page = spec.page === undefined ? undefined : startPage(spec.page);
     if (page !== undefined) { servers.push(page.server); vars.pageUrl = page.url; }
@@ -508,11 +578,13 @@ export async function runScenario(
     vars.providerDownUrl = down.url;
 
     const turns = substitute(spec.turns ?? [], vars);
+    assertNoUnresolvedPlaceholders(turns, "turns");
     const provider = startProvider(turns, providerState);
     servers.push(provider.server);
     vars.providerUrl = provider.url;
 
     const rawConfig = substitute(deepMerge(BASE_CONFIG, spec.config ?? {}), vars);
+    assertNoUnresolvedPlaceholders(rawConfig, "config");
     const configPath = join(opts.cwd, "astro.config.json");
     writeFileSync(configPath, JSON.stringify(rawConfig, null, 2), "utf8");
 
@@ -553,6 +625,7 @@ export async function runScenario(
       models: providerState.models,
       bodies: providerState.bodies,
       searchRequests: searchState.requests,
+      toolResultsText: toolResultsText(providerState.bodies),
       agents: report?.agentsUsed ?? [],
       ...(health === undefined ? {} : { health }),
     };

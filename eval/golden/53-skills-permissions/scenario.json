@@ -21,7 +21,7 @@
   },
   "turns": [],
   "expect": {
-    "error": "allowlist",
+    "error": "skill \"deploy\" pede tools fora da allowlist do agent: run_command",
     "audit": [
       "run.stopped"
     ],

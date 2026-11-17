@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -473,6 +473,32 @@ describe("eval harness (F5-2)", () => {
     const result = await runTempCase(root, "01-web-empty");
     expect(result.passed).toBe(false);
     expect(result.diffSummary.join("\n")).toContain("toolResultsContain");
+  }, 30000);
+
+  test("fixtures de MCP/web falham quando o tool result fica vazio", async () => {
+    interface MutScenario {
+      mcp?: { tools: Array<{ text: string }> };
+      search?: { results: Array<{ snippet: string }> };
+      page?: { html: string };
+    }
+    const mutations: Array<[string, (scenario: MutScenario) => void]> = [
+      ["54-mcp-filesystem-read", (scenario) => { scenario.mcp!.tools[0]!.text = ""; }],
+      ["57-web-search-basic", (scenario) => { scenario.search!.results[0]!.snippet = ""; }],
+      ["58-web-fetch-extract", (scenario) => { scenario.page!.html = ""; }],
+      ["59-web-rate-limit", (scenario) => { scenario.search!.results[0]!.snippet = ""; }],
+    ];
+    for (const [name, mutate] of mutations) {
+      const root = mkdtempSync(join(tmpdir(), "astro-fixture-empty-"));
+      cpSync(join(GOLDEN_ROOT, name), join(root, name), { recursive: true });
+      const scenarioPath = join(root, name, "scenario.json");
+      const scenario = JSON.parse(readFileSync(scenarioPath, "utf8")) as MutScenario;
+      mutate(scenario);
+      writeFileSync(scenarioPath, JSON.stringify(scenario));
+      const [golden] = listGoldenCases(root);
+      const result = await runCase(golden!, { mock: true });
+      expect(result.passed).toBe(false);
+      expect(result.diffSummary.join("\n")).toContain("toolResultsContain");
+    }
   }, 30000);
 
   test("expect desconhecido falha fechado", async () => {

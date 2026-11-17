@@ -44,7 +44,7 @@
           "name": "write_file",
           "arguments": {
             "path": "out/search.txt",
-            "content": "WEB-SNIPPET\n"
+            "content": "WEB-OUTPUT\n"
           }
         }
       ]
@@ -63,7 +63,7 @@
       "\"status\":200"
     ],
     "requests": 2,
-    "requestsContain": [
+    "toolResultsContain": [
       "WEB-SNIPPET"
     ],
     "searchRequests": 1

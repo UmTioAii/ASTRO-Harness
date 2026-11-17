@@ -31,7 +31,7 @@
           "name": "write_file",
           "arguments": {
             "path": "out/page.md",
-            "content": "# Título\n\nPAGE-CONTENT\n"
+            "content": "# Título\n\nPAGE-OUTPUT\n"
           }
         }
       ]
@@ -47,7 +47,7 @@
       "tool.call"
     ],
     "requests": 2,
-    "requestsContain": [
+    "toolResultsContain": [
       "PAGE-CONTENT"
     ]
   }
