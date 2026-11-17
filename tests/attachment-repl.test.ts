@@ -300,6 +300,32 @@ describe("@path é só menção (ADR-0026, #392)", () => {
   });
 });
 
+describe("protectedPaths da config no /attach (ADR-0026, #392)", () => {
+  test("ledger e audit resolvidos entram no hard-block", async () => {
+    const base = sandbox();
+    const cwd = join(base, "work"), home = join(base, "home");
+    mkdirSync(join(cwd, "state"), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(cwd, "state", "ledger.jsonl"), "{}\n");
+    const configPath = join(cwd, "astro.config.json");
+    writeFileSync(configPath, JSON.stringify({
+      providers: { p: { kind: "openai-compat", baseUrl: "http://127.0.0.1:1/v1", credentialRef: "KEY" } },
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "p/m1", maxSteps: 1, tools: [] },
+      paths: { ledger: "state/ledger.jsonl", audit: "state/audit.jsonl" },
+    }));
+    const session = new AgentSession({ configPath, cwd, env: { ASTRO_HOME: home, KEY: "k" } });
+    const io = new ScriptedIO(["/attach state/ledger.jsonl", "/exit"]);
+    try {
+      await runRepl(session, io, { cwd });
+      expect(io.outputs.join("\n")).toContain("bloqueado");
+      expect(io.outputs.join("\n")).not.toContain("anexo adicionado");
+    } finally {
+      session.close();
+    }
+  });
+});
+
 describe("showHidden da config no /attach (ADR-0026, #392)", () => {
   test("config true lista ocultos; false os esconde", async () => {
     for (const showHidden of [true, false]) {

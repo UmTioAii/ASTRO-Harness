@@ -24,6 +24,15 @@ afterEach(() => {
 
 const base = (cwd: string, astroHome: string) => ({ cwd, astroHome });
 
+/** Marcadores PEM exatos, montados em runtime: o literal completo não entra no repo (I-03). */
+const PEM_BEGIN = ["-----BEGIN", "PRIVATE KEY-----"].join(" ");
+const PEM_END = ["-----END", "PRIVATE KEY-----"].join(" ");
+const PEM_BODY = [
+  "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun",
+  "VTLw5Zs5DDnbqZ6rJ1QxJw9pQ0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l",
+  "Q2h1Y2sxMjM0NTY3ODkwYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo",
+];
+
 /** Header PNG mínimo com IHDR: suficiente para magic bytes e dimensões (não é PNG completo). */
 function pngHeader(width: number, height: number): Buffer {
   const bytes = Buffer.alloc(24);
@@ -70,13 +79,11 @@ describe("loadAttachment", () => {
 
   test("range de arquivo pequeno é aplicado antes da redação (numeração preservada)", async () => {
     const { cwd, astroHome } = sandbox();
-    // Header montado em runtime: o padrão literal de chave privada não entra no repo (I-03).
-    const pemEdge = (edge: "BEGIN" | "END"): string => ["-----", edge, "PRIVATE KEY-----"].join(" ");
     writeFileSync(join(cwd, "chave.txt"), [
-      pemEdge("BEGIN"),
-      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+      PEM_BEGIN,
+      PEM_BODY[0]!,
       "linha-interna-3",
-      pemEdge("END"),
+      PEM_END,
       "alvo-5",
       "alvo-6",
       "alvo-7",
@@ -85,6 +92,48 @@ describe("loadAttachment", () => {
     expect(attachment.data).toBe("alvo-5\nalvo-6");
     expect(attachment.range).toEqual({ start: 5, end: 6 });
     expect(attachment.data).not.toContain("PRIVATE KEY");
+  });
+
+  test("range no interior de um PEM não vaza o corpo da chave", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "notas.txt"), [
+      PEM_BEGIN,
+      PEM_BODY[0]!,
+      PEM_BODY[1]!,
+      "Q2h1Y2stdGVyY2VpcmEtZGUtbGlu",
+      PEM_BODY[2]!,
+      PEM_END,
+      "alvo-7",
+    ].join("\n"));
+    const interior = await loadAttachment({ ...base(cwd, astroHome), path: "notas.txt", range: "2:5" });
+    expect(interior.data).toBe("[REDACTED]\n[REDACTED]\n[REDACTED]\n[REDACTED]");
+    expect(interior.range).toEqual({ start: 2, end: 5 });
+    expect(interior.data).not.toContain("MIIEow");
+
+    // Faixa que atravessa o END: as linhas do span seguem numeradas e redigidas.
+    const throughEnd = await loadAttachment({ ...base(cwd, astroHome), path: "notas.txt", range: "5:7" });
+    expect(throughEnd.data).toBe("[REDACTED]\n[REDACTED]\nalvo-7");
+    expect(throughEnd.range).toEqual({ start: 5, end: 7 });
+  });
+
+  test("range no interior de um PEM no caminho de streaming não vaza", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "grande-notas.txt"), [
+      PEM_BEGIN,
+      PEM_BODY[0]!,
+      PEM_BODY[1]!,
+      PEM_END,
+      "resto ".repeat(200),
+    ].join("\n"));
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "grande-notas.txt",
+      range: "2:3",
+      maxBytes: 512,
+    });
+    expect(attachment.data).toBe("[REDACTED]\n[REDACTED]");
+    expect(attachment.range).toEqual({ start: 2, end: 3 });
+    expect(attachment.data).not.toContain("MIIEow");
   });
 
   test("hard-block em .env sem override", async () => {
