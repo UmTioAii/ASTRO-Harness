@@ -117,10 +117,11 @@ describe("I-03 zero segredos", () => {
     expect(scanText(`${key}-do-not-store`)).toEqual([]); // allowlist de fixture
   });
 
+  // A varredura percorre o repo inteiro: no Windows ela passa de 5s sob carga.
   test("repo versionado não tem chave real em fonte, doc, config ou fixture", () => {
     const findings = scanRepo();
     expect(findings.map((finding) => `${finding.file}:${finding.line} (${finding.rule})`)).toEqual([]);
-  });
+  }, 30_000);
 
   test("audit, ledger e log gerados não contêm o segredo", () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-zero-secret-"));
@@ -151,5 +152,5 @@ describe("I-03 zero segredos", () => {
 
   test("varredura é determinística", () => {
     expect(scanRepo()).toEqual(scanRepo());
-  });
+  }, 30_000);
 });
