@@ -1,18 +1,18 @@
 #!/usr/bin/env bun
-import { runTask, type RunReport, createProvider } from "./app";
+import { runTask, type RunReport, createProvider } from "./core/app";
 import { installCancellation } from "./signal";
 import { validateAllowlistFlags, type AllowlistFlags, type CliAllowlists } from "./allowlists";
 import { AllowlistInvalidError } from "./path-class";
 import { denyDisplayPath, isPermissionMode, nonInteractiveApprover, type PermissionMode } from "./permissions";
 import { defaultArgs, isInteractive } from "./cli-default";
-import { validateConfig } from "./config";
+import { validateConfig } from "./core/config";
 import { loadEffectiveConfig, loadProjectConfig } from "./providers/profiles";
 import { ProfileManager } from "./providers/profile-manager";
 import { formatVaultImport, importVaultCredential } from "./providers/vault-import";
 import { Ledger } from "./ledger";
 import { formatHandoffShow } from "./handoff/lifecycle";
 import { formatCostByAgent } from "./team";
-import { Registry } from "./registry";
+import { Registry } from "./core/registry";
 import { formatPoolList } from "./pool";
 import { formatAgentsList } from "./agent-manager";
 import { buildModelCatalog, formatModelCatalog, formatSeedList } from "./model-catalog";

@@ -7,7 +7,7 @@ import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, 
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { DEFAULT_ATTACHMENTS, loadConfig, loadConfigRaw, type MCPServerConfig } from "../src/config";
+import { DEFAULT_ATTACHMENTS, loadConfig, loadConfigRaw, type MCPServerConfig } from "../src/core/config";
 import { loadEffectiveConfig } from "../src/providers/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "../src/attachments/store";
 import { headerEnvNames } from "../src/mcp/headers";
