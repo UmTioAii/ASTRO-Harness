@@ -49,6 +49,14 @@ describe("loadAttachment", () => {
     expect(attachment.range).toEqual({ start: 2, end: 3 });
   });
 
+  test("range 1:999 clampa no EOF", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "a.txt"), "um\ndois\ntres");
+    const attachment = await loadAttachment({ ...base(cwd, astroHome), path: "a.txt", range: "1:999" });
+    expect(attachment.data).toBe("um\ndois\ntres");
+    expect(attachment.range).toEqual({ start: 1, end: 3 });
+  });
+
   test("hard-block em .env sem override", async () => {
     const { cwd, astroHome } = sandbox();
     writeFileSync(join(cwd, ".env"), "KEY=1");
