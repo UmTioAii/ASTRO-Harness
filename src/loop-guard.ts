@@ -130,13 +130,23 @@ const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const MAX_ID_CHARS = 120;
 const MAX_ID_BYTES = 150;
 
-/** Recusa id vazio, "."/"..", separador, dois-pontos ou controle; "_" e "." passam codificados. */
-function assertCheckpointId(value: string): void {
-  if (value === "" || value === "." || value === ".." || value.length > MAX_ID_CHARS
-      || Buffer.byteLength(value, "utf8") > MAX_ID_BYTES) {
-    throw new Error("identificador de run/agent inválido para o checkpoint");
+/**
+ * Motivo pelo qual o id não pode virar segmento de checkpoint (codificado ou
+ * não), ou undefined quando serve. Nome de agente aceito na config passa por
+ * aqui no load, então `checkpointPath` não surpreende no meio do run (#135).
+ */
+export function checkpointIdProblem(value: string): string | undefined {
+  if (value === "" || value === "." || value === "..") return "vazio, \".\" ou \"..\"";
+  if (value.length > MAX_ID_CHARS || Buffer.byteLength(value, "utf8") > MAX_ID_BYTES) return "longo demais";
+  if (/[/\\:\u0000-\u001f\u007f]/.test(value) || /[\p{Cf}\p{Zl}\p{Zp}]/u.test(value)) {
+    return "contém separador, dois-pontos, controle ou caractere de formatação";
   }
-  if (/[/\\:\u0000-\u001f\u007f]/.test(value)) {
+  return undefined;
+}
+
+/** Recusa id que não pode virar segmento de caminho nem codificado. */
+function assertCheckpointId(value: string): void {
+  if (checkpointIdProblem(value) !== undefined) {
     throw new Error("identificador de run/agent inválido para o checkpoint");
   }
 }

@@ -644,6 +644,15 @@ function lockReason(error: unknown, signal?: AbortSignal): string {
   return interruptReason(error, signal);
 }
 
+/** Código estável do erro de checkpoint: errno curto, nunca mensagem/caminho (I-03). */
+function checkpointErrorCode(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Za-z0-9._-]{1,32}$/.test(code)) return code;
+  }
+  return "checkpoint_error";
+}
+
 /**
  * Libera a conta do agente quando o run termina em erro (A4): sem isso o
  * `agent.created` fica sem `destroyed` e o próximo run falha `account_locked`.
@@ -918,6 +927,55 @@ export async function runMultiAgentSession(
     opts.ledger.recordCeilingHit({ run: opts.run, agent, ceiling_hit: true });
     throw new BudgetExceededError("ceiling", status);
   };
+  /**
+   * L5 (#135): checkpoint do agente que executou o step, uma vez, na fração do
+   * limite dele ou do gasto do escopo. Persistência é best-effort: falha de
+   * I/O/encoding vira `loop.checkpoint_error` e o run continua (o handoff já
+   * recebido não pode ser queimado por um checkpoint).
+   */
+  const recordCheckpoint = (response: CompletionResponse, agent: string, turn: number, limit: number): void => {
+    if (opts.checkpointAt === undefined || checkpointedAgents.has(agent)) return;
+    const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
+    const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
+    const turnDue = turnCheckpointDue(turn, limit, opts.checkpointAt);
+    const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
+      && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
+    if (!turnDue && !budgetDue) return;
+    checkpointedAgents.add(agent);
+    try {
+      const checkpoint = buildCheckpoint({
+        // nunca o prompt cru: só taskHash (o prompt do usuário não é persistido)
+        summary: response.content.trim() === ""
+          ? (opts.taskHash === undefined ? "[tarefa não registrada]" : `tarefa #${opts.taskHash}`)
+          : response.content,
+        changedFiles: touchedFiles,
+        nextStep: `continuar a partir do turno ${step + 1}`,
+      }, opts.cwd);
+      saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, agent));
+      opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint",
+        payload: { step, trigger: turnDue ? "turns" : "budget" } });
+    } catch (error) {
+      opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint_error",
+        payload: { step, code: checkpointErrorCode(error) } });
+    }
+  };
+  /** L6 (#135): N segmentos iguais do agente disparam a pausa; sem continuar, para seguro. */
+  const recordNoProgress = async (agent: string, stepTouched: string[], toolErrors: number): Promise<void> => {
+    if (opts.noProgressSegments === undefined) return;
+    let tracker = progressByAgent.get(agent);
+    if (tracker === undefined) {
+      tracker = new ProgressTracker(opts.noProgressSegments);
+      progressByAgent.set(agent, tracker);
+    }
+    if (!tracker.record(segmentHash(stepTouched, toolErrors))) return;
+    opts.audit.append({ run: opts.run, agent, tipo: "loop.no_progress",
+      payload: { step, segments: opts.noProgressSegments } });
+    const proceed = opts.onNoProgress === undefined
+      ? false
+      : await opts.onNoProgress({ run: opts.run, agent, step, segments: opts.noProgressSegments });
+    if (!proceed) throw new NoProgressError(opts.noProgressSegments, step);
+    tracker.reset();
+  };
   const handoffDeps = { ledger: opts.ledger, audit: opts.audit, run: opts.run, cwd: opts.cwd };
   /** Ack do receptor com timeout (F-24): hook de teste ou o ciclo padrão do ledger. */
   const ackWithTimeout = (h: { handoff_id: string; artifact: HandoffArtifactV1 }, receiver: string) =>
@@ -1019,6 +1077,11 @@ export async function runMultiAgentSession(
 
       step++;
       agentSteps++;
+      // O step pertence ao agente que o começou: handoff no meio troca o ativo,
+      // mas checkpoint e não-progresso continuam sendo do emissor.
+      const stepAgent = currentAgentName;
+      const stepAgentLimit = currentMaxSteps;
+      const stepAgentTurn = agentSteps;
 
       // Quota (F6-3): bloqueia a chamada antes de gastar
       assertWithinQuota(opts.ledger, opts.quotaLimits ?? {}, opts.quotaDomain);
@@ -1133,30 +1196,8 @@ export async function runMultiAgentSession(
       maybeWarnBudget(currentAgentName);
       checkCeiling(currentAgentName);
 
-      // L5 (#135): checkpoint do agente ativo, uma vez, na fração do limite dele ou do gasto do escopo.
-      if (opts.checkpointAt !== undefined && !checkpointedAgents.has(currentAgentName)) {
-        const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
-        const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
-        const turnDue = turnCheckpointDue(agentSteps, currentMaxSteps, opts.checkpointAt);
-        const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
-          && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
-        if (turnDue || budgetDue) {
-          checkpointedAgents.add(currentAgentName);
-          const checkpoint = buildCheckpoint({
-            // nunca o prompt cru: só taskHash (o prompt do usuário não é persistido)
-            summary: response.content.trim() === ""
-              ? (opts.taskHash === undefined ? "[tarefa não registrada]" : `tarefa #${opts.taskHash}`)
-              : response.content,
-            changedFiles: touchedFiles,
-            nextStep: `continuar a partir do turno ${step + 1}`,
-          }, opts.cwd);
-          saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, currentAgentName));
-          opts.audit.append({ run: opts.run, agent: currentAgentName, tipo: "loop.checkpoint",
-            payload: { step, trigger: turnDue ? "turns" : "budget" } });
-        }
-      }
-
       if (response.toolCalls.length === 0) {
+        recordCheckpoint(response, stepAgent, stepAgentTurn, stepAgentLimit);
         opts.ledger.recordState(opts.run, "completed", { agent: currentAgentName });
         ensureAgentDestroyed(opts.ledger, opts.audit, opts.run, currentAgentName, "completed");
         cleanupSpawns("completed");
@@ -1281,28 +1322,15 @@ export async function runMultiAgentSession(
         }
     }
 
+    // Checkpoint do step executado (já inclui os arquivos das tools) e L6 do
+    // emissor antes do continue: a troca de agente não apaga o segmento.
+    recordCheckpoint(response, stepAgent, stepAgentTurn, stepAgentLimit);
+    await recordNoProgress(stepAgent, stepTouched, toolErrors);
+
     if (handoffTriggered) {
       tracer?.end(stepSpan, { handoff: redactSecrets(currentAgentName) });
       messages.push({ role: "system", content: `[Sistema: controle transferido para agent "${redactSecrets(currentAgentName)}"]` });
       continue; // próximo step com novo agent
-    }
-    // L6 (#135): segmentos iguais consecutivos do mesmo agente → audit + pergunta;
-    // sem "continuar", para seguro. Troca de agente tem tracker próprio.
-    if (opts.noProgressSegments !== undefined) {
-      let tracker = progressByAgent.get(currentAgentName);
-      if (tracker === undefined) {
-        tracker = new ProgressTracker(opts.noProgressSegments);
-        progressByAgent.set(currentAgentName, tracker);
-      }
-      if (tracker.record(segmentHash(stepTouched, toolErrors))) {
-        opts.audit.append({ run: opts.run, agent: currentAgentName, tipo: "loop.no_progress",
-          payload: { step, segments: opts.noProgressSegments } });
-        const proceed = opts.onNoProgress === undefined
-          ? false
-          : await opts.onNoProgress({ run: opts.run, agent: currentAgentName, step, segments: opts.noProgressSegments });
-        if (!proceed) throw new NoProgressError(opts.noProgressSegments, step);
-        tracker.reset();
-      }
     }
     tracer?.end(stepSpan);
     }
