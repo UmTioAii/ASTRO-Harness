@@ -1,10 +1,17 @@
 import { expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   buildSummary,
+  cleanupOnSignal,
   createPlan,
   executePlan,
   parseArgs,
+  prepareTempDir,
+  removeTempDir,
+  stepEnv,
+  tailForFailure,
   tarballFileName,
   tempDirPrefix,
   type StepResult,
@@ -29,6 +36,16 @@ test("tarball npm usa o nome sanitizado do pacote", () => {
   expect(tempDirPrefix("@umtioai/astro-harness")).toBe(
     "astro-release-check-umtioai-astro-harness-",
   );
+}, 5000);
+
+test("PEM que cruza a janela de corte ainda é redigido", () => {
+  const body = "SENTINEL-PEM-BODY".repeat(1200);
+  const output = `${"x".repeat(20_000)}-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`;
+
+  const tail = tailForFailure(output);
+
+  expect(tail).toContain("[REDACTED]");
+  expect(tail).not.toContain("SENTINEL-PEM-BODY");
 }, 5000);
 
 test("plano padrão roda qualidade, build, smoke, pack, instalação e help", () => {
@@ -71,6 +88,58 @@ test("--skip-tests remove typecheck e bun test do plano", () => {
     "install",
     "help",
   ]);
+}, 5000);
+
+test("pack, install e help usam ambiente sanitizado; bun herda o ambiente", () => {
+  const plan = createPlan(base);
+
+  expect(plan.steps.filter((step) => step.envMode === "sanitized").map((step) => step.id)).toEqual([
+    "pack",
+    "install",
+    "help",
+  ]);
+  expect(plan.steps.filter((step) => step.envMode === "inherit").map((step) => step.id)).toEqual([
+    "typecheck",
+    "test",
+    "build",
+    "smoke",
+  ]);
+}, 5000);
+
+test("ambiente das etapas npm não leva token nem chave de provider", () => {
+  const env = stepEnv({
+    Path: "C:\\Windows\\System32",
+    PATH: "/usr/bin",
+    HOME: "/home/dev",
+    USERPROFILE: "C:\\Users\\dev",
+    APPDATA: "C:\\Users\\dev\\AppData\\Roaming",
+    SYSTEMROOT: "C:\\Windows",
+    TEMP: "C:\\Temp",
+    NPM_TOKEN: "sentinel-npm-token",
+    NODE_AUTH_TOKEN: "sentinel-node-token",
+    OPENAI_API_KEY: "sentinel-provider-key",
+    ASTRO_HOME: "/home/dev/.astro",
+    npm_config_registry: "https://registry.npmjs.org/",
+    npm_config_cache: "C:\\npm-cache",
+    npm_config__authToken: "sentinel-npm-auth",
+    UNRELATED: "drop",
+  });
+
+  expect(env.Path).toBe("C:\\Windows\\System32");
+  expect(env.PATH).toBe("/usr/bin");
+  expect(env.HOME).toBe("/home/dev");
+  expect(env.USERPROFILE).toBe("C:\\Users\\dev");
+  expect(env.APPDATA).toBe("C:\\Users\\dev\\AppData\\Roaming");
+  expect(env.SYSTEMROOT).toBe("C:\\Windows");
+  expect(env.TEMP).toBe("C:\\Temp");
+  expect(env.npm_config_registry).toBe("https://registry.npmjs.org/");
+  expect(env.npm_config_cache).toBe("C:\\npm-cache");
+  expect(env.NPM_TOKEN).toBeUndefined();
+  expect(env.NODE_AUTH_TOKEN).toBeUndefined();
+  expect(env.OPENAI_API_KEY).toBeUndefined();
+  expect(env.npm_config__authToken).toBeUndefined();
+  expect(env.ASTRO_HOME).toBeUndefined();
+  expect(env.UNRELATED).toBeUndefined();
 }, 5000);
 
 test("argumentos desconhecidos falham em vez de ignorar", () => {
@@ -155,4 +224,86 @@ test("falha na limpeza também fecha o gate", () => {
   expect(summary.ok).toBe(false);
   expect(summary.failure?.step).toBe("cleanup");
   expect(summary.failure?.message).toContain("sem permissão");
+}, 5000);
+
+test("limpeza recusa `..` e irmão com prefixo sem apagar os alvos", () => {
+  const parent = mkdtempSync(join(tmpdir(), "astro-release-guard-"));
+  const tempRoot = join(parent, "root");
+  const victim = join(parent, "victim");
+  const sibling = join(parent, `${tempDirPrefix("@umtioai/astro-harness")}sibling`);
+  mkdirSync(tempRoot);
+  mkdirSync(victim);
+  mkdirSync(sibling);
+
+  try {
+    expect(() => removeTempDir(tempRoot, join(tempRoot, "..", "victim"))).toThrow("recusando");
+    expect(() => removeTempDir(tempRoot, sibling)).toThrow("recusando");
+    expect(existsSync(victim)).toBe(true);
+    expect(existsSync(sibling)).toBe(true);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+}, 5000);
+
+test("limpeza recusa junction/symlink que aponta para fora", () => {
+  const parent = mkdtempSync(join(tmpdir(), "astro-release-guard-"));
+  const tempRoot = join(parent, "root");
+  const victim = join(parent, "victim");
+  mkdirSync(tempRoot);
+  mkdirSync(victim);
+  const link = join(tempRoot, `${tempDirPrefix("@umtioai/astro-harness")}link`);
+
+  try {
+    try {
+      symlinkSync(victim, link, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return; // Ambiente sem permissão para criar link; coberto pelo caso lexical.
+    }
+
+    expect(() => removeTempDir(tempRoot, link)).toThrow("recusando");
+    expect(existsSync(victim)).toBe(true);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+}, 5000);
+
+test("prepareTempDir limpa o diretório se escrever o manifesto falhar", () => {
+  const parent = mkdtempSync(join(tmpdir(), "astro-release-prepare-"));
+
+  try {
+    expect(() => prepareTempDir(parent, "@umtioai/astro-harness", () => {
+      throw new Error("sem espaço");
+    })).toThrow("sem espaço");
+    expect(readdirSync(parent)).toEqual([]);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+}, 5000);
+
+test("SIGINT e SIGTERM limpam o temporário antes de sair", () => {
+  const rootDir = join(tempRoot, "signals");
+  const target = join(rootDir, "astro-release-check-signal");
+  let removed = "";
+  let code = 0;
+
+  cleanupOnSignal(rootDir, target, "SIGINT", {
+    remove: (_root, dir) => {
+      removed = dir;
+    },
+    exit: (value) => {
+      code = value;
+    },
+  });
+  expect(removed).toBe(target);
+  expect(code).toBe(130);
+
+  cleanupOnSignal(rootDir, target, "SIGTERM", {
+    remove: (_root, dir) => {
+      removed = dir;
+    },
+    exit: (value) => {
+      code = value;
+    },
+  });
+  expect(code).toBe(143);
 }, 5000);
