@@ -11,7 +11,7 @@ Objetivo: como `astro eval` e `astro bench` medem qualidade e desempenho, com fo
 | Comando | O que faz | Saída |
 |---|---|---|
 | `bun src/cli.ts eval --threshold 0.85` | Roda o golden dataset em modo mock e compara com o baseline | `eval-report.json`; exit 1 abaixo do threshold ou com regressão |
-| `bun src/cli.ts bench --models <filtro> --runs <n>` | Mede cada modelo com a mesma suíte de prompts | `eval/bench-<data>.{json,md}` |
+| `bun src/cli.ts bench --models <filtro> --runs <n> [--require-filter]` | Mede cada modelo com a mesma suíte de prompts | `eval/bench-<data>.{json,md}` |
 
 - `eval`: determinístico, sem provider real; é o gate de regressão no CI.
 - `bench`: chama providers reais e consome quota; nunca roda em PR.
@@ -48,7 +48,7 @@ Objetivo: como `astro eval` e `astro bench` medem qualidade e desempenho, com fo
 | `/llama` | Qualquer provider cujo id contém `llama` |
 | `nvidia,openrouter` | União dos dois providers |
 
-A mesma regra vive em `filterModels`/`selectBenchModels` (`src/eval/bench.ts`): o CLI usa `selectBenchModels`, e testes e matriz usam o mesmo predicado.
+A mesma regra vive em `filterModels`/`selectBenchModels` (`src/eval/bench.ts`): o CLI usa `selectBenchModels`, e testes e matriz usam o mesmo predicado. `--require-filter` (usado no nightly) falha quando o filtro não tem termo alfanumérico ou quando a seleção cobre todos os modelos ativos.
 
 ## CI
 
@@ -56,7 +56,7 @@ A mesma regra vive em `filterModels`/`selectBenchModels` (`src/eval/bench.ts`): 
 
 - Manual: `workflow_dispatch` com os inputs `models` (filtro) e `runs` (repetições); sem `models` roda todos os modelos ativos.
 - Nightly opcional: `schedule` às 03:00 UTC; o job só executa com a variable de repositório `BENCH_NIGHTLY=true`.
-- No nightly, o filtro vem da variable `BENCH_MODELS`, na mesma sintaxe de `--models`; valor vazio, só com espaços ou só com vírgulas também falha, em vez de rodar todos os modelos contra quota real.
+- No nightly, o filtro vem da variable `BENCH_MODELS`, na mesma sintaxe de `--models`; o job usa `--require-filter` e falha se o filtro não recortar o registro (vazio, só espaços/vírgulas, `/` ou união que cobre todos), em vez de rodar todos os modelos contra quota real.
 - `NVIDIA_API_KEY` e `OPENROUTER_API_KEY` só existem nesse workflow; PR nunca recebe provider real.
 
 `ci.yml`:

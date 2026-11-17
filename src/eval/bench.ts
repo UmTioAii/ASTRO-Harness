@@ -102,23 +102,47 @@ export type BenchModelSelection =
   | { ok: true; models: ModelEntry[] }
   | { ok: false; error: string };
 
+export interface BenchSelectionOptions {
+  /** Falha quando o filtro não recorta o registro (usado no nightly). */
+  requireFilter?: boolean;
+}
+
 /**
  * Seleção de modelos do CLI: aplica o filtro compartilhado e recusa seleção
  * vazia com a mensagem que o `astro bench` imprime. Mantém a regra fora do
  * CLI para ser testada sem processo filho.
+ *
+ * Com `requireFilter`, exige um termo alfanumérico e uma seleção que não
+ * cubra todos os modelos ativos: sem recorte, o nightly gastaria quota real
+ * em todo o registro.
  */
 export function selectBenchModels(
   models: readonly ModelEntry[],
   filter: string | undefined,
+  opts: BenchSelectionOptions = {},
 ): BenchModelSelection {
+  const terms = filterTerms(filter);
   const selected = filterModels(models, filter);
-  if (selected.length > 0) return { ok: true, models: selected };
-  return {
-    ok: false,
-    error: filterTerms(filter).length > 0
-      ? "nenhum modelo ativo corresponde ao filtro"
-      : "nenhum modelo ativo na configuração",
-  };
+  if (selected.length === 0) {
+    return {
+      ok: false,
+      error: terms.length > 0
+        ? "nenhum modelo ativo corresponde ao filtro"
+        : "nenhum modelo ativo na configuração",
+    };
+  }
+  if (opts.requireFilter === true) {
+    if (!terms.some((term) => /[\p{L}\p{N}]/u.test(term))) {
+      return { ok: false, error: "--require-filter recusa filtro sem termo alfanumérico em --models" };
+    }
+    if (selected.length === models.length) {
+      return {
+        ok: false,
+        error: "--require-filter recusa um filtro que seleciona todos os modelos ativos",
+      };
+    }
+  }
+  return { ok: true, models: selected };
 }
 
 function percentile(sorted: readonly number[], p: number): number {

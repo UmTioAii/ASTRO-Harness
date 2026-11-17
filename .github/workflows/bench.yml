@@ -52,6 +52,8 @@ jobs:
           fi
           args=(--runs "$BENCH_RUNS")
           if [ -n "$models" ]; then args+=(--models "$models"); fi
+          # O CLI recusa filtro sem termo alfanumérico ou que selecione todos.
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then args+=(--require-filter); fi
           bun src/cli.ts bench "${args[@]}"
       - name: Upload bench reports
         if: always()
