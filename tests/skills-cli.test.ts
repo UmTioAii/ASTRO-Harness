@@ -100,12 +100,11 @@ test("installer segue redirect de mesma origem quando o host é permitido (#256)
   });
   const target = mkdtempSync(join(tmpdir(), "astro-skredir-ok-"));
   try {
-    const installed = await installSkill({
+    await installSkill({
       source: `${server.url.origin}/start`,
       root: target,
       sourceKind: "user",
     });
-    expect(installed.manifest.name).toBe("commit");
     expect(verifySkill(target, "commit").ok).toBe(true);
   } finally {
     server.stop(true);

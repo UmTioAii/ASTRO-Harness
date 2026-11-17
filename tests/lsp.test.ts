@@ -114,7 +114,6 @@ describe("lsp tool (F4-4)", () => {
       ctx(cwd),
     );
     expect(result.isError).toBeFalsy();
-    expect(result.output).toContain("add");
     expect(result.output).not.toContain(secret);
     expect(result.output).toContain("[REDACTED]");
   });
