@@ -325,10 +325,10 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
   // Ordem do ADR-0026 (mesma de `readTextRange`): fatiar → redigir → medir.
   // Redigir antes de fatiar colapsa bloco multi-linha (PEM) e desloca `start`/`end`.
   const rawText = Buffer.from(bytes).toString("utf8");
-  const lines = rawText.split("\n");
   let text = rawText;
   let range: LoadedAttachment["range"];
   if (rangeSpec !== undefined) {
+    const lines = rawText.split("\n");
     range = parseRange(rangeSpec, lines.length);
     text = lines.slice(range.start - 1, range.end).join("\n");
   }
