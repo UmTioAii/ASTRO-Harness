@@ -107,16 +107,19 @@ describe("sliceCoverage (#59)", () => {
     expect(web).toEqual({ slice: "C3 web", files: 0, lines: { hit: 0, found: 0, rate: 0 }, functions: { hit: 0, found: 0, rate: 0 } });
     const report = formatSliceReport(slices).join("\n");
     expect(report).toContain("n/a");
-    expect(report).toContain("informational");
+    expect(report).toContain("informativo");
   });
 
   test("normaliza separador win32 e aceita mapping customizado", () => {
-    const slices = sliceCoverage(record("src\\mcp\\client.ts", 1, 2).join("\n"), {
-      "C2 mcp": ["src/mcp"],
-    });
-    expect(slices[0]?.files).toBe(1);
+    const slices = sliceCoverage([
+      ...record("src\\mcp\\client.ts", 1, 2),
+      ...record("C:/repo/src/mcp/server.ts", 1, 1),
+      ...record("tests/mcp.test.ts", 0, 1),
+    ].join("\n"), { "C2 mcp": ["src/mcp"] });
+    expect(slices[0]?.files).toBe(2);
+    expect(slices[0]?.lines).toEqual({ hit: 2, found: 3, rate: 2 / 3 });
     expect(slices[1]?.slice).toBe("unmapped");
-    expect(slices[1]?.files).toBe(0);
+    expect(slices[1]?.files).toBe(1);
   });
 });
 
