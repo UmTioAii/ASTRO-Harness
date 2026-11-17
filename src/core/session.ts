@@ -912,7 +912,7 @@ export async function runMultiAgentSession(
     awaitAck(() => (opts.ackHandoff !== undefined ? opts.ackHandoff(h.artifact, receiver) : ackHandoff(handoffDeps, h.handoff_id, receiver)), ackTimeoutMs);
   const ackTimeoutError = (h: { handoff_id: string; artifact: HandoffArtifactV1 }) => {
     recordHandoffEvent("handoff.ack_timeout", handoffDeps, h.artifact, h.artifact.from, { reason: `sem ack em ${ackTimeoutMs}ms` });
-    return new HandoffError("handoff_ack_timeout", `handoff ${h.handoff_id} sem ack em ${ackTimeoutMs}ms`);
+    return new HandoffError("handoff_ack_timeout", `handoff ${h.handoff_id} sem ack em ${ackTimeoutMs}ms`, { hexIdentifiers: true });
   };
 
   const tracer = opts.tracer;
@@ -1121,7 +1121,7 @@ export async function runMultiAgentSession(
         cleanupSpawns("completed");
         tracer?.end(stepSpan, { "tool.calls": 0 });
         tracer?.end(rootSpan, { status: "ok", steps: step });
-        return { final: response.content, steps: step, agentsUsed: agentsUsed.map(redactSecrets) };
+        return { final: response.content, steps: step, agentsUsed: agentsUsed.map((value) => redactSecrets(value)) };
       }
 
       messages.push({

@@ -14,6 +14,9 @@ export interface AuditEvent {
 }
 
 const SECRET_KEY = /(^|[-_])(api[-_]?)?keys?$|tokens?$|secret|password|authorization/i;
+/** Campos de digest/ID internos (não segredo): hex 64+ é preservado (#252). */
+const NON_SECRET_ID_KEY =
+  /^(?:sha1|sha256|sha512|hash|digest|checksum|call[-_]?id|ledger[-_]?id|session[-_]?id|snapshot[-_]?id|trace[-_]?id|span[-_]?id)$/i;
 const REDACTED = "[REDACTED]";
 
 /**
@@ -50,10 +53,15 @@ export function sanitize(value: unknown): unknown {
 
   if (typeof value === "object" && value !== null) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [
-        key,
-        SECRET_KEY.test(key) && typeof child !== "number" ? REDACTED : sanitize(child),
-      ]),
+      Object.entries(value).map(([key, child]) => {
+        // I-03: campo com cara de credencial nunca vai para o arquivo.
+        if (SECRET_KEY.test(key) && typeof child !== "number") return [key, REDACTED];
+        // #252: digest/ID interno de 64+ hex continua correlacionável no audit.
+        if (typeof child === "string" && NON_SECRET_ID_KEY.test(key)) {
+          return [key, redactSecrets(child, { hexIdentifiers: true })];
+        }
+        return [key, sanitize(child)];
+      }),
     );
   }
 

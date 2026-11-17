@@ -32,6 +32,8 @@ test("redactSecrets redige hex de 64+ sem contexto e preserva SHA-1/MD5 comuns",
   const hex32 = "0123456789abcdef0123456789abcdef"; // MD5/checksum: residual
   expect(redactSecrets(`chave ${hex64}`)).not.toContain(hex64);
   expect(redactSecrets(`chave ${hex64}`)).toContain("[REDACTED]");
+  // rótulo de digest em texto externo não vira passe livre: 64+ hex redige sempre
+  expect(redactSecrets(`sha256: ${hex64}`)).not.toContain(hex64);
   // 40 hex só com rótulo de credencial; saída normal de git continua legível
   expect(redactSecrets(`KEY=${hex40}`)).not.toContain(hex40);
   expect(redactSecrets(`token: ${hex40}`)).not.toContain(hex40);

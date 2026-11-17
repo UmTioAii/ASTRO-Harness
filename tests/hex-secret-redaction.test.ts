@@ -24,13 +24,18 @@ function auditorIn(target: string): Auditor {
 }
 
 describe("redação hex nos sinks (#252, P0)", () => {
-  test("audit: payload com hex 64+ não chega ao arquivo", () => {
+  test("audit: hex 64+ em texto livre é redigido; digest/ID interno é preservado", () => {
     const cwd = dir("audit");
-    auditorIn(cwd).append({ run: "r1", tipo: "probe", payload: { note: `chave ${HEX}` } });
+    const audit = auditorIn(cwd);
+    audit.append({ run: "r1", tipo: "probe", payload: { note: `chave ${HEX}`, sha256: HEX, callId: HEX } });
 
+    const event = audit.readAll()[0]!;
+    expect(event.payload.note).toBe("chave [REDACTED]");
+    // digest/ID gerado pelo harness continua correlacionável
+    expect(event.payload.sha256).toBe(HEX);
+    expect(event.payload.callId).toBe(HEX);
     const text = readFileSync(join(cwd, "audit.jsonl"), "utf8");
-    expect(text).not.toContain(HEX);
-    expect(text).toContain("[REDACTED]");
+    expect(text).not.toContain(`chave ${HEX}`);
   });
 
   test("cache: resposta persistida com hex 64+ sai redigida no hit", () => {

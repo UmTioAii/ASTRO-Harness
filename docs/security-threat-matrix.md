@@ -29,6 +29,7 @@ Donos por assunto: invariantes em `docs/invariants.md`; cofre em `docs/adr/0019-
 ## Limites conhecidos
 
 - Prompt injection não tem classificador: a defesa é tratar conteúdo externo como dado e manter allowlist/gate no caminho de execução, não detectar intenção maliciosa.
+- Redação hex (#252): 64+ hex em texto externo é redigido sem contexto. No audit, valores sob campos de digest/ID gerados pelo harness (`sha256`, `hash`, `digest`, `callId`, ...) são preservados para correlação; um segredo escondido nesses campos é residual aceito. 40 hex (SHA-1) só é redigido com rótulo de credencial, para preservar `commit <sha>`/`git log`; 32 hex (MD5/checksum) não é redigido por padrão — residual aceito e coberto por `tests/sanitize-external.test.ts`.
 - `resolveWithin` ainda colapsa `..` lexicamente antes do realpath; a pendência está registrada como `F-00` em `docs/invariants.md` (I-11).
 - `sandbox: false` desliga o shell por completo (`sandbox_required_for_shell`); não existe modo "shell sem isolamento".
 
