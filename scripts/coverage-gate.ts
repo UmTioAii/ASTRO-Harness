@@ -18,8 +18,10 @@
  * O matching é ancorado na raiz do repositório: caminhos são usados como o Bun
  * emite (`src/...`, com `\` normalizado), nunca reescritos a partir de um `/src/`
  * interno. Assim `tests/fixtures/src/mcp/x.ts` não vira `src/mcp/x.ts`. `SF:`
- * duplicado (mesmo caminho normalizado) conta uma vez. O primeiro match vence;
- * caminho sem match — inclusive absoluto ou fora do repo — cai em `unmapped`.
+ * duplicado (mesmo caminho normalizado) conta uma vez, primeiro registro vence;
+ * logo a soma de um slice pode diferir do total quando o mesmo `SF:` aparece
+ * duas vezes. O primeiro match vence; caminho sem match — inclusive absoluto ou
+ * fora do repo — cai em `unmapped`.
  *
  * Para adicionar um slice: inclua a chave/lista em `SLICE_MAPPING`, um caso em
  * `tests/coverage-gate.test.ts` e nada mais.
@@ -67,6 +69,7 @@ export const SLICE_MAPPING: SliceMapping = {
     "src/agent-lock.ts",
     "src/loop-guard.ts",
     "src/model-choice.ts",
+    "src/pool.ts",
     "src/tools/task.ts",
     "src/tools/handoff.ts",
     "src/handoff*",
