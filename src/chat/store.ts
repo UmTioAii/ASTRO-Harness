@@ -25,6 +25,9 @@ export interface SessionRecord {
 }
 
 const SECRET_KEY = /(token(?!s)|secret|password|api[-_]?key|access[-_]?key)/i;
+/** Campos de ID/digest internos do harness: hex 64+ é preservado (#252). */
+const INTERNAL_ID_KEY =
+  /^(?:ref|hash|sha1|sha256|sha512|digest|checksum|call[-_]?id|handoff[-_]?id|ledger[-_]?id|session[-_]?id|snapshot[-_]?id|trace[-_]?id|span[-_]?id)$/i;
 
 export interface SessionSummary {
   path: string;
@@ -179,23 +182,26 @@ function parseResumedFrom(value: unknown): { resumedFrom?: { id: string; started
 }
 
 /** Sanitiza strings JSON estruturalmente (inclusive `toolCalls.arguments`). */
-function sanitizeValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sanitizeValue);
+function sanitizeValue(value: unknown, key?: string): unknown {
+  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, key));
   if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
-      key, SECRET_KEY.test(key) ? "[REDACTED]" : sanitizeValue(item),
+    return Object.fromEntries(Object.entries(value).map(([childKey, item]) => [
+      childKey, SECRET_KEY.test(childKey) ? "[REDACTED]" : sanitizeValue(item, childKey),
     ]));
   }
   if (typeof value !== "string") return value;
   const text = value.trim();
   if (text.startsWith("{") || text.startsWith("[")) {
     try {
-      return JSON.stringify(sanitizeValue(JSON.parse(text)));
+      return JSON.stringify(sanitizeValue(JSON.parse(text), key));
     } catch {
       // não era JSON: cai na redação textual
     }
   }
-  return redactSecrets(value);
+  // ref/hash do artifact store são IDs internos: preserva 64-hex (#252).
+  return INTERNAL_ID_KEY.test(key ?? "")
+    ? redactSecrets(value, { hexIdentifiers: true })
+    : redactSecrets(value);
 }
 
 /** Converte o snapshot do runtime no registro persistido (o snapshot não carrega `name`). */

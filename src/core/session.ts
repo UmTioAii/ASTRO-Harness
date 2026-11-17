@@ -942,10 +942,11 @@ export async function runMultiAgentSession(
     const resume = scanHandoffs(opts.ledger, opts.run).at(-1);
     if (resume !== undefined && resume.state === "failed") {
       // Falho permanente: reporta e não reexecuta (I-19). HandoffError (D-18)
-      // preserva o ID interno para correlação com o ledger.
+      // preserva o ID interno; o reason é redigido normalmente ANTES de juntar.
+      const reason = resume.reason === undefined ? "" : `: ${redactSecrets(resume.reason)}`;
       throw new HandoffError(
         "handoff_mismatch",
-        `handoff ${resume.handoff_id} falhou permanentemente e não será reexecutado${resume.reason === undefined ? "" : `: ${resume.reason}`}`,
+        `handoff ${resume.handoff_id} falhou permanentemente e não será reexecutado${reason}`,
         { hexIdentifiers: true },
       );
     }

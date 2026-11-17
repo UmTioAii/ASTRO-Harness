@@ -16,7 +16,7 @@ export interface AuditEvent {
 const SECRET_KEY = /(^|[-_])(api[-_]?)?keys?$|tokens?$|secret|password|authorization/i;
 /** Campos de digest/ID internos (não segredo): hex 64+ é preservado (#252). */
 const NON_SECRET_ID_KEY =
-  /^(?:sha1|sha256|sha512|hash|digest|checksum|call[-_]?id|handoff[-_]?id|ledger[-_]?id|session[-_]?id|snapshot[-_]?id|trace[-_]?id|span[-_]?id)$/i;
+  /^(?:ref|sha1|sha256|sha512|hash|digest|checksum|call[-_]?id|handoff[-_]?id|ledger[-_]?id|session[-_]?id|snapshot[-_]?id|trace[-_]?id|span[-_]?id)$/i;
 const REDACTED = "[REDACTED]";
 
 /**
