@@ -753,6 +753,12 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           session.savePermissionMode(mode); // persiste na config + troca em runtime (#273)
           setEntries((current) => [...current, { kind: "info", text: `modo: ${mode} (salvo na config)` }]);
         }}
+        onRevokeTrust={(dir) => {
+          if (session.revokeTrustedFolder === undefined) throw new Error("esta sessão não aceita revogar trust");
+          const removed = session.revokeTrustedFolder(dir); // remove do store global + audita (#267)
+          if (removed) setEntries((current) => [...current, { kind: "info", text: `trust revogado: ${dir}` }]);
+          return removed;
+        }}
       />
     );
   }
