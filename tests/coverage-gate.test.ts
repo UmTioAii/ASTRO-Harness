@@ -112,7 +112,7 @@ describe("sliceCoverage (#59)", () => {
     ]);
   });
 
-  test("C4 cobre spawn, agentes, task, handoff e model-choice", () => {
+  test("C4 cobre spawn, agentes, task, handoff, model-choice e pool", () => {
     const paths = [
       "src/spawn.ts",
       "src/agent-manager.ts",
@@ -120,11 +120,20 @@ describe("sliceCoverage (#59)", () => {
       "src/tools/task.ts",
       "src/tools/handoff.ts",
       "src/model-choice.ts",
+      "src/pool.ts",
     ];
     for (const path of paths) {
       const slices = sliceCoverage(record(path, 1, 1).join("\n"), SLICE_MAPPING);
       expect(slices.find((slice) => slice.slice === "C4 multi-agent")?.files).toBe(1);
       expect(slices.find((slice) => slice.slice === "unmapped")?.files).toBe(0);
+    }
+  });
+
+  test("team e registry ficam fora de C4 (exclusão documentada)", () => {
+    for (const path of ["src/team.ts", "src/core/registry.ts"]) {
+      const slices = sliceCoverage(record(path, 1, 1).join("\n"), SLICE_MAPPING);
+      expect(slices.find((slice) => slice.slice === "C4 multi-agent")?.files).toBe(0);
+      expect(slices.find((slice) => slice.slice === "unmapped")?.files).toBe(1);
     }
   });
 
@@ -193,6 +202,7 @@ describe("coverage gate CLI (#59)", () => {
     expect(result.stdout).toContain("C1 skills");
     expect(result.stdout).toContain("100.00%");
     expect(result.stdout).toContain("coverage: ok");
+    expect(result.stdout.indexOf("slice")).toBeLessThan(result.stdout.indexOf("coverage: ok"));
   });
 
   test("sai 1 abaixo do limiar, com tabela e veredito no stdout", () => {
@@ -200,6 +210,7 @@ describe("coverage gate CLI (#59)", () => {
     expect(result.code).toBe(1);
     expect(result.stdout).toContain("C2 mcp");
     expect(result.stdout).toContain("abaixo do threshold");
+    expect(result.stdout.indexOf("slice")).toBeLessThan(result.stdout.indexOf("abaixo do threshold"));
     expect(result.stderr).toBe("");
   });
 
