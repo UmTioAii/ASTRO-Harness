@@ -5,8 +5,12 @@ import { join } from "node:path";
 import {
   loadEffectiveConfig,
   loadGlobalProfileStore,
+  loadProjectConfig,
   ProfileStoreError,
+  ProfileStoreMigratedError,
+  readGlobalProfileStore,
 } from "../src/providers/profiles";
+import { ProfileManager } from "../src/providers/profile-manager";
 
 const profileA = {
   id: "a",
@@ -30,6 +34,19 @@ const SENTINEL = ["s", "k", "-"].join("") + "live-SENTINEL";
 
 function jsonAt(home: string, name: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(home, name), "utf8")) as Record<string, unknown>;
+}
+
+const legacyWith = (profiles: unknown[]): string => JSON.stringify({ version: 1, profiles });
+
+function projectConfig(cwd: string, id: string, baseUrl: string, credentialRef: string): string {
+  const path = join(cwd, "astro.config.json");
+  writeFileSync(path, JSON.stringify({
+    providers: { [id]: { kind: "openai-compat", baseUrl, credentialRef } },
+    models: [{ provider: id, id: "m", tags: ["writing-code"], context: 8192 }],
+    agent: { model: `${id}/m`, maxSteps: 2, tools: ["read_file"] },
+    paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+  }));
+  return path;
 }
 
 test("importa providers.json para config.json uma vez e preserva o legado", () => {
@@ -152,4 +169,131 @@ test("depois do import config.json é a fonte de verdade na resolução", () => 
   expect(effective.config.providers.a).toMatchObject({ baseUrl: "https://edited.example/v1" });
   expect(effective.activeProvider).toBe("b");
   expect(effective.providerSelection).toBe("store");
+});
+
+test("legado aposentado: arquivo corrompido não quebra loadProjectConfig", () => {
+  const home = homeDir();
+  const legacy = join(home, "providers.json");
+  writeFileSync(legacy, legacyWith([profileA]));
+  loadGlobalProfileStore({ ASTRO_HOME: home });
+  writeFileSync(legacy, "corrompido");
+  const configPath = projectConfig(homeDir(), "p", "https://p.example/v1", "P_KEY");
+
+  const config = loadProjectConfig(configPath, { env: { ASTRO_HOME: home } });
+
+  expect(config?.providers.p).toBeDefined();
+});
+
+test("entrada obsoleta no legado não amplia o allow-set de endpoint da credencial", () => {
+  const home = homeDir();
+  const legacy = join(home, "providers.json");
+  writeFileSync(legacy, legacyWith([profileA]));
+  loadGlobalProfileStore({ ASTRO_HOME: home });
+  // Perfil obsoleto reusa A_KEY em outro endpoint: se fosse lido, permitiria o projeto.
+  writeFileSync(legacy, legacyWith([{ ...profileA, id: "evil", name: "Evil", baseUrl: "https://evil.example/v1" }]));
+  const configPath = projectConfig(homeDir(), "evil", "https://evil.example/v1", "A_KEY");
+
+  expect(() => loadProjectConfig(configPath, { env: { ASTRO_HOME: home } }))
+    .toThrow(/redireciona a credencial global/);
+});
+
+test("/provider recusa escrita pós-migração e preserva o legado", () => {
+  const home = homeDir();
+  const legacy = join(home, "providers.json");
+  const bytes = legacyWith([profileA]);
+  writeFileSync(legacy, bytes);
+  loadGlobalProfileStore({ ASTRO_HOME: home });
+  const manager = new ProfileManager({ env: { ASTRO_HOME: home } });
+
+  // Provider só da config não é removível/ativável pelo store legado.
+  expect(() => manager.remove("a")).toThrow(/config\.json/);
+  expect(() => manager.use("a")).toThrow(/config\.json/);
+  expect(() => manager.add({
+    name: "Novo",
+    kind: "openai-compat",
+    baseUrl: "https://novo.example/v1",
+    credentialRef: "NOVO_KEY",
+    models: [{ id: "m", tags: ["writing-code"], context: 8192 }],
+  })).toThrow(ProfileStoreMigratedError);
+
+  expect(readFileSync(legacy, "utf8")).toBe(bytes);
+  expect((jsonAt(home, "config.json").providers as Record<string, unknown>).a).toBeDefined();
+});
+
+test("legado com zero perfis não cria config.json", () => {
+  const home = homeDir();
+  writeFileSync(join(home, "providers.json"), legacyWith([]));
+
+  expect(loadGlobalProfileStore({ ASTRO_HOME: home })).toEqual({ version: 1, profiles: [] });
+  expect(existsSync(join(home, "config.json"))).toBe(false);
+  expect(jsonAt(home, "state.json").migrations).toEqual({ providers: true, trust: false });
+});
+
+test("vault:<id> sobrevive ao import e segredo cru no legado é recusado (I-03)", () => {
+  const home = homeDir();
+  const vaultRef = "vault:cred-12345678-abcd";
+  writeFileSync(join(home, "providers.json"), legacyWith([{ ...profileA, credentialRef: vaultRef }]));
+
+  expect(loadGlobalProfileStore({ ASTRO_HOME: home }).profiles[0]?.credentialRef).toBe(vaultRef);
+  expect((jsonAt(home, "config.json").providers as Record<string, Record<string, unknown>>).a!.credentialRef).toBe(vaultRef);
+  expect(readGlobalProfileStore({ ASTRO_HOME: home }).profiles[0]?.credentialRef).toBe(vaultRef);
+
+  const rawHome = homeDir();
+  writeFileSync(join(rawHome, "providers.json"), legacyWith([{ ...profileA, credentialRef: SENTINEL }]));
+  let thrown: unknown;
+  try {
+    loadGlobalProfileStore({ ASTRO_HOME: rawHome });
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(ProfileStoreError);
+  expect((thrown as Error).message).not.toContain(SENTINEL);
+});
+
+test("credentialRef cru na config não entra no store derivado (I-03)", () => {
+  const home = homeDir();
+  writeFileSync(join(home, "config.json"), JSON.stringify({
+    providers: { bad: { kind: "openai-compat", baseUrl: "https://bad.example/v1", credentialRef: SENTINEL } },
+    models: [{ provider: "bad", id: "m", tags: ["writing-code"], context: 8192 }],
+    activeProfileId: "bad",
+  }));
+  writeFileSync(join(home, "state.json"), JSON.stringify({
+    version: 1,
+    trust: { folders: [] },
+    migrations: { providers: true, trust: false },
+  }));
+
+  const store = readGlobalProfileStore({ ASTRO_HOME: home });
+
+  expect(store.profiles).toEqual([]);
+  expect(JSON.stringify(store)).not.toContain(SENTINEL);
+});
+
+test("detalhe de validação não ecoa tag nem nome (I-03)", () => {
+  const tagHome = homeDir();
+  writeFileSync(join(tagHome, "providers.json"), legacyWith([
+    { ...profileA, models: [{ id: "m1", tags: [SENTINEL], context: 8192 }] },
+  ]));
+  let tagError: unknown;
+  try {
+    loadGlobalProfileStore({ ASTRO_HOME: tagHome });
+  } catch (error) {
+    tagError = error;
+  }
+  expect(tagError).toBeInstanceOf(ProfileStoreError);
+  expect((tagError as Error).message).not.toContain(SENTINEL);
+
+  const nameHome = homeDir();
+  writeFileSync(join(nameHome, "providers.json"), legacyWith([
+    { ...profileA, name: SENTINEL },
+    { ...profileB, name: SENTINEL },
+  ]));
+  let nameError: unknown;
+  try {
+    loadGlobalProfileStore({ ASTRO_HOME: nameHome });
+  } catch (error) {
+    nameError = error;
+  }
+  expect(nameError).toBeInstanceOf(ProfileStoreError);
+  expect((nameError as Error).message).not.toContain(SENTINEL);
 });

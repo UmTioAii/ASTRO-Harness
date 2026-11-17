@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,18 +59,23 @@ test("/provider add grava, ativa e aparece na lista", async () => {
 
   const list = await chat(cwd, cfg, home, "/provider\n/exit\n");
   expect(list.exit).toBe(0);
-  expect(list.stdout).toContain("Local (local)");
+  // Depois da migração o perfil vem de `config.json`, sem nome de exibição.
+  expect(list.stdout).toContain("local (local)");
 });
 
-test("/provider remove apaga o perfil", async () => {
+test("/provider remove de perfil migrado é recusado e preserva o legado", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-provider-rm-"));
   const home = mkdtempSync(join(tmpdir(), "astro-provider-rm-home-"));
   const cfg = projectConfig(cwd);
   await chat(cwd, cfg, home, "/provider add\ncustom\nLocal\nhttp://localhost:1/v1\n\nm1\nS\nn\n/exit\n");
+  const legacy = join(home, "providers.json");
+  const bytes = readFileSync(legacy, "utf8");
   const removed = await chat(cwd, cfg, home, "/provider remove local\n/exit\n");
   expect(removed.exit).toBe(0);
-  expect(removed.stdout).toContain("removido: local");
-  expect(loadProfileStore(join(home, "providers.json")).profiles).toEqual([]);
+  expect(removed.stdout).toContain('erro: provider "local"');
+  expect(removed.stdout).toMatch(/config\.json/);
+  expect(removed.stdout).not.toContain("removido: local");
+  expect(readFileSync(legacy, "utf8")).toBe(bytes);
 });
 
 test("/provider <nome> troca para provider do projeto sem persistir", async () => {
