@@ -100,6 +100,18 @@ interface MockServer {
   stop(force?: boolean): void;
 }
 
+type LoopbackServer = ReturnType<typeof Bun.serve>;
+
+/** Único ponto de criação dos mocks: sempre 127.0.0.1, nunca todas as interfaces. */
+function serveLoopback(options: { fetch: (request: Request) => Response | Promise<Response> }): LoopbackServer {
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: options.fetch });
+  if (server.hostname !== "127.0.0.1") {
+    server.stop(true);
+    throw new Error(`mock de cenário ligou em "${server.hostname}" em vez de 127.0.0.1`);
+  }
+  return server;
+}
+
 interface ProviderState {
   bodies: unknown[];
   models: string[];
@@ -297,8 +309,7 @@ function payloadMatches(actual: unknown, expected: Record<string, unknown> | und
 
 /** Provider OpenAI-compat determinístico: uma resposta por turno declarado. */
 function startProvider(turns: ScenarioTurn[], state: ProviderState): { server: MockServer; url: string } {
-  const server = Bun.serve({
-    port: 0,
+  const server = serveLoopback({
     async fetch(req) {
       if (req.method === "GET") {
         // health check (F6-6): GET /models
@@ -333,14 +344,13 @@ function startProvider(turns: ScenarioTurn[], state: ProviderState): { server: M
 
 /** Servidor primário em outage (fallback C6). */
 function startDownServer(): { server: MockServer; url: string } {
-  const server = Bun.serve({ port: 0, fetch: () => new Response("outage", { status: 500 }) });
+  const server = serveLoopback({ fetch: () => new Response("outage", { status: 500 }) });
   return { server, url: `http://127.0.0.1:${server.port}/v1` };
 }
 
 /** Servidor MCP streamable HTTP mínimo (initialize, tools/list, tools/call). */
 function startMcp(spec: ScenarioMcpServer): { server: MockServer; url: string } {
-  const server = Bun.serve({
-    port: 0,
+  const server = serveLoopback({
     async fetch(req) {
       const body = (await req.json()) as {
         id?: number | string;
@@ -386,8 +396,7 @@ function startMcp(spec: ScenarioMcpServer): { server: MockServer; url: string } 
 
 /** Backend web_search mock (formato Exa) com 429 opcional na primeira chamada. */
 function startSearch(spec: ScenarioSearchServer, state: SearchState): { server: MockServer; url: string } {
-  const server = Bun.serve({
-    port: 0,
+  const server = serveLoopback({
     fetch() {
       state.requests += 1;
       if (spec.retryOnce === true && state.requests === 1) {
@@ -403,8 +412,7 @@ function startSearch(spec: ScenarioSearchServer, state: SearchState): { server: 
 
 /** Página HTML para web_fetch. */
 function startPage(spec: ScenarioPageServer): { server: MockServer; url: string } {
-  const server = Bun.serve({
-    port: 0,
+  const server = serveLoopback({
     fetch: () => new Response(spec.html, { headers: { "content-type": "text/html; charset=utf-8" } }),
   });
   return { server, url: `http://127.0.0.1:${server.port}/page` };

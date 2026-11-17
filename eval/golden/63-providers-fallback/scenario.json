@@ -82,6 +82,28 @@
       "provider.complete",
       "agent.lock.moved"
     ],
+    "auditEvents": [
+      {
+        "tipo": "provider.failure",
+        "payload": {
+          "provider": "primary"
+        }
+      },
+      {
+        "tipo": "agent.lock.moved",
+        "payload": {
+          "provider": "backup"
+        }
+      },
+      {
+        "tipo": "provider.complete",
+        "payload": {
+          "provider": "backup",
+          "model": "mock-1",
+          "attempt": 1
+        }
+      }
+    ],
     "models": [
       "mock-1",
       "mock-1"
