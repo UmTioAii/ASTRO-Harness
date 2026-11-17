@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validateConfig } from "../src/core/config";
 import { definePlugin, loadPlugins, pluginAllowlistFromEnv } from "../src/plugins";
@@ -308,6 +308,31 @@ describe("plugin trust order (#255, P0)", () => {
     expect(report.final).toBe("ok");
     expect(existsSync(marker)).toBe(false); // trust da pasta não cobre código externo
     expect(warnings.join("\n")).toMatch(/fora do cwd|fora da pasta|fora do projeto/i);
+  });
+
+  test("trust do cwd não carrega plugin local via ../", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-rel-inside-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-plugin-rel-outside-"));
+    const { entry, marker } = writeMarkerPlugin(outside);
+    const { report, warnings } = await runPluginTask(dir, relative(dir, entry), () => true);
+    expect(report.final).toBe("ok");
+    expect(existsSync(marker)).toBe(false);
+    expect(warnings.join("\n")).toMatch(/fora do cwd/i);
+  });
+
+  test("trust do cwd não carrega plugin local via symlink para fora", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-link-inside-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-plugin-link-outside-"));
+    const { entry, marker } = writeMarkerPlugin(outside);
+    try {
+      symlinkSync(entry, join(dir, "link-plugin.ts"), "file");
+    } catch {
+      return; // Windows sem Developer Mode: criação de symlink negada (skip gracioso)
+    }
+    const { report, warnings } = await runPluginTask(dir, "./link-plugin.ts", () => true);
+    expect(report.final).toBe("ok");
+    expect(existsSync(marker)).toBe(false);
+    expect(warnings.join("\n")).toMatch(/fora do cwd/i);
   });
 
   test("runTask usa ASTRO_PLUGIN_ALLOWLIST do env do run, não do process.env", async () => {
