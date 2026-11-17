@@ -42,11 +42,13 @@ jobs:
         run: |
           models="$DISPATCH_MODELS"
           if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            if [ -z "$NIGHTLY_MODELS" ]; then
-              echo "::error::defina BENCH_MODELS (filtro não vazio) para o nightly; sem filtro o bench usaria todos os modelos e gastaria quota real"
+            models="$NIGHTLY_MODELS"
+            # Vazio, só espaços ou só vírgulas seleciona todos no CLI; no
+            # nightly isso gastaria quota real em todos os modelos.
+            if [ -z "$(printf '%s' "$models" | tr -d '[:space:],')" ]; then
+              echo "::error::defina BENCH_MODELS com ao menos um provider/modelo; valor vazio, só com espaços ou só com vírgulas rodaria todos os modelos"
               exit 1
             fi
-            models="$NIGHTLY_MODELS"
           fi
           args=(--runs "$BENCH_RUNS")
           if [ -n "$models" ]; then args+=(--models "$models"); fi

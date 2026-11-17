@@ -56,7 +56,7 @@ A mesma regra vive em `filterModels`/`selectBenchModels` (`src/eval/bench.ts`): 
 
 - Manual: `workflow_dispatch` com os inputs `models` (filtro) e `runs` (repetições); sem `models` roda todos os modelos ativos.
 - Nightly opcional: `schedule` às 03:00 UTC; o job só executa com a variable de repositório `BENCH_NIGHTLY=true`.
-- No nightly, o filtro vem da variable `BENCH_MODELS`, na mesma sintaxe de `--models`; sem ela o job falha, em vez de rodar todos os modelos contra quota real.
+- No nightly, o filtro vem da variable `BENCH_MODELS`, na mesma sintaxe de `--models`; valor vazio, só com espaços ou só com vírgulas também falha, em vez de rodar todos os modelos contra quota real.
 - `NVIDIA_API_KEY` e `OPENROUTER_API_KEY` só existem nesse workflow; PR nunca recebe provider real.
 
 `ci.yml`:
