@@ -22,6 +22,15 @@ afterEach(() => {
 
 const base = (cwd: string, astroHome: string) => ({ cwd, astroHome });
 
+/** Header PNG mínimo com IHDR: suficiente para magic bytes e dimensões (não é PNG completo). */
+function pngHeader(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(24);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
 describe("loadAttachment", () => {
   test("texto: conteúdo, tamanho UTF-8 e redação", async () => {
     const { cwd, astroHome } = sandbox();
@@ -129,6 +138,22 @@ describe("loadAttachment", () => {
     const { cwd, astroHome } = sandbox();
     writeFileSync(join(cwd, "i.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
     await expect(loadAttachment({ ...base(cwd, astroHome), path: "i.png" })).rejects.toMatchObject({
+      code: "attachment_image_invalid",
+    });
+  });
+
+  test("imagem usa bytes decodificados (RGBA), não o tamanho comprimido", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "i.png"), pngHeader(100, 100));
+    const attachment = await loadAttachment({ ...base(cwd, astroHome), path: "i.png" });
+    expect(attachment.sizeBytes).toBe(100 * 100 * 4);
+    expect(attachment.sizeBytes).toBeGreaterThan(Buffer.from(attachment.data, "base64").length);
+  });
+
+  test("imagem comprimida pequena acima de 20 MiB decodificados rejeita", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "big.png"), pngHeader(3000, 3000));
+    await expect(loadAttachment({ ...base(cwd, astroHome), path: "big.png" })).rejects.toMatchObject({
       code: "attachment_image_invalid",
     });
   });

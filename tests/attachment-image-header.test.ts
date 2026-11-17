@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AttachmentError, assertImageLimits, imageDimensions } from "../src/attachments/model";
+import { AttachmentError, assertImageLimits, decodedImageBytes, imageDimensions } from "../src/attachments/model";
 
 const u8 = (...parts: number[]) => Uint8Array.from(parts);
 
@@ -60,6 +60,10 @@ describe("imageDimensions", () => {
 });
 
 describe("assertImageLimits", () => {
+  test("bytes decodificados são 4 por pixel (RGBA), não o tamanho comprimido", () => {
+    expect(decodedImageBytes({ width: 100, height: 100 })).toBe(40_000);
+  });
+
   test("aceita dentro dos limites", () => {
     expect(() => assertImageLimits(png(100, 100), "image/png", 1024)).not.toThrow();
   });
