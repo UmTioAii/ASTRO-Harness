@@ -15,7 +15,7 @@ Objetivo: publicar `@umtioai/astro-harness` (gate em #230), do bump à verifica�
 | 3 | `bun test` verde em 10 execuções consecutivas e `bun run typecheck` verde | §3 |
 | 4 | CI do PR de release verde: `test` nos dois SOs, `eval` e `secrets` | `docs/ci.md` |
 | 5 | `npm config get "@umtioai:registry"` = `https://registry.npmjs.org/` (se `undefined`: `npm config set "@umtioai:registry" https://registry.npmjs.org/`); outro valor aborta | humano |
-| 6 | Conta npm no escopo público, 2FA/`npm login` válidos, versão/tag/notas acordadas na issue | humano |
+| 6 | Conta npm no escopo público, 2FA/`npm login` e `gh` autenticado; versão/tag/notas acordadas na issue | humano |
 
 `@scope:registry` do `.npmrc` vence `--registry` e `publishConfig.registry`: com `name` divergente, um mapa errado (`@umtioaii:registry=https://npm.pkg.github.com`, um `i` a mais) publica fora do npmjs com exit 0; por isso publish, view, install e rollback fixam `--@umtioai:registry=https://registry.npmjs.org/`.
 
@@ -44,13 +44,13 @@ bun run smoke
 
 ## 4. Pacote e instalação limpa
 
-Depois do merge, crie a tag no commit do merge e trabalhe nela; §1 e §4–§8 no mesmo shell, sem worktree sujo:
+Depois do merge, crie a tag no commit do merge e trabalhe nela (em estável, remova `--prerelease`); §1 e §4–§8 no mesmo shell, sem worktree sujo:
 
 ```bash
-git fetch origin main && git tag -a "v<versão>" "$(git rev-parse origin/main)" -m "v<versão>" && git push origin "v<versão>"
-gh release create "v<versão>" --verify-tag --notes-file <notas.md>
-git fetch --tags && git switch --detach "v$(npm pkg get version | tr -d '"')"
-git describe --tags --exact-match && git status --short   # v<versão>; vazio
+MERGE=$(gh pr view <pr-do-bump> --json mergeCommit -q .mergeCommit.oid)   # PR do bump
+gh release create "v<versão>" --target "$MERGE" --prerelease --notes-file <notas.md>
+git fetch --tags --force && git switch --detach "v$(npm pkg get version | tr -d '"')"
+[ "$(git describe --tags --exact-match)" = "v$(npm pkg get version | tr -d '"')" ] && [ -z "$(git status --porcelain)" ] || exit 1   # tag = versão; árvore limpa
 bun install --frozen-lockfile
 npm pack --dry-run                  # lista: dist/, README.md, LICENSE, package.json
 PACKDIR=$(mktemp -d) && npm pack --pack-destination "$PACKDIR"
@@ -86,13 +86,12 @@ createServer((req, res) => {
 }).listen(8787, "127.0.0.1", () => console.log("mock: http://127.0.0.1:8787/v1"));
 ```
 
-No diretório limpo do §4 (mesmo shell, terminal interativo). O mock é loopback: sem o opt-in de dev abaixo o wizard recusa (`src/url-safety.ts`); a regra de `baseUrl` está em `docs/providers.md`:
+No diretório limpo do §4 (mesmo shell, terminal interativo). O mock é loopback; o opt-in abaixo vale só para este processo e desliga a recusa de loopback e faixas privadas (RFC1918, CGNAT, ULA) em toda saída do `astro` (provider, `web_fetch`, webhook, MCP, telemetria, skill); metadados e link-local seguem bloqueados (`src/url-safety.ts`; `docs/web-tools.md`, `I-11`):
 
 ```bash
 node mock-openai.mjs &
 mkdir -p "$TMP/astro-home" && export ASTRO_HOME="$TMP/astro-home"   # isola perfis e cofre
-export ASTRO_ALLOW_PRIVATE_URLS=1    # só para o mock local; não use fora do teste
-./node_modules/.bin/astro              # sem provider: abre a tela de providers
+ASTRO_ALLOW_PRIVATE_URLS=1 ./node_modules/.bin/astro    # opt-in de dev: só neste processo
 ```
 
 | Passo | Valor |
@@ -110,6 +109,7 @@ export ASTRO_ALLOW_PRIVATE_URLS=1    # só para o mock local; não use fora do t
 Publique o `.tgz` já testado, com a tag de pré-release:
 
 ```bash
+[ -f "$TARBALL" ] || exit 1
 npm publish "$TARBALL" --tag alpha "--@umtioai:registry=https://registry.npmjs.org/"
 ```
 
@@ -138,7 +138,7 @@ npm install "$PKG@alpha" "--@umtioai:registry=https://registry.npmjs.org/"
 | Quando | Ação |
 |---|---|
 | Antes do merge | feche o PR; nada foi publicado |
-| Depois do merge, antes do publish | nada foi publicado; apague a tag e o GitHub Release |
+| Depois do merge, antes do publish | nada foi publicado; `gh release delete "v<versão>" --cleanup-tag --yes` |
 | Versão com defeito (inclui segredo) | revogue a credencial (`I-03`); publique a próxima versão com a correção, sem reescrever a existente; `npm unpublish` só em até 72 h, sem dependentes e com decisão do dono |
 | Pré-release ou `latest` errado | `npm dist-tag add "$PKG@<boa>" alpha "--@umtioai:registry=https://registry.npmjs.org/"` (ou `latest`); se a versão ruim continua instalável, `npm deprecate "$PKG@<ruim>" "quebrada; use <boa>" "--@umtioai:registry=https://registry.npmjs.org/"` |
 
