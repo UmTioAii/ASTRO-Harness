@@ -921,17 +921,30 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   toolsByName.set("task", createTaskTool({
     audit,
     knownAgents: () => registry.listAgentNames(),
+    parallel: config.spawn?.parallel === true,
+    maxActive: config.maxActive ?? 2,
+    accountOf: (agent) => {
+      const target = registry.requireAgent(agent);
+      const targetModel = registry.resolveModel(target);
+      const provider = config.providers[targetModel.provider];
+      return provider === undefined
+        ? `provider:${targetModel.provider}`
+        : providerAccountRefFor(targetModel.provider, provider);
+    },
     delegate: async ({ agent, prompt, maxSteps, signal, callerAllow, callerPermission }) => {
       const target = registry.requireAgent(agent);
       const targetModel = registry.resolveModel(target);
-      // v1: o filho compartilha a conta já travada pelo chamador; trocar de conta é recusado.
+      // A11: sem spawn.parallel o filho compartilha a conta já travada pelo
+      // chamador; com a flag, o filho de outra conta adquire a sua (A4).
       const parentAccount = currentAccount() ?? providerAccountRefFor(model.provider, config.providers[model.provider]!);
       const targetProvider = config.providers[targetModel.provider];
+      const parallel = config.spawn?.parallel === true;
       if (targetProvider === undefined) {
         throw new Error(`task: provider "${targetModel.provider}" do agent "${agent}" não está configurado`);
       }
-      if (providerAccountRefFor(targetModel.provider, targetProvider) !== parentAccount) {
-        throw new Error(`task: agent "${agent}" usa outra conta; delegação entre contas não é suportada em v1`);
+      const sameAccount = providerAccountRefFor(targetModel.provider, targetProvider) === parentAccount;
+      if (!sameAccount && !parallel) {
+        throw new Error(`task: agent "${agent}" usa outra conta; delegação entre contas exige spawn.parallel`);
       }
       const parentAllow = new Set(callerAllow ?? config.agent.tools);
       // Teto = allowlist efetiva do chamador, sem recursão de task em v1.
@@ -948,11 +961,12 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       });
       // Run própria para o filho: não sobrescreve o estado do run pai no ledger.
       const childRun = `${run}.task.${randomUUID()}`;
+      const targetIdentity = providerIdentity(config, targetModel.provider);
       const result = await runSession({
         run: childRun,
         agent,
-        credentialRef,
-        quotaDomain,
+        ...(targetIdentity.credentialRef === undefined ? {} : { credentialRef: targetIdentity.credentialRef }),
+        quotaDomain: targetIdentity.quotaDomain,
         cwd,
         provider: providerFor(targetModel, target.profile, target.modelRouting),
         model: targetModel,
@@ -966,7 +980,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         env,
         protectedPaths: [ledgerPath, auditPath],
         secretEnvNames,
-        inheritAgentLock: true,
+        inheritAgentLock: sameAccount,
         taskHash: shortTaskHash(prompt),
         // L5/L6 (#135): o filho da task segue config.run e o decider do pai; o run do filho é codificado no path.
         ...(config.run === undefined

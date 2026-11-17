@@ -21,11 +21,11 @@ Hoje "a LLM nunca cria agente em runtime" (`src/agent-manager.ts:15`): só exist
 
 **Herança e comunicação (A10, A8/A9).** Subagente NÃO herda o profile do pai; herda teto: `tools?` ⊆ allowlist do pai, `maxTurns?` e orçamento nunca maiores que os dele (I-02). Recebe `HandoffArtifactV1` (ADR-0006) com a task + `AGENTS.md`, nunca mensagens do orchestrator nem histórico da sessão (A9); comunicação só via handoff do orchestrator (I-18), sem canal p2p.
 
-**Serial em v1 (A11, Q-12).** Um subagente por vez; paralelo é v2. Testes usam `maxActive=2`. O entryAgent default continua `planner` (Q-03).
+**Serial por default; paralelo opt-in (A11, Q-12).** O default continua um subagente por vez; `spawn.parallel: true` habilita o fan-out de `task` (lista `tasks`). `agents.maxActive` (default 2) limita os jobs simultâneos; jobs da mesma conta são serializados pelo lock A4, então uma conta compartilhada nunca roda dois filhos juntos. Falha ou aborto de um filho não cancela os irmãos; o resultado sai na ordem de entrada. Testes usam `maxActive=2`. O entryAgent default continua `planner` (Q-03).
 
 **Emendas.** I-01 estende-se a agents nascidos em runtime: a declaração efetiva do subagente (tools, teto, orçamento, sandbox) deriva do `spawn_agent` e é sempre ⊆ à do pai; nada fora dela é acessível. I-06 estende a reprodução ao runtime: `snapshot_id` + escolha registrada no ledger reproduzem o placement; `candidate_set_changed` detecta divergência (composição com ADR-0011, #120). Para subagentes nascidos em runtime, esta decisão substitui a cláusula "a LLM nunca escolhe modelo em runtime" do ADR-0007, que segue valendo para agents declarados na config; a auditabilidade exigida lá é preservada por `snapshot_id` + escolha registrada no ledger (I-06).
 
-**Implementação (S-11, #128).** `src/spawn.ts` registra o filho, adquire a conta (A4), fixa modelo/profile/tools/teto e devolve `{agent_id, model, profile, status:"active"}`; o handoff executa o filho em série. `maxSpawnsPerRun` fixo em 8, `maxActive` declarado ou default 2, tools ⊆ pai, `maxTurns` ≤ pai, comunicação só com o pai (A8), filho não spawna neto na v1 e limpeza dos filhos ao fim do run (A5). O filho recebe task + `AGENTS.md` no system prompt, sem o histórico do orchestrator (A9). No caminho single/chat a tool responde `spawn_unavailable` antes de adquirir conta.
+**Implementação (S-11, #128; A11, #452).** `src/spawn.ts` registra o filho, adquire a conta (A4), fixa modelo/profile/tools/teto e devolve `{agent_id, model, profile, status:"active"}`; o handoff executa o filho em série. `maxSpawnsPerRun` fixo em 8, `maxActive` declarado ou default 2, tools ⊆ pai, `maxTurns` ≤ pai, comunicação só com o pai (A8), filho não spawna neto e limpeza dos filhos ao fim do run (A5). O filho recebe task + `AGENTS.md` no system prompt, sem o histórico do orchestrator (A9). No caminho single/chat a tool responde `spawn_unavailable` antes de adquirir conta. O fan-out v2 (`src/fan-out.ts`) roda `task.tasks` com teto `maxActive`, serializa por conta e mantém ledger/audit ordenados por filho; `resume` retoma só o run pai — nenhum filho pendente é reexecutado.
 
 ## Consequências
 
@@ -38,4 +38,4 @@ Hoje "a LLM nunca cria agente em runtime" (`src/agent-manager.ts:15`): só exist
 - Manter "LLM nunca cria agente em runtime": trava C4a (#128) e a escalada de esforço da trilha.
 - Spawn herdando o profile do pai: contradiz A10 e o per-fallback do ADR-0007.
 - Canal p2p entre subagentes: escapa do orchestrator; viola I-18.
-- Paralelismo em v1: sem baseline de custo por conta; Q-12 defere para v2.
+- Paralelismo sem opt-in e sem baseline de custo por conta: o default segue serial; o v2 exige `spawn.parallel: true` (A11, #452).

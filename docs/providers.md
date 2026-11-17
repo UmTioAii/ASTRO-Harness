@@ -15,6 +15,10 @@ Objetivo: guia de configuração de providers, validação manual de credenciais
 
 Kinds de plugin são aceitos com `kind` custom e factory registrada por plugin (`src/plugins.ts`, `src/core/config.ts`).
 
+## Contas por subagente e fan-out (A4/A11)
+
+Cada agente ativo prende uma conta exclusiva (A4, ADR-0009); o ledger reconstrói o lock e nunca permite dois filhos na mesma conta ao mesmo tempo. `spawn.parallel: true` (ADR-0008, #452) habilita o fan-out de `task` via lista `tasks`; `agents.maxActive` limita a concorrência, `spawn.parallel` ausente mantém a execução serial e uma falha/aborto de um filho não cancela os irmãos.
+
 ## Redirects (fail-closed, #442)
 
 Nenhum fetch de provider segue redirect: completion, health, refresh e login usam `redirect: "error"`. Um 3xx vira erro classificado (`invalid_request` no completion e no refresh; `outage` no login) cuja mensagem pede a URL final, sem retry e sem reenviar `authorization` ou tokens a outro host (I-03). Não há upgrade automático de `http` para `https`: configure a URL final no `baseUrl`. Detalhe na linha SSRF de `docs/security-threat-matrix.md`.
