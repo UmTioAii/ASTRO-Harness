@@ -9,7 +9,6 @@ const METADATA_HOSTS = new Set([
   "instance-data",
   "instance-data.ec2.internal",
   "metadata.tencentyun.com",
-  "fd00:ec2::254",
 ]);
 
 function parse(raw: string): URL | undefined {
@@ -43,6 +42,15 @@ function bareHost(hostname: string): string {
   return lower.startsWith("[") && lower.endsWith("]") ? lower.slice(1, -1) : lower;
 }
 
+function isIpv6Literal(hostname: string): boolean {
+  return hostname.startsWith("[") && hostname.endsWith("]");
+}
+
+/** Prefixos ULA de metadados: AWS IMDS/EKS Pod Identity e GCP. */
+function isMetadataIpv6(host: string): boolean {
+  return host.startsWith("fd00:ec2:") || host.startsWith("fd20:ce:");
+}
+
 /** IPv4 link-local (169.254/16) ou CGNAT (100.64/10), sempre metadados. */
 function ipv4LinkLocalOrCgnat(host: string): boolean {
   const parts = host.split(".");
@@ -66,8 +74,9 @@ function mappedIpv4(host: string): string | undefined {
   return [hi >> 8, hi & 255, lo >> 8, lo & 255].join(".");
 }
 
-function ipv6Private(host: string): boolean {
-  const lower = bareHost(host);
+function ipv6Private(hostname: string): boolean {
+  if (!isIpv6Literal(hostname)) return false;
+  const lower = bareHost(hostname);
   if (lower === "::" || lower === "::1") return true;
   if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
   if (/^fe[89ab]/.test(lower)) return true;
@@ -83,8 +92,10 @@ function isMetadataOrLinkLocal(url: URL): boolean {
   const bare = bareHost(host);
   if (METADATA_HOSTS.has(host) || METADATA_HOSTS.has(bare)) return true;
   if (ipv4LinkLocalOrCgnat(bare)) return true;
+  if (!isIpv6Literal(host)) return false;
   const mapped = mappedIpv4(bare);
   if (mapped !== undefined && ipv4LinkLocalOrCgnat(mapped)) return true;
+  if (isMetadataIpv6(bare)) return true;
   return bare.startsWith("fe8")
     || bare.startsWith("fe9")
     || bare.startsWith("fea")
@@ -94,7 +105,7 @@ function isMetadataOrLinkLocal(url: URL): boolean {
 function isPrivateHost(url: URL): boolean {
   const bare = bareHost(url.hostname);
   if (bare === "localhost" || bare.endsWith(".localhost")) return true;
-  return ipv4Private(bare) || ipv6Private(bare);
+  return ipv4Private(bare) || ipv6Private(url.hostname);
 }
 
 /** Opt-in explícito para destinos privados em desenvolvimento local. */
