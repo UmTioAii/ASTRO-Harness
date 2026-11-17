@@ -201,8 +201,17 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
         real,
       );
     }
+    const selected = output.subarray(0, outputBytes);
+    let text: string;
+    try {
+      // O header só cobre 64 KiB: valida NUL/UTF-8 na faixa que realmente entra no prompt.
+      if (selected.includes(0)) throw new Error("NUL");
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(selected);
+    } catch {
+      throw new AttachmentError("attachment_unsupported_binary", `tipo não suportado: ${basename(real)}`, real);
+    }
     return {
-      data: redactSecrets(output.subarray(0, outputBytes).toString("utf8")),
+      data: redactSecrets(text),
       range: { start: requested.start, end: Math.min(requested.end, lastLine) },
     };
   } finally {
