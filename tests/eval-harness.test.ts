@@ -16,11 +16,33 @@ import {
 const GOLDEN_ROOT = join(import.meta.dir, "..", "eval", "golden");
 
 describe("eval harness (F5-2)", () => {
-  test("listGoldenCases devolve os 50 cases com meta", () => {
+  test("listGoldenCases devolve os 65 cases com meta", () => {
     const cases = listGoldenCases(GOLDEN_ROOT);
-    expect(cases).toHaveLength(50);
+    expect(cases).toHaveLength(65);
     expect(cases[0]!.files.length).toBeGreaterThan(0);
     expect(cases[0]!.category).toBeTruthy();
+  });
+
+  test("listGoldenCases carrega scenario.json dos cases de cenário", () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-scenario-list-"));
+    const dir = join(root, "01-scenario");
+    mkdirSync(join(dir, "expected"), { recursive: true });
+    writeFileSync(join(dir, "task.md"), "escreva o resultado do cenário\n");
+    writeFileSync(join(dir, "expected", "out.txt"), "ok\n");
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({
+      schema: 1, id: "scenario-list", category: "mcp", difficulty: 2, tags: ["writing-code"], files: ["out.txt"],
+    }));
+    writeFileSync(join(dir, "scenario.json"), JSON.stringify({
+      schema: 1,
+      kind: "app",
+      turns: [{ toolCalls: [{ name: "write_file", arguments: { path: "out.txt", content: "ok\n" } }] }, { content: "fim" }],
+      expect: { final: "fim", audit: ["tool.call"] },
+    }));
+
+    const [golden] = listGoldenCases(root);
+    expect(golden?.scenario?.kind).toBe("app");
+    expect(golden?.scenario?.turns).toHaveLength(2);
+    expect(golden?.scenario?.expect?.final).toBe("fim");
   });
 
   test("runEval no golden dataset: pass rate 1.0 com relatório completo", async () => {
@@ -31,7 +53,7 @@ describe("eval harness (F5-2)", () => {
       baselinePath: join(GOLDEN_ROOT, "..", "baseline-inexistente.json"),
       reportPath,
     });
-    expect(report.total).toBe(50);
+    expect(report.total).toBe(65);
     expect(report.passRate).toBe(1);
     expect(report.regressions).toEqual([]);
     expect(report.cases.every((c) => c.passed)).toBe(true);
@@ -39,7 +61,7 @@ describe("eval harness (F5-2)", () => {
     expect(report.cases.every((c) => c.latencyMs >= 0)).toBe(true);
     // relatório gravado
     const saved = JSON.parse(readFileSync(reportPath, "utf8")) as EvalReport;
-    expect(saved.total).toBe(50);
+    expect(saved.total).toBe(65);
   });
 
   test("runCase detecta divergência quando o esperado é sabotado", async () => {
@@ -103,7 +125,7 @@ describe("eval harness (F5-2)", () => {
   test("regressão real: runEval com baseline de passRate alto e um case sabotado", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "astro-regr-"));
     const baselinePath = join(tmp, "baseline.json");
-    // baseline: todos os 50 cases passando
+    // baseline: todos os 65 cases passando
     const all = listGoldenCases(GOLDEN_ROOT);
     writeBaseline(
       {
@@ -119,5 +141,5 @@ describe("eval harness (F5-2)", () => {
     expect(report.regressions).toEqual([]);
     expect(evalFailsThreshold(report, 0.85)).toBe(false);
     // full-dataset mock eval: 4486ms on windows-latest CI at main (default cap 5000ms) — #312
-  }, 30000);
+  }, 60000);
 });
