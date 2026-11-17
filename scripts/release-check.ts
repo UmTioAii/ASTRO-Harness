@@ -102,7 +102,7 @@ Gate local de release. Não publica nada.
   --help        mostra esta ajuda
 
 Passos manuais fora do gate (TUI e provider não são automatizáveis headless):
-  1. npm install -g @umtioaii/astro-harness@alpha
+  1. npm install -g @umtioai/astro-harness@alpha
   2. astro tui`;
 
 /** Nome de arquivo que o `npm pack` gera para nome+versão do pacote. */

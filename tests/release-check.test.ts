@@ -12,22 +12,22 @@ import {
 
 const root = resolve(import.meta.dir, "..");
 const tempRoot = join(root, ".tmp-release-check");
-const tempDir = join(tempRoot, `${tempDirPrefix("@umtioaii/astro-harness")}abc123`);
+const tempDir = join(tempRoot, `${tempDirPrefix("@umtioai/astro-harness")}abc123`);
 const base = {
   root,
   tempRoot,
   tempDir,
-  packageName: "@umtioaii/astro-harness",
+  packageName: "@umtioai/astro-harness",
   version: "0.1.0-alpha.3",
 };
 
 test("tarball npm usa o nome sanitizado do pacote", () => {
-  expect(tarballFileName("@umtioaii/astro-harness", "0.1.0-alpha.3")).toBe(
-    "umtioaii-astro-harness-0.1.0-alpha.3.tgz",
+  expect(tarballFileName("@umtioai/astro-harness", "0.1.0-alpha.3")).toBe(
+    "umtioai-astro-harness-0.1.0-alpha.3.tgz",
   );
   expect(tarballFileName("astro-harness", "1.0.0")).toBe("astro-harness-1.0.0.tgz");
-  expect(tempDirPrefix("@umtioaii/astro-harness")).toBe(
-    "astro-release-check-umtioaii-astro-harness-",
+  expect(tempDirPrefix("@umtioai/astro-harness")).toBe(
+    "astro-release-check-umtioai-astro-harness-",
   );
 }, 5000);
 
@@ -53,7 +53,7 @@ test("plano padrão roda qualidade, build, smoke, pack, instalação e help", ()
     "npx --no-install astro --help",
   ]);
   expect(plan.tarball).toBe(
-    join(plan.tempDir, "umtioaii-astro-harness-0.1.0-alpha.3.tgz"),
+    join(plan.tempDir, "umtioai-astro-harness-0.1.0-alpha.3.tgz"),
   );
   expect(plan.steps.find((step) => step.id === "install")?.cwd).toBe(plan.tempDir);
   expect(plan.steps.find((step) => step.id === "help")?.cwd).toBe(plan.tempDir);
