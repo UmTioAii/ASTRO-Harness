@@ -136,6 +136,11 @@ function detectHeaderKind(header: Uint8Array): DetectedKind | null {
   return null;
 }
 
+/** Erro tipado do teto de leitura por anexo (stat ou range). */
+function attachmentTooLarge(name: string, limit: number, size: number, real: string): AttachmentError {
+  return new AttachmentError("attachment_too_large", `anexo "${name}" excede ${limit} bytes (${size})`, real);
+}
+
 /** Erro tipado do teto de leitura durante range (ADR-0026): nunca trunca em silêncio. */
 function rangeTooLarge(spec: string, limit: number, real: string): AttachmentError {
   return new AttachmentError("attachment_too_large", `faixa "${spec}" excede o teto de leitura de ${limit} bytes`, real);
@@ -163,6 +168,9 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
       const view = chunk.subarray(0, read);
       let cursor = 0;
       while (cursor < read) {
+        // A linha `start` pode existir com offset acima do cap: aí o erro é de teto.
+        // Se o arquivo terminar antes dela, o erro é range inválido (checado após o loop).
+        if (line === requested.start && skippedBytes > limit) throw rangeTooLarge(spec, limit, real);
         const newline = view.indexOf(0x0a, cursor);
         const end = newline === -1 ? read : newline;
         const length = end - cursor;
@@ -172,7 +180,6 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
           outputBytes += length;
         } else {
           skippedBytes += length;
-          if (skippedBytes > limit) throw rangeTooLarge(spec, limit, real);
         }
         if (newline === -1) break;
         if (line >= requested.start && line <= requested.end) {
@@ -183,7 +190,6 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
           }
         } else {
           skippedBytes += 1;
-          if (skippedBytes > limit) throw rangeTooLarge(spec, limit, real);
         }
         line += 1;
         lastLine = line;
@@ -201,6 +207,7 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
         real,
       );
     }
+    if (skippedBytes > limit) throw rangeTooLarge(spec, limit, real);
     const selected = output.subarray(0, outputBytes);
     let text: string;
     try {
@@ -273,14 +280,9 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
   }
 
   const limit = input.maxBytes ?? MAX_ATTACHMENT_BYTES;
-  if (stats.size > limit && input.range === undefined) {
-    throw new AttachmentError(
-      "attachment_too_large",
-      `anexo "${name}" excede ${limit} bytes (${stats.size})`,
-      real,
-    );
-  }
+  const rangeSpec = input.range;
   const oversized = stats.size > limit;
+  if (oversized && rangeSpec === undefined) throw attachmentTooLarge(name, limit, stats.size, real);
   const bytes = oversized ? readHeader(real, READ_CHUNK_BYTES) : new Uint8Array(readFileSync(real));
   const detected = detectKind(bytes) ?? (oversized ? detectHeaderKind(bytes) : null);
   if (detected === null) {
@@ -288,7 +290,7 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
   }
 
   if (detected.kind === "image") {
-    if (input.range !== undefined) {
+    if (rangeSpec !== undefined) {
       throw new AttachmentError("attachment_range_invalid", "range não vale para imagem", real);
     }
     const dimensions = imageDimensions(bytes, detected.mediaType);
@@ -307,7 +309,10 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
   }
 
   if (oversized) {
-    const ranged = readTextRange(real, input.range!, limit);
+    // O guard acima já rejeitou arquivo acima do teto sem range; o check explícito
+    // mantém o narrowing do TypeScript sem `!`.
+    if (rangeSpec === undefined) throw attachmentTooLarge(name, limit, stats.size, real);
+    const ranged = readTextRange(real, rangeSpec, limit);
     const sizeBytes = Buffer.byteLength(ranged.data, "utf8");
     assertAttachmentSize(sizeBytes, name);
     return {
@@ -323,8 +328,8 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
 
   let text = redactSecrets(Buffer.from(bytes).toString("utf8"));
   let range: LoadedAttachment["range"];
-  if (input.range !== undefined) {
-    range = parseRange(input.range, text.split("\n").length);
+  if (rangeSpec !== undefined) {
+    range = parseRange(rangeSpec, text.split("\n").length);
     text = text
       .split("\n")
       .slice(range.start - 1, range.end)
