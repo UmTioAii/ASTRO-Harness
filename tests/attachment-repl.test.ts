@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentSession, type SendTurnOptions, type TurnResult } from "../src/chat/agent-session";
 import { runRepl, type ChatSession, type ReplIO } from "../src/chat/repl";
+import { loadAttachment } from "../src/attachments/load";
 import type { AttachmentMeta, LoadedAttachment } from "../src/attachments/model";
 import { FAKE_PRIVATE_ACL } from "./setup";
 
@@ -134,10 +135,13 @@ describe("/attach e /paste no REPL (ADR-0026, #392)", () => {
 
 /** PNG 1x1 real (70 bytes), o mesmo fixture do teste de turno. */
 const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+/** Texto comum de ~20 MiB; hex longo seria redigido e encolheria o anexo. */
+const BIG_CHUNK = "lorem ipsum dolor sit amet\n";
+const BIG_TEXT = BIG_CHUNK.repeat(Math.floor((20 * 1024 * 1024) / BIG_CHUNK.length));
 interface CapturedBody { messages?: Array<{ role?: string; content?: unknown }> }
 
 /** Sessão real + servidor local que captura o corpo: exercita o wire até o provider. */
-function e2eSetup(context = 8192) {
+function e2eSetup(context = 8192, extraConfig: Record<string, unknown> = {}) {
   const base = sandbox();
   const cwd = join(base, "work"), home = join(base, "home");
   mkdirSync(cwd, { recursive: true });
@@ -150,6 +154,7 @@ function e2eSetup(context = 8192) {
   } });
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
+    ...extraConfig,
     providers: { p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
     models: [{ provider: "p", id: "m1", tags: ["writing-code"], context, capabilities: { vision: true } }],
     agent: { model: "p/m1", maxSteps: 1, tools: [] },
@@ -229,6 +234,62 @@ describe("imagem no turno do REPL (ADR-0026, #392)", () => {
       expect(readFileSync(join(cwd, ".astro", "audit.jsonl"), "utf8")).not.toContain("attachment.approved");
     } finally {
       stop();
+    }
+  });
+});
+
+describe("turno acima da janela no REPL (ADR-0026, #392)", () => {
+  test("20 MiB de texto estoura a janela e falha antes do request, sem compactar", async () => {
+    const { cwd, bodies, session, stop } = e2eSetup(131072);
+    writeFileSync(join(cwd, "big.txt"), BIG_TEXT);
+    const io = new ScriptedIO(["/attach big.txt", "resuma", "/exit"]);
+    try {
+      await runRepl(session, io, { cwd });
+      expect(bodies).toHaveLength(0);
+      expect(io.outputs.join("\n")).toContain("janela de contexto");
+      expect(session.snapshot().messages.map((message) => message.role)).toEqual(["system"]);
+      const audit = join(cwd, ".astro", "audit.jsonl");
+      expect(existsSync(audit) ? readFileSync(audit, "utf8") : "").not.toContain("chat.compact");
+    } finally {
+      stop();
+    }
+  }, 30_000);
+
+  test("falha tipada attachment_turn_too_large, não trunca histórico e não envia", async () => {
+    const { cwd, home, bodies, session, stop } = e2eSetup(131072);
+    writeFileSync(join(cwd, "big.txt"), BIG_TEXT);
+    try {
+      const big = await loadAttachment({ path: "big.txt", cwd, astroHome: home });
+      let thrown: unknown;
+      try {
+        // Mesma forma do REPL: o conteúdo já está no prompt e os metas acompanham o turno.
+        await session.send(BIG_TEXT, undefined, undefined, undefined, { attachments: [big] });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_turn_too_large" });
+      expect(bodies).toHaveLength(0);
+      expect(session.snapshot().messages.map((message) => message.role)).toEqual(["system"]);
+    } finally {
+      stop();
+    }
+  }, 30_000);
+});
+
+describe("showHidden da config no /attach (ADR-0026, #392)", () => {
+  test("config true lista ocultos; false os esconde", async () => {
+    for (const showHidden of [true, false]) {
+      const { cwd, bodies, session, stop } = e2eSetup(8192, { attachments: { directory: { showHidden } } });
+      mkdirSync(join(cwd, "d"));
+      writeFileSync(join(cwd, "d", "visivel.txt"), "x");
+      writeFileSync(join(cwd, "d", ".oculto"), "x");
+      try {
+        await runRepl(session, new ScriptedIO(["/attach d", "liste", "/exit"]), { cwd });
+        expect(bodies).toHaveLength(1);
+        expect(JSON.stringify(bodies[0]).includes(".oculto")).toBe(showHidden);
+      } finally {
+        stop();
+      }
     }
   });
 });

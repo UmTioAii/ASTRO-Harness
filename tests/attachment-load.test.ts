@@ -67,6 +67,23 @@ describe("loadAttachment", () => {
     expect(attachment.range).toEqual({ start: 1, end: 3 });
   });
 
+  test("range de arquivo pequeno é aplicado antes da redação (numeração preservada)", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "chave.txt"), [
+      "-----BEGIN PRIVATE KEY-----",
+      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+      "linha-interna-3",
+      "-----END PRIVATE KEY-----",
+      "alvo-5",
+      "alvo-6",
+      "alvo-7",
+    ].join("\n"));
+    const attachment = await loadAttachment({ ...base(cwd, astroHome), path: "chave.txt", range: "5:6" });
+    expect(attachment.data).toBe("alvo-5\nalvo-6");
+    expect(attachment.range).toEqual({ start: 5, end: 6 });
+    expect(attachment.data).not.toContain("PRIVATE KEY");
+  });
+
   test("hard-block em .env sem override", async () => {
     const { cwd, astroHome } = sandbox();
     writeFileSync(join(cwd, ".env"), "KEY=1");
