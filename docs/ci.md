@@ -31,6 +31,12 @@ O bench noturno/ manual fica em `.github/workflows/bench.yml`; métricas, filtro
 - Não usar `--admin` para contornar check vermelho. Exceção por causa externa (billing, runner) é registrada no PR com justificativa e issue de correção.
 - Falha intermitente: reexecutar o job; se repetir, abrir issue com o link do run.
 
+## Gate de release local (#230)
+
+`bun run release:check` roda typecheck, `bun test`, build, smoke, `npm pack`, instala o tarball em um diretório temporário e valida `npx --no-install astro --help`. `--skip-tests` pula typecheck/test; `--json` imprime um resumo estável. O gate nunca publica e falha fechado na primeira etapa com erro.
+
+`npm install <tarball>` instala o pacote sob teste localmente, mas ainda resolve `ink`, `react` e `bun` do registry; só o pacote sob teste é local. TUI e setup de provider continuam manuais (`astro tui`).
+
 ## Referências
 
-#140 (CI verde), `.github/workflows/ci.yml`, `docs/workflow.md` §6, `docs/review-checklist.md`.
+#140 (CI verde), #230 (gate de release), `.github/workflows/ci.yml`, `docs/workflow.md` §6, `docs/review-checklist.md`.
