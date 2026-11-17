@@ -117,10 +117,15 @@ export function assertNarrowed(
   const namedAfter = isPlainObject(merged.agents) ? merged.agents : {};
   for (const [name, agent] of Object.entries(named)) {
     const after = namedAfter[name];
+    if (isPlainObject(agent) && isPlainObject(after)) assertAgentNarrowed(agent, after, `do agent "${name}"`);
+  }
+  // Teto de passos dos nomeados cobre também os declarados só no projeto: sem
+  // valor global do nomeado, vale o teto do agent principal (mainCeiling).
+  for (const [name, after] of Object.entries(namedAfter)) {
     if (!isPlainObject(after)) continue;
-    const ceiling = isPlainObject(agent) && typeof agent.maxSteps === "number" ? agent.maxSteps : mainCeiling;
+    const globalAgent = isPlainObject(named[name]) ? named[name] : undefined;
+    const ceiling = globalAgent !== undefined && typeof globalAgent.maxSteps === "number" ? globalAgent.maxSteps : mainCeiling;
     assertStepsCeiling(after.maxSteps, `agents.${name}.maxSteps`, ceiling);
-    if (isPlainObject(agent)) assertAgentNarrowed(agent, after, `do agent "${name}"`);
   }
   // Teto de turnos (#473): `run.maxTurns` só capa `agent.maxSteps`, mas não pode
   // passar de um teto numérico declarado na camada global ("unlimited" alarga).
