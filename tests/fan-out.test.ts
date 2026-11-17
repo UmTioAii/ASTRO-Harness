@@ -150,6 +150,25 @@ describe("fan-out concorrente (A11)", () => {
   test("teto inválido falha antes de executar", async () => {
     await expect(runFanOut([], { parallel: true, maxActive: 0 })).rejects.toThrow(/maxActive/);
   });
+
+  test("conta presa fora do grupo recusa o job em vez de rodar junto", async () => {
+    const { ledger, audit } = setup();
+    const probe: Probe = { active: 0, max: 0, started: [], finished: [] };
+    acquireAgentLock(ledger, audit, {
+      run: "outsider", agent_id: "outsider", session_id: "outsider",
+      provider: "p", model: "m", credentialRef: "KEY_B",
+    });
+    const results = await runFanOut([
+      job(ledger, audit, "a", "KEY_A", probe, 5),
+      job(ledger, audit, "b", "KEY_B", probe, 5),
+    ], { parallel: true, maxActive: 2 });
+    releaseAgentLock(ledger, audit, { run: "outsider", agent_id: "outsider", reason: "completed" });
+
+    expect(results[0]).toMatchObject({ id: "a", ok: true });
+    expect(results[1]).toMatchObject({ id: "b", ok: false });
+    expect((results[1] as { error: string }).error).toContain("já está em uso");
+    expect(ledger.readAll().filter((entry) => entry.agent === "b")).toHaveLength(0);
+  });
 });
 
 describe("resume após fan-out parcial (A11)", () => {

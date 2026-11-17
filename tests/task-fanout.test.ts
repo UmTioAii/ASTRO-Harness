@@ -3,11 +3,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
+import { PermissionPendingError } from "../src/permissions";
 import { createTaskTool, type TaskDelegator } from "../src/tools/task";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function setup(opts: { parallel?: boolean; delegate?: TaskDelegator } = {}) {
+function setup(opts: { parallel?: boolean; delegate?: TaskDelegator; activeCount?: () => number } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "astro-task-fanout-"));
   const audit = new Auditor(join(cwd, "audit.jsonl"));
   const probe = { active: 0, max: 0, calls: [] as Array<{ agent: string; prompt: string }> };
@@ -29,6 +30,7 @@ function setup(opts: { parallel?: boolean; delegate?: TaskDelegator } = {}) {
     ...(opts.parallel === undefined ? {} : { parallel: opts.parallel }),
     maxActive: 2,
     accountOf: (agent) => `account-${agent}`,
+    ...(opts.activeCount === undefined ? {} : { activeCount: opts.activeCount }),
   });
   const ctx = { cwd, run: "r1", agent: "plan", maxSteps: 7 };
   return { tool, audit, probe, ctx };
@@ -90,5 +92,42 @@ describe("task fan-out (A11)", () => {
     ]) {
       expect(await tool.execute(input, ctx)).toMatchObject({ isError: true });
     }
+  });
+
+  test("o teto desconta os locks vivos do run (pai incluso)", async () => {
+    const { tool, probe, ctx } = setup({ parallel: true, activeCount: () => 1 });
+    const result = await tool.execute({
+      tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
+    }, ctx);
+    expect(JSON.parse(result.output).tasks.map((item: { status: string }) => item.status)).toEqual(["ok", "ok"]);
+    expect(probe.max).toBe(1);
+  });
+
+  test("sem filho concluído o fan-out é erro de tool", async () => {
+    const { tool, ctx } = setup({
+      parallel: true,
+      delegate: async () => { throw new Error("falha total"); },
+    });
+    const result = await tool.execute({
+      tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
+    }, ctx);
+    expect(result.isError).toBe(true);
+  });
+
+  test("serial rethrow de PermissionPendingError antes do próximo filho (I-19)", async () => {
+    const calls: string[] = [];
+    const { tool, ctx } = setup({
+      delegate: async (input) => {
+        calls.push(input.agent);
+        if (input.agent === "a") {
+          throw new PermissionPendingError({ name: "read_file", action: "read_common", mode: "ask" });
+        }
+        return "ok";
+      },
+    });
+    await expect(tool.execute({
+      tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
+    }, ctx)).rejects.toBeInstanceOf(PermissionPendingError);
+    expect(calls).toEqual(["a"]);
   });
 });
