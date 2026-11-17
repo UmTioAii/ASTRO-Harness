@@ -10,7 +10,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { DEFAULT_ATTACHMENTS, loadConfig, loadConfigRaw, type AstroConfig, type MCPServerConfig } from "./core/config";
 import { loadEffectiveConfig, NoProviderError } from "./providers/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "./attachments/store";
-import { runHealthCheck, type HealthCheck, type HealthStatus } from "./health";
+import type { HealthCheck, HealthStatus } from "./health";
 import { ARTIFACT_KEY_PATTERN, SHA256_HEX } from "./internal-ids";
 import { headerEnvNames } from "./mcp/headers";
 import { resolveAstroHome } from "./permissions";
@@ -829,6 +829,8 @@ export async function collectOnlineChecks(
     return [{ level: "ok", label: "online", detail: "nenhum provider configurado; nada para verificar (sem rede)" }];
   }
   try {
+    // Import tardio: offline não carrega o registry nem o caminho de rede.
+    const { runHealthCheck } = await import("./health");
     const report = await runHealthCheck(config, env, {
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
       ...(options.fetchLike === undefined ? {} : { fetchLike: options.fetchLike }),
