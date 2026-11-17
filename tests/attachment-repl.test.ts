@@ -276,6 +276,22 @@ describe("turno acima da janela no REPL (ADR-0026, #392)", () => {
   }, 30_000);
 });
 
+describe("@path é só menção (ADR-0026, #392)", () => {
+  test("prompt com @path não lê o arquivo nem envia attachments", async () => {
+    const cwd = sandbox();
+    writeFileSync(join(cwd, "a.txt"), "conteudo-do-arquivo\n");
+    const session = new CaptureSession();
+    const io = new ScriptedIO(["veja @a.txt e @nao-existe.txt", "/exit"]);
+    await runRepl(session, io, { cwd });
+    expect(session.sent).toHaveLength(1);
+    expect(session.sent[0]?.prompt).toBe("veja @a.txt e @nao-existe.txt");
+    expect(session.sent[0]?.attachments).toBeUndefined();
+    const out = io.outputs.join("\n");
+    expect(out).not.toContain("conteudo-do-arquivo");
+    expect(out).not.toContain("erro");
+  });
+});
+
 describe("showHidden da config no /attach (ADR-0026, #392)", () => {
   test("config true lista ocultos; false os esconde", async () => {
     for (const showHidden of [true, false]) {

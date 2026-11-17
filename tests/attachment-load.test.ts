@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAttachment, loadPastedText } from "../src/attachments/load";
 import { MAX_ATTACHMENT_BYTES } from "../src/attachments/model";
+import { canonicalize } from "../src/tools/paths";
 
 const roots: string[] = [];
 
@@ -90,6 +91,38 @@ describe("loadAttachment", () => {
     await expect(loadAttachment({ ...base(cwd, astroHome), path: ".env" })).rejects.toMatchObject({
       code: "attachment_hard_blocked",
     });
+  });
+
+  test("hard-block em vault, .astro do cwd e .git/config mesmo com confirmação", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(astroHome, "vault.json"), "{}");
+    mkdirSync(join(cwd, ".astro"));
+    writeFileSync(join(cwd, ".astro", "state.json"), "{}");
+    mkdirSync(join(cwd, ".git"));
+    writeFileSync(join(cwd, ".git", "config"), "[core]\n");
+    for (const path of [join(astroHome, "vault.json"), ".astro/state.json", ".git/config"]) {
+      await expect(
+        loadAttachment({ ...base(cwd, astroHome), path, confirmOutsideCwd: () => true }),
+      ).rejects.toMatchObject({ code: "attachment_hard_blocked" });
+    }
+  });
+
+  test("symlink no cwd que escapa entrega o realpath externo à confirmação", async () => {
+    const { cwd, astroHome } = sandbox();
+    const outside = join(cwd, "..", "fora");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "x.txt"), "x");
+    symlinkSync(outside, join(cwd, "link"), process.platform === "win32" ? "junction" : "dir");
+    const seen: string[] = [];
+    await expect(loadAttachment({
+      ...base(cwd, astroHome),
+      path: "link/x.txt",
+      confirmOutsideCwd: (absolute) => {
+        seen.push(absolute);
+        return false;
+      },
+    })).rejects.toMatchObject({ code: "attachment_outside_denied" });
+    expect(seen).toEqual([canonicalize(join(outside, "x.txt"))]);
   });
 
   test("fora do cwd pede confirmação; negado para", async () => {
