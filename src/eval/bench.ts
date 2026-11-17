@@ -78,6 +78,26 @@ export function filterModels(
   return models.filter((m) => terms.some((term) => `${m.provider}/${m.id}`.includes(term)));
 }
 
+export type BenchModelSelection =
+  | { ok: true; models: ModelEntry[] }
+  | { ok: false; error: string };
+
+/**
+ * Seleção de modelos do CLI: aplica o filtro compartilhado e recusa seleção
+ * vazia com a mensagem que o `astro bench` imprime. Mantém a regra fora do
+ * CLI para ser testada sem processo filho.
+ */
+export function selectBenchModels(
+  models: readonly ModelEntry[],
+  filter: string | undefined,
+): BenchModelSelection {
+  const selected = filterModels(models, filter);
+  if (selected.length === 0) {
+    return { ok: false, error: "nenhum modelo ativo corresponde ao filtro" };
+  }
+  return { ok: true, models: selected };
+}
+
 function percentile(sorted: readonly number[], p: number): number {
   if (sorted.length === 0) return 0;
   const index = Math.min(Math.ceil((p / 100) * sorted.length) - 1, sorted.length - 1);

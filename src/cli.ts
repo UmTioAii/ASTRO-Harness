@@ -18,7 +18,7 @@ import { formatAgentsList } from "./agent-manager";
 import { buildModelCatalog, formatModelCatalog, formatSeedList } from "./model-catalog";
 import { PROVIDER_CATALOG } from "./provider/catalog";
 import { evalFailsThreshold, runEval, writeBaseline, type EvalReport } from "./eval/harness";
-import { formatBenchTable, runBenchmark, type BenchReport } from "./eval/bench";
+import { formatBenchTable, runBenchmark, selectBenchModels } from "./eval/bench";
 import { Metrics, startMetricsServer } from "./metrics";
 import { formatBudgetEstimate } from "./budget";
 import { replayRun } from "./replay";
@@ -1095,15 +1095,13 @@ async function main(argv: string[]): Promise<number> {
     const config = loadEffectiveConfig(resolve(o.configPath)).config;
     const registry = new Registry(config);
     const all = registry.list();
-    const models = o.models === undefined
-      ? all
-      : all.filter((m) => o.models!.split(",").some((f) => `${m.provider}/${m.id}`.includes(f.trim())));
-    if (models.length === 0) {
-      console.error("erro: nenhum modelo ativo corresponde ao filtro");
+    const selection = selectBenchModels(all, o.models);
+    if (!selection.ok) {
+      console.error(`erro: ${selection.error}`);
       return 1;
     }
     const report = await runBenchmark({
-      models,
+      models: selection.models,
       runs: o.runs,
       outDir: resolve(o.outDir),
       providerFor: (m) => createProvider(config, m, process.env).provider,
