@@ -34,6 +34,7 @@ Objetivo: como `astro eval` e `astro bench` medem qualidade e desempenho, com fo
 - O texto do erro não entra no relatório JSON/Markdown (I-03).
 - Se nenhum prompt completar, `benchModel` propaga o erro do provider e nenhum relatório é gravado.
 - O Markdown traz `Sucesso` por modelo (`80% (4/5)`) e `Sucesso agregado: N% (completed/total)`.
+- O JSON do relatório usa `schema: 2`; a v1 não tinha `successRate`, `completed` e `total`.
 
 ### Filtro de provider/modelo
 
@@ -45,7 +46,7 @@ Objetivo: como `astro eval` e `astro bench` medem qualidade e desempenho, com fo
 | `openrouter/llama` | Modelos do `openrouter` cujo id contém `llama` |
 | `nvidia,openrouter` | União dos dois providers |
 
-A mesma regra vive em `filterModels` (`src/eval/bench.ts`), usada pelos testes e pela matriz de CI.
+A mesma regra vive em `filterModels`/`selectBenchModels` (`src/eval/bench.ts`): o CLI usa `selectBenchModels`, e testes e matriz usam o mesmo predicado.
 
 ## CI
 
@@ -58,7 +59,7 @@ A mesma regra vive em `filterModels` (`src/eval/bench.ts`), usada pelos testes e
 
 `ci.yml`:
 
-- `eval` continua sendo o gate required (Ubuntu, threshold 0.85) com o golden dataset mock.
+- `eval` é gate de merge (`docs/ci.md`), não check required de branch protection: roda em Ubuntu com threshold 0.85 e golden dataset mock.
 - `bench-mock` roda a matriz OS × filtro (`nvidia`, `openrouter`); cada perna executa o caso de filtro correspondente via `-t`, sem quota de provider.
 
 ## Referências
