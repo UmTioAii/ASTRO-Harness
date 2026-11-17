@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ConfigError, DEFAULT_ATTACHMENTS, isPlainObject, loadConfigRaw, validateConfig, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
-import { globalConfigPath } from "../astro-home";
+import { astroHomePath, globalConfigPath } from "../astro-home";
+import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
 import { isKnownTag } from "../tags";
 import { isAuthHeader, isVaultCredentialRef, looksLikeSecret } from "../secrets";
@@ -196,6 +197,28 @@ export function profilesPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(base, "providers.json");
 }
 
+/** Store legado inválido: nomeia o arquivo e nunca ecoa o conteúdo (I-03). */
+export class ProfileStoreError extends Error {
+  override name = "ProfileStoreError";
+  constructor(readonly path: string, detail: string) {
+    super(`store de perfis inválido em "${path}": ${detail}`);
+  }
+}
+
+/** Providers e modelos declarados na camada de projeto (o `loadProjectConfig` devolve a config mesclada com a global). */
+export function projectLayerRefs(configPath: string): { providers: string[]; modelProviders: string[] } {
+  if (!existsSync(configPath)) return { providers: [], modelProviders: [] };
+  const raw = loadConfigRaw(configPath);
+  return {
+    providers: isPlainObject(raw.providers) ? Object.keys(raw.providers) : [],
+    modelProviders: Array.isArray(raw.models)
+      ? raw.models.flatMap((model) => (
+          isPlainObject(model) && typeof model.provider === "string" ? [model.provider] : []
+        ))
+      : [],
+  };
+}
+
 /** Store ausente é um store vazio; JSON corrompido é erro com o caminho. */
 export function loadProfileStore(path: string = profilesPath()): ProviderStore {
   let text: string;
@@ -204,7 +227,7 @@ export function loadProfileStore(path: string = profilesPath()): ProviderStore {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return { version: 1, profiles: [] };
-    throw new Error(`store de perfis inválido em "${path}": ${error instanceof Error ? error.message : String(error)}`);
+    throw new ProfileStoreError(path, error instanceof Error ? error.message : String(error));
   }
   if (text.trim() === "") return { version: 1, profiles: [] };
   let parsed: unknown;
@@ -213,13 +236,119 @@ export function loadProfileStore(path: string = profilesPath()): ProviderStore {
   } catch {
     // Nunca ecoar o detalhe do parser: ele cita os primeiros caracteres do
     // conteúdo colado, que pode ser uma chave (I-03).
-    throw new Error(`store de perfis inválido em "${path}": JSON inválido`);
+    throw new ProfileStoreError(path, "JSON inválido");
   }
   try {
     return validateProfileStore(parsed);
   } catch (error) {
-    throw new Error(`store de perfis inválido em "${path}": ${error instanceof Error ? error.message : String(error)}`);
+    throw new ProfileStoreError(path, error instanceof Error ? error.message : String(error));
   }
+}
+
+/** Arquivo irmão do store: `config.json` e `state.json` vivem no mesmo diretório. */
+function siblingPath(storePath: string, name: string): string {
+  return join(dirname(storePath), name);
+}
+
+/** Escrita atômica da camada crua (0600 no POSIX); a camada global é parcial, não valida o schema inteiro. */
+function writeConfigRaw(raw: Record<string, unknown>, path: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    renameSync(tmp, path);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
+    throw error;
+  }
+}
+
+/** Importa o store legado no `config.json`: `config.json` vence por chave (ADR-0029, #459). */
+function importProfiles(configPath: string, legacy: ProviderStore): void {
+  const raw = existsSync(configPath) ? loadConfigRaw(configPath) : {};
+  const providers = { ...(isPlainObject(raw.providers) ? raw.providers : {}) };
+  for (const profile of legacy.profiles) {
+    if (!Object.hasOwn(providers, profile.id)) providers[profile.id] = profileToProvider(profile);
+  }
+  const imported = legacy.profiles.flatMap((profile) => (
+    profile.models.map((model) => ({ provider: profile.id, id: model.id, tags: model.tags, context: model.context }))
+  ));
+  const models = mergeModelLayers(imported, Array.isArray(raw.models) ? raw.models : []);
+  writeConfigRaw({
+    ...raw,
+    providers,
+    models,
+    // D-21: a seleção ativa acompanha os perfis; a de `config.json` vence.
+    ...(typeof raw.activeProfileId === "string" || legacy.activeProfileId === undefined
+      ? {}
+      : { activeProfileId: legacy.activeProfileId }),
+  }, configPath);
+}
+
+/** Store efetivo a partir de `config.json`: `providers` + `models` viram perfis (sem nome próprio). */
+export function profileStoreFromConfig(configPath: string): ProviderStore {
+  if (!existsSync(configPath)) return { version: 1, profiles: [] };
+  const raw = loadConfigRaw(configPath);
+  const providers = isPlainObject(raw.providers) ? raw.providers : {};
+  const models = Array.isArray(raw.models) ? raw.models : [];
+  const profiles: ProviderProfile[] = [];
+  for (const [id, value] of Object.entries(providers)) {
+    if (!isPlainObject(value)) continue;
+    const kind = value.kind;
+    if (typeof kind !== "string") continue;
+    const headers: Record<string, string> = {};
+    if (isPlainObject(value.headers)) {
+      for (const [name, item] of Object.entries(value.headers)) {
+        if (typeof item === "string") headers[name] = item;
+      }
+    }
+    const profileModels = models.flatMap((model) => (
+      isPlainObject(model) && model.provider === id && typeof model.id === "string"
+        && Array.isArray(model.tags) && typeof model.context === "number"
+        ? [{
+            id: model.id,
+            tags: model.tags.filter((tag): tag is string => typeof tag === "string"),
+            context: model.context,
+          }]
+        : []
+    ));
+    // Perfil do store exige ao menos um modelo: sem modelo o provider não é selecionável.
+    if (profileModels.length === 0) continue;
+    profiles.push({
+      id,
+      name: id,
+      kind,
+      ...(typeof value.baseUrl === "string" ? { baseUrl: value.baseUrl } : {}),
+      ...(typeof value.credentialRef === "string" ? { credentialRef: value.credentialRef } : {}),
+      ...(typeof value.credentialsPath === "string" ? { credentialsPath: value.credentialsPath } : {}),
+      ...(typeof value.quotaDomain === "string" ? { quotaDomain: value.quotaDomain } : {}),
+      ...(Object.keys(headers).length === 0 ? {} : { headers }),
+      models: profileModels,
+    });
+  }
+  const activeProfileId = typeof raw.activeProfileId === "string" ? raw.activeProfileId : undefined;
+  return { version: 1, ...(activeProfileId === undefined ? {} : { activeProfileId }), profiles };
+}
+
+/**
+ * Store global efetivo (ADR-0029, #459): na primeira carga com store legado válido,
+ * importa os perfis para `config.json` e marca `migrations.providers`; a partir daí
+ * `config.json` é a fonte de verdade e `providers.json` não é lido nem escrito.
+ */
+export function loadGlobalProfileStore(env: NodeJS.ProcessEnv = process.env): ProviderStore {
+  const legacyPath = join(astroHomePath(env), "providers.json");
+  const configPath = siblingPath(legacyPath, "config.json");
+  const stateFile = siblingPath(legacyPath, "state.json");
+  const state = loadHomeState(stateFile);
+  if (state.migrations.providers) return profileStoreFromConfig(configPath);
+  if (!existsSync(legacyPath)) {
+    return existsSync(configPath) ? profileStoreFromConfig(configPath) : { version: 1, profiles: [] };
+  }
+  const legacy = loadProfileStore(legacyPath);
+  // Sem perfil nem seleção não há o que importar: não cria `config.json` (S3).
+  if (legacy.profiles.length > 0 || legacy.activeProfileId !== undefined) importProfiles(configPath, legacy);
+  saveHomeState({ ...state, migrations: { ...state.migrations, providers: true } }, stateFile);
+  return profileStoreFromConfig(configPath);
 }
 
 /** Valida antes de gravar; escrita atômica com modo 0600 no POSIX. */
@@ -578,7 +707,13 @@ export function loadEffectiveConfig(
     && !declaredModels.some((model) => isPlainObject(model) && `${String(model.provider)}/${String(model.id)}` === declaredAgent.model)) {
     throw new ConfigError(`config inválida: "agent.model" referencia o modelo "${declaredAgent.model}", que não está declarado em "models"`);
   }
-  const store = loadProfileStore(opts.storePath ?? profilesPath(homeEnv));
+  // Store legado só é lido sem camada global ou com store injetado; a migração
+  // para `config.json` acontece no caminho de produção (`loadGlobalProfileStore`).
+  const store = opts.storePath !== undefined
+    ? loadProfileStore(opts.storePath)
+    : useGlobal
+      ? loadGlobalProfileStore(homeEnv)
+      : loadProfileStore(profilesPath(homeEnv));
   const envProfile = profileFromEnv(env);
   return resolveEffectiveConfig({
     ...(project === undefined ? {} : { project }),

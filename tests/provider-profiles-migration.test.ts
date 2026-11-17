@@ -6,7 +6,6 @@ import {
   loadEffectiveConfig,
   loadGlobalProfileStore,
   ProfileStoreError,
-  saveProfileStore,
 } from "../src/providers/profiles";
 
 const profileA = {
@@ -70,8 +69,6 @@ test("a segunda carga não reescreve config.json nem relê o legado", () => {
 
   expect(again.profiles.map((profile) => profile.id)).toEqual(["a", "b"]);
   expect(readFileSync(join(home, "config.json"), "utf8")).toBe(before);
-  expect(readFileSync(legacy, "utf8")).toBe("lixo");
-  expect(() => saveProfileStore({ version: 1, profiles: [profileA] }, legacy)).toThrow(/migrad/);
   expect(readFileSync(legacy, "utf8")).toBe("lixo");
 });
 

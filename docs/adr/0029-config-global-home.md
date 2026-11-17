@@ -29,6 +29,7 @@ Após migrar providers, `config.json` é a fonte de verdade também para o geren
 
 - Ganho: preferências de usuário são reutilizadas entre projetos com fronteira clara para trust e segredos.
 - Custo: o loader deve validar as camadas antes de executar; projeto não pode relaxar políticas globais.
+- Custo: depois da migração, a seleção ativa acompanha os perfis em `config.json` (`activeProfileId`) e o store legado não é mais lido nem aceita escrita; a TUI e `providers vault-import` ainda apontam para `providers.json` e ficam para o slice seguinte de #401.
 - Invariantes afetados: I-01, I-03, I-11 e I-17.
 
 ## Alternativas descartadas
