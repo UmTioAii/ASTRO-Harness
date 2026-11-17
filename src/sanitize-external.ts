@@ -53,9 +53,9 @@ const REDACT_ENV = new RegExp(
 
 const REDACTED = "[REDACTED]";
 
-/** Marcadores de bloco PEM; `REDACT_PEM` e os leitores por faixa usam o mesmo par. */
-export const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
-export const PRIVATE_KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
+/** Marcadores de bloco PEM (OpenSSH/RSA/PGP); `REDACT_PEM` e os leitores por faixa usam o mesmo par. */
+export const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/;
+export const PRIVATE_KEY_END = /-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/;
 
 // JWT (header eyJ…, reusa o prefixo de `src/secrets.ts`) e bloco PEM de chave privada.
 const REDACT_JWT = new RegExp(`\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b`, "g");

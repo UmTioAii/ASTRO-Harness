@@ -26,6 +26,7 @@ import { effectiveOutputCap } from "../output-limit";
 import { Registry, type ModelEntry } from "../core/registry";
 import { Ledger } from "../ledger";
 import { isPermissionMode, resolveAstroHome, resolvePermissionMode, type PermissionMode } from "../permissions";
+import { canonicalize } from "../tools/paths";
 import { readAgentsMd } from "../spawn";
 import { forceCompaction, recordCompactionSuccess } from "../compaction/breaker";
 import { assertWithinQuota, quotaStatus, type QuotaStatus } from "../quota";
@@ -355,11 +356,11 @@ export class AgentSession {
     return this.#config.attachments.directory.showHidden;
   }
 
-  /** Ledger e audit resolvidos: estado do harness que nunca entra como anexo (I-11, #392). */
+  /** Ledger e audit canônicos: estado do harness que nunca entra como anexo (I-11, #392). */
   attachmentProtectedPaths(): readonly string[] {
     return [
-      resolvePath(this.#cwd, this.#config.paths.ledger),
-      resolvePath(this.#cwd, this.#config.paths.audit),
+      canonicalize(resolvePath(this.#cwd, this.#config.paths.ledger)),
+      canonicalize(resolvePath(this.#cwd, this.#config.paths.audit)),
     ];
   }
 
