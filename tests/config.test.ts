@@ -135,6 +135,17 @@ describe("agents (F3-1)", () => {
   });
 });
 
+describe("spawn (A11)", () => {
+  test("paralelo é opt-in e o valor precisa ser booleano", () => {
+    expect(validateConfig(structuredClone(valid)).spawn).toBeUndefined();
+    const raw = structuredClone(valid) as typeof valid & { spawn?: { parallel?: unknown } };
+    raw.spawn = { parallel: true };
+    expect(validateConfig(raw).spawn?.parallel).toBe(true);
+    raw.spawn = { parallel: "yes" };
+    expect(() => validateConfig(raw)).toThrow(/spawn\.parallel/);
+  });
+});
+
 describe("handoff (F-24)", () => {
   test("sem seção handoff o ackTimeoutMs default é 30000 (D-15)", () => {
     const cfg = validateConfig(structuredClone(valid));
