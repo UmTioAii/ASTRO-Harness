@@ -1161,13 +1161,18 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         payload: { reason: "max_steps" },
       });
       // #473: a mensagem nomeia o limite que disparou, o valor e a setting.
+      // Multi-agent: o teto do agent nomeado (`agents.<nome>.maxSteps`) vem no erro.
       // `run.maxTurns` só capa `agent.maxSteps` (Q-01/L2): se é o menor, é ele quem disparou.
       const turnCap = config.run?.maxTurns;
-      const turnBinding = typeof turnCap === "number" && turnCap < config.agent.maxSteps;
+      const turnBinding = error.agentName === undefined
+        && typeof turnCap === "number" && turnCap < config.agent.maxSteps;
+      const namedField = error.agentName === undefined ? undefined : `agents.${error.agentName}.maxSteps`;
       throw new Error(
-        turnBinding
-          ? `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite de turnos "run.maxTurns" = ${turnCap}; ajuste "run.maxTurns" na configuração`
-          : `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "agent.maxSteps" = ${config.agent.maxSteps}; ajuste "agent.maxSteps" na configuração`,
+        namedField !== undefined
+          ? `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "${namedField}" = ${error.maxSteps}; ajuste "${namedField}" na configuração`
+          : turnBinding
+            ? `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite de turnos "run.maxTurns" = ${turnCap}; ajuste "run.maxTurns" na configuração`
+            : `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "agent.maxSteps" = ${config.agent.maxSteps}; ajuste "agent.maxSteps" na configuração`,
         { cause: error },
       );
     }
