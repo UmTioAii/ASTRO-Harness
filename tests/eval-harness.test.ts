@@ -57,12 +57,13 @@ describe("eval harness (F5-2)", () => {
     expect(report.passRate).toBe(1);
     expect(report.regressions).toEqual([]);
     expect(report.cases.every((c) => c.passed)).toBe(true);
-    expect(report.cases.every((c) => c.tokens > 0)).toBe(true);
+    // Dois cenários não chamam provider (falha esperada de skill e health check).
+    expect(report.cases.filter((c) => c.tokens > 0).length).toBeGreaterThanOrEqual(63);
     expect(report.cases.every((c) => c.latencyMs >= 0)).toBe(true);
     // relatório gravado
     const saved = JSON.parse(readFileSync(reportPath, "utf8")) as EvalReport;
     expect(saved.total).toBe(65);
-  });
+  }, 30000);
 
   test("runCase detecta divergência quando o esperado é sabotado", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-sabot-"));
@@ -140,6 +141,6 @@ describe("eval harness (F5-2)", () => {
     const report = await runEval({ goldenRoot: GOLDEN_ROOT, mock: true, baselinePath });
     expect(report.regressions).toEqual([]);
     expect(evalFailsThreshold(report, 0.85)).toBe(false);
-    // full-dataset mock eval: 4486ms on windows-latest CI at main (default cap 5000ms) — #312
+    // full-dataset mock eval: ~9s local com os 15 cenários (#59); CI windows pode ser mais lento.
   }, 60000);
 });

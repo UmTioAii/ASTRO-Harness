@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "kind": "app",
+  "env": {
+    "EVAL_KEY": "eval-provider-secret"
+  },
+  "config": {
+    "agent": {
+      "model": "mock/mock-1",
+      "maxSteps": 4,
+      "tools": [
+        "read_file"
+      ]
+    }
+  },
+  "turns": [],
+  "expect": {
+    "error": "allowlist",
+    "audit": [
+      "run.stopped"
+    ],
+    "auditAbsent": [
+      "skill.loaded",
+      "tool.call"
+    ],
+    "requests": 0,
+    "absentFiles": [
+      "out/deploy.txt"
+    ]
+  }
+}
