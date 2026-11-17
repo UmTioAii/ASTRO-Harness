@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -212,9 +212,11 @@ describe("attachment resume (ADR-0026, #392)", () => {
   });
 
   test("SessionApi save/load preserva ref/hash e resume reidrata a imagem", () => {
-    const { root, session, artifact, meta, stop } = setup();
+    const { session, artifact, meta, stop } = setup();
     const saved = artifact();
-    const api = new SessionApi(join(root, "..", "sessions-api"));
+    const apiDir = mkdtempSync(join(tmpdir(), "astro-session-api-"));
+    dirs.push(apiDir);
+    const api = new SessionApi(apiDir);
     try {
       api.save({ schemaVersion: 1, ...snapshot("s3", meta(saved)) });
       const loaded = api.load("s3");
@@ -230,6 +232,28 @@ describe("attachment resume (ADR-0026, #392)", () => {
       }
     } finally {
       api.close();
+      stop();
+    }
+  });
+
+  test("resume descarta imagem com ref redigido e avisa em vez de abortar", () => {
+    const { session, stop } = setup();
+    const warnings: string[] = [];
+    const warning = spyOn(console, "warn").mockImplementation((message?: unknown) => {
+      warnings.push(String(message));
+    });
+    const chat = session();
+    try {
+      chat.resume(snapshot("s4", {
+        kind: "image", name: "a.png", sizeBytes: 10, mediaType: "image/png",
+        ref: "session-[REDACTED]/[REDACTED]", hash: "[REDACTED]",
+      }));
+      const user = chat.messages.find((message) => message.role === "user");
+      expect(user?.images).toBeUndefined();
+      expect(warnings.join("\n")).toMatch(/ref redigido|ignorada/i);
+    } finally {
+      warning.mockRestore();
+      chat.close();
       stop();
     }
   });
