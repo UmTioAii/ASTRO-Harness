@@ -182,7 +182,8 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     results.push(await benchModel(model, opts.providerFor, runs));
   }
   const report: BenchReport = {
-    schema: 1,
+    // v2 acrescenta successRate/completed/total ao resultado por modelo (v1 não tinha).
+    schema: 2,
     date: new Date().toISOString().slice(0, 10),
     prompts: PROMPTS.length,
     results,
