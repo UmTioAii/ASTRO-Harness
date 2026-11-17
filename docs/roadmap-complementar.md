@@ -72,9 +72,9 @@ Nota: F-13 (`glob`) ficou fora por não ser confirmado como lacuna dos diferenci
 | C2 | Cliente MCP com namespace e saída não confiável (I-15) | planejado | #56 | F-00, F-03, F-09, F-10 | — |
 | C3 | `web_search` e `web_fetch` com bloqueio de destinos internos | planejado | #57 | F-00, F-09, F-11 | — |
 | C4 | Perfis de agente, subagentes com escopo menor (I-02) e blackboard pelo orquestrador (I-18) | planejado | #58 | F-02, F-05, F-07, F-17, F-23, F-24, F-25, F-26 | P-02 |
-| C5 | Gate de conclusão determinístico e golden tasks com N execuções | planejado | #59 | F-14, F-15 | P-01, P-04 |
+| C5 | Gate de conclusão determinístico e golden tasks com N execuções | em andamento: golden 65/65, bench, integração e cobertura entregues; falta o gate de conclusão | #59 | F-14, F-15 | P-01, P-04 |
 | C6 | Fallback, pool de chaves com cooldown, classes de equivalência (I-22) | concluído | #60 | F-01, F-03, F-07, F-19 | P-01 |
-| C7 | Módulos reorganizados, budget por sessão, perfis de ambiente | planejado | #61 | F-02, F-05 | P-01 |
+| C7 | Módulos reorganizados, budget por sessão, perfis de ambiente | em andamento: `src/core`, `src/providers` e `src/doctor.ts` entregues; budget por sessão, perfis de ambiente e event bus pendentes | #61 | F-02, F-05 | P-01 |
 
 C4 inclui o blackboard entre agentes como sub-itens: entradas tipadas (`fact`, `decision`, `task`, `question`, `artifact`, `result`), proveniência completa (agente, provider, modelo, step, `call_id`, hashes dos arquivos de origem), staleness por hash, projeção por agente com orçamento de tokens, resolução de conflito entre entradas e conteúdo externo marcado como não confiável (nunca promovido a `decision` automaticamente).
 
