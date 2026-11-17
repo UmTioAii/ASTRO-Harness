@@ -41,6 +41,26 @@ jobs:
           name: eval-report
           path: eval-report.json
 
+  bench-mock:
+    # Matriz OS × filtro de provider, só com mocks: bench real consome quota e
+    # fica no workflow bench (manual/nightly). O filtro segue `astro bench --models`.
+    name: bench-mock (${{ matrix.os }}, ${{ matrix.provider-filter }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        provider-filter: ["nvidia", "openrouter"]
+    runs-on: ${{ matrix.os }}
+    env:
+      BENCH_PROVIDER_FILTER: ${{ matrix.provider-filter }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - run: bun test tests/bench.test.ts
+
   secrets:
     runs-on: ubuntu-latest
     steps:
