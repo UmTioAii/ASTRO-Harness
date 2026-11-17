@@ -62,6 +62,7 @@ describe("astro doctor CLI (#61)", () => {
       fixes?: unknown;
     };
     expect(parsed.schema).toBe("doctor/v1");
+    expect(Object.keys(parsed).sort()).toEqual(["checks", "schema", "summary"]);
     expect(Array.isArray(parsed.checks)).toBe(true);
     for (const check of parsed.checks) {
       expect(["ok", "warn", "fail"]).toContain(check.level);
@@ -104,6 +105,57 @@ describe("astro doctor CLI (#61)", () => {
     const secondJson = JSON.parse(second.out) as { fixes: { applied: string[]; errors: string[] } };
     expect(secondJson.fixes.applied).toEqual([]);
     expect(secondJson.fixes.errors).toEqual([]);
+  });
+
+  test("--fix recusa ASTRO_HOME relativo e não cria o diretório no cwd", async () => {
+    const dir = sandbox();
+    const { out, code } = await run(["doctor", "--json", "--fix"], dir, { ASTRO_HOME: ".astro" });
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out) as {
+      checks: Array<{ label: string; level: string; detail?: string }>;
+      fixes: { applied: string[]; errors: string[] };
+    };
+    expect(parsed.fixes.applied).toEqual([]);
+    expect(parsed.fixes.errors.length).toBeGreaterThan(0);
+    expect(existsSync(join(dir, ".astro"))).toBe(false);
+    const home = parsed.checks.find((check) => check.label === "astro home");
+    expect(home?.level).toBe("fail");
+    expect(home?.detail).toContain("absoluto");
+  });
+
+  test("--fix recusa ASTRO_HOME com .. e não cria o destino fora do cwd", async () => {
+    const dir = sandbox();
+    const escapeName = `astro-doctor-escape-${process.pid}-${Date.now()}`;
+    const escape = join(dir, "..", escapeName);
+    dirs.push(escape);
+    const { out, code } = await run(["doctor", "--json", "--fix"], dir, {
+      ASTRO_HOME: join("..", escapeName),
+    });
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out) as { fixes: { applied: string[]; errors: string[] } };
+    expect(parsed.fixes.applied).toEqual([]);
+    expect(parsed.fixes.errors.length).toBeGreaterThan(0);
+    expect(existsSync(escape)).toBe(false);
+  });
+
+  test("--fix aceita ASTRO_HOME absoluto dentro do cwd, uma vez e idempotente", async () => {
+    const dir = sandbox();
+    const home = join(dir, "home");
+    const env = { ASTRO_HOME: home };
+
+    const first = await run(["doctor", "--json", "--fix"], dir, env);
+    const firstJson = JSON.parse(first.out) as {
+      fixes: { applied: string[]; errors: string[] };
+    };
+    expect(Object.keys(firstJson).sort()).toEqual(["checks", "fixes", "schema", "summary"]);
+    expect(firstJson.fixes.errors).toEqual([]);
+    expect(firstJson.fixes.applied).toHaveLength(1);
+    expect(existsSync(home)).toBe(true);
+
+    const second = await run(["doctor", "--json", "--fix"], dir, env);
+    const secondJson = JSON.parse(second.out) as { fixes: { applied: string[]; errors: string[] } };
+    expect(secondJson.fixes.errors).toEqual([]);
+    expect(secondJson.fixes.applied).toEqual([]);
   });
 
   test("--fix falha fechado quando ASTRO_HOME é arquivo, sem vazar o caminho-sentinela", async () => {

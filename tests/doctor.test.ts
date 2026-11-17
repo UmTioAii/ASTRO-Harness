@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   applyFixes,
   doctorJson,
@@ -274,4 +274,82 @@ test("applyFixes não sobrescreve ASTRO_HOME que é arquivo", () => {
   expect(result.applied).toEqual([]);
   expect(result.errors).toHaveLength(1);
   expect(result.errors[0]).toContain("diretório");
+});
+
+test("applyFixes recusa ASTRO_HOME relativo sem criar nada", () => {
+  const base = sandbox();
+  const relative = `.astro-doctor-${process.pid}-${Date.now()}`;
+  const result = applyFixes({ ...process.env, ASTRO_HOME: relative });
+  expect(result.applied).toEqual([]);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain("absoluto");
+  expect(existsSync(join(base, relative))).toBe(false);
+  expect(existsSync(join(process.cwd(), relative))).toBe(false);
+});
+
+test("applyFixes recusa ASTRO_HOME absoluto com .. sem criar o destino resolvido", () => {
+  const base = sandbox();
+  // `..` literal: `join` normalizaria o segmento e o teste não exercitaria a guarda.
+  const escape = `${base}${sep}..${sep}astro-doctor-escape-${process.pid}-${Date.now()}`;
+  dirs.push(escape);
+  const result = applyFixes({ ...process.env, ASTRO_HOME: escape });
+  expect(result.applied).toEqual([]);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain("..");
+  expect(existsSync(escape)).toBe(false);
+});
+
+test("applyFixes aceita ASTRO_HOME absoluto dentro do cwd, uma vez e idempotente", () => {
+  const base = sandbox();
+  const home = join(base, "state", "home");
+  const env = { ...process.env, ASTRO_HOME: home };
+
+  const first = applyFixes(env);
+  expect(first.errors).toEqual([]);
+  expect(first.applied).toHaveLength(1);
+  expect(existsSync(home)).toBe(true);
+  if (process.platform !== "win32") {
+    expect(statSync(home).mode & 0o777).toBe(0o700);
+  }
+
+  const second = applyFixes(env);
+  expect(second.errors).toEqual([]);
+  expect(second.applied).toEqual([]);
+});
+
+test("applyFixes recusa ASTRO_HOME que é link simbólico e não escreve pelo link", () => {
+  const base = sandbox();
+  const target = join(base, "missing-target");
+  const home = join(base, "linked-home");
+  symlinkSync(target, home, process.platform === "win32" ? "junction" : "dir");
+
+  const result = applyFixes({ ...process.env, ASTRO_HOME: home });
+  expect(result.applied).toEqual([]);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain("link");
+});
+
+test("check da astro home falha quando o valor resolvido é inválido", () => {
+  const report = runChecks(facts({
+    astroHome: { path: ".astro", exists: false, writable: false, error: 'ASTRO_HOME precisa ser um caminho absoluto: .astro' },
+  }));
+  const check = report.checks.find((item) => item.label === "astro home");
+  expect(check?.level).toBe("fail");
+  expect(check?.detail).toContain("absoluto");
+  expect(exitCode(report)).toBe(1);
+});
+
+test("sanitizeCheck redige também o label do check", () => {
+  const secret = ["sk", "-", "live", "-", "SECRET", "123456789"].join("");
+  const report = runChecks(facts({
+    config: {
+      path: "astro.config.json",
+      present: true,
+      providers: [{ id: secret, credentialRef: "KEY" }],
+    },
+    env: { KEY: "present" },
+  }));
+  const text = lines(report);
+  expect(text).toContain("[REDACTED]");
+  expect(text).not.toContain(secret);
 });
