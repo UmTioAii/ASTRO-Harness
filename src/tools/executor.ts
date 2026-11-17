@@ -173,7 +173,7 @@ export class ToolExecutor {
     if (step !== undefined && journal !== undefined) {
       const id = callId(ctx.run, step, call);
       const tool = this.byName.get(call.name);
-      const cached = tool?.manifest.idempotent === true ? journal.lookup(id) : undefined;
+      const cached = tool?.manifest?.idempotent === true ? journal.lookup(id) : undefined;
       if (cached !== undefined) {
         // Chamada suprimida NÃO emite tool.call/tool.result: as métricas de
         // duração continuam medindo só execuções reais.
@@ -252,6 +252,19 @@ export class ToolExecutor {
         payload: { name: call.name, reason },
       });
       return failure(reason);
+    }
+    // Manifesto inválido falha fechado antes de qualquer decisão (#264): sem
+    // `class` válida o gate não pode escolher entre allow/ask/deny e o
+    // `requiredPermission` não pode tocar um manifesto ausente.
+    const problem = manifestProblem(tool.manifest);
+    if (problem !== undefined) {
+      this.auditRef.append({
+        run: ctx.run,
+        agent: ctx.agent,
+        tipo: "tool.denied",
+        payload: { name: call.name, reason: "invalid_manifest" },
+      });
+      return { ...failure(`tool "${call.name}" recusada: ${problem}`), code: "invalid_manifest" };
     }
     // Perfil do agent (#58): a permissão mais restritiva entre I-01 e o perfil vence
     const required = requiredPermission(tool.manifest);
@@ -337,19 +350,6 @@ export class ToolExecutor {
     call: ToolCall,
     input: unknown,
   ): Promise<ToolResult | undefined> {
-    // Manifesto inválido falha fechado antes de qualquer decisão (#264): sem
-    // `class` válida o gate não pode escolher entre allow/ask/deny.
-    const problem = manifestProblem(tool.manifest);
-    if (problem !== undefined) {
-      this.auditRef.append({
-        run: ctx.run,
-        agent: ctx.agent,
-        tipo: "tool.denied",
-        payload: { name: call.name, reason: "invalid_manifest" },
-      });
-      return { ...failure(`tool "${call.name}" recusada: ${problem}`), code: "invalid_manifest" };
-    }
-
     // Hard-block de path (ADR-0027, #391 slice 1): precedência sobre a MATRIX —
     // `hard-block` é deny em todos os modos, inclusive `bypass`.
     const hardBlocked = this.hardBlockGate(ctx, call, input);
