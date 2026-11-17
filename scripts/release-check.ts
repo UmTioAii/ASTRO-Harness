@@ -1,15 +1,18 @@
 /**
  * Gate local de release: roda qualidade opcional (typecheck + bun test), build,
  * smoke, `npm pack`, instala o tarball em um diretório temporário limpo e valida
- * `npx astro --help`. Nunca publica, nunca imprime saída sem redigir segredos e
- * falha fechado em qualquer erro, inclusive na limpeza.
+ * `npx astro --help`. O pacote sob teste é local, mas as dependências de runtime
+ * (`ink`, `react`, `bun`) ainda são resolvidas pelo registry. Nunca publica,
+ * nunca imprime saída sem redigir segredos e falha fechado em qualquer erro,
+ * inclusive na limpeza.
  *
  * Uso: bun scripts/release-check.ts [--skip-tests] [--json]
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { redactSecrets } from "../src/sanitize-external";
+import { sanitizedEnv } from "../src/tools/run-command";
 
 export type StepId = "typecheck" | "test" | "build" | "smoke" | "pack" | "install" | "help";
 export type StepStatus = "passed" | "failed" | "skipped";
@@ -21,6 +24,8 @@ export interface PlannedStep {
   bin: string;
   args: string[];
   cwd: string;
+  /** `sanitized` remove segredos do ambiente antes de rodar npm/npx. */
+  envMode: "inherit" | "sanitized";
   /** Linha exibida ao usuário; nunca contém segredo. */
   display: string;
 }
@@ -97,6 +102,7 @@ const MAX_OUTPUT_CHARS = 8_000;
 const USAGE = `Uso: bun scripts/release-check.ts [--skip-tests] [--json]
 
 Gate local de release. Não publica nada.
+O pacote sob teste é local; dependências de runtime vêm do registry.
   --skip-tests  pula typecheck e bun test; build, smoke, pack e instalação continuam
   --json        imprime só o resumo JSON ao final
   --help        mostra esta ajuda
@@ -128,6 +134,56 @@ export function tempDirPrefix(name: string): string {
   return `${TEMP_PREFIX}${packageSlug(name)}-`;
 }
 
+const BASE_ENV_KEYS = new Set([
+  "PATH",
+  "HOME",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "SYSTEMROOT",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "COMSPEC",
+  "PATHEXT",
+]);
+
+const NPM_CONFIG_ALLOW = new Set([
+  "NPM_CONFIG_REGISTRY",
+  "NPM_CONFIG_CACHE",
+  "NPM_CONFIG_USERCONFIG",
+  "NPM_CONFIG_GLOBALCONFIG",
+  "NPM_CONFIG_PREFIX",
+  "NPM_CONFIG_PROXY",
+  "NPM_CONFIG_HTTPS_PROXY",
+  "NPM_CONFIG_NOPROXY",
+  "NPM_CONFIG_STRICT_SSL",
+  "NPM_CONFIG_CAFILE",
+  "NPM_CONFIG_FETCH_RETRIES",
+  "NPM_CONFIG_FETCH_TIMEOUT",
+  "NPM_CONFIG_LOGLEVEL",
+  "NPM_CONFIG_PREFER_OFFLINE",
+  "NPM_CONFIG_OFFLINE",
+  "NPM_CONFIG_AUDIT",
+  "NPM_CONFIG_FUND",
+  "NPM_CONFIG_YES",
+  "NPM_CONFIG_SCRIPT_SHELL",
+]);
+
+/**
+ * Ambiente das etapas npm/npx: preserva PATH/HOME/APPDATA/etc. e apenas
+ * `npm_config_*` não secreto. Tokens de npm e chaves de provider não passam
+ * para os lifecycle scripts do `npm install` (I-03).
+ */
+export function stepEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(sanitizedEnv(source))) {
+    const upper = name.toUpperCase();
+    if (BASE_ENV_KEYS.has(upper) || NPM_CONFIG_ALLOW.has(upper)) env[name] = value;
+  }
+  return env;
+}
+
 function quoteDisplay(value: string): string {
   return /\s/.test(value) ? `"${value}"` : value;
 }
@@ -155,6 +211,7 @@ export function createPlan(input: PlanInput): ReleasePlan {
       bin: "bun",
       args: ["run", "typecheck"],
       cwd: input.root,
+      envMode: "inherit",
       display: "bun run typecheck",
     });
     steps.push({
@@ -163,6 +220,7 @@ export function createPlan(input: PlanInput): ReleasePlan {
       bin: "bun",
       args: ["test"],
       cwd: input.root,
+      envMode: "inherit",
       display: "bun test",
     });
   }
@@ -173,6 +231,7 @@ export function createPlan(input: PlanInput): ReleasePlan {
     bin: "bun",
     args: ["run", "build"],
     cwd: input.root,
+    envMode: "inherit",
     display: "bun run build",
   });
   steps.push({
@@ -181,6 +240,7 @@ export function createPlan(input: PlanInput): ReleasePlan {
     bin: "bun",
     args: ["run", "smoke"],
     cwd: input.root,
+    envMode: "inherit",
     display: "bun run smoke",
   });
   steps.push({
@@ -189,6 +249,7 @@ export function createPlan(input: PlanInput): ReleasePlan {
     bin: "npm",
     args: ["pack", "--pack-destination", input.tempDir],
     cwd: input.root,
+    envMode: "sanitized",
     display: `npm pack --pack-destination ${quoteDisplay(input.tempDir)}`,
   });
   steps.push({
@@ -197,6 +258,7 @@ export function createPlan(input: PlanInput): ReleasePlan {
     bin: "npm",
     args: ["install", "--no-save", "--no-audit", "--no-fund", tarball],
     cwd: input.tempDir,
+    envMode: "sanitized",
     display: `npm install --no-save --no-audit --no-fund ${quoteDisplay(tarball)}`,
   });
   steps.push({
@@ -205,6 +267,7 @@ export function createPlan(input: PlanInput): ReleasePlan {
     bin: "npx",
     args: ["--no-install", "astro", "--help"],
     cwd: input.tempDir,
+    envMode: "sanitized",
     display: "npx --no-install astro --help",
   });
 
@@ -248,29 +311,71 @@ export function readPackageMeta(root: string): PackageMeta {
   return { name: manifest.name, version: manifest.version };
 }
 
-export function prepareTempDir(tempRoot: string, packageName: string): string {
+export type TempWriter = (path: string, content: string) => void;
+
+export function prepareTempDir(
+  tempRoot: string,
+  packageName: string,
+  write: TempWriter = (path, content) => writeFileSync(path, content, "utf8"),
+): string {
   const dir = mkdtempSync(join(tempRoot, tempDirPrefix(packageName)));
-  writeFileSync(
-    join(dir, "package.json"),
-    `${JSON.stringify({ name: "astro-release-check", private: true }, null, 2)}\n`,
-    "utf8",
-  );
+  try {
+    write(
+      join(dir, "package.json"),
+      `${JSON.stringify({ name: "astro-release-check", private: true }, null, 2)}\n`,
+    );
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
   return dir;
 }
 
 export function removeTempDir(tempRoot: string, tempDir: string): void {
-  if (!isInside(tempRoot, tempDir) || !basename(tempDir).startsWith(TEMP_PREFIX)) {
+  const root = resolve(tempRoot);
+  const dir = resolve(tempDir);
+  if (!isInside(root, dir) || !basename(dir).startsWith(TEMP_PREFIX)) {
     throw new Error(`recusando remover diretório temporário fora do padrão: ${tempDir}`);
   }
-  rmSync(tempDir, { recursive: true, force: true });
+  if (existsSync(dir)) {
+    let realRoot: string;
+    let realDir: string;
+    try {
+      realRoot = realpathSync(root);
+      realDir = realpathSync(dir);
+    } catch {
+      throw new Error(`recusando remover diretório temporário não resolvido: ${tempDir}`);
+    }
+    if (!isInside(realRoot, realDir) || !basename(realDir).startsWith(TEMP_PREFIX)) {
+      throw new Error(`recusando remover diretório temporário que resolve para fora: ${tempDir}`);
+    }
+  }
+  rmSync(dir, { recursive: true, force: true });
 }
 
 /** Últimas linhas da saída, com segredos redigidos e tamanho limitado. */
 export function tailForFailure(output: string, maxLines = 40): string {
-  const raw = output.length > MAX_OUTPUT_CHARS * 2 ? output.slice(-MAX_OUTPUT_CHARS * 2) : output;
-  const redacted = redactSecrets(raw);
+  const redacted = redactSecrets(output);
   const clipped = redacted.length > MAX_OUTPUT_CHARS ? redacted.slice(-MAX_OUTPUT_CHARS) : redacted;
   return clipped.trimEnd().split(/\r?\n/).slice(-maxLines).join("\n");
+}
+
+/** Limpeza de melhor esforço em Ctrl-C/SIGTERM; sempre encerra com código convencional. */
+export function cleanupOnSignal(
+  tempRoot: string,
+  tempDir: string,
+  signal: "SIGINT" | "SIGTERM",
+  deps: {
+    remove?: (root: string, dir: string) => void;
+    exit?: (code: number) => void;
+  } = {},
+): void {
+  try {
+    (deps.remove ?? removeTempDir)(tempRoot, tempDir);
+  } catch {
+    // O sinal já encerra o processo; não mascarar o motivo original.
+  }
+  (deps.exit ?? ((code: number) => process.exit(code)))(signal === "SIGINT" ? 130 : 143);
 }
 
 function commandFor(plan: ReleasePlan, id: StepId): string {
@@ -304,11 +409,12 @@ function runPlannedStep(step: PlannedStep): StepOutcome {
   if (bin === null) {
     return { exitCode: null, output: "", error: `comando não encontrado: ${step.bin}` };
   }
+  const env = step.envMode === "sanitized" ? stepEnv(process.env) : process.env;
   try {
     const proc = Bun.spawnSync({
       cmd: [bin, ...step.args],
       cwd: step.cwd,
-      env: process.env,
+      env,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -406,33 +512,44 @@ function main(): number {
   try {
     meta = readPackageMeta(root);
     const tempRoot = tmpdir();
-    tempDir = prepareTempDir(tempRoot, meta.name);
-    const plan = createPlan({
-      root,
-      tempRoot,
-      tempDir,
-      packageName: meta.name,
-      version: meta.version,
-      skipTests: options.skipTests,
-    });
+    const created = prepareTempDir(tempRoot, meta.name);
+    tempDir = created;
+    const onSigint = () => cleanupOnSignal(tempRoot, created, "SIGINT");
+    const onSigterm = () => cleanupOnSignal(tempRoot, created, "SIGTERM");
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
 
-    if (!options.json) {
-      console.log(`release-check: ${meta.name}@${meta.version}`);
-      console.log(`release-check: temporário ${tempDir}`);
+    try {
+      const plan = createPlan({
+        root,
+        tempRoot,
+        tempDir: created,
+        packageName: meta.name,
+        version: meta.version,
+        skipTests: options.skipTests,
+      });
+
+      if (!options.json) {
+        console.log(`release-check: ${meta.name}@${meta.version}`);
+        console.log(`release-check: temporário ${created}`);
+      }
+
+      const summary = executePlan(plan, {
+        log: options.json ? () => {} : (line) => console.log(line),
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(summary, null, 2));
+      } else if (summary.ok) {
+        console.log(`release-check: ok (${summary.steps.length} etapas)`);
+      } else {
+        console.error(`release-check: falhou em ${summary.failure?.step ?? "etapa desconhecida"}`);
+      }
+      return summary.ok ? 0 : 1;
+    } finally {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
     }
-
-    const summary = executePlan(plan, {
-      log: options.json ? () => {} : (line) => console.log(line),
-    });
-
-    if (options.json) {
-      console.log(JSON.stringify(summary, null, 2));
-    } else if (summary.ok) {
-      console.log(`release-check: ok (${summary.steps.length} etapas)`);
-    } else {
-      console.error(`release-check: falhou em ${summary.failure?.step ?? "etapa desconhecida"}`);
-    }
-    return summary.ok ? 0 : 1;
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error));
     if (tempDir !== undefined) {
