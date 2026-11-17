@@ -4,7 +4,8 @@
  * pacote npm) que exporta `definePlugin()`. Falha de load é isolada: warn no
  * console e o ASTRO segue sem o plugin.
  */
-import { isAbsolute, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Provider } from "./providers/types";
 import { validateManifest } from "./sdk/tool";
 import type { Tool } from "./tools/types";
@@ -72,6 +73,27 @@ async function importPlugin(entry: string, baseDir: string): Promise<unknown> {
   return import(entry);
 }
 
+/** Realpath quando o caminho existe; inexistente segue lexical (import falha depois). */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * Caminho local coberto pelo trust do cwd: dentro de `baseDir`, inclusive
+ * depois de resolver symlink. Fora da pasta, o trust não cobre o código (#255).
+ */
+function localPluginPath(baseDir: string, entry: string): string | undefined {
+  const base = canonicalPath(resolve(baseDir));
+  const real = canonicalPath(resolve(base, entry));
+  const rel = relative(base, real);
+  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return undefined;
+  return real;
+}
+
 /** Extrai a definição do módulo importado (export default ou nomeado). */
 function extractDefinition(mod: unknown): PluginDefinition | null {
   const record = mod as Record<string, unknown>;
@@ -114,6 +136,11 @@ export async function loadPlugins(
       // #255: importar executaria código do projeto ANTES do trust. Sem TTY e
       // pasta não confiável, o plugin local não carrega.
       warn(`plugin local "${entry}" não carrega: pasta do projeto não confiável (trust pendente); ignorado`);
+      continue;
+    }
+    if (local && localPluginPath(baseDir, entry) === undefined) {
+      // #255: trust da pasta não cobre `../` nem absoluto fora do cwd (symlink incluso).
+      warn(`plugin local "${entry}" fora do cwd do projeto; ignorado`);
       continue;
     }
     try {

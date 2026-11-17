@@ -620,7 +620,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   // Plugins locais (#255, P0): só depois do trust/aprovação. Sem TTY e pasta
   // não confiável, o módulo não é importado (config não executa código).
   const loaded = await loadPlugins(config.plugins ?? [], {
-    allowlist: pluginAllowlistFromEnv(),
+    allowlist: pluginAllowlistFromEnv(env),
     localTrusted: cwdTrusted,
     baseDir: cwd,
   });

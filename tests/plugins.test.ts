@@ -135,7 +135,7 @@ describe("plugin system (F7-1)", () => {
 
   test("loadPlugins carrega tool e provider factory de arquivo .ts", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-plugin-"));
-    const loaded = await loadPlugins([writePlugin(dir)], { localTrusted: true });
+    const loaded = await loadPlugins([writePlugin(dir)], { localTrusted: true, baseDir: dir });
     expect(loaded.tools).toHaveLength(1);
     expect(loaded.tools[0]!.manifest.name).toBe("sql_query");
     expect(loaded.providerFactories.size).toBe(1);
@@ -155,7 +155,7 @@ describe("plugin system (F7-1)", () => {
     const bad = join(dir, "bad-plugin.ts");
     writeFileSync(bad, "export const outra = 1;\n", "utf8");
     const warnings: string[] = [];
-    const loaded = await loadPlugins([bad], { warn: (m) => warnings.push(m), localTrusted: true });
+    const loaded = await loadPlugins([bad], { warn: (m) => warnings.push(m), localTrusted: true, baseDir: dir });
     expect(loaded.tools).toHaveLength(0);
     expect(warnings.some((w) => w.includes("não exporta"))).toBe(true);
   });
@@ -205,7 +205,7 @@ describe("plugin manifest validation (#264, P0)", () => {
     const entry = join(dir, "raw-plugin.ts");
     writeFileSync(entry, RAW_TOOL_PLUGIN, "utf8");
     const warnings: string[] = [];
-    const loaded = await loadPlugins([entry], { localTrusted: true, warn: (m) => warnings.push(m) });
+    const loaded = await loadPlugins([entry], { localTrusted: true, baseDir: dir, warn: (m) => warnings.push(m) });
     expect(loaded.tools).toHaveLength(0);
     expect(warnings.join("\n")).toMatch(/class|inválid/i);
   });
@@ -229,7 +229,7 @@ describe("plugin trust (I-13, #255)", () => {
   test("caminho local não exige allowlist", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-plugin-"));
     const warnings: string[] = [];
-    const loaded = await loadPlugins([writePlugin(dir)], { warn: (m) => warnings.push(m), localTrusted: true });
+    const loaded = await loadPlugins([writePlugin(dir)], { warn: (m) => warnings.push(m), localTrusted: true, baseDir: dir });
     expect(loaded.tools).toHaveLength(1);
     expect(warnings).toHaveLength(0);
   });
