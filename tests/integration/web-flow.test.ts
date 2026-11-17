@@ -16,6 +16,7 @@ function startSearchServer(): SearchMock {
   const state = { requests: 0 };
   const server = Bun.serve({
     port: 0,
+    hostname: "127.0.0.1",
     fetch() {
       state.requests += 1;
       if (state.requests === 1) {
@@ -35,6 +36,7 @@ function startPageServer(): { server: TestServer; url: string } {
   const page = "<html><body><h1>Título</h1><script>evil()</script><p>PAGE-CONTENT</p></body></html>";
   const server = Bun.serve({
     port: 0,
+    hostname: "127.0.0.1",
     fetch: () => new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } }),
   });
   return { server, url: `http://127.0.0.1:${server.port}/page` };

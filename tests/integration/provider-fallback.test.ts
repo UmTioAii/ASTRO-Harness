@@ -7,6 +7,64 @@ import { Ledger } from "../../src/ledger";
 import { testEnv } from "../setup";
 import { newWorkspace, readAudit, readLedger, removeWorkspace, startDownProvider, startMockProvider, writeConfig } from "./helpers";
 
+test("provider-fallback: erro transitório do primário faz retry e mantém o primário", async () => {
+  let attempts = 0;
+  const primary = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      attempts += 1;
+      if (attempts === 1) return new Response("boom", { status: 500 });
+      const body = (await req.json()) as { model?: string };
+      return Response.json({
+        choices: [{ message: { content: `primário recuperou ${body.model ?? ""}` } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      });
+    },
+  });
+  const backup = startMockProvider([{ content: "backup não deveria atender" }]);
+  const dir = newWorkspace("provider-retry");
+  try {
+    expect(primary.hostname).toBe("127.0.0.1");
+    const configPath = writeConfig(dir, {
+      providers: {
+        primary: {
+          kind: "openai-compat", baseUrl: `http://127.0.0.1:${primary.port}/v1`, credentialRef: "KEY_A",
+          fallback: ["backup"], maxRetries: 1, retryBackoffMs: 1, priority: 1,
+        },
+        backup: { kind: "openai-compat", baseUrl: backup.baseUrl, credentialRef: "KEY_B", priority: 2 },
+      },
+      models: [
+        { provider: "primary", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+        { provider: "backup", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+      ],
+      agent: { model: "primary/m1", maxSteps: 2, tools: [] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    });
+
+    const report = await runTask({
+      configPath,
+      task: "sobreviva a um erro transitório",
+      cwd: dir,
+      env: testEnv({ KEY_A: "key-a-secret", KEY_B: "key-b-secret" }),
+      approveSwap: () => true,
+    });
+
+    expect(report.final).toContain("primário recuperou");
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(backup.state.calls).toBe(0);
+    const audit = readAudit(dir);
+    expect(audit.events.find((event) => event.tipo === "provider.complete")?.payload)
+      .toMatchObject({ provider: "primary" });
+    const usage = readLedger(dir).filter((entry) => entry.kind === undefined || entry.kind === "usage");
+    expect(usage.every((entry) => entry.provider === "primary")).toBe(true);
+  } finally {
+    primary.stop(true);
+    backup.server.stop(true);
+    removeWorkspace(dir);
+  }
+}, 30000);
+
 test("provider-fallback: primário em outage e o run continua no provider de reserva", async () => {
   const down = startDownProvider();
   const backup = startMockProvider([

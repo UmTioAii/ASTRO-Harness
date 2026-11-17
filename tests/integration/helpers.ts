@@ -16,7 +16,7 @@ export interface Turn {
 
 export interface TestServer {
   port?: number;
-  hostname: string;
+  hostname?: string;
   url: URL;
   stop(force?: boolean): void;
 }
@@ -39,6 +39,7 @@ export function startMockProvider(turns: Turn[]): MockProvider {
   const state: MockProviderState = { calls: 0, bodies: [], models: [], toolsPerCall: [] };
   const server = Bun.serve({
     port: 0,
+    hostname: "127.0.0.1",
     async fetch(req) {
       if (req.method === "GET") return Response.json({ data: [{ id: "mock-1" }] });
       const body = (await req.json()) as {
@@ -74,7 +75,7 @@ export function startMockProvider(turns: Turn[]): MockProvider {
 
 /** Servidor que sempre falha (provider primário em outage). */
 export function startDownProvider(): TestServer {
-  return Bun.serve({ port: 0, fetch: () => new Response("outage", { status: 500 }) });
+  return Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("outage", { status: 500 }) });
 }
 
 export function newWorkspace(prefix: string): string {
