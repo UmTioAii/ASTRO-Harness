@@ -210,6 +210,43 @@ describe("loadAttachment", () => {
     ).rejects.toMatchObject({ code: "attachment_too_large" });
   });
 
+  test("start além do EOF em arquivo pequeno é range inválido", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "curto.txt"), "a\nb\n");
+    await expect(
+      loadAttachment({ ...base(cwd, astroHome), path: "curto.txt", range: "5:5" }),
+    ).rejects.toMatchObject({ code: "attachment_range_invalid" });
+  });
+
+  test("start além do EOF em arquivo acima do teto é range inválido com a contagem real", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "longo.txt"), "a\n".repeat(50));
+    await expect(
+      loadAttachment({ ...base(cwd, astroHome), path: "longo.txt", range: "999:999", maxBytes: 50 }),
+    ).rejects.toThrow(/faixa fora do arquivo.*51 linha/i);
+  });
+
+  test("start existente com offset acima do teto continua sendo erro de teto", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "longo.txt"), "a\n".repeat(50));
+    await expect(
+      loadAttachment({ ...base(cwd, astroHome), path: "longo.txt", range: "30:30", maxBytes: 50 }),
+    ).rejects.toThrow(/teto de leitura/);
+  });
+
+  test("end além do EOF no streaming clampa na última linha", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "longo.txt"), "a\n".repeat(50));
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "longo.txt",
+      range: "21:999",
+      maxBytes: 60,
+    });
+    expect(attachment.data).toBe("a\n".repeat(30));
+    expect(attachment.range).toEqual({ start: 21, end: 51 });
+  });
+
   test("range de arquivo grande rejeita binário na faixa selecionada", async () => {
     const { cwd, astroHome } = sandbox();
     const target = 100_000;
