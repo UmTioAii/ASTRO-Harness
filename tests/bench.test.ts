@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { benchModel, formatMarkdown, runBenchmark, type BenchReport } from "../src/eval/bench";
+import { benchModel, filterModels, formatMarkdown, runBenchmark, type BenchReport } from "../src/eval/bench";
 import type { ModelEntry } from "../src/registry";
 import type { CompletionResponse, Provider } from "../src/provider/types";
 
@@ -95,6 +95,40 @@ describe("benchmark de providers (F5-4)", () => {
       },
     };
     await expect(benchModel(model(), () => down, 1)).rejects.toThrow("provider fora do ar");
+  });
+
+  test("filtro de provider/modelo segue a sintaxe do --models", () => {
+    const models = [
+      model({ provider: "nvidia", id: "n1" }),
+      model({ provider: "openrouter", id: "o1" }),
+      model({ provider: "openrouter", id: "o2" }),
+    ];
+    const ids = (list: ModelEntry[]) => list.map((m) => `${m.provider}/${m.id}`);
+    const all = ids(models);
+    expect(ids(filterModels(models, "nvidia"))).toEqual(["nvidia/n1"]);
+    expect(ids(filterModels(models, "openrouter/o2"))).toEqual(["openrouter/o2"]);
+    expect(ids(filterModels(models, " nvidia , openrouter/o2 "))).toEqual(["nvidia/n1", "openrouter/o2"]);
+    expect(ids(filterModels(models, ""))).toEqual(all);
+    expect(ids(filterModels(models, undefined))).toEqual(all);
+    expect(filterModels(models, "sem-match")).toEqual([]);
+  });
+
+  test("filtro do CI matrix restringe o bench com mocks", async () => {
+    const filter = process.env.BENCH_PROVIDER_FILTER ?? "nvidia";
+    const models = [
+      model({ provider: "nvidia", id: "bench" }),
+      model({ provider: "openrouter", id: "bench" }),
+    ];
+    const selected = filterModels(models, filter);
+    expect(selected.length).toBeGreaterThan(0);
+    expect(selected.every((m) => `${m.provider}/${m.id}`.includes(filter))).toBe(true);
+    const report = await runBenchmark({
+      models: selected,
+      runs: 1,
+      providerFor: () => delayedProvider(1),
+    });
+    expect(report.results.length).toBe(selected.length);
+    expect(report.results.every((r) => r.successRate === 1)).toBe(true);
   });
 
   test("runBenchmark grava JSON e Markdown com data", async () => {
