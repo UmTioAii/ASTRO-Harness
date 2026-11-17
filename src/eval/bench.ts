@@ -30,6 +30,12 @@ export interface BenchModelResult {
   provider: string;
   tags: string[];
   runs: number;
+  /** Chamadas concluídas sem erro / chamadas tentadas (0..1). */
+  successRate: number;
+  /** Chamadas que devolveram resposta. */
+  completed: number;
+  /** Chamadas tentadas: `runs` × prompts da suíte. */
+  total: number;
   latencyMs: BenchLatency;
   tokensInAvg: number;
   tokensOutAvg: number;
@@ -71,6 +77,7 @@ export async function benchModel(
   const latencies: number[] = [];
   let tokensInTotal = 0;
   let tokensOutTotal = 0;
+  let firstError: unknown;
 
   for (let run = 0; run < runs; run++) {
     for (const prompt of PROMPTS) {
@@ -79,19 +86,31 @@ export async function benchModel(
         messages: [{ role: "user", content: prompt }],
       };
       const started = Date.now();
-      const response: CompletionResponse = await provider.complete(req);
-      latencies.push(Date.now() - started);
-      tokensInTotal += response.usage.inputTokens;
-      tokensOutTotal += response.usage.outputTokens;
+      try {
+        const response: CompletionResponse = await provider.complete(req);
+        latencies.push(Date.now() - started);
+        tokensInTotal += response.usage.inputTokens;
+        tokensOutTotal += response.usage.outputTokens;
+      } catch (error) {
+        // Prompt que falha conta na success rate e não interrompe a suíte. O
+        // texto do erro não entra no relatório: pode carregar conteúdo do
+        // provider para JSON/Markdown (I-03).
+        if (firstError === undefined) firstError = error;
+      }
     }
   }
 
-  const calls = latencies.length;
+  const total = runs * PROMPTS.length;
+  const completed = latencies.length;
+  // Provider inteiro fora do ar: não há métrica para reportar, falha alto.
+  if (completed === 0 && total > 0) throw firstError;
+
   const sorted = [...latencies].sort((a, b) => a - b);
-  const tokensInAvg = calls === 0 ? 0 : tokensInTotal / calls;
-  const tokensOutAvg = calls === 0 ? 0 : tokensOutTotal / calls;
-  const latencyAvg = calls === 0 ? 0 : latencies.reduce((a, b) => a + b, 0) / calls;
+  const tokensInAvg = completed === 0 ? 0 : tokensInTotal / completed;
+  const tokensOutAvg = completed === 0 ? 0 : tokensOutTotal / completed;
+  const latencyAvg = completed === 0 ? 0 : latencies.reduce((a, b) => a + b, 0) / completed;
   const tokensPerSec = latencyAvg === 0 ? 0 : tokensOutAvg / (latencyAvg / 1000);
+  const successRate = total === 0 ? 0 : completed / total;
 
   const costPer1kOutUsd =
     model.price !== undefined && model.price.verificado ? model.price.outputPerM : null;
@@ -101,6 +120,9 @@ export async function benchModel(
     provider: model.provider,
     tags: [...model.tags],
     runs,
+    successRate,
+    completed,
+    total,
     latencyMs: {
       min: sorted[0] ?? 0,
       p50: percentile(sorted, 50),
@@ -143,19 +165,28 @@ function fmtCost(v: number | null): string {
   return v === null ? "n/d" : `US$ ${v.toFixed(4)}`;
 }
 
+/** Success rate no formato `80% (4/5)`. */
+function fmtRate(r: BenchModelResult): string {
+  return `${Math.round(r.successRate * 100)}% (${r.completed}/${r.total})`;
+}
+
 /** Tabela Markdown do relatório. */
 export function formatMarkdown(report: BenchReport): string {
+  const completed = report.results.reduce((sum, r) => sum + r.completed, 0);
+  const total = report.results.reduce((sum, r) => sum + r.total, 0);
+  const success = total === 0 ? 0 : Math.round((completed / total) * 100);
   const lines = [
-    `# Benchmark de providers — ${report.date}`,
+    `# Benchmark de providers - ${report.date}`,
     "",
     `Prompts por execução: ${report.prompts}. TTFT requer streaming no contrato Provider (pendente).`,
+    `Sucesso agregado: ${success}% (${completed}/${total}).`,
     "",
-    "| Modelo | Tags | p50 (ms) | p95 (ms) | tokens out/call | tokens/s | custo/1k out |",
-    "|---|---|---|---|---|---|---|",
+    "| Modelo | Tags | Sucesso | p50 (ms) | p95 (ms) | tokens out/call | tokens/s | custo/1k out |",
+    "|---|---|---|---|---|---|---|---|",
   ];
   for (const r of report.results) {
     lines.push(
-      `| ${r.model} | ${r.tags.join(", ")} | ${r.latencyMs.p50} | ${r.latencyMs.p95} | ` +
+      `| ${r.model} | ${r.tags.join(", ")} | ${fmtRate(r)} | ${r.latencyMs.p50} | ${r.latencyMs.p95} | ` +
         `${r.tokensOutAvg} | ${r.tokensPerSec} | ${fmtCost(r.costPer1kOutUsd)} |`,
     );
   }
