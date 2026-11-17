@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { validateConfig, type AstroConfig } from "../src/core/config";
 import { runHealthCheck, testProvider } from "../src/health";
 
@@ -161,7 +164,7 @@ describe("health e providers test leem o cofre (#311 B.2/B.3)", () => {
       const report = await runHealthCheck(config, { SENTINEL_KEY: ENV_SECRET }, { vault: readerWith(entries) });
       const check = report.checks.find((c) => c.name === "provider:mock")!;
       expect(check.status).toBe("ok");
-      expect(check.detail).toContain("vault");
+      expect(check.detail).toMatch(/credencial: vault/);
       expect(server.auth()).toBe(`Bearer ${VAULT_SECRET}`);
       expect(JSON.stringify(report)).not.toContain(VAULT_SECRET);
       expect(JSON.stringify(report)).not.toContain(ENV_SECRET);
@@ -200,7 +203,7 @@ describe("health e providers test leem o cofre (#311 B.2/B.3)", () => {
       });
       const ok = await testProvider(config, "mock", {}, { vault: readerWith(entries) });
       expect(ok.status).toBe("ok");
-      expect(ok.detail).toContain("vault");
+      expect(ok.detail).toMatch(/credencial: vault/);
       expect(server.auth()).toBe(`Bearer ${VAULT_SECRET}`);
       expect(JSON.stringify(ok)).not.toContain(VAULT_SECRET);
       const missing = await testProvider(vaultConfig(VAULT_REF), "mock", {}, { vault: readerWith({}) });
@@ -209,5 +212,36 @@ describe("health e providers test leem o cofre (#311 B.2/B.3)", () => {
     } finally {
       server.stop();
     }
+  });
+
+  test("sem vault.json nenhum: cofre real vazio → down citando o ref, sem crash", async () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-health-novault-"));
+    const report = await runHealthCheck(vaultConfig(VAULT_REF), { ASTRO_HOME: home });
+    const check = report.checks.find((c) => c.name === "provider:mock")!;
+    expect(check.status).toBe("down");
+    expect(check.detail).toContain(VAULT_REF);
+    expect(report.checks.find((c) => c.name === "vault")!.detail).toMatch(/sem cofre/);
+  });
+
+  test("falha ao decifrar no cofre → down citando o ref do provider, nunca o valor", async () => {
+    const reader = {
+      read: (): { value: string } => { throw new Error("falha ao decifrar a credencial no cofre (DPAPI)"); },
+    };
+    const report = await runHealthCheck(vaultConfig(VAULT_REF), {}, { vault: reader });
+    const check = report.checks.find((c) => c.name === "provider:mock")!;
+    expect(check.status).toBe("down");
+    expect(check.detail).toContain(`credencial "${VAULT_REF}"`);
+    expect(check.detail).toContain("DPAPI");
+  });
+
+  test("ref colada com forma de segredo não é ecoada no relatório (I-03)", async () => {
+    const pasted = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const broken = {
+      ...vaultConfig(VAULT_REF),
+      providers: { mock: { kind: "openai-compat", baseUrl: "http://localhost/v1", credentialRef: pasted } },
+    } as unknown as AstroConfig;
+    const report = await runHealthCheck(broken, {}, { vault: readerWith(entries) });
+    expect(report.checks.find((c) => c.name === "provider:mock")!.status).toBe("down");
+    expect(JSON.stringify(report)).not.toContain(pasted);
   });
 });

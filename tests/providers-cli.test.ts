@@ -66,7 +66,7 @@ describe("providers avançados (C6b)", () => {
     expect(missing?.message).toContain("codexx");
   });
 
-  test("providers health: cofre plain vira warn e ref ausente vira down, sem segredo na saída (#311)", async () => {
+  test("providers health/test: cofre plain vira warn e ref ausente vira down, sem segredo na saída (#311)", async () => {
     const SENTINEL = ["sentinel", "-", "vault"].join("");
     const ENV_SENTINEL = ["sentinel", "-", "xyz"].join("");
     const dir = mkdtempSync(join(tmpdir(), "astro-providers-cli-"));
@@ -100,5 +100,16 @@ describe("providers avançados (C6b)", () => {
     expect(out).not.toContain(SENTINEL);
     expect(err).not.toContain(SENTINEL);
     expect(out).not.toContain(ENV_SENTINEL);
+    // `providers test` segue o mesmo contrato de saída (I-03)
+    const probe = Bun.spawn([process.execPath, entry, "providers", "test", "a", "--config", configPath], {
+      cwd: dir, stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, ASTRO_HOME: home, SENTINEL_KEY: ENV_SENTINEL },
+    });
+    const probeOut = await new Response(probe.stdout).text();
+    const probeErr = await new Response(probe.stderr).text();
+    expect(await probe.exited).toBe(1);
+    expect((JSON.parse(probeOut) as { detail?: string }).detail).toContain("vault:cred-missing-0000");
+    expect(probeOut).not.toContain(SENTINEL);
+    expect(probeErr).not.toContain(SENTINEL);
   }, 20_000);
 });
