@@ -7,12 +7,13 @@ import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, 
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { DEFAULT_ATTACHMENTS, loadConfig, type MCPServerConfig } from "../src/config";
+import { DEFAULT_ATTACHMENTS, loadConfig, loadConfigRaw, type MCPServerConfig } from "../src/config";
 import { loadEffectiveConfig } from "../src/provider/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "../src/attachments/store";
 import { headerEnvNames } from "../src/mcp/headers";
 import { resolveAstroHome } from "../src/permissions";
 import { redactSecrets } from "../src/sanitize-external";
+import { isVaultCredentialRef, isVaultRef } from "../src/secrets";
 import { loadSkillsFromRoot } from "../src/skills/loader";
 
 export type CheckLevel = "ok" | "warn" | "fail";
@@ -68,8 +69,20 @@ export interface DoctorFacts {
     error?: string;
     providers?: ProviderFact[];
     mcp?: McpFact;
+    /** Camada global (`$ASTRO_HOME/config.json`), validada só como JSON objeto. */
+    global?: { path: string; present: boolean; error?: string };
   };
-  astroHome: { path: string; exists: boolean; writable: boolean; error?: string };
+  astroHome: {
+    path: string;
+    exists: boolean;
+    writable: boolean;
+    /** Declaração inválida (relativo/`..`): falha fechada. */
+    error?: string;
+    /** Forma incomum aceita na leitura (link sem destino, destino não-diretório). */
+    warning?: string;
+    /** Observação informativa (link simbólico resolvido), sem mudar o nível. */
+    note?: string;
+  };
   attachments: {
     root: string;
     realpath?: string;
@@ -153,6 +166,11 @@ function credentialChecks(
         : { level: "warn", label, detail: "arquivo de credenciais ausente ou ilegível" } satisfies Check;
     }
     if (provider.credentialRef === undefined) return { level: "ok", label, detail: "sem chave" } satisfies Check;
+    if (isVaultRef(provider.credentialRef)) {
+      return isVaultCredentialRef(provider.credentialRef)
+        ? { level: "ok", label, detail: "credencial no cofre local" } satisfies Check
+        : { level: "warn", label, detail: "referência de cofre inválida" } satisfies Check;
+    }
     const present = (env[provider.credentialRef] ?? "").length > 0;
     return present
       ? { level: "ok", label, detail: `${provider.credentialRef} presente` } satisfies Check
@@ -187,10 +205,11 @@ function skillsCheck(fact: SkillsFact | undefined): Check | undefined {
 function diskCheck(fact: DiskFact | undefined): Check | undefined {
   if (fact === undefined) return undefined;
   if (!fact.writable) {
-    return { level: "fail", label: "disco", detail: `${fact.cwd} sem permissão de escrita; ledger/audit não gravam` };
+    return { level: "fail", label: "disco", detail: `${fact.cwd} atributo de escrita do SO negado; ledger/audit podem não gravar` };
   }
   const free = fact.freeBytes === undefined ? "" : ` · ${formatBytes(fact.freeBytes)} livres`;
-  return { level: "ok", label: "disco", detail: `${fact.cwd} gravável${free}` };
+  // `accessSync` vê o atributo do SO, não prova escrita (ACL do Windows pode negar).
+  return { level: "ok", label: "disco", detail: `${fact.cwd} atributo de escrita do SO presente${free} (não é prova de escrita)` };
 }
 
 /** Redação central de label e detalhe: segredo em nome/caminho nunca chega à saída (I-03). */
@@ -240,14 +259,24 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
     if (mcp !== undefined) checks.push(mcp);
   }
 
+  const globalConfig = facts.config.global;
+  if (globalConfig !== undefined && globalConfig.present) {
+    checks.push(globalConfig.error === undefined
+      ? { level: "ok", label: "config global", detail: `${globalConfig.path} válida` }
+      : { level: "fail", label: "config global", detail: globalConfig.error });
+  }
+
   if (facts.astroHome.error !== undefined) {
     checks.push({ level: "fail", label: "astro home", detail: facts.astroHome.error });
+  } else if (facts.astroHome.warning !== undefined) {
+    checks.push({ level: "warn", label: "astro home", detail: `${facts.astroHome.path} ${facts.astroHome.warning}` });
   } else if (!facts.astroHome.exists) {
     checks.push({ level: "warn", label: "astro home", detail: `${facts.astroHome.path} ausente; será criado no primeiro uso` });
   } else if (!facts.astroHome.writable) {
     checks.push({ level: "fail", label: "astro home", detail: `${facts.astroHome.path} sem permissão de escrita` });
   } else {
-    checks.push({ level: "ok", label: "astro home", detail: `${facts.astroHome.path} gravável` });
+    const note = facts.astroHome.note === undefined ? "" : ` · ${facts.astroHome.note}`;
+    checks.push({ level: "ok", label: "astro home", detail: `${facts.astroHome.path} gravável${note}` });
   }
 
   const attachments = facts.attachments;
@@ -310,11 +339,11 @@ interface AstroHomeValidation {
 }
 
 /**
- * `$ASTRO_HOME` é a raiz do estado local: só aceita absoluto, sem segmento
- * `..` e sem link no destino final. Qualquer desvio é fail-closed — nenhuma
- * escrita acontece com caminho relativo, que resolveria contra o cwd.
+ * Validação de escrita: `$ASTRO_HOME` só aceita absoluto, sem segmento `..` e
+ * sem link no destino final. Qualquer desvio é fail-closed — nenhuma escrita
+ * acontece com caminho relativo, que resolveria contra o cwd.
  */
-function validateAstroHome(env: NodeJS.ProcessEnv): AstroHomeValidation {
+function validateAstroHomeForWrite(env: NodeJS.ProcessEnv): AstroHomeValidation {
   const raw = env.ASTRO_HOME?.trim();
   const declared = raw === undefined || raw === "" ? join(homedir(), ".astro") : raw;
   if (!isAbsolute(declared)) {
@@ -341,13 +370,74 @@ function validateAstroHome(env: NodeJS.ProcessEnv): AstroHomeValidation {
   return { path: resolved };
 }
 
+/** Leitura de `$ASTRO_HOME`: aceita link no destino final, como o runtime. */
+interface AstroHomeRead {
+  path: string;
+  error?: string;
+  warning?: string;
+  note?: string;
+}
+
+function realpathOrUndefined(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve `$ASTRO_HOME` para leitura: relativo/`..` continuam fail-closed,
+ * mas um link simbólico é resolvido para o alvo real (o runtime aceita link).
+ * Link sem destino ou alvo que não é diretório vira warn, nunca fail.
+ */
+function resolveAstroHomeForRead(env: NodeJS.ProcessEnv): AstroHomeRead {
+  const raw = env.ASTRO_HOME?.trim();
+  const declared = raw === undefined || raw === "" ? join(homedir(), ".astro") : raw;
+  if (!isAbsolute(declared)) {
+    return { path: declared, error: `ASTRO_HOME precisa ser um caminho absoluto: ${declared}` };
+  }
+  if (declared.split(/[\\/]+/).includes("..")) {
+    return { path: declared, error: `ASTRO_HOME não pode conter "..": ${declared}` };
+  }
+  const resolved = resolve(declared);
+  let link = false;
+  try {
+    link = lstatSync(resolved).isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      const detail = error instanceof Error ? error.message : String(error);
+      return { path: resolved, error: `não foi possível inspecionar ${resolved}: ${detail}` };
+    }
+    return { path: resolved };
+  }
+  if (!link) {
+    try {
+      if (!statSync(resolved).isDirectory()) return { path: resolved, warning: "não é um diretório" };
+    } catch {
+      return { path: resolved };
+    }
+    return { path: resolved };
+  }
+  const target = realpathOrUndefined(resolved);
+  if (target === undefined) {
+    return { path: resolved, warning: "link simbólico sem destino; será criado no primeiro uso" };
+  }
+  try {
+    if (!statSync(target).isDirectory()) return { path: target, warning: "link simbólico não aponta para um diretório" };
+  } catch {
+    return { path: target, warning: "link simbólico sem destino" };
+  }
+  return { path: target, note: "link simbólico" };
+}
+
 /**
  * `--fix`: só estado local seguro e idempotente. Cria `$ASTRO_HOME` (0700)
  * quando ausente; nunca cria a raiz de artefatos, o `.astro` do projeto nem
  * toca em credenciais. Erros saem redigidos e sem derrubar o processo.
  */
 export function applyFixes(env: NodeJS.ProcessEnv = process.env): FixReport {
-  const home = validateAstroHome(env);
+  const home = validateAstroHomeForWrite(env);
   if (home.error !== undefined) return { applied: [], errors: [redactSecrets(home.error)] };
   const applied: string[] = [];
   const errors: string[] = [];
@@ -432,9 +522,26 @@ function readMcpFact(
   };
 }
 
+/** Camada global: só JSON objeto é validado; config parcial é válida por contrato. */
+function readGlobalConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"]["global"] {
+  const home = resolveAstroHomeForRead(env);
+  if (home.error !== undefined) return undefined; // o check de astro home já reporta
+  const path = join(home.path, "config.json");
+  if (!existsSync(path)) return { path, present: false };
+  try {
+    loadConfigRaw(path);
+    return { path, present: true };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { path, present: true, error: redactSecrets(detail) };
+  }
+}
+
 function readConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"] {
   const path = join(process.cwd(), "astro.config.json");
-  if (!existsSync(path)) return { path, present: false };
+  const global = readGlobalConfig(env);
+  const base = { path, ...(global === undefined ? {} : { global }) };
+  if (!existsSync(path)) return { ...base, present: false };
   try {
     const config = loadConfig(path);
     const providers = Object.entries(config.providers).map(([id, provider]) => ({
@@ -447,33 +554,54 @@ function readConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"] {
         ? { credentialsReadable: readableFile(provider.credentialsPath) }
         : {}),
     }));
-    return { path, present: true, providers, mcp: readMcpFact(config.mcpServers, env) };
+    return { ...base, present: true, providers, mcp: readMcpFact(config.mcpServers, env) };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return { path, present: true, error: redactSecrets(detail) };
+    return { ...base, present: true, error: redactSecrets(detail) };
   }
 }
 
 function readAstroHome(env: Record<string, string | undefined>): DoctorFacts["astroHome"] {
-  const home = validateAstroHome(env);
-  if (home.error !== undefined) return { path: home.path, exists: false, writable: false, error: home.error };
-  if (!existsSync(home.path)) return { path: home.path, exists: false, writable: false };
+  const home = resolveAstroHomeForRead(env);
+  const extra = {
+    ...(home.warning === undefined ? {} : { warning: home.warning }),
+    ...(home.note === undefined ? {} : { note: home.note }),
+  };
+  if (home.error !== undefined) {
+    return { path: home.path, exists: false, writable: false, error: home.error, ...extra };
+  }
+  if (!existsSync(home.path)) return { path: home.path, exists: false, writable: false, ...extra };
   try {
     accessSync(home.path, constants.W_OK);
-    return { path: home.path, exists: true, writable: true };
+    return { path: home.path, exists: true, writable: true, ...extra };
   } catch {
-    return { path: home.path, exists: true, writable: false };
+    return { path: home.path, exists: true, writable: false, ...extra };
   }
 }
 
-/** Skills opcionais: carrega as raízes reais e converte avisos em fato (sem prompt, I-03). */
-function collectSkillFacts(env: NodeJS.ProcessEnv): SkillsFact {
+function loadSkillRoot(
+  root: string,
+  source: "project" | "user",
+  warnings: string[],
+): ReturnType<typeof loadSkillsFromRoot> {
+  try {
+    return loadSkillsFromRoot(root, source, (message) => warnings.push(message));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    warnings.push(`raiz ${source} ilegível: ${detail}`);
+    return [];
+  }
+}
+
+/**
+ * Skills opcionais: carrega as raízes reais e converte avisos em fato (sem
+ * prompt, I-03). A raiz do usuário é a mesma do runtime (`~/.astro/skills`),
+ * independente de `$ASTRO_HOME`; fica injetável para teste não tocar o home real.
+ */
+function collectSkillFacts(userRoot: string): SkillsFact {
   const warnings: string[] = [];
-  const project = loadSkillsFromRoot(join(process.cwd(), ".astro", "skills"), "project", (message) => warnings.push(message));
-  const home = validateAstroHome(env);
-  const user = home.error === undefined
-    ? loadSkillsFromRoot(join(home.path, "skills"), "user", (message) => warnings.push(message))
-    : [];
+  const project = loadSkillRoot(join(process.cwd(), ".astro", "skills"), "project", warnings);
+  const user = loadSkillRoot(userRoot, "user", warnings);
   return { project: project.length, user: user.length, warnings: warnings.slice(0, 5) };
 }
 
@@ -488,7 +616,7 @@ function collectDiskFacts(env: NodeJS.ProcessEnv): DiskFact {
   }
   let freeBytes: number | undefined;
   try {
-    const home = validateAstroHome(env);
+    const home = resolveAstroHomeForRead(env);
     const stats = statfsSync(home.error === undefined && existsSync(home.path) ? home.path : cwd);
     const bytes = Number(stats.bavail) * Number(stats.bsize);
     if (Number.isFinite(bytes) && bytes >= 0) freeBytes = bytes;
@@ -604,6 +732,8 @@ export function collectFacts(
     env?: NodeJS.ProcessEnv;
     checkPrivate?: (path: string) => boolean;
     probeWritable?: (path: string) => boolean;
+    /** Raiz de skills do usuário; default é a do runtime (`~/.astro/skills`). */
+    userSkillsRoot?: string;
   } = {},
 ): DoctorFacts {
   const env = options.env ?? process.env;
@@ -616,7 +746,7 @@ export function collectFacts(
     config: readConfig(env),
     astroHome: readAstroHome(env),
     attachments: collectAttachmentFacts(env, options.checkPrivate, options.probeWritable),
-    skills: collectSkillFacts(env),
+    skills: collectSkillFacts(options.userSkillsRoot ?? join(homedir(), ".astro", "skills")),
     disk: collectDiskFacts(env),
     env,
   };
