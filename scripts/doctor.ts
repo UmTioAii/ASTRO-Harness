@@ -3,10 +3,10 @@
  * config, credenciais por NOME e ASTRO_HOME. Nunca imprime valor de segredo (I-03).
  */
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { DEFAULT_ATTACHMENTS, loadConfig, type MCPServerConfig } from "../src/config";
 import { loadEffectiveConfig } from "../src/provider/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "../src/attachments/store";
@@ -69,7 +69,7 @@ export interface DoctorFacts {
     providers?: ProviderFact[];
     mcp?: McpFact;
   };
-  astroHome: { path: string; exists: boolean; writable: boolean };
+  astroHome: { path: string; exists: boolean; writable: boolean; error?: string };
   attachments: {
     root: string;
     realpath?: string;
@@ -193,9 +193,13 @@ function diskCheck(fact: DiskFact | undefined): Check | undefined {
   return { level: "ok", label: "disco", detail: `${fact.cwd} gravável${free}` };
 }
 
-/** Redação central do detalhe: caminho/erro com padrão de segredo nunca chega à saída (I-03). */
+/** Redação central de label e detalhe: segredo em nome/caminho nunca chega à saída (I-03). */
 function sanitizeCheck(check: Check): Check {
-  return check.detail === undefined ? check : { ...check, detail: redactSecrets(check.detail) };
+  return {
+    ...check,
+    label: redactSecrets(check.label),
+    ...(check.detail === undefined ? {} : { detail: redactSecrets(check.detail) }),
+  };
 }
 
 function formatBytes(bytes: number): string {
@@ -236,7 +240,9 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
     if (mcp !== undefined) checks.push(mcp);
   }
 
-  if (!facts.astroHome.exists) {
+  if (facts.astroHome.error !== undefined) {
+    checks.push({ level: "fail", label: "astro home", detail: facts.astroHome.error });
+  } else if (!facts.astroHome.exists) {
     checks.push({ level: "warn", label: "astro home", detail: `${facts.astroHome.path} ausente; será criado no primeiro uso` });
   } else if (!facts.astroHome.writable) {
     checks.push({ level: "fail", label: "astro home", detail: `${facts.astroHome.path} sem permissão de escrita` });
@@ -297,25 +303,62 @@ export function exitCode(report: DoctorReport): 0 | 1 {
   return report.checks.some((check) => check.level === "fail") ? 1 : 0;
 }
 
+/** `$ASTRO_HOME` validado: `path` é o absoluto resolvido; `error` é fail-closed. */
+interface AstroHomeValidation {
+  path: string;
+  error?: string;
+}
+
+/**
+ * `$ASTRO_HOME` é a raiz do estado local: só aceita absoluto, sem segmento
+ * `..` e sem link no destino final. Qualquer desvio é fail-closed — nenhuma
+ * escrita acontece com caminho relativo, que resolveria contra o cwd.
+ */
+function validateAstroHome(env: NodeJS.ProcessEnv): AstroHomeValidation {
+  const raw = env.ASTRO_HOME?.trim();
+  const declared = raw === undefined || raw === "" ? join(homedir(), ".astro") : raw;
+  if (!isAbsolute(declared)) {
+    return { path: declared, error: `ASTRO_HOME precisa ser um caminho absoluto: ${declared}` };
+  }
+  if (declared.split(/[\\/]+/).includes("..")) {
+    return { path: declared, error: `ASTRO_HOME não pode conter "..": ${declared}` };
+  }
+  const resolved = resolve(declared);
+  try {
+    const stats = lstatSync(resolved);
+    if (stats.isSymbolicLink()) {
+      return { path: resolved, error: `ASTRO_HOME não pode ser link simbólico: ${resolved}` };
+    }
+    if (!stats.isDirectory()) {
+      return { path: resolved, error: `${resolved} existe e não é um diretório` };
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      const detail = error instanceof Error ? error.message : String(error);
+      return { path: resolved, error: `não foi possível inspecionar ${resolved}: ${detail}` };
+    }
+  }
+  return { path: resolved };
+}
+
 /**
  * `--fix`: só estado local seguro e idempotente. Cria `$ASTRO_HOME` (0700)
  * quando ausente; nunca cria a raiz de artefatos, o `.astro` do projeto nem
  * toca em credenciais. Erros saem redigidos e sem derrubar o processo.
  */
 export function applyFixes(env: NodeJS.ProcessEnv = process.env): FixReport {
-  const home = resolveAstroHome(env);
+  const home = validateAstroHome(env);
+  if (home.error !== undefined) return { applied: [], errors: [redactSecrets(home.error)] };
   const applied: string[] = [];
   const errors: string[] = [];
   try {
-    if (!existsSync(home)) {
-      mkdirSync(home, { recursive: true, mode: 0o700 });
-      applied.push(redactSecrets(`criado ${home}`));
-    } else if (!statSync(home).isDirectory()) {
-      errors.push(redactSecrets(`${home} existe e não é um diretório`));
+    if (!existsSync(home.path)) {
+      mkdirSync(home.path, { recursive: true, mode: 0o700 });
+      applied.push(redactSecrets(`criado ${home.path}`));
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    errors.push(redactSecrets(`não foi possível criar ${home}: ${detail}`));
+    errors.push(redactSecrets(`não foi possível criar ${home.path}: ${detail}`));
   }
   return { applied, errors };
 }
@@ -412,14 +455,14 @@ function readConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"] {
 }
 
 function readAstroHome(env: Record<string, string | undefined>): DoctorFacts["astroHome"] {
-  const path = resolveAstroHome(env);
-  if (!existsSync(path)) return { path, exists: false, writable: false };
+  const home = validateAstroHome(env);
+  if (home.error !== undefined) return { path: home.path, exists: false, writable: false, error: home.error };
+  if (!existsSync(home.path)) return { path: home.path, exists: false, writable: false };
   try {
-    if (!statSync(path).isDirectory()) return { path, exists: true, writable: false };
-    accessSync(path, constants.W_OK);
-    return { path, exists: true, writable: true };
+    accessSync(home.path, constants.W_OK);
+    return { path: home.path, exists: true, writable: true };
   } catch {
-    return { path, exists: true, writable: false };
+    return { path: home.path, exists: true, writable: false };
   }
 }
 
@@ -427,7 +470,10 @@ function readAstroHome(env: Record<string, string | undefined>): DoctorFacts["as
 function collectSkillFacts(env: NodeJS.ProcessEnv): SkillsFact {
   const warnings: string[] = [];
   const project = loadSkillsFromRoot(join(process.cwd(), ".astro", "skills"), "project", (message) => warnings.push(message));
-  const user = loadSkillsFromRoot(join(resolveAstroHome(env), "skills"), "user", (message) => warnings.push(message));
+  const home = validateAstroHome(env);
+  const user = home.error === undefined
+    ? loadSkillsFromRoot(join(home.path, "skills"), "user", (message) => warnings.push(message))
+    : [];
   return { project: project.length, user: user.length, warnings: warnings.slice(0, 5) };
 }
 
@@ -442,8 +488,8 @@ function collectDiskFacts(env: NodeJS.ProcessEnv): DiskFact {
   }
   let freeBytes: number | undefined;
   try {
-    const home = resolveAstroHome(env);
-    const stats = statfsSync(existsSync(home) ? home : cwd);
+    const home = validateAstroHome(env);
+    const stats = statfsSync(home.error === undefined && existsSync(home.path) ? home.path : cwd);
     const bytes = Number(stats.bavail) * Number(stats.bsize);
     if (Number.isFinite(bytes) && bytes >= 0) freeBytes = bytes;
   } catch {
