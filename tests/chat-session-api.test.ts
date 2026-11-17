@@ -358,6 +358,8 @@ describe("session API JSON migration", () => {
     try {
       expect(api.delete("s1")).toBe(true);
       expect(legacy.list().map(({ id }) => id)).toEqual(["my-s1"]);
+      expect(api.list().map(({ id }) => id)).toEqual(["my-s1"]);
+      expect(warning).not.toHaveBeenCalled(); // `my-s1` não é cópia de `s1`
     } finally {
       warning.mockRestore();
       api.close();
