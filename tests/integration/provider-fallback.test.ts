@@ -5,9 +5,9 @@ import { activeLocks } from "../../src/agent-lock";
 import { runTask } from "../../src/app";
 import { Ledger } from "../../src/ledger";
 import { testEnv } from "../setup";
-import { newWorkspace, readAudit, readLedger, removeWorkspace, startDownProvider, startMockProvider, writeConfig } from "./helpers";
+import { newWorkspace, readAudit, removeWorkspace, startDownProvider, startMockProvider, writeConfig } from "./helpers";
 
-test("provider-fallback: erro transitório do primário faz retry e mantém o primário", async () => {
+test("provider-fallback: adapter retry do primário recupera sem acionar o backup", async () => {
   let attempts = 0;
   const primary = Bun.serve({
     port: 0,
@@ -51,12 +51,13 @@ test("provider-fallback: erro transitório do primário faz retry e mantém o pr
     });
 
     expect(report.final).toContain("primário recuperou");
-    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(attempts).toBe(2);
     expect(backup.state.calls).toBe(0);
     const audit = readAudit(dir);
     expect(audit.events.find((event) => event.tipo === "provider.complete")?.payload)
       .toMatchObject({ provider: "primary" });
-    const usage = readLedger(dir).filter((entry) => entry.kind === undefined || entry.kind === "usage");
+    const usage = new Ledger(join(dir, ".astro", "ledger.jsonl")).readAll();
+    expect(usage).toHaveLength(1);
     expect(usage.every((entry) => entry.provider === "primary")).toBe(true);
   } finally {
     primary.stop(true);
@@ -103,13 +104,14 @@ test("provider-fallback: primário em outage e o run continua no provider de res
     expect(report.final).toBe("fallback concluído");
     expect(readFileSync(join(dir, "out", "fallback.txt"), "utf8")).toBe("fallback served\n");
 
-    const usage = readLedger(dir).filter((entry) => entry.kind === undefined || entry.kind === "usage");
-    expect(usage.length).toBeGreaterThanOrEqual(2);
+    const usage = new Ledger(join(dir, ".astro", "ledger.jsonl")).readAll();
+    expect(usage).toHaveLength(2);
     expect(usage.every((entry) => entry.provider === "backup")).toBe(true);
 
     const audit = readAudit(dir);
     expect(audit.events.some((event) => event.tipo === "provider.failure")).toBe(true);
-    expect(audit.events.some((event) => event.tipo === "provider.complete")).toBe(true);
+    expect(audit.events.find((event) => event.tipo === "provider.complete")?.payload)
+      .toMatchObject({ provider: "backup" });
     expect(audit.events.some((event) => event.tipo === "agent.lock.moved")).toBe(true);
     expect(audit.text.includes("key-a-secret")).toBe(false);
     expect(audit.text.includes("key-b-secret")).toBe(false);

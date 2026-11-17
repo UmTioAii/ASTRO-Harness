@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { runTask } from "../../src/app";
 import { installDockerSpawnMock } from "../helpers/docker-mock";
 import { testEnv } from "../setup";
-import { newWorkspace, readAudit, removeWorkspace, startMockProvider, writeConfig } from "./helpers";
+import { newWorkspace, readAudit, removeWorkspace, requestMessages, startMockProvider, writeConfig } from "./helpers";
 
 const CREATED = "export function greet(name: string): string {\n  return \"oi \" + name;\n}\n";
 const EDITED = "export function greet(name: string): string {\n  return \"olá \" + name;\n}\n";
@@ -58,9 +58,12 @@ test("full-flow: create → edit → run → commit ponta a ponta", async () => 
     const audit = readAudit(dir);
     const toolCalls = audit.events.filter((event) => event.tipo === "tool.call").map((event) => event.payload.name);
     expect(toolCalls).toEqual(["write_file", "edit", "run_command", "run_command"]);
-    expect(audit.text).toContain("run.completed");
+    expect(audit.text.includes("run.completed")).toBe(true);
     expect(audit.events.find((event) => event.tipo === "mode.changed")?.payload.mode).toBe("allow-edits");
     expect(audit.text.includes("test-key")).toBe(false);
+    const runResults = audit.events.filter((event) => event.tipo === "tool.result" && event.payload.name === "run_command");
+    expect(runResults).toHaveLength(2);
+    expect(runResults.every((event) => event.payload.isError === false)).toBe(true);
 
     const commands = docker.runCalls.map((argv) => argv.join(" "));
     expect(commands.some((command) => command.includes("bun test"))).toBe(true);
@@ -106,6 +109,9 @@ test("full-flow: write_file não escapa do workspace por ../ nem por junction", 
     const results = readAudit(dir).events.filter((event) => event.tipo === "tool.result");
     expect(results).toHaveLength(2);
     expect(results.every((event) => event.payload.isError === true)).toBe(true);
+    const toolMessages = requestMessages(provider.state.bodies.at(-1)).filter((message) => message.role === "tool");
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages.every((message) => message.content.includes("fora do diretório"))).toBe(true);
     expect(existsSync(join(dir, "..", "escape.txt"))).toBe(false);
     expect(existsSync(join(outside, "escape.txt"))).toBe(false);
   } finally {

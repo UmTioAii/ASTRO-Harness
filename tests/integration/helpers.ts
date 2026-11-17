@@ -119,13 +119,6 @@ export function readAudit(dir: string): { text: string; events: AuditEvent[] } {
   return { text, events };
 }
 
-export function readLedger(dir: string): Array<Record<string, unknown>> {
-  const text = readFileSync(join(dir, ".astro", "ledger.jsonl"), "utf8");
-  return text.trim() === ""
-    ? []
-    : text.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
 /** Mensagens de um request mock sem cast cego; entradas fora do shape são descartadas. */
 export function requestMessages(body: unknown): Array<{ role: string; content: string }> {
   if (typeof body !== "object" || body === null) return [];

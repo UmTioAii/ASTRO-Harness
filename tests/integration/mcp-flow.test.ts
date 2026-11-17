@@ -101,7 +101,7 @@ test("mcp-flow: descobre a tool, chama o servidor e devolve o conteúdo ao model
   }
 }, 30000);
 
-test("mcp-flow: tool MCP fora da allowlist não é exposta nem chama o servidor", async () => {
+test("mcp-flow: tool MCP fora da allowlist não é exposta nem executa", async () => {
   const mcp = startMcpServer([{ name: "read_file", text: "MCP-FS-CONTENT" }]);
   const provider = startMockProvider([
     { toolCalls: [
@@ -135,7 +135,8 @@ test("mcp-flow: tool MCP fora da allowlist não é exposta nem chama o servidor"
     expect(provider.state.toolsPerCall[0]).toEqual(["write_file"]);
     const denied = readAudit(dir).events.find((event) => event.tipo === "tool.denied");
     expect(denied?.payload.name).toBe("mcp__fs__read_file");
-    expect(mcp.methods).not.toContain("tools/call");
+    expect(mcp.methods.filter((method) => method !== "notifications/initialized"))
+      .toEqual(["initialize", "tools/list"]);
   } finally {
     provider.server.stop(true);
     mcp.server.stop(true);
@@ -143,7 +144,7 @@ test("mcp-flow: tool MCP fora da allowlist não é exposta nem chama o servidor"
   }
 }, 30000);
 
-test("mcp-flow: servidor cai no tools/call e a sessão continua", async () => {
+test("mcp-flow: servidor responde HTTP 500 em tools/call e a sessão continua", async () => {
   const mcp = startMcpServer([{ name: "read_file", text: "nunca chega" }], { failCall: true });
   const provider = startMockProvider([
     { toolCalls: [
@@ -179,7 +180,9 @@ test("mcp-flow: servidor cai no tools/call e a sessão continua", async () => {
       .toMatchObject({ server: "fs", tool: "read_file", status: "error" });
     const mcpResult = audit.events.find((event) => event.tipo === "tool.result" && event.payload.name === "mcp__fs__read_file");
     expect(mcpResult?.payload.isError).toBe(true);
-    expect(audit.text).toContain("run.completed");
+    expect(requestMessages(provider.state.bodies[1]).some((message) =>
+      message.role === "tool" && message.content.includes("HTTP 500"))).toBe(true);
+    expect(audit.text.includes("run.completed")).toBe(true);
   } finally {
     provider.server.stop(true);
     mcp.server.stop(true);

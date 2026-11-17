@@ -68,9 +68,13 @@ test("multi-agent-flow: planner spawna em outra conta, faz handoff e o filho esc
     const ledger = new Ledger(join(dir, ".astro", "ledger.jsonl"));
     expect(rebuildAgentTree(ledger, report.runId).nodes.map((node) => node.agent_id)).toEqual(["planner", "sub-1"]);
     const byAgent = ledger.byAgent();
+    const planner = Object.values(byAgent).find((row) => row.agent === "planner");
     const child = Object.values(byAgent).find((row) => row.agent === "sub-1");
+    expect(planner?.provider).toBe("p1");
     expect(child?.provider).toBe("p2");
     expect((child?.tokensIn ?? 0) + (child?.tokensOut ?? 0)).toBeGreaterThan(0);
+    expect(child?.costUsd ?? 0).toBeGreaterThan(0);
+    expect(planner?.costUsd ?? 0).toBeGreaterThan(0);
     expect(activeLocks(ledger)).toEqual([]);
   } finally {
     provider.server.stop(true);

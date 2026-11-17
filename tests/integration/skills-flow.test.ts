@@ -66,7 +66,7 @@ test("skills-flow: carrega a skill, injeta o prompt e executa as tools permitida
     const loaded = audit.events.find((event) => event.tipo === "skill.loaded");
     expect(loaded?.payload).toMatchObject({ name: "report", version: "1.0.0", source: "project" });
     expect(loaded?.payload.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(audit.text).not.toContain("Leia notes.txt"); // I-04: prompt da skill não é persistido
+    expect(audit.text.includes("Leia notes.txt")).toBe(false); // I-04: prompt da skill não é persistido
     expect(audit.text.includes("test-key")).toBe(false);
   } finally {
     provider.server.stop(true);
@@ -101,7 +101,7 @@ test("skills-flow: skill fora da allowlist falha fechado antes de chamar o provi
     expect(provider.state.calls).toBe(0);
     expect(existsSync(join(dir, "out"))).toBe(false);
     const audit = readAudit(dir);
-    expect(audit.text).toContain("run.stopped");
+    expect(audit.text.includes("run.stopped")).toBe(true);
     expect(audit.events.some((event) => event.tipo === "skill.loaded")).toBe(false);
     expect(audit.text.includes("test-key")).toBe(false);
   } finally {
