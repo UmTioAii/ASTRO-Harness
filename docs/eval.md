@@ -34,7 +34,8 @@ Objetivo: como `astro eval` e `astro bench` medem qualidade e desempenho, com fo
 - O texto do erro não entra no relatório JSON/Markdown (I-03).
 - Se nenhum prompt completar, `benchModel` propaga o erro do provider e nenhum relatório é gravado.
 - O Markdown traz `Sucesso` por modelo (`80% (4/5)`) e `Sucesso agregado: N% (completed/total)`.
-- O JSON do relatório usa `schema: 2`; a v1 não tinha `successRate`, `completed` e `total`.
+- O `summary` do relatório traz `fastest` (menor p50), `cheapest` (menor custo/1k out; ignora `null`) e `highestSuccessRate`; empate fica com o primeiro resultado e lista vazia devolve `null` nos três.
+- O JSON do relatório usa `schema: 2`; a v1 não tinha `successRate`, `completed`, `total` nem `summary`.
 
 ### Filtro de provider/modelo
 

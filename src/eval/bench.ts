@@ -46,10 +46,20 @@ export interface BenchModelResult {
   ttftMs: number | null;
 }
 
+export interface BenchSummary {
+  /** Modelo com menor p50; null sem resultados. */
+  fastest: string | null;
+  /** Modelo com menor custo/1k out entre os precificados; null sem preço. */
+  cheapest: string | null;
+  /** Modelo com maior successRate; empate mantém o primeiro resultado. */
+  highestSuccessRate: string | null;
+}
+
 export interface BenchReport {
   schema: number;
   date: string;
   prompts: number;
+  summary: BenchSummary;
   results: BenchModelResult[];
 }
 
@@ -187,6 +197,31 @@ export async function benchModel(
   };
 }
 
+/**
+ * Sumário do relatório: menor p50, menor custo/1k out (só precificados) e
+ * maior successRate. Empate mantém o primeiro resultado; lista vazia → null.
+ */
+export function summarizeBench(results: readonly BenchModelResult[]): BenchSummary {
+  if (results.length === 0) {
+    return { fastest: null, cheapest: null, highestSuccessRate: null };
+  }
+  let fastest = results[0]!;
+  let cheapest: BenchModelResult | undefined;
+  let best = results[0]!;
+  for (const r of results) {
+    if (r.latencyMs.p50 < fastest.latencyMs.p50) fastest = r;
+    const cost = r.costPer1kOutUsd;
+    const cheapestCost = cheapest?.costPer1kOutUsd ?? Infinity;
+    if (cost !== null && cost < cheapestCost) cheapest = r;
+    if (r.successRate > best.successRate) best = r;
+  }
+  return {
+    fastest: fastest.model,
+    cheapest: cheapest?.model ?? null,
+    highestSuccessRate: best.model,
+  };
+}
+
 /** Roda o benchmark para todos os modelos informados. */
 export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
   const runs = opts.runs ?? 1;
@@ -195,10 +230,11 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     results.push(await benchModel(model, opts.providerFor, runs));
   }
   const report: BenchReport = {
-    // v2 acrescenta successRate/completed/total ao resultado por modelo (v1 não tinha).
+    // v2 acrescenta successRate/completed/total e summary (v1 não tinha).
     schema: 2,
     date: new Date().toISOString().slice(0, 10),
     prompts: PROMPTS.length,
+    summary: summarizeBench(results),
     results,
   };
   if (opts.outDir !== undefined) {
@@ -230,7 +266,7 @@ export function formatBenchTable(report: BenchReport): string {
     (r) =>
       `${r.model} · p50 ${r.latencyMs.p50}ms · ${r.tokensPerSec} tok/s · custo/1k out ` +
       `${r.costPer1kOutUsd === null ? "n/d" : `US$ ${r.costPer1kOutUsd.toFixed(4)}`} · ` +
-      `sucesso ${Math.round(r.successRate * 100)}% (${r.completed}/${r.total})`,
+      `sucesso ${fmtRate(r)}`,
   );
   return [`bench: ${report.results.length} modelos · ${report.prompts} prompts`, ...lines].join("\n");
 }
@@ -240,11 +276,20 @@ export function formatMarkdown(report: BenchReport): string {
   const completed = report.results.reduce((sum, r) => sum + r.completed, 0);
   const total = report.results.reduce((sum, r) => sum + r.total, 0);
   const success = total === 0 ? 0 : Math.round((completed / total) * 100);
+  const fastest = report.results.find((r) => r.model === report.summary.fastest);
+  const cheapest = report.results.find((r) => r.model === report.summary.cheapest);
+  const best = report.results.find((r) => r.model === report.summary.highestSuccessRate);
   const lines = [
     `# Benchmark de providers - ${report.date}`,
     "",
     `Prompts por execução: ${report.prompts}. TTFT requer streaming no contrato Provider (pendente).`,
     `Sucesso agregado: ${success}% (${completed}/${total}).`,
+    "",
+    "## Sumário",
+    "",
+    `- Mais rápido: ${fastest === undefined ? "n/d" : `\`${fastest.model}\` (p50 ${fastest.latencyMs.p50}ms)`}`,
+    `- Mais barato: ${cheapest === undefined ? "n/d" : `\`${cheapest.model}\` (${fmtCost(cheapest.costPer1kOutUsd)}/1k out)`}`,
+    `- Maior success rate: ${best === undefined ? "n/d" : `\`${best.model}\` (${fmtRate(best)})`}`,
     "",
     "| Modelo | Tags | Sucesso | p50 (ms) | p95 (ms) | tokens out/call | tokens/s | custo/1k out |",
     "|---|---|---|---|---|---|---|---|",
