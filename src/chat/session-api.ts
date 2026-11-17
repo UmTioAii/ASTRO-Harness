@@ -215,7 +215,9 @@ export class SessionApi {
         if (!LEGACY_STAMP.test(name.slice(0, -suffix.length))) continue;
         try { unlinkSync(join(dir, name)); } catch { /* confirmado abaixo */ }
       }
-      return !readdirSync(dir).some((name) => name.endsWith(suffix));
+      // Só conta como pendente o que tem o stamp do harness; `my-s1` não é cópia de `s1`.
+      return !readdirSync(dir).some((name) =>
+        name.endsWith(suffix) && LEGACY_STAMP.test(name.slice(0, -suffix.length)));
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === "ENOENT";
     }
