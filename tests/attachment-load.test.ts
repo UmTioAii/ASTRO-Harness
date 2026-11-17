@@ -188,6 +188,28 @@ describe("loadAttachment", () => {
     ).rejects.toThrow(/faixa.*teto de leitura/);
   });
 
+  test("última linha da faixa exatamente no teto não cobra o newline final", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "abc.txt"), "abc\ndef\n");
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "abc.txt",
+      range: "1:1",
+      maxBytes: 3,
+    });
+    expect(attachment.data).toBe("abc");
+    expect(attachment.range).toEqual({ start: 1, end: 1 });
+    expect(attachment.sizeBytes).toBe(3);
+  });
+
+  test("linha selecionada acima do teto rejeita", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "abcd.txt"), "abcd\nef\n");
+    await expect(
+      loadAttachment({ ...base(cwd, astroHome), path: "abcd.txt", range: "1:1", maxBytes: 3 }),
+    ).rejects.toMatchObject({ code: "attachment_too_large" });
+  });
+
   test("range de arquivo grande rejeita binário na faixa selecionada", async () => {
     const { cwd, astroHome } = sandbox();
     const target = 100_000;
