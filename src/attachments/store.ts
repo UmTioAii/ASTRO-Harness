@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
+import { ARTIFACT_REF_PATTERN } from "../internal-ids";
 import { canonicalize, isWithin } from "../tools/paths";
 import { defaultCheckPrivate, hardenWindowsAcl, type WindowsAcl, windowsAclIsPrivate } from "./acl";
 import { AttachmentError, MAX_ATTACHMENT_BYTES } from "./model";
@@ -61,7 +62,6 @@ export interface GcMarker {
   removed: number;
 }
 
-const REF_PATTERN = /^(?:session|run)-[a-f0-9]{64}\/[a-f0-9]{64}$/;
 const KEY_PATTERN = /^(?:session|run)-[a-f0-9]{64}$/;
 const GC_FILE = "gc.json";
 const DEFAULT_TTL_DAYS = 7;
@@ -255,7 +255,7 @@ export class ArtifactStore {
 
   /** Lê e valida o metadado do artefato; ref/sidecar ausente ou adulterado falha tipado. */
   meta(ref: string): ArtifactMeta {
-    if (!REF_PATTERN.test(ref)) {
+    if (!ARTIFACT_REF_PATTERN.test(ref)) {
       throw new AttachmentError("attachment_image_invalid", `ref de artefato inválido: ${ref}`);
     }
     const [key, hash] = ref.split("/") as [string, string];
@@ -291,7 +291,7 @@ export class ArtifactStore {
 
   /** Lê e valida o hash; ref ausente/adulterado falha tipado. */
   read(ref: string): Uint8Array {
-    if (!REF_PATTERN.test(ref)) {
+    if (!ARTIFACT_REF_PATTERN.test(ref)) {
       throw new AttachmentError("attachment_image_invalid", `ref de artefato inválido: ${ref}`);
     }
     const [key, hash] = ref.split("/") as [string, string];

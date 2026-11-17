@@ -27,10 +27,14 @@ describe("redação hex nos sinks (#252, P0)", () => {
   test("audit: hex 64+ em texto livre é redigido; digest/ID interno é preservado", () => {
     const cwd = dir("audit");
     const audit = auditorIn(cwd);
+    const artifactRef = `run-${HEX}/${HEX}`;
     audit.append({
       run: "r1",
       tipo: "probe",
-      payload: { note: `chave ${HEX}`, sha256: HEX, callId: HEX, handoff_id: HEX, ledger_id: HEX, ref: HEX },
+      payload: {
+        note: `chave ${HEX}`, sha256: HEX, callId: HEX, handoff_id: HEX, ledger_id: HEX,
+        ref: artifactRef, hash: HEX,
+      },
     });
 
     const event = audit.readAll()[0]!;
@@ -40,7 +44,8 @@ describe("redação hex nos sinks (#252, P0)", () => {
     expect(event.payload.callId).toBe(HEX);
     expect(event.payload.handoff_id).toBe(HEX);
     expect(event.payload.ledger_id).toBe(HEX);
-    expect(event.payload.ref).toBe(HEX);
+    expect(event.payload.ref).toBe(artifactRef);
+    expect(event.payload.hash).toBe(HEX);
     const text = readFileSync(join(cwd, "audit.jsonl"), "utf8");
     expect(text).not.toContain(`chave ${HEX}`);
   });

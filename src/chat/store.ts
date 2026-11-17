@@ -4,7 +4,10 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameS
 import { join, resolve, sep } from "node:path";
 import type { ChatMessage } from "../providers/types";
 import type { SessionSnapshot } from "./agent-session";
+import { ARTIFACT_REF_PATTERN, INTERNAL_ID_KEY, SHA256_HEX, isAttachmentMeta } from "../internal-ids";
 import { redactSecrets } from "../sanitize-external";
+
+const SECRET_KEY = /(token(?!s)|secret|password|api[-_]?key|access[-_]?key)/i;
 
 export interface SessionRecord {
   schemaVersion: 1;
@@ -23,11 +26,6 @@ export interface SessionRecord {
   /** Cadeia de sessões retomadas, do mais antigo ao mais novo (ADR-0010/#392). */
   lineage?: string[];
 }
-
-const SECRET_KEY = /(token(?!s)|secret|password|api[-_]?key|access[-_]?key)/i;
-/** Campos de ID/digest internos do harness: hex 64+ é preservado (#252). */
-const INTERNAL_ID_KEY =
-  /^(?:ref|hash|sha1|sha256|sha512|digest|checksum|call[-_]?id|handoff[-_]?id|ledger[-_]?id|session[-_]?id|snapshot[-_]?id|trace[-_]?id|span[-_]?id)$/i;
 
 export interface SessionSummary {
   path: string;
@@ -182,26 +180,34 @@ function parseResumedFrom(value: unknown): { resumedFrom?: { id: string; started
 }
 
 /** Sanitiza strings JSON estruturalmente (inclusive `toolCalls.arguments`). */
-function sanitizeValue(value: unknown, key?: string): unknown {
-  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, key));
+function sanitizeValue(value: unknown, key?: string, attachmentMeta = false): unknown {
+  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, key, attachmentMeta));
   if (value !== null && typeof value === "object") {
+    const meta = isAttachmentMeta(value);
     return Object.fromEntries(Object.entries(value).map(([childKey, item]) => [
-      childKey, SECRET_KEY.test(childKey) ? "[REDACTED]" : sanitizeValue(item, childKey),
+      childKey, SECRET_KEY.test(childKey) ? "[REDACTED]" : sanitizeValue(item, childKey, meta),
     ]));
   }
   if (typeof value !== "string") return value;
   const text = value.trim();
   if (text.startsWith("{") || text.startsWith("[")) {
     try {
-      return JSON.stringify(sanitizeValue(JSON.parse(text), key));
+      return JSON.stringify(sanitizeValue(JSON.parse(text), key, attachmentMeta));
     } catch {
       // não era JSON: cai na redação textual
     }
   }
-  // ref/hash do artifact store são IDs internos: preserva 64-hex (#252).
-  return INTERNAL_ID_KEY.test(key ?? "")
-    ? redactSecrets(value, { hexIdentifiers: true })
-    : redactSecrets(value);
+  const field = key ?? "";
+  if (!INTERNAL_ID_KEY.test(field)) return redactSecrets(value);
+  // O session store carrega output do modelo: nome de chave não basta. Só
+  // preserva ref/hash com a forma exata do artifact store; o resto redige.
+  if (field.toLowerCase() === "ref") {
+    return ARTIFACT_REF_PATTERN.test(value) ? value : redactSecrets(value);
+  }
+  if (field.toLowerCase() === "hash") {
+    return attachmentMeta && SHA256_HEX.test(value) ? value : redactSecrets(value);
+  }
+  return redactSecrets(value);
 }
 
 /** Converte o snapshot do runtime no registro persistido (o snapshot não carrega `name`). */

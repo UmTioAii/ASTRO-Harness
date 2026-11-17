@@ -631,13 +631,23 @@ export class AgentSession {
       const images: ImagePart[] = [];
       for (const attachment of message.attachments ?? []) {
         if (attachment.kind !== "image" || attachment.ref === undefined) continue;
-        const meta = store.meta(attachment.ref);
-        const allowed = meta.sessionId !== undefined && lineage.includes(meta.sessionId);
-        if (!allowed) {
-          throw new AttachmentError("attachment_image_invalid", `imagem de outra sessão: ${attachment.ref}`);
+        try {
+          const meta = store.meta(attachment.ref);
+          const allowed = meta.sessionId !== undefined && lineage.includes(meta.sessionId);
+          if (!allowed) {
+            throw new AttachmentError("attachment_image_invalid", `imagem de outra sessão: ${attachment.ref}`);
+          }
+          const bytes = store.read(attachment.ref);
+          images.push({ mediaType: meta.mediaType, dataBase64: Buffer.from(bytes).toString("base64") });
+        } catch (error) {
+          // Snapshot antigo com ref já redigido não pode derrubar o resume:
+          // descarta a imagem, avisa e mantém a sessão retomável (#252).
+          if (error instanceof AttachmentError && error.code === "attachment_image_invalid" && attachment.ref.includes("[REDACTED]")) {
+            console.warn("aviso: imagem com ref redigido ignorada ao retomar a sessão");
+            continue;
+          }
+          throw error;
         }
-        const bytes = store.read(attachment.ref);
-        images.push({ mediaType: meta.mediaType, dataBase64: Buffer.from(bytes).toString("base64") });
       }
       return images.length === 0 ? clean : { ...clean, images };
     });
