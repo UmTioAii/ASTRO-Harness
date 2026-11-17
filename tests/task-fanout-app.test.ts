@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activeLocks } from "../src/agent-lock";
+import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
 import { Ledger, type LedgerAgentEntry } from "../src/ledger";
 import { planResume, rebuildAgentTree } from "../src/resume";
@@ -29,7 +30,7 @@ interface Harness {
 }
 
 /** App-level fan-out: parent em P, filhos em Q (com fallback R) e R. */
-function harness(maxActive: number, opts: { abortParentSecond?: boolean } = {}): Harness {
+function harness(maxActive: number, opts: { abortParentSecond?: boolean; childSpawn?: boolean } = {}): Harness {
   const cwd = mkdtempSync(join(tmpdir(), "astro-task-fanout-app-"));
   const ledgerPath = join(cwd, ".astro", "ledger.jsonl");
   const controller = new AbortController();
@@ -47,6 +48,20 @@ function harness(maxActive: number, opts: { abortParentSecond?: boolean } = {}):
         stats.maxChildren = Math.max(stats.maxChildren, stats.activeChildren);
         stats.maxLocks = Math.max(stats.maxLocks, activeLocks(new Ledger(ledgerPath)).length);
         try {
+          if (opts.childSpawn === true && system === "child-q" && stats.childCalls[system] === 1) {
+            return Response.json({
+              choices: [{
+                message: {
+                  content: "",
+                  tool_calls: [{
+                    id: "s1", type: "function",
+                    function: { name: "spawn_agent", arguments: JSON.stringify({ need: "writing-code", task: "neto" }) },
+                  }],
+                },
+              }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            });
+          }
           await delay(30);
           return final(`${system}-final`);
         } finally {
@@ -91,11 +106,14 @@ function harness(maxActive: number, opts: { abortParentSecond?: boolean } = {}):
       { provider: "q", id: "m", tags: ["writing-code"], context: 8192 },
       { provider: "r", id: "m", tags: ["writing-code"], context: 8192 },
     ],
-    agent: { model: "p/m", maxSteps: 6, tools: ["task"], entryAgent: "parent" },
+    agent: {
+      model: "p/m", maxSteps: 6, entryAgent: "parent",
+      tools: opts.childSpawn === true ? ["task", "spawn_agent"] : ["task"],
+    },
     agents: {
       maxActive,
-      parent: { model: "p/m", maxSteps: 6, tools: ["task"] },
-      qa: { model: "q/m", maxSteps: 3, tools: [], systemPrompt: "child-q" },
+      parent: { model: "p/m", maxSteps: 6, tools: opts.childSpawn === true ? ["task", "spawn_agent"] : ["task"] },
+      qa: { model: "q/m", maxSteps: 3, tools: opts.childSpawn === true ? ["spawn_agent"] : [], systemPrompt: "child-q" },
       rb: { model: "r/m", maxSteps: 3, tools: [], systemPrompt: "child-r" },
     },
     spawn: { parallel: true },
@@ -245,6 +263,25 @@ test("fallback do filho move o lock do filho, nunca o lock do pai", async () => 
     expect(activeLocks(ledger)).toEqual([]);
   } finally {
     server.stop(true);
+  }
+});
+
+test("task filho não recebe spawn_agent: sem neto (ADR-0008 A5)", async () => {
+  const h = harness(2, { childSpawn: true });
+  try {
+    const report = await runTask({
+      configPath: h.configPath, cwd: h.cwd, task: "fan-out", env: env(), approveSwap: () => true,
+    });
+    expect(report.final).toBe("parent-final");
+    const audit = new Auditor(join(h.cwd, ".astro", "audit.jsonl")).readAll();
+    expect(audit.some((event) => event.tipo === "tool.denied"
+      && (event.payload as { name?: string }).name === "spawn_agent")).toBe(true);
+    expect(audit.some((event) => event.tipo === "agent.spawned")).toBe(false);
+    expect(new Ledger(h.ledgerPath).readAllEntries().some(
+      (entry) => entry.kind === "agent" && entry.agent_id.startsWith("sub-"),
+    )).toBe(false);
+  } finally {
+    h.stop();
   }
 });
 

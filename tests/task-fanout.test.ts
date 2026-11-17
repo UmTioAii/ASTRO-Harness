@@ -38,7 +38,7 @@ function setup(opts: { parallel?: boolean; delegate?: TaskDelegator; activeCount
 
 describe("task fan-out (A11)", () => {
   test("paralelo respeita maxActive, preserva a ordem de entrada e audita em ordem", async () => {
-    const { tool, audit, probe, ctx } = setup({ parallel: true });
+    const { tool, audit, probe, ctx } = setup({ parallel: true, activeCount: () => 0 });
     const result = await tool.execute({
       tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
     }, ctx);
@@ -129,5 +129,25 @@ describe("task fan-out (A11)", () => {
       tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
     }, ctx)).rejects.toBeInstanceOf(PermissionPendingError);
     expect(calls).toEqual(["a"]);
+  });
+
+  test("task single também respeita o teto antes de auditar ou delegar", async () => {
+    const { tool, audit, probe, ctx } = setup({ activeCount: () => 2 });
+    const result = await tool.execute({ agent: "a", prompt: "um" }, ctx);
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.output).error).toBe("spawn_limit_exceeded");
+    expect(audit.readAll().filter((event) => event.tipo === "task.delegated")).toHaveLength(0);
+    expect(probe.calls).toHaveLength(0);
+  });
+
+  test("fan-out também recusa sem slot antes de auditar ou delegar", async () => {
+    const { tool, audit, probe, ctx } = setup({ parallel: true, activeCount: () => 2 });
+    const result = await tool.execute({
+      tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
+    }, ctx);
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.output).error).toBe("spawn_limit_exceeded");
+    expect(audit.readAll().filter((event) => event.tipo === "task.delegated")).toHaveLength(0);
+    expect(probe.calls).toHaveLength(0);
   });
 });
