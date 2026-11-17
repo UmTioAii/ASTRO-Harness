@@ -89,6 +89,42 @@ describe("escalada automática no runSession (#451)", () => {
       delta: 1, baseline: 2, cumulative: 1, allowed: true, reason: "up_auto",
     }]);
     expect(JSON.stringify(jumps(s.ledger))).not.toContain("a.txt");
+    const entry = jumps(s.ledger)[0]!;
+    if (entry.kind === "effort") {
+      expect(entry.segment).toMatch(/^[0-9a-f]{64}$/);
+      expect(["up_auto", "ceiling", "cumulative_cap"]).toContain(entry.reason);
+    }
+  });
+
+  test("salto encolhe para o budget acumulado e para o teto L4", async () => {
+    const shrink = setup([...writes(4), resp({ content: "fim" })], {
+      call: { lvl: 0 }, noProgressSegments: 2, effort: auto(2, 3),
+    });
+    await runSession(shrink.opts, "t");
+    expect(levels(shrink.requests)).toEqual([0, 0, 2, 2, 3]);
+    expect(jumps(shrink.ledger)).toMatchObject([
+      { from: 0, to: 2, delta: 2, cumulative: 2, allowed: true },
+      { from: 2, to: 3, delta: 1, cumulative: 3, allowed: true },
+    ]);
+
+    const ceiling = setup([...writes(2), resp({ content: "fim" })], {
+      call: { lvl: 3 }, noProgressSegments: 2, effort: auto(2, 3),
+    });
+    await runSession(ceiling.opts, "t");
+    expect(levels(ceiling.requests)).toEqual([3, 3, 4]);
+    expect(jumps(ceiling.ledger)).toMatchObject([{ from: 3, to: 4, delta: 1, allowed: true }]);
+  });
+
+  test("ledger corrompido fora de 0..4 é ignorado, sem RangeError", async () => {
+    const s = setup([...writes(2), resp({ content: "fim" })], {
+      noProgressSegments: 2, effort: auto(),
+    });
+    s.ledger.recordEffortJump({
+      run: "r1", agent: "default", from: 2, to: 99, delta: 97, baseline: 2, cumulative: 0,
+      allowed: true, reason: "up_auto",
+    });
+    await runSession(s.opts, "t");
+    expect(levels(s.requests)).toEqual([2, 2, 3]);
   });
 
   test("respeita autoJumpMax e maxCumulativeJump", async () => {
@@ -134,7 +170,7 @@ describe("escalada no multi-agent (#451)", () => {
     const script = [
       resp({ toolCalls: [write("p1", "p.txt")] }), resp({ toolCalls: [write("p2", "p.txt")] }),
       resp({ toolCalls: [handoff("h1", "coder")] }), resp({ toolCalls: [write("c1", "c.txt")] }),
-      resp({ content: "fim" }),
+      resp({ toolCalls: [write("c2", "c.txt")] }), resp({ content: "fim" }),
     ];
     let i = 0;
     const provider: Provider = { complete: async (request) => { requests.push(request); return script[i++]!; } };
@@ -152,8 +188,10 @@ describe("escalada no multi-agent (#451)", () => {
       ledger, audit, baseMaxSteps: 6, entryAgent: "planner", noProgressSegments: 2, effort: auto(), call: { lvl: 2 },
     };
     expect((await runMultiAgentSession(opts, "t")).final).toBe("fim");
-    expect(levels(requests)).toEqual([2, 2, 3, 2, 2]);
-    expect(jumps(ledger)).toMatchObject([{ agent: "planner", from: 2, to: 3 }]);
-    expect(jumps(ledger).some((entry) => entry.kind === "effort" && entry.agent === "coder")).toBe(false);
+    expect(levels(requests)).toEqual([2, 2, 3, 2, 2, 3]);
+    expect(jumps(ledger)).toMatchObject([
+      { agent: "planner", from: 2, to: 3 },
+      { agent: "coder", from: 2, to: 3 },
+    ]);
   });
 });
