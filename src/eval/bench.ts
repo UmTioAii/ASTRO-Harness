@@ -55,6 +55,13 @@ export interface BenchSummary {
   highestSuccessRate: string | null;
 }
 
+/** Campos que o renderer/sumário precisam; v2 acrescenta as métricas de sucesso. */
+export type BenchModelResultLike = Omit<BenchModelResult, "successRate" | "completed" | "total"> & {
+  successRate?: number;
+  completed?: number;
+  total?: number;
+};
+
 export interface BenchReport {
   schema: number;
   date: string;
@@ -62,6 +69,12 @@ export interface BenchReport {
   summary: BenchSummary;
   results: BenchModelResult[];
 }
+
+/** Relatório v1 ou v2 aceito pelo Markdown; `summary` só existe a partir do v2. */
+export type BenchReportLike = Omit<BenchReport, "summary" | "results"> & {
+  summary?: BenchSummary;
+  results: readonly BenchModelResultLike[];
+};
 
 export interface BenchOptions {
   models: ModelEntry[];
@@ -132,8 +145,11 @@ export function selectBenchModels(
     };
   }
   if (opts.requireFilter === true) {
+    if (terms.length === 0) {
+      return { ok: false, error: "--require-filter exige um filtro de modelos (filtro ausente)" };
+    }
     if (!terms.some((term) => /[\p{L}\p{N}]/u.test(term))) {
-      return { ok: false, error: "--require-filter recusa filtro sem termo alfanumérico em --models" };
+      return { ok: false, error: "--require-filter recusa filtro de modelos sem termo alfanumérico" };
     }
     if (selected.length === models.length) {
       return {
@@ -233,24 +249,26 @@ export async function benchModel(
  * Sumário do relatório: menor p50, menor custo/1k out (só precificados) e
  * maior successRate. Empate mantém o primeiro resultado; lista vazia → null.
  */
-export function summarizeBench(results: readonly BenchModelResult[]): BenchSummary {
+export function summarizeBench(results: readonly BenchModelResultLike[]): BenchSummary {
   if (results.length === 0) {
     return { fastest: null, cheapest: null, highestSuccessRate: null };
   }
   let fastest = results[0]!;
-  let cheapest: BenchModelResult | undefined;
-  let best = results[0]!;
+  let cheapest: BenchModelResultLike | undefined;
+  let best: BenchModelResultLike | undefined;
   for (const r of results) {
     if (r.latencyMs.p50 < fastest.latencyMs.p50) fastest = r;
     const cost = r.costPer1kOutUsd;
     const cheapestCost = cheapest?.costPer1kOutUsd ?? Infinity;
-    if (cost !== null && cost < cheapestCost) cheapest = r;
-    if (r.successRate > best.successRate) best = r;
+    if (typeof cost === "number" && cost < cheapestCost) cheapest = r;
+    if (typeof r.successRate === "number" && Number.isFinite(r.successRate)) {
+      if (r.successRate > (best?.successRate ?? -Infinity)) best = r;
+    }
   }
   return {
     fastest: fastest.model,
     cheapest: cheapest?.model ?? null,
-    highestSuccessRate: best.model,
+    highestSuccessRate: best?.model ?? null,
   };
 }
 
@@ -285,8 +303,15 @@ function fmtCost(v: number | null): string {
   return v === null ? "n/d" : `US$ ${v.toFixed(4)}`;
 }
 
-/** Success rate no formato `80% (4/5)`. */
-function fmtRate(r: BenchModelResult): string {
+/** Success rate no formato `80% (4/5)`; `n/d` quando o relatório é v1. */
+function fmtRate(r: BenchModelResultLike): string {
+  if (
+    typeof r.successRate !== "number" || !Number.isFinite(r.successRate) ||
+    typeof r.completed !== "number" || !Number.isFinite(r.completed) ||
+    typeof r.total !== "number" || !Number.isFinite(r.total)
+  ) {
+    return "n/d";
+  }
   return `${Math.round(r.successRate * 100)}% (${r.completed}/${r.total})`;
 }
 
@@ -304,21 +329,30 @@ export function formatBenchTable(report: BenchReport): string {
   return [`bench: ${report.results.length} modelos · ${report.prompts} prompts`, ...lines].join("\n");
 }
 
-/** Tabela Markdown do relatório. */
-export function formatMarkdown(report: BenchReport): string {
-  const completed = report.results.reduce((sum, r) => sum + r.completed, 0);
-  const total = report.results.reduce((sum, r) => sum + r.total, 0);
-  const success = total === 0 ? 0 : Math.round((completed / total) * 100);
-  // Relatório v1 (antes do schema 2) não tem summary: calcula na leitura.
+/** Tabela Markdown do relatório; aceita v1 (sem métricas de sucesso). */
+export function formatMarkdown(report: BenchReportLike): string {
+  const withTotals = report.results.filter(
+    (r) => typeof r.completed === "number" && typeof r.total === "number",
+  );
+  const completed = withTotals.reduce((sum, r) => sum + (r.completed ?? 0), 0);
+  const total = withTotals.reduce((sum, r) => sum + (r.total ?? 0), 0);
+  const successLine = withTotals.length === 0
+    ? "Sucesso agregado: n/d."
+    : `Sucesso agregado: ${total === 0 ? 0 : Math.round((completed / total) * 100)}% (${completed}/${total}).`;
+  // Relatório v1 (antes do schema 2) não tem summary: calcula o que existe.
   const summary = report.summary ?? summarizeBench(report.results);
   const fastest = report.results.find((r) => r.model === summary.fastest);
   const cheapest = report.results.find((r) => r.model === summary.cheapest);
-  const best = report.results.find((r) => r.model === summary.highestSuccessRate);
+  // Só elege maior success rate entre resultados com a métrica v2 presente.
+  const best = report.results.reduce<BenchModelResultLike | undefined>((acc, r) => {
+    if (typeof r.successRate !== "number" || !Number.isFinite(r.successRate)) return acc;
+    return acc === undefined || r.successRate > (acc.successRate ?? -Infinity) ? r : acc;
+  }, undefined);
   const lines = [
     `# Benchmark de providers - ${report.date}`,
     "",
     `Prompts por execução: ${report.prompts}. TTFT requer streaming no contrato Provider (pendente).`,
-    `Sucesso agregado: ${success}% (${completed}/${total}).`,
+    successLine,
     "",
     "## Sumário",
     "",

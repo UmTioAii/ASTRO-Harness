@@ -36,6 +36,7 @@ Objetivo: como `astro eval` e `astro bench` medem qualidade e desempenho, com fo
 - O Markdown traz `Sucesso` por modelo (`80% (4/5)`) e `Sucesso agregado: N% (completed/total)`.
 - O `summary` do relatório traz `fastest` (menor p50), `cheapest` (menor custo/1k out; ignora `null`) e `highestSuccessRate`; empate fica com o primeiro resultado e lista vazia devolve `null` nos três.
 - O JSON do relatório usa `schema: 2`; a v1 não tinha `successRate`, `completed`, `total` nem `summary`.
+- Relatório v1 (sem `successRate`/`completed`/`total`/`summary`) renderiza `n/d` nesses campos; nenhum vencedor de success rate é inferido.
 
 ### Filtro de provider/modelo
 
