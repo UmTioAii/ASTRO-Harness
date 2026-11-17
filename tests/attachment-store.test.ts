@@ -10,6 +10,7 @@ import {
   resolveArtifactRoot,
   validateArtifactRoot,
 } from "../src/attachments/store";
+import { AttachmentError } from "../src/attachments/model";
 import { FAKE_PRIVATE_ACL } from "./setup";
 
 const dirs: string[] = [];
@@ -253,6 +254,20 @@ describe("ArtifactStore", () => {
     const [dir, file] = saved.ref.split("/");
     writeFileSync(join(root, dir!, file!), "adulterado");
     expect(() => store.read(saved.ref)).toThrow(/attachment_image_invalid|hash/i);
+  });
+
+  test("artefato/sidecar ausente usa attachment_artifact_missing", () => {
+    const { root, cwd, astroHome } = sandbox();
+    const store = new ArtifactStore(root, context(cwd, astroHome));
+    const saved = store.save(owner, new TextEncoder().encode("x"), "image/png");
+    const [dir, hash] = saved.ref.split("/");
+    unlinkSync(join(root, dir!, hash!));
+    const readErr = (() => { try { store.read(saved.ref); } catch (error) { return error as AttachmentError; } })();
+    expect(readErr?.code).toBe("attachment_artifact_missing");
+
+    unlinkSync(join(root, dir!, `${hash!}.json`));
+    const metaErr = (() => { try { store.meta(saved.ref); } catch (error) { return error as AttachmentError; } })();
+    expect(metaErr?.code).toBe("attachment_artifact_missing");
   });
 
   test("rejeita ref com traversal", () => {

@@ -55,6 +55,11 @@ describe("store de sessão do chat (T1, #62)", () => {
             bare: { ref: hex, hash: hex },
             artifact: { ref: artifactRef },
             forged: { kind: "image", name: "a.png", mediaType: "image/png", hash: hex },
+            plain: { ref: "refs/heads/main", hash: "abc1234" },
+            forgedMessage: {
+              role: "user",
+              attachments: [{ kind: "image", name: "a.png", mediaType: "image/png", ref: artifactRef, hash: hex }],
+            },
           }),
         }],
       }],
@@ -64,11 +69,17 @@ describe("store de sessão do chat (T1, #62)", () => {
       bare: { ref: string; hash: string };
       artifact: { ref: string };
       forged: { hash: string };
+      plain: { ref: string; hash: string };
+      forgedMessage: { attachments: Array<{ ref: string; hash: string }> };
     };
     expect(args.bare.ref).toBe("[REDACTED]");
     expect(args.bare.hash).toBe("[REDACTED]");
     expect(args.artifact.ref).toBe("[REDACTED]");
     expect(args.forged.hash).toBe("[REDACTED]");
+    expect(args.plain.ref).toBe("refs/heads/main");
+    expect(args.plain.hash).toBe("abc1234");
+    expect(args.forgedMessage.attachments[0]!.ref).toBe("[REDACTED]");
+    expect(args.forgedMessage.attachments[0]!.hash).toBe("[REDACTED]");
   });
 
   test("preserva ref/hash de um attachment meta real", () => {
