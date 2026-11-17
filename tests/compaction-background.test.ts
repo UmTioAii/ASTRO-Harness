@@ -139,7 +139,9 @@ describe("compactação em background (CMP-9)", () => {
     expect(summaries).toBe(2);
     expect(aborted).toBe(true);
     expect(seen[1]!.content).toContain("INLINE");
-    expect(ledger.readAllEntries().some((entry) => entry.kind === "compaction")).toBe(false);
+    expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction")
+      .every((entry) => entry.failure_count === 0)).toBe(true);
+    expect(audit.readAll().some((event) => event.tipo === "compaction.failed")).toBe(false);
     await background.close();
   });
 

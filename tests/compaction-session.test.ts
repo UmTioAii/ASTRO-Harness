@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
 import { CompactionPausedError, recordCompactionFailure } from "../src/compaction/breaker";
+import { compactionArtifactPaths } from "../src/compaction/background";
 import { Ledger } from "../src/ledger";
 import type { CompletionResponse, Provider } from "../src/providers/types";
 import type { AgentEntry, ModelEntry } from "../src/core/registry";
@@ -18,7 +19,7 @@ interface Body {
   messages?: Array<{ role?: string; content?: string }>;
 }
 
-function server(handler: (calls: number, body: Body) => Response) {
+function server(handler: (calls: number, body: Body) => Response | Promise<Response>) {
   let calls = 0;
   const bodies: Body[] = [];
   const instance = Bun.serve({
@@ -240,6 +241,44 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
       expect(error).toBeDefined();
       expect((error as Error).message).toMatch(/maximum context length/);
       expect(mock.calls()).toBe(3);
+    } finally {
+      mock.instance.stop(true);
+    }
+  });
+
+  test("encerramento aguarda o prewarm e apaga artefato não consumido", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-compaction-close-"));
+    writeFileSync(join(cwd, "nota.txt"), "conteúdo");
+    const mock = server(async (calls, body) => {
+      if (body.tools === undefined && body.messages?.[0]?.content?.includes("Resuma")) {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return ok("resumo");
+      }
+      if (calls === 1) return toolCall("read_file", { path: "nota.txt" });
+      return ok("concluído");
+    });
+    try {
+      const configPath = writeConfig(cwd, mock.instance.port!, {
+        models: [{ provider: "mock", id: "m1", tags: ["writing-code"], context: 24_000 }],
+        agent: { model: "mock/m1", maxSteps: 3, tools: ["read_file"], systemPrompt: "SYS-PROMPT" },
+        compaction: { buffer: null },
+      });
+      const report = await runTask({
+        configPath, task: "oi", cwd, env: testEnv({ KEY: "k" }), runId: "r-close",
+        history: [
+          { role: "user", content: "a".repeat(12_000) },
+          { role: "assistant", content: "b".repeat(12_000) },
+        ],
+      });
+
+      expect(report.final).toBe("concluído");
+      expect(mock.calls()).toBe(3);
+      const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
+      // 2 completions + o resumo em background: close() esperou o job gravar usage.
+      expect(ledger.readAllEntries().filter((entry) => entry.kind === "usage")).toHaveLength(3);
+      const paths = compactionArtifactPaths(join(cwd, ".astro", "compaction"), "r-close", "default");
+      expect(existsSync(paths.artifact)).toBe(false);
+      expect(existsSync(paths.marker)).toBe(false);
     } finally {
       mock.instance.stop(true);
     }
