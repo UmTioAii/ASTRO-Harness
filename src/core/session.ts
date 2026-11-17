@@ -29,6 +29,8 @@ import { completeWithCompaction } from "../compaction/runtime";
 import { effectiveOutputCap, type OutputLimitConfig } from "../output-limit";
 import type { SpawnRegistry } from "../spawn";
 import { mostRestrictive } from "../permissions";
+import { join } from "node:path";
+import { BackgroundCompactor } from "../compaction/background";
 import {
   buildCheckpoint,
   budgetCheckpointDue,
@@ -345,6 +347,13 @@ export async function runSession(
   // #367: mensagens do turno na ordem, preservadas mesmo se a compactação
   // substituir `messages` no meio do run.
   const appended: ChatMessage[] = [userMessage];
+  // CMP-9: compactação sai do caminho crítico; o close do run aguarda o job em voo.
+  const compactionBackground = new BackgroundCompactor({
+    dir: join(opts.cwd, ".astro", "compaction"),
+    run: opts.run,
+    ledger: opts.ledger,
+    audit: opts.audit,
+  });
   if (
     messages.some((message) => (message.images?.length ?? 0) > 0) &&
     opts.model.capabilities?.vision !== true
@@ -455,6 +464,7 @@ export async function runSession(
         provider: () => opts.model.provider,
         model: () => opts.model.id,
         compaction: opts.compaction ?? DEFAULT_COMPACTION_CONFIG,
+        background: compactionBackground,
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),
         complete: (current) => opts.provider.complete({
           model: opts.model.id,
@@ -664,6 +674,8 @@ export async function runSession(
       });
     }
     throw error;
+  } finally {
+    await compactionBackground.close();
   }
 }
 
@@ -910,6 +922,13 @@ export async function runMultiAgentSession(
   /** Handoff ack nesta sessão; falha pós-ack grava handoff.failed (F-24). */
   let activeHandoff: { handoff_id: string; artifact: HandoffArtifactV1 } | undefined;
   const ackTimeoutMs = opts.ackTimeoutMs ?? DEFAULT_ACK_TIMEOUT_MS;
+  // CMP-9: um único job em voo por run, com artefato por agent.
+  const compactionBackground = new BackgroundCompactor({
+    dir: join(opts.cwd, ".astro", "compaction"),
+    run: opts.run,
+    ledger: opts.ledger,
+    audit: opts.audit,
+  });
   // L5/L6 (#135): checkpoint por agente ativo e guarda de não-progresso por agente.
   const checkpointedAgents = new Set<string>();
   const progressByAgent = new Map<string, ProgressTracker>();
@@ -1215,8 +1234,12 @@ export async function runMultiAgentSession(
       // Wrappers atribuem swap.* ao agente que está executando (F-19/I-04)
       if (opts.activeAgent !== undefined) opts.activeAgent.name = currentAgentName;
       const stepCall = callFor(currentAgentName, currentModel);
-      const providerFor = (): Provider =>
-        opts.providerFor?.(currentModel, currentAgent.profile, currentAgent.modelRouting) ?? opts.provider;
+      // Identidade congelada no step: o resumo em background não pode usar o
+      // provider/model de um handoff posterior (CMP-9).
+      const stepProvider = opts.providerFor?.(currentModel, currentAgent.profile, currentAgent.modelRouting) ?? opts.provider;
+      const stepModel = currentModel;
+      const stepAgentName = currentAgentName;
+      const stepProfile = currentAgent.profile;
       const response = await completeWithCompaction(messages, {
         ledger: opts.ledger,
         audit: opts.audit,
@@ -1226,23 +1249,24 @@ export async function runMultiAgentSession(
         provider: () => currentModel.provider,
         model: () => currentModel.id,
         compaction: opts.compaction ?? DEFAULT_COMPACTION_CONFIG,
+        background: compactionBackground,
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),
-        complete: (current) => providerFor().complete({
-          model: currentModel.id,
+        complete: (current) => stepProvider.complete({
+          model: stepModel.id,
           messages: safePrompt(current),
           tools: executor.defs(),
-          ...(currentAgent.profile === undefined ? {} : { profile: currentAgent.profile }),
+          ...(stepProfile === undefined ? {} : { profile: stepProfile }),
           ...(stepCall === undefined ? {} : { call: stepCall }),
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
         }, opts.signal),
-        summarize: (input) => providerFor().complete({
-          model: currentModel.id,
+        summarize: (input) => stepProvider.complete({
+          model: stepModel.id,
           messages: safePrompt(input),
           tools: undefined,
           purpose: "cheap",
-          ...(currentAgent.profile === undefined ? {} : { profile: currentAgent.profile }),
+          ...(stepProfile === undefined ? {} : { profile: stepProfile }),
         }, opts.signal).then((summary) => {
-          recordAuxUsage(summary, currentModel, currentAgentName);
+          recordAuxUsage(summary, stepModel, stepAgentName);
           return summary.content;
         }),
         onCompacted: () => saveAgentState(currentAgentName),
@@ -1461,6 +1485,8 @@ export async function runMultiAgentSession(
       });
     }
     throw error;
+  } finally {
+    await compactionBackground.close();
   }
 }
 

@@ -8,6 +8,11 @@ import type { Auditor } from "../audit";
 import type { Ledger } from "../ledger";
 import { ProviderError, type ChatMessage, type CompletionResponse } from "../providers/types";
 import {
+  applyBackgroundCompaction,
+  type BackgroundCompaction,
+  type BackgroundCompactor,
+} from "./background";
+import {
   CompactionPausedError,
   compactionState,
   recordCompactionFailure,
@@ -40,6 +45,8 @@ export interface CompactionRuntimeOptions {
   summarize: (messages: ChatMessage[]) => Promise<string>;
   /** Chamado após uma compactação aplicada (ex.: atualizar histórico do agente). */
   onCompacted?: (messages: readonly ChatMessage[]) => void;
+  /** Fila de compactação em background (CMP-9); ausente = sempre inline. */
+  background?: BackgroundCompactor;
 }
 
 /** Vocabulário de tamanho/estouro; "context caching" não é overflow. */
@@ -135,6 +142,73 @@ async function applyCompaction(
   }
 }
 
+/**
+ * Aplica um artefato pronto (já resumido): sem chamada ao provider e sem
+ * reescrever o schema do ledger/auditoria.
+ */
+function applyReadyCompaction(
+  messages: ChatMessage[],
+  job: BackgroundCompaction,
+  opts: CompactionRuntimeOptions,
+  reason: CompactReason,
+): void {
+  const state = compactionState(opts.ledger, opts.run);
+  if (state.paused) throw new CompactionPausedError(state.remainingMs);
+  const agent = opts.agent();
+  applyBackgroundCompaction(messages, job);
+  recordCompactionSuccess(opts.ledger, opts.run, agent);
+  opts.onCompacted?.(messages);
+  opts.audit.append({
+    run: opts.run,
+    agent,
+    tipo: "compaction.applied",
+    payload: {
+      reason,
+      background: true,
+      reduction: job.reduction,
+      originalTokens: job.originalTokens,
+      returnedTokens: job.returnedTokens,
+    },
+  });
+}
+
+/** Folga de pré-aquecimento antes do gatilho (tokens). */
+const PREWARM_MARGIN = 2_000;
+
+/**
+ * Pré-aquece a compactação depois de um step que ainda vai chamar o provider.
+ * O snapshot é do prefixo atual; a cauda nova é preservada na aplicação.
+ */
+function scheduleCompaction(
+  messages: readonly ChatMessage[],
+  opts: CompactionRuntimeOptions,
+  response: CompletionResponse,
+): void {
+  const background = opts.background;
+  if (background === undefined || response.toolCalls.length === 0) return;
+  const window = opts.window();
+  const trigger = window - reserveTokens(window, opts.compaction.buffer);
+  if (trigger < PREWARM_MARGIN * 2) return; // janela pequena: inline é previsível
+  const tokens = countMessageTokens(messages, { provider: opts.provider() }).tokens;
+  if (tokens >= trigger || tokens < trigger - PREWARM_MARGIN) return;
+  if (compactionState(opts.ledger, opts.run).paused) return;
+  // Sem histórico antigo ou sem projeção para sair do gatilho, resumir de novo
+  // não reduziria o contexto: deixa o inline decidir.
+  if (!projectionCanClear(messages, opts)) return;
+  const provider = opts.provider();
+  const summarize = opts.summarize;
+  try {
+    background.schedule(opts.agent(), messages, (snapshot) => compactSession({
+      run: opts.run,
+      messages: snapshot,
+      window,
+      buffer: opts.compaction.buffer,
+      provider,
+      summarize,
+    }));
+  } catch { /* pré-aquecimento nunca quebra o turno */ }
+}
+
 /** Compacta antes da chamada quando o gatilho dispara e retenta uma vez por overflow. */
 export async function completeWithCompaction(
   messages: ChatMessage[],
@@ -143,15 +217,22 @@ export async function completeWithCompaction(
   throwIfAborted(opts.signal);
 
   if (shouldCompact(messages, opts.window(), opts.compaction.buffer, { provider: opts.provider() })) {
-    await applyCompaction(messages, opts, "trigger");
+    const ready = opts.background?.take(opts.agent(), messages);
+    if (ready !== undefined) applyReadyCompaction(messages, ready, opts, "trigger");
+    else await applyCompaction(messages, opts, "trigger");
     throwIfAborted(opts.signal);
   }
 
   try {
-    return await opts.complete(messages);
+    const response = await opts.complete(messages);
+    scheduleCompaction(messages, opts, response);
+    return response;
   } catch (error) {
     if (!isContextOverflow(error)) throw error;
-    const compacted = await applyCompaction(messages, opts, "overflow");
+    const ready = opts.background?.take(opts.agent(), messages);
+    let compacted = true;
+    if (ready !== undefined) applyReadyCompaction(messages, ready, opts, "overflow");
+    else compacted = await applyCompaction(messages, opts, "overflow");
     throwIfAborted(opts.signal);
     // Sem nada para compactar, repetir a mesma request só gastaria uma chamada.
     if (!compacted) throw error;

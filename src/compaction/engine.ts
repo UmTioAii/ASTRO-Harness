@@ -184,6 +184,8 @@ export interface CompactResult {
   returnedTokens: number;
   /** Mensagens antigas substituídas; 0 = nada a compactar. */
   olderCount: number;
+  /** Índice onde começa a parte recente no histórico original (CMP-9). */
+  recentStart: number;
 }
 
 /** Executa uma compactação: parte recente, redução do antigo, resumo e artefato. */
@@ -208,6 +210,7 @@ export async function compactSession(input: CompactInput): Promise<CompactResult
       originalTokens,
       returnedTokens: originalTokens,
       olderCount: 0,
+      recentStart,
     };
   }
   const recentTokens = countMessageTokens(recent, countOpts).tokens;
@@ -255,5 +258,6 @@ export async function compactSession(input: CompactInput): Promise<CompactResult
     originalTokens,
     returnedTokens: countMessageTokens(compacted, countOpts).tokens,
     olderCount: older.length,
+    recentStart,
   };
 }
