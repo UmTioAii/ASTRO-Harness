@@ -391,7 +391,7 @@ function main(): number {
   try {
     options = parseArgs(process.argv.slice(2));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = redactSecrets(error instanceof Error ? error.message : String(error));
     console.error(`release-check: ${message}\n\n${USAGE}`);
     return 2;
   }
