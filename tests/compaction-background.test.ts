@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
-import type { ChatMessage, CompletionResponse } from "../src/providers/types";
+import { ProviderError, type ChatMessage, type CompletionResponse } from "../src/providers/types";
 import { compactionState } from "../src/compaction/breaker";
 import {
   BackgroundCompactor,
@@ -114,33 +114,80 @@ describe("compactação em background (CMP-9)", () => {
     const messages = history();
     let summaries = 0;
     let aborted = false;
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => { rejections.push(reason); };
+    process.on("unhandledRejection", onRejection);
+    try {
+      await completeWithCompaction(messages, {
+        ...options(ledger, audit, background),
+        complete: async () => toolResp(),
+        summarize: (_input, signal) => {
+          summaries++;
+          if (summaries > 1) return Promise.resolve("INLINE");
+          return new Promise<string>((resolve, reject) => {
+            signal?.addEventListener("abort", () => { aborted = true; reject(new DOMException("aborted", "AbortError")); }, { once: true });
+            gate.promise.then(resolve);
+          });
+        },
+      });
+      overTrigger(messages);
+
+      let seen: readonly ChatMessage[] = [];
+      await completeWithCompaction(messages, {
+        ...options(ledger, audit, background),
+        complete: async (current) => { seen = current; return resp("ok"); },
+        summarize: async () => { summaries++; return "INLINE"; },
+      });
+      await background.close();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(summaries).toBe(2);
+      expect(aborted).toBe(true);
+      expect(seen[1]!.content).toContain("INLINE");
+      expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction")
+        .every((entry) => entry.failure_count === 0)).toBe(true);
+      expect(audit.readAll().some((event) => event.tipo === "compaction.failed")).toBe(false);
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
+  test("overflow cancela o prewarm e compacta inline antes do retry", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const messages = history();
+    let summaries = 0;
+    let completions = 0;
+    let aborted = false;
+    const gate = deferred<string>();
 
     await completeWithCompaction(messages, {
       ...options(ledger, audit, background),
-      complete: async () => toolResp(),
+      complete: async () => { completions++; return toolResp(); },
       summarize: (_input, signal) => {
         summaries++;
-        if (summaries > 1) return Promise.resolve("INLINE");
         return new Promise<string>((resolve, reject) => {
           signal?.addEventListener("abort", () => { aborted = true; reject(new DOMException("aborted", "AbortError")); }, { once: true });
           gate.promise.then(resolve);
         });
       },
     });
-    overTrigger(messages);
 
-    let seen: readonly ChatMessage[] = [];
-    await completeWithCompaction(messages, {
+    const response = await completeWithCompaction(messages, {
       ...options(ledger, audit, background),
-      complete: async (current) => { seen = current; return resp("ok"); },
+      complete: async () => {
+        completions++;
+        if (completions === 2) throw new ProviderError("invalid_request", "maximum context length exceeded");
+        return resp("depois");
+      },
       summarize: async () => { summaries++; return "INLINE"; },
     });
 
+    expect(response.content).toBe("depois");
+    expect(completions).toBe(3);
     expect(summaries).toBe(2);
     expect(aborted).toBe(true);
-    expect(seen[1]!.content).toContain("INLINE");
-    expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction")
-      .every((entry) => entry.failure_count === 0)).toBe(true);
     expect(audit.readAll().some((event) => event.tipo === "compaction.failed")).toBe(false);
     await background.close();
   });
