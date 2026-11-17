@@ -26,8 +26,12 @@ describe("url-safety: hosts privados (#249)", () => {
   test("metadados IPv6, IPv4 mapeado e DNS são recusados com e sem opt-in", () => {
     const prev = process.env.ASTRO_ALLOW_PRIVATE_URLS;
     const urls = [
+      "http://[fd00:ec2::23]/latest/meta-data/",
       "http://[fd00:ec2::254]/latest/meta-data/",
+      "http://[fd00:ec2:1:2::3]/latest/meta-data/",
       "http://[fd00:0ec2:0:0:0:0:0:254]/latest/meta-data/",
+      "http://[fd20:ce::254]/latest/meta-data/",
+      "http://[fd20:ce:1::1]/latest/meta-data/",
       "http://[::ffff:169.254.169.254]/latest/meta-data/",
       "http://[::ffff:a9fe:a9fe]/latest/meta-data/",
       "http://metadata.tencentyun.com/latest/meta-data/",
@@ -66,6 +70,13 @@ describe("url-safety: hosts privados (#249)", () => {
 
   test("outbound aceita host público", () => {
     expect(outboundUrlProblem("https://api.example.com/v1", { allowPrivate: false })).toBeUndefined();
+  });
+
+  test("prefixos fd/feb em hostnames não são literais IPv6", () => {
+    for (const raw of ["https://fdic.gov/", "https://february.com/", "https://fe80.example.com/"]) {
+      expect(urlProblem(raw)).toBeUndefined();
+      expect(outboundUrlProblem(raw)).toBeUndefined();
+    }
   });
 
   test("allowPrivate explícito libera loopback (dev local), nunca metadados", () => {
