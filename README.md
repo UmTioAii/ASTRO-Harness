@@ -146,7 +146,7 @@ All commands run as `astro <command>`. From a clone, `bun src/cli.ts <command>` 
 | `eval` | Runs the golden dataset in mock mode as a regression gate. |
 | `bench` | Reports latency, tokens per second and cost per model. |
 | `health` | Validates configuration, credentials and provider connectivity. |
-| `doctor [--json] [--fix]` | Local diagnostics without network (versions, dependencies, dist, config, credentials by name, skills, MCP, disk permissions). `--json` emits a stable `doctor/v1` payload; `--fix` creates only `$ASTRO_HOME`. |
+| `doctor [--json] [--fix]` | Local diagnostics without network (versions, dependencies, dist, config, credentials by name, skills, MCP, disk permissions). `--json` emits a stable `doctor/v1` payload; `--fix` creates only `$ASTRO_HOME`, refusing relative, `..` or symlink values. |
 | `cost --by-agent` | Shows cost per agent and profile, read from the ledger. |
 | `handoff show <handoff_id>` | Inspects a durable handoff and its compaction audit. |
 | `serve` | Exposes `/metrics` in Prometheus format. |
