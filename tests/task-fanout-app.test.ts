@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activeLocks } from "../src/agent-lock";
 import { Auditor } from "../src/audit";
+import { budgetStatus } from "../src/budget";
+import { providerAccountRefFor } from "../src/core/config";
 import { runTask } from "../src/core/app";
 import { Ledger, type LedgerAgentEntry } from "../src/ledger";
 import { planResume, rebuildAgentTree } from "../src/resume";
@@ -285,14 +287,92 @@ test("task filho não recebe spawn_agent: sem neto (ADR-0008 A5)", async () => {
   }
 });
 
-test("reserva de budget barra dois filhos paralelos a 0.99 de 1.00", async () => {
+test("delegação em provider de plugin usa a mesma conta do helper de config", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "astro-task-fanout-plugin-"));
+  const pluginPath = join(cwd, "test-plugin.ts");
+  writeFileSync(pluginPath, `
+export function definePlugin() {
+  return {
+    name: "fanout-plugin",
+    tools: [],
+    providers: [{
+      kind: "custom",
+      create() {
+        return {
+          async complete() {
+            return { content: "plugin-final", toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } };
+          },
+        };
+      },
+    }],
+  };
+}
+`, "utf8");
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const body = (await req.json()) as { messages: Array<{ role: string; content: string }> };
+      if (body.messages.some((message) => message.role === "tool")) return final("parent-final");
+      return Response.json({
+        choices: [{
+          message: {
+            content: "",
+            tool_calls: [{
+              id: "t1", type: "function",
+              function: { name: "task", arguments: JSON.stringify({ tasks: [{ agent: "qa", prompt: "q" }] }) },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    },
+  });
+  const configPath = join(cwd, "astro.config.json");
+  writeFileSync(configPath, JSON.stringify({
+    providers: {
+      p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_P" },
+      bq: { kind: "custom" },
+    },
+    models: [
+      { provider: "p", id: "m", tags: ["writing-code"], context: 4096 },
+      { provider: "bq", id: "m", tags: ["writing-code"], context: 4096 },
+    ],
+    agent: { model: "p/m", maxSteps: 4, tools: ["task"], entryAgent: "parent" },
+    agents: {
+      maxActive: 2,
+      parent: { model: "p/m", maxSteps: 4, tools: ["task"] },
+      qa: { model: "bq/m", maxSteps: 2, tools: [], systemPrompt: "child-q" },
+    },
+    plugins: [pluginPath],
+    spawn: { parallel: true },
+    paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+  }));
+  try {
+    const report = await runTask({
+      configPath, cwd, task: "fan-out", env: testEnv({ KEY_P: "p" }), approveSwap: () => true,
+      trustAsk: () => true,
+    });
+    expect(report.final).toBe("parent-final");
+    const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
+    const created = ledger.readAllEntries().find(
+      (entry): entry is LedgerAgentEntry => entry.kind === "agent" && entry.event === "created"
+        && entry.run.startsWith(`${report.runId}.task.`),
+    );
+    expect(created?.credentialRef).toBe(providerAccountRefFor("bq", { kind: "custom" } as never));
+    expect(activeLocks(ledger)).toEqual([]);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("reserva de budget impede o segundo filho paralelo a 0.985 + 0.01", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-task-fanout-budget-"));
   const ledgerPath = join(cwd, ".astro", "ledger.jsonl");
   mkdirSync(join(cwd, ".astro"), { recursive: true });
   appendFileSync(ledgerPath, `${JSON.stringify({
     schemaVersion: 3, kind: "usage", seq: 1, ts: new Date().toISOString(),
     run: "seed", agent: "seed", provider: "p", model: "m", credentialRef: "KEY_P",
-    quotaDomain: "default", tokensIn: 0, tokensOut: 0, costUsd: 0.99,
+    quotaDomain: "default", tokensIn: 0, tokensOut: 0, costUsd: 0.985,
   })}\n`);
   let childCalls = 0;
   const server = Bun.serve({
@@ -352,11 +432,13 @@ test("reserva de budget barra dois filhos paralelos a 0.99 de 1.00", async () =>
       configPath, cwd, task: "fan-out", env: env(), approveSwap: () => true,
     });
     expect(report.final).toBe("parent-final");
-    expect(childCalls).toBe(0);
+    expect(childCalls).toBe(1);
     const hits = new Ledger(ledgerPath).readAllEntries().filter(
       (entry) => entry.kind === "budget" && entry.event === "ceiling_hit",
     );
-    expect(hits.length).toBeGreaterThanOrEqual(2);
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(budgetStatus({ scope: "day", limitUsd: 2, warnAt: 0.8, onExceed: "stop", hardCeilingUsd: 1 },
+      new Ledger(ledgerPath)).spentUsd!).toBeLessThanOrEqual(1);
   } finally {
     server.stop(true);
   }

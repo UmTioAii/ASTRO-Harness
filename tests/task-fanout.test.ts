@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
+import { NoProgressError } from "../src/loop-guard";
 import { PermissionPendingError } from "../src/permissions";
 import { createTaskTool, type TaskDelegator } from "../src/tools/task";
 
@@ -128,6 +129,21 @@ describe("task fan-out (A11)", () => {
     await expect(tool.execute({
       tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
     }, ctx)).rejects.toBeInstanceOf(PermissionPendingError);
+    expect(calls).toEqual(["a"]);
+  });
+
+  test("serial rethrow de NoProgressError antes do próximo filho (I-19)", async () => {
+    const calls: string[] = [];
+    const { tool, ctx } = setup({
+      delegate: async (input) => {
+        calls.push(input.agent);
+        if (input.agent === "a") throw new NoProgressError(2, 3);
+        return "ok";
+      },
+    });
+    await expect(tool.execute({
+      tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
+    }, ctx)).rejects.toBeInstanceOf(NoProgressError);
     expect(calls).toEqual(["a"]);
   });
 
