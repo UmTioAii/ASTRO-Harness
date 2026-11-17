@@ -63,14 +63,9 @@ export function pluginAllowlistFromEnv(env: NodeJS.ProcessEnv = process.env): Se
   );
 }
 
-/** Resolve a entrada da config: caminho absoluto/relativo vira import direto. */
-async function importPlugin(entry: string, baseDir: string): Promise<unknown> {
-  const isPath = isLocalEntry(entry);
-  if (isPath) {
-    const absolute = resolve(baseDir, entry);
-    return import(absolute);
-  }
-  return import(entry);
+/** Importa o caminho canônico já validado; remoto segue a entrada original. */
+async function importPlugin(entry: string, localPath?: string): Promise<unknown> {
+  return import(localPath ?? entry);
 }
 
 /** Realpath quando o caminho existe; inexistente segue lexical (import falha depois). */
@@ -132,19 +127,23 @@ export async function loadPlugins(
       warn(`plugin remoto "${entry}" não está em ASTRO_PLUGIN_ALLOWLIST; ignorado`);
       continue;
     }
-    if (local && opts.localTrusted !== true) {
-      // #255: importar executaria código do projeto ANTES do trust. Sem TTY e
-      // pasta não confiável, o plugin local não carrega.
-      warn(`plugin local "${entry}" não carrega: pasta do projeto não confiável (trust pendente); ignorado`);
-      continue;
-    }
-    if (local && localPluginPath(baseDir, entry) === undefined) {
-      // #255: trust da pasta não cobre `../` nem absoluto fora do cwd (symlink incluso).
-      warn(`plugin local "${entry}" fora do cwd do projeto; ignorado`);
-      continue;
+    let localPath: string | undefined;
+    if (local) {
+      if (opts.localTrusted !== true) {
+        // #255: importar executaria código do projeto ANTES do trust. Sem TTY e
+        // pasta não confiável, o plugin local não carrega.
+        warn(`plugin local "${entry}" não carrega: pasta do projeto não confiável (trust pendente); ignorado`);
+        continue;
+      }
+      localPath = localPluginPath(baseDir, entry);
+      if (localPath === undefined) {
+        // #255: trust da pasta não cobre `../` nem absoluto fora do cwd (symlink incluso).
+        warn(`plugin local "${entry}" fora do cwd do projeto; ignorado`);
+        continue;
+      }
     }
     try {
-      const mod = await importPlugin(entry, baseDir);
+      const mod = await importPlugin(entry, localPath);
       const definition = extractDefinition(mod);
       if (definition === null) {
         warn(`plugin "${entry}" não exporta definePlugin/plugin válido; ignorado`);
