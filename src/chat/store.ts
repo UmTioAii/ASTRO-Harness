@@ -209,12 +209,14 @@ function sanitizeValue(value: unknown, key?: string, attachmentMeta = false, har
   }
   const field = (key ?? "").toLowerCase();
   if (field === "ref") {
-    if (attachmentMeta && ARTIFACT_REF_PATTERN.test(value)) return value;
-    return ARTIFACT_REF_PATTERN.test(value) ? "[REDACTED]" : redactSecrets(value);
+    const shaped = ARTIFACT_REF_PATTERN.test(value);
+    if (attachmentMeta && shaped) return value;
+    return shaped ? "[REDACTED]" : redactSecrets(value);
   }
   if (field === "hash") {
-    if (attachmentMeta && SHA256_HEX.test(value)) return value;
-    return SHA256_HEX.test(value) ? "[REDACTED]" : redactSecrets(value);
+    const shaped = SHA256_HEX.test(value);
+    if (attachmentMeta && shaped) return value;
+    return shaped ? "[REDACTED]" : redactSecrets(value);
   }
   return redactSecrets(value);
 }

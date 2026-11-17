@@ -626,7 +626,8 @@ export class AgentSession {
     return messages.map((message) => {
       const clean = withoutImages(message);
       // Só mensagem de usuário carrega imagem no wire; o metadado do sumário
-      // (assistant) fica no store/export, mas não vira image_url de assistant.
+      // (assistant) é retido intencionalmente mesmo se o artefato expirou: não
+      // vira image_url nem reidrata, e o export preserva o resumo (#252).
       if (message.role !== "user") return clean;
       const images: ImagePart[] = [];
       const kept: AttachmentMeta[] = [];

@@ -321,7 +321,6 @@ describe("attachment resume (ADR-0026, #392)", () => {
     const api = new SessionApi(apiDir);
     try {
       chat.resume({
-        schemaVersion: 1,
         ...snapshot("s6", meta(good)),
         messages: [{ role: "user", content: "olhe", attachments: [meta(good), meta(dead)] }],
       });

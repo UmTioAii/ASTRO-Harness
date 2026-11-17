@@ -66,6 +66,12 @@ const GC_FILE = "gc.json";
 const DEFAULT_TTL_DAYS = 7;
 const DEFAULT_MAX_BYTES = 1024 ** 3;
 
+/** Ausente de verdade: só ENOENT/ENOTDIR vira `attachment_artifact_missing`. */
+function isMissingFile(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 /** Marcador de GC puro e read-only; ausente/inválido é `undefined`, nunca cria a raiz. */
 export function readGcMarker(root: string): GcMarker | undefined {
   try {
@@ -263,11 +269,20 @@ export class ArtifactStore {
     if (rel.startsWith("..") || isAbsolute(rel)) {
       throw new AttachmentError("attachment_image_invalid", `ref fora da raiz de artefato: ${ref}`);
     }
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch (error) {
+      if (isMissingFile(error)) {
+        throw new AttachmentError("attachment_artifact_missing", `metadado ausente: ${ref}`);
+      }
+      throw new AttachmentError("attachment_image_invalid", `metadado ilegível: ${ref}`);
+    }
     let meta: ArtifactMeta;
     try {
-      meta = JSON.parse(readFileSync(path, "utf8")) as ArtifactMeta;
+      meta = JSON.parse(raw) as ArtifactMeta;
     } catch {
-      throw new AttachmentError("attachment_artifact_missing", `metadado ausente ou ilegível: ${ref}`);
+      throw new AttachmentError("attachment_image_invalid", `metadado ilegível: ${ref}`);
     }
     if (
       meta === null || typeof meta !== "object" || meta.schema !== "artifact/v1" ||
@@ -302,8 +317,11 @@ export class ArtifactStore {
     let bytes: Uint8Array;
     try {
       bytes = new Uint8Array(readFileSync(path));
-    } catch {
-      throw new AttachmentError("attachment_artifact_missing", `artefato ausente ou expirado: ${ref}`);
+    } catch (error) {
+      if (isMissingFile(error)) {
+        throw new AttachmentError("attachment_artifact_missing", `artefato ausente ou expirado: ${ref}`);
+      }
+      throw new AttachmentError("attachment_image_invalid", `artefato ilegível: ${ref}`);
     }
     if (sha256(bytes) !== hash) {
       throw new AttachmentError("attachment_image_invalid", `hash do artefato divergente: ${ref}`);
