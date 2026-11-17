@@ -215,7 +215,7 @@ test("installer aborta download acima do teto sem bufferizar o corpo inteiro", a
     },
   });
   await expect(installSkill({
-    source: "https://skills.example/commit/SKILL.md",
+    source: "http://203.0.113.10/commit/SKILL.md",
     root: target,
     sourceKind: "user",
     fetchFn: async () => new Response(body, { status: 200 }),

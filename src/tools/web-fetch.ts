@@ -1,7 +1,6 @@
 /** Tool `web_fetch` (#57): baixa uma página e devolve texto sanitizado (untrusted). */
-import { lookup } from "node:dns/promises";
 import { redactSecrets } from "../sanitize-external";
-import { outboundUrlProblem, privateUrlsAllowed } from "../url-safety";
+import { privateUrlsAllowed, resolvedOutboundUrlProblem } from "../url-safety";
 import type { AuditLike, Tool, ToolContext, ToolResult } from "./types";
 
 export type WebFetchFormat = "markdown" | "text";
@@ -19,25 +18,6 @@ const MAX_LENGTH_LIMIT = 500_000;
 const MAX_REDIRECTS = 3;
 const READ_BYTES_LIMIT = 1_000_000;
 const TEXT_TYPES = /^(text\/|application\/(xhtml\+xml|xml|json))/i;
-
-/** Valida o literal e todos os endereços resolvidos (SSRF/DNS rebinding). */
-async function urlProblem(url: string, allowPrivate: boolean): Promise<string | undefined> {
-  const literal = outboundUrlProblem(url, { allowPrivate });
-  if (literal !== undefined) return literal;
-  const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
-  let addresses: Array<{ address: string }>;
-  try {
-    addresses = await lookup(host, { all: true });
-  } catch {
-    return "não foi possível resolver o host";
-  }
-  if (addresses.length === 0) return "host sem endereço";
-  for (const { address } of addresses) {
-    const blocked = outboundUrlProblem(`http://${address.includes(":") ? `[${address}]` : address}/`, { allowPrivate });
-    if (blocked !== undefined) return blocked;
-  }
-  return undefined;
-}
 
 /** URL de audit sem query/hash (assinaturas e tokens não vão para o log). */
 function auditUrl(raw: string): string {
@@ -239,7 +219,7 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
       let finalUrl = current;
       try {
         for (let hop = 0; hop <= maxRedirects; hop += 1) {
-          const problem = await urlProblem(current, allowPrivate);
+          const problem = await resolvedOutboundUrlProblem(current, { allowPrivate });
           if (problem !== undefined) return failure(`web_fetch: URL recusada (${problem})`);
           const response = await fetchImpl(current, { redirect: "manual", signal: ctx.signal });
           status = response.status;
