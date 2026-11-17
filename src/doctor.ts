@@ -7,9 +7,10 @@ import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, 
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { DEFAULT_ATTACHMENTS, loadConfig, loadConfigRaw, type MCPServerConfig } from "./core/config";
-import { loadEffectiveConfig } from "./providers/profiles";
+import { DEFAULT_ATTACHMENTS, loadConfig, loadConfigRaw, type AstroConfig, type MCPServerConfig } from "./core/config";
+import { loadEffectiveConfig, NoProviderError } from "./providers/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "./attachments/store";
+import { runHealthCheck, type HealthCheck, type HealthStatus } from "./health";
 import { ARTIFACT_KEY_PATTERN, SHA256_HEX } from "./internal-ids";
 import { headerEnvNames } from "./mcp/headers";
 import { resolveAstroHome } from "./permissions";
@@ -27,6 +28,38 @@ export interface Check {
 
 export interface DoctorReport {
   checks: Check[];
+}
+
+/** Status do contrato `DoctorCheck[]` (#61): `fail` interno aparece como `error`. */
+export type DoctorStatus = "ok" | "warn" | "error";
+
+/**
+ * Forma estável de cada check em `--json` (#61). `name/status/message` são o
+ * contrato; `level/label/detail` ficam como aliases do payload `doctor/v1`
+ * para não quebrar consumidores existentes.
+ */
+export interface DoctorCheck {
+  name: string;
+  status: DoctorStatus;
+  message: string;
+  /** @deprecated alias de `status`; `error` aparece como `fail`. */
+  level: CheckLevel;
+  /** @deprecated alias de `name`. */
+  label: string;
+  /** @deprecated alias de `message`, omitido quando não há detalhe. */
+  detail?: string;
+}
+
+/** Converte o check interno (`fail`) no contrato público (`error`). */
+export function toDoctorCheck(check: Check): DoctorCheck {
+  return {
+    name: check.label,
+    status: check.level === "fail" ? "error" : check.level,
+    message: check.detail ?? "",
+    level: check.level,
+    label: check.label,
+    ...(check.detail === undefined ? {} : { detail: check.detail }),
+  };
 }
 
 export interface ProviderFact {
@@ -115,7 +148,7 @@ export interface DoctorSummary {
 /** Payload estável de `astro doctor --json`. */
 export interface DoctorJson {
   schema: "doctor/v1";
-  checks: Check[];
+  checks: DoctorCheck[];
   summary: DoctorSummary;
   fixes?: FixReport;
 }
@@ -314,7 +347,7 @@ export function summarize(report: DoctorReport): DoctorSummary {
 export function doctorJson(report: DoctorReport, fixes?: FixReport): DoctorJson {
   return {
     schema: "doctor/v1",
-    checks: report.checks,
+    checks: report.checks.map(toDoctorCheck),
     summary: summarize(report),
     ...(fixes === undefined ? {} : { fixes }),
   };
@@ -749,6 +782,81 @@ export function collectFacts(
     disk: collectDiskFacts(env),
     env,
   };
+}
+
+/** Opções de rede do `--online`; sem elas o default do health é 5s por provider. */
+export interface OnlineOptions {
+  cwd?: string;
+  timeoutMs?: number;
+  fetchLike?: typeof fetch;
+}
+
+function onlineLevel(status: HealthStatus): CheckLevel {
+  return status === "ok" ? "ok" : status === "degraded" ? "warn" : "fail";
+}
+
+function healthCheck(check: HealthCheck): Check {
+  const latency = check.latencyMs === undefined ? "" : ` · ${check.latencyMs}ms`;
+  return {
+    level: check.status === "ok" ? "ok" : "fail",
+    label: check.name === "vault" ? "cofre" : check.name,
+    detail: `${redactSecrets(check.detail ?? "ok")}${latency}`,
+  };
+}
+
+/**
+ * `--online` (F6-6): health dos providers, um check por `HealthCheck`. Só é
+ * chamado quando pedido — offline não faz rede. Config ausente/inválida e
+ * falha do health viram check, nunca exceção; o timeout de cada provider é o
+ * do `runHealthCheck`.
+ */
+export async function collectOnlineChecks(
+  env: Record<string, string | undefined>,
+  options: OnlineOptions = {},
+): Promise<Check[]> {
+  const configPath = join(options.cwd ?? process.cwd(), "astro.config.json");
+  let config: AstroConfig;
+  try {
+    config = loadEffectiveConfig(configPath, { env, allowMissing: true }).config;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (error instanceof NoProviderError) {
+      return [{ level: "ok", label: "online", detail: "nenhum provider configurado; nada para verificar (sem rede)" }];
+    }
+    return [{ level: "warn", label: "online", detail: redactSecrets(`config inválida; health online não executado: ${detail}`) }];
+  }
+  if (Object.keys(config.providers).length === 0) {
+    return [{ level: "ok", label: "online", detail: "nenhum provider configurado; nada para verificar (sem rede)" }];
+  }
+  try {
+    const report = await runHealthCheck(config, env, {
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      ...(options.fetchLike === undefined ? {} : { fetchLike: options.fetchLike }),
+    });
+    const checks = report.checks.filter((check) => check.name !== "config").map(healthCheck);
+    // Qualquer provider fora é erro no doctor, mesmo quando o health agrega "degraded".
+    const providerDown = report.checks.some((check) => check.name.startsWith("provider:") && check.status === "down");
+    checks.unshift({
+      level: providerDown ? "fail" : onlineLevel(report.status),
+      label: "online",
+      detail: `health F6-6: ${report.status}`,
+    });
+    return checks.map(sanitizeCheck);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return [{ level: "fail", label: "online", detail: redactSecrets(`health online falhou: ${detail}`) }];
+  }
+}
+
+/** Relatório do CLI: checks offline e, só com `online: true`, o health F6-6. */
+export async function runDoctor(
+  root: string,
+  options: { online?: boolean; env?: NodeJS.ProcessEnv } & OnlineOptions = {},
+): Promise<DoctorReport> {
+  const report = runChecks(collectFacts(root, options.env === undefined ? {} : { env: options.env }));
+  if (options.online !== true) return report;
+  report.checks.push(...await collectOnlineChecks(options.env ?? process.env, options));
+  return report;
 }
 
 if (import.meta.main) {
