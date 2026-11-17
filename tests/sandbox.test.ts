@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runTask } from "../src/core/app";
@@ -367,5 +367,40 @@ describe("dockerArgv: máscaras do sandbox (ADR-0027, #391 slice 4a)", () => {
     );
     const root = resolve(link);
     for (const t of [".astro", "protected", "home"]) expect(hasRoMaskFor(argv, join(root, t))).toBe(true);
+  });
+});
+
+describe("sandbox: fontes de máscara não vazam em tmpdir (#391)", () => {
+  test("remove o diretório de máscara após sucesso e após falha do comando", async () => {
+    let fail = false;
+    const mock = installDockerSpawnMock(() => (fail ? { code: 1, stdout: "", stderr: "boom" } : "ok\n"));
+    try {
+      const mod = await isolatedRunCommand("s4a-mask-cleanup");
+      mod.configureRunCommand({ sandbox: true });
+      const cwd = mkdtempSync(join(tmpdir(), "astro-sb-mask-clean-"));
+      writeFileSync(join(cwd, ".env"), "X=1");
+      const target = join(resolve(cwd), ".env");
+      const maskSource = (): string | undefined => {
+        const argv = mock.runCalls.at(-1) ?? [];
+        const spec = argv.flatMap((v, i) => (v === "--volume" ? [argv[i + 1] as string] : []))
+          .find((s) => s.endsWith(`:${target}:ro`));
+        return spec?.slice(0, spec.length - `:${target}:ro`.length);
+      };
+
+      const ok = await mod.runCommandTool.execute({ command: "echo ok" }, ctx(cwd));
+      expect(ok.isError).toBeFalsy();
+      const successMask = maskSource();
+      expect(successMask).toBeDefined();
+      expect(existsSync(successMask!)).toBe(false);
+
+      fail = true;
+      const bad = await mod.runCommandTool.execute({ command: "echo fail" }, ctx(cwd));
+      expect(bad.isError).toBe(true);
+      const failureMask = maskSource();
+      expect(failureMask).toBeDefined();
+      expect(existsSync(failureMask!)).toBe(false);
+    } finally {
+      mock.restore();
+    }
   });
 });
