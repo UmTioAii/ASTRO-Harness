@@ -129,6 +129,14 @@ describe("sliceCoverage (#59)", () => {
     }
   });
 
+  test("task sem cobertura aparece como 0.00% em C4, não some", () => {
+    const slices = sliceCoverage(record("src/tools/task.ts", 0, 74, 0, 4).join("\n"), SLICE_MAPPING);
+    const row = formatSliceReport(slices).find((line) => line.startsWith("C4 multi-agent"));
+    expect(row).toContain("0.00%");
+    expect(row).toContain("0/74");
+    expect(slices.find((slice) => slice.slice === "unmapped")?.files).toBe(0);
+  });
+
   test("team e registry ficam fora de C4 (exclusão documentada)", () => {
     for (const path of ["src/team.ts", "src/core/registry.ts"]) {
       const slices = sliceCoverage(record(path, 1, 1).join("\n"), SLICE_MAPPING);
