@@ -103,6 +103,8 @@ describe("handoff com ack e retomada (F-24)", () => {
     o.ledger.recordHandoff("handoff.received", "r1", a, { agent: "coder", receiverAgent: "coder" });
     o.ledger.recordHandoff("handoff.failed", "r1", a, { agent: "coder", reason: "MaxStepsError" });
     const err = await runMultiAgentSession(o, "plan").then(() => null, (e) => e as Error);
+    expect(err).toBeInstanceOf(HandoffError); // D-18: erro classificado, não Error cru
+    expect((err as HandoffError).code).toBe("handoff_mismatch");
     expect(err?.message).toContain(handoffId(a));
     expect(err?.message).toContain("MaxStepsError");
     expect(o.ledger.readHandoffs().filter((e) => e.kind === "handoff.received")).toHaveLength(1);

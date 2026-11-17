@@ -27,13 +27,19 @@ describe("redação hex nos sinks (#252, P0)", () => {
   test("audit: hex 64+ em texto livre é redigido; digest/ID interno é preservado", () => {
     const cwd = dir("audit");
     const audit = auditorIn(cwd);
-    audit.append({ run: "r1", tipo: "probe", payload: { note: `chave ${HEX}`, sha256: HEX, callId: HEX } });
+    audit.append({
+      run: "r1",
+      tipo: "probe",
+      payload: { note: `chave ${HEX}`, sha256: HEX, callId: HEX, handoff_id: HEX, ledger_id: HEX },
+    });
 
     const event = audit.readAll()[0]!;
     expect(event.payload.note).toBe("chave [REDACTED]");
-    // digest/ID gerado pelo harness continua correlacionável
+    // digest/ID gerado pelo harness continua correlacionável (handoff show/ack/scan)
     expect(event.payload.sha256).toBe(HEX);
     expect(event.payload.callId).toBe(HEX);
+    expect(event.payload.handoff_id).toBe(HEX);
+    expect(event.payload.ledger_id).toBe(HEX);
     const text = readFileSync(join(cwd, "audit.jsonl"), "utf8");
     expect(text).not.toContain(`chave ${HEX}`);
   });

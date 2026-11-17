@@ -122,6 +122,27 @@ describe("CompletionCache (F6-4)", () => {
     }
   });
 
+  test("set preserva toolCalls[].arguments: replay de edit/write_file não corrompe o diff", () => {
+    const cache = makeCache();
+    try {
+      const sk = ["s", "k", "-", "rede", "de", "teste", "123456"].join("");
+      const hex = "a1b2c3d4".repeat(8);
+      const diff = `@@ -1 +1 @@\n-const a = 1;\n+const k = "${sk}";\n+const h = "${hex}";\n`;
+      const args = JSON.stringify({ path: "a.ts", diff });
+      cache.set("k1", resp({
+        content: `chave ${sk}`,
+        toolCalls: [{ id: "c1", name: "edit", arguments: args }],
+      }), 100);
+
+      const hit = cache.get("k1", 24)!;
+      expect(hit.content).not.toContain(sk);
+      expect(hit.content).toContain("[REDACTED]");
+      expect(hit.toolCalls).toEqual([{ id: "c1", name: "edit", arguments: args }]);
+    } finally {
+      cache.close();
+    }
+  });
+
   test("ttlHours 0 desliga o cache: não lê nem grava (D-23)", async () => {
     const cache = makeCache();
     let calls = 0;
