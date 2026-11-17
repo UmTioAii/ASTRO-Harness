@@ -409,6 +409,33 @@ describe("benchmark de providers (F5-4)", () => {
     expect(md).toContain("Sucesso agregado: 0% (0/0)");
   });
 
+  test("formatMarkdown aceita relatório v1 sem summary", () => {
+    const v1 = {
+      schema: 1,
+      date: "2026-10-23",
+      prompts: 5,
+      results: [
+        benchResult({
+          model: "a/1",
+          latencyMs: { min: 1, p50: 2, p95: 3, max: 4 },
+          costPer1kOutUsd: 1.5,
+          successRate: 0.8,
+          completed: 4,
+          total: 5,
+        }),
+        benchResult({
+          model: "b/2",
+          latencyMs: { min: 1, p50: 3, p95: 4, max: 5 },
+          costPer1kOutUsd: null,
+        }),
+      ],
+    } as unknown as BenchReport;
+    const md = formatMarkdown(v1);
+    expect(md).toContain("- Mais rápido: `a/1` (p50 2ms)");
+    expect(md).toContain("- Mais barato: `a/1` (US$ 1.5000/1k out)");
+    expect(md).toContain("- Maior success rate: `b/2` (100% (5/5))");
+  });
+
   test("formatBenchTable mostra a taxa de sucesso por modelo", () => {
     const report: BenchReport = {
       schema: 2, date: "2026-10-23", prompts: 5,
