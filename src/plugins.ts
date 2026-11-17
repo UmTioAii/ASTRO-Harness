@@ -6,6 +6,7 @@
  */
 import { isAbsolute, resolve } from "node:path";
 import type { Provider } from "./providers/types";
+import { validateManifest } from "./sdk/tool";
 import type { Tool } from "./tools/types";
 
 /** Fábrica de provider registrada por plugin, keyed por `kind` da config. */
@@ -123,8 +124,16 @@ export async function loadPlugins(
         continue;
       }
       for (const tool of definition.tools ?? []) {
-        if (typeof tool.manifest?.name !== "string") {
-          warn(`plugin "${definition.name}" registrou tool sem manifesto; ignorada`);
+        if (typeof tool !== "object" || tool === null) {
+          warn(`plugin "${definition.name}" registrou tool inválida; ignorada`);
+          continue;
+        }
+        try {
+          // #264: plugin não passa pelo typechecker; valida o manifesto no load.
+          validateManifest(tool.manifest);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          warn(`plugin "${definition.name}" registrou tool inválida: ${detail}; ignorada`);
           continue;
         }
         tools.push(tool);
