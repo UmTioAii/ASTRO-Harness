@@ -14,10 +14,12 @@ Objetivo: publicar `@umtioai/astro-harness` (gate em #230), do bump à verifica�
 | 2 | `name` do `package.json` igual ao pacote publicado (mesma grafia de escopo) | `package.json` |
 | 3 | `bun test` verde em 10 execuções consecutivas e `bun run typecheck` verde | §3 |
 | 4 | CI do PR de release verde: `test` nos dois SOs, `eval` e `secrets` | `docs/ci.md` |
-| 5 | Conta npm com permissão no escopo e no registry de destino, 2FA resolvida e `npm login` válido | humano |
-| 6 | Versão, tag e notas acordadas na issue de release | humano |
+| 5 | `npm config get "@umtioai:registry"` = `https://registry.npmjs.org/` (se `undefined`: `npm config set "@umtioai:registry" https://registry.npmjs.org/`); outro valor aborta | humano |
+| 6 | Conta npm no escopo público, 2FA/`npm login` válidos, versão/tag/notas acordadas na issue | humano |
 
-Escopo novo não é atualização: publicar com `name` diferente cria outro pacote ou falha (`npm view @umtioai/astro-harness version` deve responder). Defina `export PKG=@umtioai/astro-harness` antes das seções 7 e 8.
+`@scope:registry` do `.npmrc` vence `--registry` e `publishConfig.registry`: com `name` divergente, um mapa errado (`@umtioaii:registry=https://npm.pkg.github.com`, um `i` a mais) publica fora do npmjs com exit 0; por isso publish, view, install e rollback fixam `--@umtioai:registry=https://registry.npmjs.org/`.
+
+`export PKG=@umtioai/astro-harness` (= `npm pkg get name`). Escopo novo não é atualização: `npm view "$PKG" version` precisa responder no registry público.
 
 ## 2. Versão e notas
 
@@ -27,7 +29,7 @@ Escopo novo não é atualização: publicar com `name` diferente cria outro paco
 
 ## 3. Gate de CI
 
-Na cabeça da branch de release, com lockfile congelado:
+Na cabeça da branch de release, em Git Bash/WSL (o loop é bash), com lockfile congelado:
 
 ```bash
 bun install --frozen-lockfile
@@ -43,7 +45,7 @@ bun run smoke
 
 ## 4. Pacote e instalação limpa
 
-Depois do merge, trabalhe na tag, não no worktree sujo:
+Depois do merge, trabalhe na tag; §4–§8 no mesmo shell, sem worktree sujo:
 
 ```bash
 git fetch --tags && git switch --detach "v$(npm pkg get version | tr -d '"')"
@@ -52,7 +54,7 @@ git status --short                  # vazio
 bun install --frozen-lockfile
 npm pack --dry-run                  # lista: dist/, README.md, LICENSE, package.json
 PACKDIR=$(mktemp -d) && npm pack --pack-destination "$PACKDIR"
-TARBALL=$(ls "$PACKDIR"/*.tgz)
+TARBALL=$(ls "$PACKDIR"/*.tgz 2>/dev/null) && [ -n "$TARBALL" ] && [ "$(printf '%s\n' "$TARBALL" | wc -l)" -eq 1 ] || { echo "pack: esperava 1 .tgz"; exit 1; }
 ```
 
 - `prepack` roda o build e `prepublishOnly` o typecheck; não use `--ignore-scripts`.
@@ -98,8 +100,7 @@ mkdir -p "$TMP/astro-home" && export ASTRO_HOME="$TMP/astro-home"   # isola perf
 |---|---|
 | adicionar (`a`) | `custom`, nome `mock` |
 | base URL | `http://127.0.0.1:8787/v1` |
-| modelos | `mock-model` |
-| credencial | vazio (provider local, sem chave) |
+| modelos / credencial | `mock-model` / vazio (provider local, sem chave) |
 | salvar → testar (`t`, enter) → ativar (enter) | `ok` com latência |
 
 - Fora da TUI, `astro providers test mock` exige `astro.config.json` no diretório; `401/403` indica credencial, `outage`/`network_timeout` indica URL ou porta. Tela e `providers.json` nunca mostram segredo (`I-03`). Provider real: smoke manual de `docs/providers.md`.
@@ -109,27 +110,28 @@ mkdir -p "$TMP/astro-home" && export ASTRO_HOME="$TMP/astro-home"   # isola perf
 Publique o `.tgz` já testado, com a tag de pré-release:
 
 ```bash
-npm publish "$TARBALL" --tag alpha
+npm publish "$TARBALL" --tag alpha "--@umtioai:registry=https://registry.npmjs.org/"
 ```
 
 - `publishConfig.access: public` vem do `package.json`; não passe `--access` divergente. Publish de `.tgz` não roda hooks: valem o gate do §3 e o pack do §4.
-- 2FA: `npm publish "$TARBALL" --tag alpha --otp <código>`. Token por `NODE_AUTH_TOKEN` ou `npm login`, nunca no repositório (`I-03`).
+- 2FA: deixe o npm pedir o código; não passe `--otp` (fica no histórico). Token por `NODE_AUTH_TOKEN` ou `npm login`, nunca no repositório (`I-03`).
 - `--tag alpha` move só `alpha`; `latest` muda apenas por decisão explícita (§7). Se o publish falhar, incremente a versão; não a reutilize.
 
 ## 7. Verificação pós-publicação
 
 ```bash
-npm view "$PKG" version dist-tags --json
+npm view "$PKG" version dist-tags --json "--@umtioai:registry=https://registry.npmjs.org/"
+TB=$(npm view "$PKG@alpha" dist.tarball "--@umtioai:registry=https://registry.npmjs.org/")
+printf '%s\n' "$TB" | grep -q '^https://registry.npmjs.org/' || { echo "registry errado: $TB"; exit 1; }
 TMP2=$(mktemp -d) && cd "$TMP2" && npm init -y >/dev/null
-npm install "$PKG@alpha"
+npm install "$PKG@alpha" "--@umtioai:registry=https://registry.npmjs.org/"
 ./node_modules/.bin/astro --help | grep -q "astro run" && echo "publish ok"
 ```
 
 | Verificação | Esperado |
 |---|---|
-| `version`, `dist-tags.alpha` e `latest` | versão publicada; `latest` inalterado ou movido por decisão da issue |
-| Instalação nova por `@alpha` e `--help` | exit 0, comandos listados |
-| TUI + provider mock | §5, com `ASTRO_HOME` novo |
+| `version`, `dist-tags.alpha`, `latest` e host do `dist.tarball` | versão publicada; `latest` inalterado ou movido por decisão da issue; host `registry.npmjs.org` |
+| Instalação nova por `@alpha`; `--help` e TUI + mock | exit 0, comandos listados; §5 |
 | GitHub Release `v<versão>` | tag no commit do merge, notas da §2 |
 
 ## 8. Rollback
@@ -137,10 +139,8 @@ npm install "$PKG@alpha"
 | Quando | Ação |
 |---|---|
 | Antes do publish | feche o PR e apague a tag local/remota; nada foi publicado |
-| Versão publicada com defeito | publique a próxima versão com a correção; não reescreva a existente |
-| Pré-release quebrada | `npm dist-tag add "$PKG@<anterior>" alpha` e `npm deprecate "$PKG@<ruim>" "quebrada; use <anterior>"` |
-| `latest` errado | `npm dist-tag add "$PKG@<boa>" latest` |
-| Segredo no pacote | revogue a credencial (`I-03`), deprecate a versão e publique a correção; `npm unpublish` só em até 72 h, sem dependentes e com decisão do dono |
+| Versão com defeito (inclui segredo) | revogue a credencial (`I-03`); publique a próxima versão com a correção, sem reescrever a existente; `npm unpublish` só em até 72 h, sem dependentes e com decisão do dono |
+| Pré-release ou `latest` errado | `npm dist-tag add "$PKG@<boa>" alpha "--@umtioai:registry=https://registry.npmjs.org/"` (ou `latest`); se a versão ruim continua instalável, `npm deprecate "$PKG@<ruim>" "quebrada; use <boa>" "--@umtioai:registry=https://registry.npmjs.org/"` |
 
 - `npm unpublish` é exceção: quebra instalações e o registry pode recusar. Prefira deprecate + versão corrigida; versão publicada não aceita sobrescrita. Ajuste o GitHub Release (pré-release/deprecado) e registre na issue.
 
