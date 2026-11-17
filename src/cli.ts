@@ -18,7 +18,7 @@ import { formatAgentsList } from "./agent-manager";
 import { buildModelCatalog, formatModelCatalog, formatSeedList } from "./model-catalog";
 import { PROVIDER_CATALOG } from "./provider/catalog";
 import { evalFailsThreshold, runEval, writeBaseline, type EvalReport } from "./eval/harness";
-import { runBenchmark, type BenchReport } from "./eval/bench";
+import { formatBenchTable, runBenchmark, type BenchReport } from "./eval/bench";
 import { Metrics, startMetricsServer } from "./metrics";
 import { formatBudgetEstimate } from "./budget";
 import { replayRun } from "./replay";
@@ -1011,16 +1011,6 @@ function formatEval(report: EvalReport): string {
     lines.push(`  ✗ ${c.case}: ${c.diffSummary.join("; ")}`);
   }
   return lines.join("\n");
-}
-
-/** Tabela compacta de bench no stdout. */
-function formatBenchTable(report: BenchReport): string {
-  const lines = report.results.map(
-    (r) =>
-      `${r.model} · p50 ${r.latencyMs.p50}ms · ${r.tokensPerSec} tok/s · custo/1k out ` +
-      `${r.costPer1kOutUsd === null ? "n/d" : `US$ ${r.costPer1kOutUsd.toFixed(4)}`}`,
-  );
-  return [`bench: ${report.results.length} modelos · ${report.prompts} prompts`, ...lines].join("\n");
 }
 
 async function main(argv: string[]): Promise<number> {

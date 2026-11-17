@@ -187,6 +187,20 @@ function fmtRate(r: BenchModelResult): string {
   return `${Math.round(r.successRate * 100)}% (${r.completed}/${r.total})`;
 }
 
+/**
+ * Tabela do CLI: latência, tokens, custo e taxa de sucesso por modelo.
+ * A taxa vem de `completed / total` (chamadas concluídas, não acertos).
+ */
+export function formatBenchTable(report: BenchReport): string {
+  const lines = report.results.map(
+    (r) =>
+      `${r.model} · p50 ${r.latencyMs.p50}ms · ${r.tokensPerSec} tok/s · custo/1k out ` +
+      `${r.costPer1kOutUsd === null ? "n/d" : `US$ ${r.costPer1kOutUsd.toFixed(4)}`} · ` +
+      `sucesso ${Math.round(r.successRate * 100)}% (${r.completed}/${r.total})`,
+  );
+  return [`bench: ${report.results.length} modelos · ${report.prompts} prompts`, ...lines].join("\n");
+}
+
 /** Tabela Markdown do relatório. */
 export function formatMarkdown(report: BenchReport): string {
   const completed = report.results.reduce((sum, r) => sum + r.completed, 0);
