@@ -59,8 +59,10 @@ export class CompletionCache {
 
   /** Armazena a resposta redigida (I-03); acima de maxEntries, remove a mais antiga. */
   set(key: string, response: CompletionResponse, maxEntries: number): void {
-    // Redige o JSON serializado: segredo devolvido pelo provider não vai para o disco.
-    const stored = redactSecrets(JSON.stringify(response));
+    // Só `content` é texto livre do provider. `toolCalls[].arguments` fica
+    // intacto: redigir o JSON inteiro corromperia diffs de edit/write_file no
+    // replay do cache (o argumento é o contrato executável, não conteúdo).
+    const stored = JSON.stringify({ ...response, content: redactSecrets(response.content) });
     const tx = this.#db.transaction(() => {
       this.#db.run(
         "INSERT OR REPLACE INTO cache (key, response, created_ms) VALUES (?, ?, ?)",

@@ -941,8 +941,13 @@ export async function runMultiAgentSession(
     // Varredura de retomada (F-24): pendências do run no ledger do cwd corrente
     const resume = scanHandoffs(opts.ledger, opts.run).at(-1);
     if (resume !== undefined && resume.state === "failed") {
-      // Falho permanente: reporta e não reexecuta (I-19)
-      throw new Error(`handoff ${resume.handoff_id} falhou permanentemente e não será reexecutado${resume.reason === undefined ? "" : `: ${resume.reason}`}`);
+      // Falho permanente: reporta e não reexecuta (I-19). HandoffError (D-18)
+      // preserva o ID interno para correlação com o ledger.
+      throw new HandoffError(
+        "handoff_mismatch",
+        `handoff ${resume.handoff_id} falhou permanentemente e não será reexecutado${resume.reason === undefined ? "" : `: ${resume.reason}`}`,
+        { hexIdentifiers: true },
+      );
     }
     if (resume !== undefined && resume.state === "pending") {
       const pending = resume;

@@ -60,10 +60,10 @@ const REDACT_PEM = new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----
 // redigido sem contexto. SHA-1/git (40) só com rótulo de credencial, para
 // `git log`/`commit <sha>` continuarem legíveis; 32 hex (MD5/checksum) fica
 // como residual documentado em docs/security-threat-matrix.md.
-const REDACT_HEX_LONG = /\b[0-9a-fA-F]{64,}\b/g;
-const HEX_KEY_LABEL = "(?:[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?key|secret|token|credential|password|auth|key)[A-Za-z0-9_-]*)";
+const REDACT_HEX_LONG = /(?<![0-9a-fA-F])[0-9a-fA-F]{64,}(?![0-9a-fA-F])/g;
+const HEX_KEY_TOKEN = "(?:api[-_]?key|access[-_]?key|secret|token|credential|password|auth|key)";
 const REDACT_HEX_40_KEY = new RegExp(
-  `\\b(${HEX_KEY_LABEL}(?:${QUOTE})?\\s*[=:]\\s*(?:${QUOTE})?)([0-9a-fA-F]{40})\\b`,
+  `(?<![A-Za-z0-9])(${HEX_KEY_TOKEN}(?:${QUOTE})?\\s*[=:]\\s*(?:${QUOTE})?)([0-9a-fA-F]{40})(?![0-9a-fA-F])`,
   "gi",
 );
 
