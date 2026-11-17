@@ -25,7 +25,7 @@ Objetivo: publicar `@umtioai/astro-harness` (gate em #230), do bump à verifica�
 
 - `version` em `package.json` é a única fonte (`npm pkg get version`); `dist/` é gerado e não entra no git. Pré-release: `0.1.0-alpha.N` → `N+1`; base nova (`0.2.0-alpha.1`) só quando o milestone fecha; compatibilidade de config segue `ADR-0028`.
 - Notas: não há `CHANGELOG.md`; o GitHub Release da tag é o registro. Agrupe por tipo (`feat`, `fix`, `docs`, `chore`) os PRs desde a tag anterior (`git log --oneline <tag-anterior>..HEAD`; sem tag, use `npm view <pkg> time.modified`) e destaque deprecações de config.
-- Bump em PR `chore/release-<versão>` (só `package.json`), squash merge. A tag `v<versão>` aponta para o commit do merge na `main`, nunca para um commit local.
+- Bump em PR `chore/230-release-<versão>` (só `package.json`), squash merge; a tag fica no commit do merge, nunca local.
 
 ## 3. Gate de CI
 
@@ -34,31 +34,30 @@ Na cabeça da branch de release, em Git Bash/WSL (o loop é bash), com lockfile 
 ```bash
 bun install --frozen-lockfile
 bun run typecheck
-for i in $(seq 1 10); do bun test || { echo "falhou na execução $i"; break; }; done
+for i in $(seq 1 10); do bun test || { echo "falhou na execução $i"; exit 1; }; done
 bun run build
 bun run smoke
 ```
 
-- As 10 execuções são consecutivas e no mesmo commit; intermitência reprova o gate, não vira "verde com ressalva". Registre o resultado na issue.
+- As 10 execuções são consecutivas e no mesmo commit; intermitência reprova o gate, não vira "verde com ressalva". Os jobs de `docs/ci.md` rodam no PR e bloqueiam o merge; registre o resultado na issue.
 - `smoke` reexecuta o build e valida `dist/launcher.js` com Node sem Bun no `PATH` (`scripts/smoke.ts`), incluindo `astro --help` e o help sem TTY.
-- Os jobs de `docs/ci.md` rodam no PR de release e bloqueiam o merge como em qualquer PR.
 
 ## 4. Pacote e instalação limpa
 
-Depois do merge, trabalhe na tag; §4–§8 no mesmo shell, sem worktree sujo:
+Depois do merge, crie a tag no commit do merge e trabalhe nela; §1 e §4–§8 no mesmo shell, sem worktree sujo:
 
 ```bash
+git fetch origin main && git tag -a "v<versão>" "$(git rev-parse origin/main)" -m "v<versão>" && git push origin "v<versão>"
+gh release create "v<versão>" --verify-tag --notes-file <notas.md>
 git fetch --tags && git switch --detach "v$(npm pkg get version | tr -d '"')"
-git describe --tags --exact-match   # v<versão>
-git status --short                  # vazio
+git describe --tags --exact-match && git status --short   # v<versão>; vazio
 bun install --frozen-lockfile
 npm pack --dry-run                  # lista: dist/, README.md, LICENSE, package.json
 PACKDIR=$(mktemp -d) && npm pack --pack-destination "$PACKDIR"
 TARBALL=$(ls "$PACKDIR"/*.tgz 2>/dev/null) && [ -n "$TARBALL" ] && [ "$(printf '%s\n' "$TARBALL" | wc -l)" -eq 1 ] || { echo "pack: esperava 1 .tgz"; exit 1; }
 ```
 
-- `prepack` roda o build e `prepublishOnly` o typecheck; não use `--ignore-scripts`.
-- O install baixa o runtime `bun` pinado (`ADR-0017`, `ADR-0018`); espere ~100 MB e exija rede.
+- `prepack` roda o build e `prepublishOnly` o typecheck; não use `--ignore-scripts`. O install limpo baixa o `bun` pinado (`ADR-0017`, `ADR-0018`): ~100 MB e rede.
 
 Instalação limpa, sem config nem `ASTRO_HOME` do host:
 
@@ -82,17 +81,17 @@ createServer((req, res) => {
   if (req.method === "GET" && req.url?.endsWith("/models")) return res.writeHead(200, { "content-type": "application/json" }).end('{"data":[{"id":"mock-model","object":"model"}]}');
   if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) return res.writeHead(404).end();
   req.resume(); req.on("end", () => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
-    id: "mock", object: "chat.completion", model: "mock-model",
     choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
     usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9 } })));
 }).listen(8787, "127.0.0.1", () => console.log("mock: http://127.0.0.1:8787/v1"));
 ```
 
-No diretório limpo do §4 (mesmo shell, terminal interativo):
+No diretório limpo do §4 (mesmo shell, terminal interativo). O mock é loopback: sem o opt-in de dev abaixo o wizard recusa (`src/url-safety.ts`); a regra de `baseUrl` está em `docs/providers.md`:
 
 ```bash
 node mock-openai.mjs &
 mkdir -p "$TMP/astro-home" && export ASTRO_HOME="$TMP/astro-home"   # isola perfis e cofre
+export ASTRO_ALLOW_PRIVATE_URLS=1    # só para o mock local; não use fora do teste
 ./node_modules/.bin/astro              # sem provider: abre a tela de providers
 ```
 
@@ -101,9 +100,10 @@ mkdir -p "$TMP/astro-home" && export ASTRO_HOME="$TMP/astro-home"   # isola perf
 | adicionar (`a`) | `custom`, nome `mock` |
 | base URL | `http://127.0.0.1:8787/v1` |
 | modelos / credencial | `mock-model` / vazio (provider local, sem chave) |
-| salvar → testar (`t`, enter) → ativar (enter) | `ok` com latência |
+| salvar | ativa e fecha o setup; a TUI abre |
+| na TUI: `/providers` → `t` → enter | `ok` com latência |
 
-- Fora da TUI, `astro providers test mock` exige `astro.config.json` no diretório; `401/403` indica credencial, `outage`/`network_timeout` indica URL ou porta. Tela e `providers.json` nunca mostram segredo (`I-03`). Provider real: smoke manual de `docs/providers.md`.
+- Fora da TUI, `astro providers test mock` exige `astro.config.json` no diretório; `401/403` indica credencial; timeout, abort ou conexão recusada aparecem como `outage` (a tela não usa `network_timeout`). Tela e `providers.json` nunca mostram segredo (`I-03`). Provider real: smoke manual de `docs/providers.md`.
 
 ## 6. Publicação
 
@@ -113,9 +113,8 @@ Publique o `.tgz` já testado, com a tag de pré-release:
 npm publish "$TARBALL" --tag alpha "--@umtioai:registry=https://registry.npmjs.org/"
 ```
 
-- `publishConfig.access: public` vem do `package.json`; não passe `--access` divergente. Publish de `.tgz` não roda hooks: valem o gate do §3 e o pack do §4.
-- 2FA: deixe o npm pedir o código; não passe `--otp` (fica no histórico). Token por `NODE_AUTH_TOKEN` ou `npm login`, nunca no repositório (`I-03`).
-- `--tag alpha` move só `alpha`; `latest` muda apenas por decisão explícita (§7). Se o publish falhar, incremente a versão; não a reutilize.
+- `publishConfig.access: public` vem do `package.json`; não passe `--access` divergente. Publish de `.tgz` não roda hooks (valem §3/§4). `--tag alpha` move só `alpha`; `latest` só por decisão (§7); publish que falha exige versão nova, não reutilizada.
+- 2FA: deixe o npm pedir o código; não passe `--otp` (fica no histórico). Token por `npm login` ou pela linha `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` no `.npmrc` (nunca no repositório, `I-03`).
 
 ## 7. Verificação pós-publicação
 
@@ -132,13 +131,14 @@ npm install "$PKG@alpha" "--@umtioai:registry=https://registry.npmjs.org/"
 |---|---|
 | `version`, `dist-tags.alpha`, `latest` e host do `dist.tarball` | versão publicada; `latest` inalterado ou movido por decisão da issue; host `registry.npmjs.org` |
 | Instalação nova por `@alpha`; `--help` e TUI + mock | exit 0, comandos listados; §5 |
-| GitHub Release `v<versão>` | tag no commit do merge, notas da §2 |
+| GitHub Release `v<versão>` | tag e release criados em §4; notas conferem |
 
 ## 8. Rollback
 
 | Quando | Ação |
 |---|---|
-| Antes do publish | feche o PR e apague a tag local/remota; nada foi publicado |
+| Antes do merge | feche o PR; nada foi publicado |
+| Depois do merge, antes do publish | nada foi publicado; apague a tag e o GitHub Release |
 | Versão com defeito (inclui segredo) | revogue a credencial (`I-03`); publique a próxima versão com a correção, sem reescrever a existente; `npm unpublish` só em até 72 h, sem dependentes e com decisão do dono |
 | Pré-release ou `latest` errado | `npm dist-tag add "$PKG@<boa>" alpha "--@umtioai:registry=https://registry.npmjs.org/"` (ou `latest`); se a versão ruim continua instalável, `npm deprecate "$PKG@<ruim>" "quebrada; use <boa>" "--@umtioai:registry=https://registry.npmjs.org/"` |
 
