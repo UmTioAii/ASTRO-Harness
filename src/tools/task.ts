@@ -121,6 +121,18 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
     },
     async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
       const raw = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
+      /** A2/A4: o teto conta agentes vivos; sem a dependência, assume o pai (fail closed). */
+      const availableSlots = (): { maxActive: number; available: number } => {
+        const maxActive = deps.maxActive ?? 2;
+        return { maxActive, available: maxActive - (deps.activeCount?.() ?? 1) };
+      };
+      const noSlot = (maxActive: number): ToolResult => ({
+        output: JSON.stringify({
+          error: "spawn_limit_exceeded",
+          message: `teto de ${maxActive} agentes ativos por run atingido`,
+        }),
+        isError: true,
+      });
       const delegation = (task: FanOutTask, signal?: AbortSignal): Promise<string> => deps.delegate({
         agent: task.agent,
         prompt: task.prompt,
@@ -147,18 +159,9 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           tasks.push(parsed);
         }
         // A2/A4: `maxActive` conta agentes vivos (o pai já segura um lock).
-        const maxActive = deps.maxActive ?? 2;
-        const live = deps.activeCount?.() ?? 0;
-        const available = maxActive - live;
-        if (available < 1) {
-          return {
-            output: JSON.stringify({
-              error: "spawn_limit_exceeded",
-              message: `teto de ${maxActive} agentes ativos por run atingido`,
-            }),
-            isError: true,
-          };
-        }
+        const slots = availableSlots();
+        if (slots.available < 1) return noSlot(slots.maxActive);
+        const { available } = slots;
         tasks.forEach((task, index) => {
           deps.audit.append({
             run: ctx.run,
@@ -226,6 +229,8 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
       const composed = raw.context === undefined || raw.context === ""
         ? prompt
         : `${raw.context}\n\n${prompt}`;
+      const slots = availableSlots();
+      if (slots.available < 1) return noSlot(slots.maxActive);
       deps.audit.append({
         run: ctx.run,
         agent: ctx.agent,

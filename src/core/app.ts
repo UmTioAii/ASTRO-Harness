@@ -983,9 +983,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         throw new Error(`task: agent "${agent}" usa outra conta; delegação entre contas exige spawn.parallel`);
       }
       const parentAllow = new Set(callerAllow ?? config.agent.tools);
-      // Teto = allowlist efetiva do chamador, sem recursão de task em v1.
+      // Teto = allowlist efetiva do chamador, sem recursão de task nem neto via
+      // spawn_agent em filho de task (ADR-0008 A5/A11).
       const allow = (target.tools ?? config.agent.tools)
-        .filter((name) => parentAllow.has(name) && name !== "task");
+        .filter((name) => parentAllow.has(name) && name !== "task" && name !== "spawn_agent");
       const executor = new ToolExecutor({
         tools: childTools,
         allow,
