@@ -3,7 +3,14 @@
 const SENSITIVE_QUERY = /^(api[-_]?key|key|token|access[-_]?token|secret)$/i;
 
 /** Hosts de metadados de nuvem conhecidos (nunca são destinos legítimos). */
-const METADATA_HOSTS = new Set(["metadata.google.internal", "metadata.goog", "instance-data"]);
+const METADATA_HOSTS = new Set([
+  "metadata.google.internal",
+  "metadata.goog",
+  "instance-data",
+  "instance-data.ec2.internal",
+  "metadata.tencentyun.com",
+  "fd00:ec2::254",
+]);
 
 function parse(raw: string): URL | undefined {
   try {
@@ -36,22 +43,37 @@ function bareHost(hostname: string): string {
   return lower.startsWith("[") && lower.endsWith("]") ? lower.slice(1, -1) : lower;
 }
 
+/** IPv4 link-local (169.254/16) ou CGNAT (100.64/10), sempre metadados. */
+function ipv4LinkLocalOrCgnat(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  const nums = parts.map((part) => (/^\d+$/.test(part) ? Number(part) : Number.NaN));
+  if (nums.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [a, b] = nums as [number, number, number, number];
+  return (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+}
+
+/** IPv4 embutido em IPv6 mapeado (`::ffff:a.b.c.d` ou `::ffff:xxxx:xxxx`). */
+function mappedIpv4(host: string): string | undefined {
+  const mapped = /^::ffff:(.+)$/.exec(host);
+  if (mapped === null) return undefined;
+  const rest = mapped[1]!.toLowerCase();
+  if (rest.includes(".")) return rest;
+  const groups = rest.split(":");
+  if (groups.length !== 2 || !groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return undefined;
+  const hi = Number.parseInt(groups[0]!, 16);
+  const lo = Number.parseInt(groups[1]!, 16);
+  return [hi >> 8, hi & 255, lo >> 8, lo & 255].join(".");
+}
+
 function ipv6Private(host: string): boolean {
   const lower = bareHost(host);
   if (lower === "::" || lower === "::1") return true;
   if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
   if (/^fe[89ab]/.test(lower)) return true;
-  const mapped = /^::ffff:(.+)$/.exec(lower);
-  if (mapped !== null) {
-    const rest = mapped[1]!;
-    if (rest.includes(".")) return ipv4Private(rest);
-    const groups = rest.split(":");
-    if (groups.length === 2 && groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) {
-      const hi = Number.parseInt(groups[0]!, 16);
-      const lo = Number.parseInt(groups[1]!, 16);
-      return ipv4Private([hi >> 8, hi & 255, lo >> 8, lo & 255].join("."));
-    }
-    return true;
+  if (/^::ffff:/.test(lower)) {
+    const mapped = mappedIpv4(lower);
+    return mapped === undefined ? true : ipv4Private(mapped);
   }
   return false;
 }
@@ -60,10 +82,9 @@ function isMetadataOrLinkLocal(url: URL): boolean {
   const host = url.hostname.toLowerCase();
   const bare = bareHost(host);
   if (METADATA_HOSTS.has(host) || METADATA_HOSTS.has(bare)) return true;
-  if (ipv4Private(bare)) {
-    const [a, b] = bare.split(".").map(Number) as [number, number, number, number];
-    if ((a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)) return true;
-  }
+  if (ipv4LinkLocalOrCgnat(bare)) return true;
+  const mapped = mappedIpv4(bare);
+  if (mapped !== undefined && ipv4LinkLocalOrCgnat(mapped)) return true;
   return bare.startsWith("fe8")
     || bare.startsWith("fe9")
     || bare.startsWith("fea")
@@ -100,8 +121,8 @@ export function urlProblem(raw: string): string | undefined {
 /**
  * URL de saída que recebe dado do harness (webhook, telemetria, MCP, instalação
  * de skill). Além das regras de `urlProblem`, recusa loopback e faixas privadas
- * para evitar SSRF/exfiltração; `allowPrivate` (opt-in de dev) libera apenas
- * loopback/RFC1918, nunca metadados.
+ * para evitar SSRF/exfiltração; `allowPrivate` (opt-in de dev) libera loopback,
+ * RFC1918, ULA e faixas reservadas, nunca metadados/link-local.
  */
 export function outboundUrlProblem(raw: string, opts: { allowPrivate?: boolean } = {}): string | undefined {
   const base = urlProblem(raw);
