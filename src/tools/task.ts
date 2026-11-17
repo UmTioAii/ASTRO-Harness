@@ -129,10 +129,10 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
        */
       const availableSlots = (): { maxActive: number; available: number } => {
         const configured = deps.maxActive ?? 2;
-        const maxActive = Number.isFinite(configured) && configured > 0 ? configured : 2;
-        const live = deps.activeCount?.() ?? 1;
-        const active = Number.isFinite(live) ? Math.max(0, live) : 1;
-        return { maxActive, available: Math.max(0, maxActive - active) };
+        const maxActive = Number.isInteger(configured) && configured > 0 ? configured : 2;
+        const rawLive = deps.activeCount?.() ?? 1;
+        const live = Number.isFinite(rawLive) ? Math.floor(Math.max(0, rawLive)) : 1;
+        return { maxActive, available: Math.max(0, maxActive - live) };
       };
       const gated = deps.parallel === true;
       const noSlot = (maxActive: number): ToolResult => ({
@@ -167,10 +167,9 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           if (typeof parsed === "string") return invalid(parsed);
           tasks.push(parsed);
         }
-        // A2/A4: o slot só é exigido quando a flag liga a concorrência.
-        const slots = availableSlots();
-        if (gated && slots.available < 1) return noSlot(slots.maxActive);
-        const available = gated ? slots.available : 1;
+        // A2/A4: o slot só é lido quando a flag liga a concorrência.
+        const slots = gated ? availableSlots() : undefined;
+        if (slots !== undefined && slots.available < 1) return noSlot(slots.maxActive);
         tasks.forEach((task, index) => {
           deps.audit.append({
             run: ctx.run,
@@ -185,15 +184,13 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           });
         });
 
-        const parallel = deps.parallel === true;
         const isFatal = (error: unknown): boolean =>
           error instanceof PermissionPendingError || error instanceof NoProgressError;
 
         let fatal: unknown;
         const jobs: FanOutJob<string>[] = tasks.map((task, index) => ({
           id: `t${index + 1}`,
-          account: deps.accountOf?.(task.agent) ?? task.agent,
-          run: async (signal) => {
+          account: deps.accountOf?.(task.agent) ?? task.agent,          run: async (signal) => {
             try {
               return await delegation(task, signal);
             } catch (error) {
@@ -203,9 +200,9 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           },
         }));
         const results = await runFanOut(jobs, {
-          parallel,
-          maxActive: parallel ? available : 1,
-          ...(parallel ? {} : { stopOnError: isFatal }),
+          parallel: gated,
+          maxActive: gated ? slots!.available : 1,
+          ...(gated ? {} : { stopOnError: isFatal }),
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
         });
         if (ctx.signal?.aborted === true) {
@@ -238,8 +235,10 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
       const composed = raw.context === undefined || raw.context === ""
         ? prompt
         : `${raw.context}\n\n${prompt}`;
-      const slots = availableSlots();
-      if (gated && slots.available < 1) return noSlot(slots.maxActive);
+      if (gated) {
+        const slots = availableSlots();
+        if (slots.available < 1) return noSlot(slots.maxActive);
+      }
       deps.audit.append({
         run: ctx.run,
         agent: ctx.agent,
