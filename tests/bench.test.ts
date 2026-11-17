@@ -103,11 +103,15 @@ describe("benchmark de providers (F5-4)", () => {
   test("filtro de provider/modelo segue a sintaxe do --models", () => {
     const models = [
       model({ provider: "nvidia", id: "n1" }),
-      model({ provider: "openrouter", id: "o1" }),
+      model({ provider: "openrouter", id: "nvidia/nemotron-4-340b" }),
       model({ provider: "openrouter", id: "o2" }),
     ];
     const all = refs(models);
+    // Termo sem `/` casa o provider exato: não pega id de outro provider.
     expect(refs(filterModels(models, "nvidia"))).toEqual(["nvidia/n1"]);
+    // Termo com `/` é substring de `provider/model`.
+    expect(refs(filterModels(models, "/nemotron"))).toEqual(["openrouter/nvidia/nemotron-4-340b"]);
+    expect(refs(filterModels(models, "openrouter/nvidia"))).toEqual(["openrouter/nvidia/nemotron-4-340b"]);
     expect(refs(filterModels(models, "openrouter/o2"))).toEqual(["openrouter/o2"]);
     expect(refs(filterModels(models, " nvidia , openrouter/o2 "))).toEqual(["nvidia/n1", "openrouter/o2"]);
     expect(refs(filterModels(models, ""))).toEqual(all);
@@ -129,6 +133,18 @@ describe("benchmark de providers (F5-4)", () => {
     const none = selectBenchModels(models, "sem-match");
     expect(none.ok).toBe(false);
     expect(none.ok ? "" : none.error).toBe("nenhum modelo ativo corresponde ao filtro");
+  });
+
+  test("selectBenchModels distingue registro vazio de filtro sem correspondência", () => {
+    const emptyConfig = selectBenchModels([], undefined);
+    expect(emptyConfig.ok).toBe(false);
+    expect(emptyConfig.ok ? "" : emptyConfig.error).toBe("nenhum modelo ativo na configuração");
+    const onlyEmptyTerms = selectBenchModels([], " ,, ");
+    expect(onlyEmptyTerms.ok ? "" : onlyEmptyTerms.error).toBe("nenhum modelo ativo na configuração");
+    const emptyFilter = selectBenchModels([], "nvidia");
+    expect(emptyFilter.ok ? "" : emptyFilter.error).toBe("nenhum modelo ativo corresponde ao filtro");
+    const noMatch = selectBenchModels([model()], "sem-match");
+    expect(noMatch.ok ? "" : noMatch.error).toBe("nenhum modelo ativo corresponde ao filtro");
   });
 
   // Duas pernas da matriz de CI (`.github/workflows/ci.yml`): sem depender de
