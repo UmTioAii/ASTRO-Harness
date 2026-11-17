@@ -8,19 +8,26 @@
  *
  * Exit code: só os totais decidem (fail-closed: abaixo do threshold ou lcov
  * vazio/sem métricas). O relatório por slice é informativo e nunca altera o
- * exit code; slice sem registros imprime `n/a` em vez de quebrar.
+ * exit code; slice sem registros imprime `n/a` em vez de quebrar. O veredito
+ * sai no stdout, depois da tabela.
  *
  * Mapa de slices (`SLICE_MAPPING`): cada chave é um slice, cada valor uma lista
  * de padrões de caminho de `SF:` do lcov. Casamento, na ordem da lista:
  * - `dir` casa `dir` e `dir/...`;
  * - `prefixo*` casa qualquer caminho que comece por `prefixo`.
- * O primeiro match vence; caminho sem match cai em `unmapped`.
+ * O matching é ancorado na raiz do repositório: caminhos são usados como o Bun
+ * emite (`src/...`, com `\` normalizado), nunca reescritos a partir de um `/src/`
+ * interno. Assim `tests/fixtures/src/mcp/x.ts` não vira `src/mcp/x.ts`. `SF:`
+ * duplicado (mesmo caminho normalizado) conta uma vez. O primeiro match vence;
+ * caminho sem match — inclusive absoluto ou fora do repo — cai em `unmapped`.
  *
  * Para adicionar um slice: inclua a chave/lista em `SLICE_MAPPING`, um caso em
  * `tests/coverage-gate.test.ts` e nada mais.
  *
- * Uso: `bun scripts/coverage-gate.ts [--file coverage/lcov.info] [--threshold 0.8]`
- * (o caminho e o threshold posicionais antigos continuam aceitos).
+ * Uso (flags e posicionais não se misturam):
+ *   bun scripts/coverage-gate.ts [--file coverage/lcov.info] [--threshold 0.8]
+ *   bun scripts/coverage-gate.ts <lcov> [threshold]
+ * `--threshold` fora de (0, 1] ou não numérico imprime o uso e sai 1.
  */
 import { readFileSync } from "node:fs";
 
@@ -49,13 +56,19 @@ export const UNMAPPED_SLICE = "unmapped";
 
 /** Slices C1–C4; ver cabeçalho para a semântica dos padrões. */
 export const SLICE_MAPPING: SliceMapping = {
-  "C1 skills": ["src/skills", "src/skill*"],
+  "C1 skills": ["src/skill*"],
   "C2 mcp": ["src/mcp"],
   "C3 web": ["src/web-*", "src/tools/web*"],
   "C4 multi-agent": [
     "src/core/session.ts",
     "src/core/app.ts",
+    "src/spawn.ts",
+    "src/agent-manager.ts",
+    "src/agent-lock.ts",
     "src/loop-guard.ts",
+    "src/model-choice.ts",
+    "src/tools/task.ts",
+    "src/tools/handoff.ts",
     "src/handoff*",
   ],
 };
@@ -92,11 +105,9 @@ export function parseLcov(text: string, threshold = 0.8): CoverageTotals {
   return { lines, functions, ok };
 }
 
-/** Normaliza `SF:` para caminho relativo à raiz, aceitando `\` e absoluto. */
+/** Normaliza `SF:` (separador win32, `./`); não reescreve caminho aninhado. */
 function normalizePath(file: string): string {
-  const slashed = file.replace(/\\/g, "/").replace(/^\.\//, "");
-  const marker = slashed.lastIndexOf("/src/");
-  return marker === -1 ? slashed : slashed.slice(marker + 1);
+  return file.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 function matchesPath(pattern: string, file: string): boolean {
@@ -121,6 +132,7 @@ export function sliceCoverage(text: string, mapping: SliceMapping = SLICE_MAPPIN
   const names = Object.keys(mapping);
   const buckets = new Map<string, Bucket>(names.map((name) => [name, emptyBucket()]));
   buckets.set(UNMAPPED_SLICE, emptyBucket());
+  const seen = new Set<string>();
 
   let target: Bucket | null = null;
 
@@ -139,6 +151,11 @@ export function sliceCoverage(text: string, mapping: SliceMapping = SLICE_MAPPIN
         continue;
       }
       const path = normalizePath(rawValue);
+      if (seen.has(path)) {
+        target = null;
+        continue;
+      }
+      seen.add(path);
       const name = names.find((candidate) =>
         (mapping[candidate] ?? []).some((pattern) => matchesPath(pattern, path))) ?? UNMAPPED_SLICE;
       target = buckets.get(name) ?? null;
@@ -201,34 +218,67 @@ interface CliOptions {
   threshold: number;
 }
 
-/** Aceita `--file`/`--threshold` e a forma posicional antiga. */
-function parseArgs(argv: readonly string[]): CliOptions {
+type CliParse = { ok: true; options: CliOptions } | { ok: false; message: string };
+
+export const USAGE =
+  "uso: bun scripts/coverage-gate.ts [--file <lcov>] [--threshold <0-1>] | <lcov> [threshold]";
+
+/** Aceita flags ou a forma posicional, nunca as duas. Validação falha fechado. */
+function parseArgs(argv: readonly string[]): CliParse {
   let file = "coverage/lcov.info";
   let threshold = 0.8;
   const positional: string[] = [];
+  let sawFlag = false;
+
+  const readThreshold = (raw: string): number | null => {
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 && value <= 1 ? value : null;
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
-    if (arg === "--file" && argv[index + 1] !== undefined) {
-      file = argv[index + 1] ?? file;
-      index += 1;
-    } else if (arg === "--threshold" && Number.isFinite(Number(argv[index + 1]))) {
-      threshold = Number(argv[index + 1]);
-      index += 1;
-    } else {
+    if (arg !== "--file" && arg !== "--threshold") {
       positional.push(arg);
+      continue;
     }
+    const next = argv[index + 1];
+    if (next === undefined || next.startsWith("--")) {
+      return { ok: false, message: `${arg} exige um valor` };
+    }
+    sawFlag = true;
+    index += 1;
+    if (arg === "--file") {
+      file = next;
+      continue;
+    }
+    const parsed = readThreshold(next);
+    if (parsed === null) {
+      return { ok: false, message: `threshold inválido: ${next} (esperado número em (0, 1])` };
+    }
+    threshold = parsed;
   }
 
+  if (sawFlag && positional.length > 0) return { ok: false, message: "não misture flags e posicionais" };
+  if (positional.length > 2) return { ok: false, message: "posicionais demais" };
   if (positional[0] !== undefined) file = positional[0];
-  if (positional[1] !== undefined && Number.isFinite(Number(positional[1]))) {
-    threshold = Number(positional[1]);
+  if (positional[1] !== undefined) {
+    const parsed = readThreshold(positional[1]);
+    if (parsed === null) {
+      return { ok: false, message: `threshold inválido: ${positional[1]} (esperado número em (0, 1])` };
+    }
+    threshold = parsed;
   }
-  return { file, threshold };
+  return { ok: true, options: { file, threshold } };
 }
 
 if (import.meta.main) {
-  const { file, threshold } = parseArgs(process.argv.slice(2));
+  const parsed = parseArgs(process.argv.slice(2));
+  if (!parsed.ok) {
+    console.error(`coverage: ${parsed.message}`);
+    console.error(USAGE);
+    process.exit(1);
+  }
+  const { file, threshold } = parsed.options;
   let text: string;
   try {
     text = readFileSync(file, "utf8");
@@ -243,8 +293,6 @@ if (import.meta.main) {
     `threshold ${percent(threshold)}`,
   );
   for (const line of formatSliceReport(sliceCoverage(text, SLICE_MAPPING))) console.log(line);
-  if (!totals.ok) {
-    console.error("coverage: abaixo do threshold");
-    process.exit(1);
-  }
+  console.log(totals.ok ? "coverage: ok" : "coverage: abaixo do threshold");
+  if (!totals.ok) process.exit(1);
 }
