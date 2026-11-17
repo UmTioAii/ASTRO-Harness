@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAttachment, loadPastedText } from "../src/attachments/load";
+import { MAX_ATTACHMENT_BYTES } from "../src/attachments/model";
 
 const roots: string[] = [];
 
@@ -164,6 +165,27 @@ describe("loadAttachment", () => {
     await expect(
       loadAttachment({ ...base(cwd, astroHome), path: "grande.txt", maxBytes: 16 }),
     ).rejects.toMatchObject({ code: "attachment_too_large" });
+  });
+
+  test("arquivo acima do teto com range lê só a faixa", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "grande.txt"), Buffer.alloc(MAX_ATTACHMENT_BYTES + 1, "linha\n"));
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "grande.txt",
+      range: "1:2",
+    });
+    expect(attachment.data).toBe("linha\nlinha");
+    expect(attachment.range).toEqual({ start: 1, end: 2 });
+    expect(attachment.sizeBytes).toBe(Buffer.byteLength("linha\nlinha", "utf8"));
+  });
+
+  test("range que pula além do teto de leitura falha tipado", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "linhas.txt"), "a\n".repeat(100));
+    await expect(
+      loadAttachment({ ...base(cwd, astroHome), path: "linhas.txt", range: "100:100", maxBytes: 16 }),
+    ).rejects.toThrow(/faixa.*teto de leitura/);
   });
 });
 
