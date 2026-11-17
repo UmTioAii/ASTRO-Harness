@@ -11,7 +11,7 @@ import { DEFAULT_PRIORITY } from "./providers/fallback-provider";
 import { Registry } from "./core/registry";
 import { isRedirectRefusal } from "./url-safety";
 import { resolveCredentialValue, type VaultReader } from "./credential-ref";
-import { isVaultRef } from "./secrets";
+import { isVaultCredentialRef, isVaultRef, looksLikeSecret } from "./secrets";
 import { Vault, vaultMeta, vaultPath, vaultPlainWarning } from "./vault";
 
 // Predicates: PluginProviderConfig (kind: string) sobrepõe os literais dos
@@ -68,12 +68,21 @@ function readCredential(
   try {
     const value = resolveCredentialValue(ref, env, vault);
     if (value === undefined || value.length === 0) {
-      return { failure: isVaultRef(ref) ? `credencial de vault "${ref}" vazia` : `defina ${ref} no ambiente` };
+      if (isVaultRef(ref)) return { failure: `credencial de vault "${ref}" vazia` };
+      // Ref colada com forma de segredo não é ecoada (I-03); o load já a recusa.
+      return {
+        failure: looksLikeSecret(ref)
+          ? "defina a variável de ambiente do provider (nome suprimido: parece um segredo)"
+          : `defina ${ref} no ambiente`,
+      };
     }
     return { value, source: isVaultRef(ref) ? "vault" : "env" };
   } catch (error) {
-    // ConfigError do cofre já nomeia só o ref; cofre ilegível cita só o caminho.
-    return { failure: error instanceof Error ? error.message : String(error) };
+    const message = error instanceof Error ? error.message : String(error);
+    // Falha de leitura/decifra pode não citar o ref: nomeia o provider a corrigir.
+    // Ref malformada fica fora do prefixo: o conteúdo colado não é ecoado (I-03).
+    const failure = isVaultCredentialRef(ref) && !message.includes(ref) ? `credencial "${ref}": ${message}` : message;
+    return { failure };
   }
 }
 

@@ -486,8 +486,9 @@ function validateProvider(name: string, value: unknown): ProviderConfig {
       ? undefined
       : expectString(raw.credentialRef, `${field}.credentialRef`);
     // Fontes aceitas (ADR-0019, #311, I-03): env nomeada ou `vault:<credentialId>`.
-    // Mensagem nomeia o campo e nunca ecoa o valor; cara de segredo só é mencionada.
-    if (credentialRef !== undefined && !isEnvName(credentialRef) && !isVaultCredentialRef(credentialRef)) {
+    // Segredo tem precedência: `AKIA…` também casa `isEnvName` (mesma ordem de
+    // `webSearch.apiKeyEnv`). Mensagem nomeia o campo e nunca ecoa o valor.
+    if (credentialRef !== undefined && (looksLikeSecret(credentialRef) || (!isEnvName(credentialRef) && !isVaultCredentialRef(credentialRef)))) {
       fail(looksLikeSecret(credentialRef)
         ? `config inválida: "${field}.credentialRef" parece um segredo; use um nome de variável de ambiente ou vault:<credentialId>`
         : `config inválida: "${field}.credentialRef" não é um nome de variável de ambiente nem vault:<credentialId>`);
