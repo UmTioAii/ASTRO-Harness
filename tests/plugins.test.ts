@@ -320,16 +320,13 @@ describe("plugin trust order (#255, P0)", () => {
     expect(warnings.join("\n")).toMatch(/fora do cwd/i);
   });
 
-  test("trust do cwd não carrega plugin local via symlink para fora", async () => {
+  test("trust do cwd não carrega plugin local via junction/symlink para fora", async () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-plugin-link-inside-"));
     const outside = mkdtempSync(join(tmpdir(), "astro-plugin-link-outside-"));
     const { entry, marker } = writeMarkerPlugin(outside);
-    try {
-      symlinkSync(entry, join(dir, "link-plugin.ts"), "file");
-    } catch {
-      return; // Windows sem Developer Mode: criação de symlink negada (skip gracioso)
-    }
-    const { report, warnings } = await runPluginTask(dir, "./link-plugin.ts", () => true);
+    // Junction (Windows) / symlink de diretório (POSIX): não exige Developer Mode.
+    symlinkSync(outside, join(dir, "link-dir"), process.platform === "win32" ? "junction" : "dir");
+    const { report, warnings } = await runPluginTask(dir, `./link-dir/${basename(entry)}`, () => true);
     expect(report.final).toBe("ok");
     expect(existsSync(marker)).toBe(false);
     expect(warnings.join("\n")).toMatch(/fora do cwd/i);
