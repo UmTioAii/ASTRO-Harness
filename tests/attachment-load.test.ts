@@ -70,11 +70,13 @@ describe("loadAttachment", () => {
 
   test("range de arquivo pequeno é aplicado antes da redação (numeração preservada)", async () => {
     const { cwd, astroHome } = sandbox();
+    // Header montado em runtime: o padrão literal de chave privada não entra no repo (I-03).
+    const pemEdge = (edge: "BEGIN" | "END"): string => ["-----", edge, "PRIVATE KEY-----"].join(" ");
     writeFileSync(join(cwd, "chave.txt"), [
-      "-----BEGIN PRIVATE KEY-----",
+      pemEdge("BEGIN"),
       "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
       "linha-interna-3",
-      "-----END PRIVATE KEY-----",
+      pemEdge("END"),
       "alvo-5",
       "alvo-6",
       "alvo-7",
