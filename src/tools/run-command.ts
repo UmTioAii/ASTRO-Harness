@@ -308,8 +308,8 @@ function maskMounts(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): { mounts
   const targets = collectMaskTargets(ctx, env);
   if (targets.length === 0) return { mounts: [] };
   const maskRoot = mkdtempSync(join(tmpdir(), "astro-sandbox-mask-"));
+  try { chmodSync(maskRoot, 0o700); } catch { /* best-effort: 0700 no POSIX, bits ignorados no Windows */ }
   try {
-    chmodSync(maskRoot, 0o700); // 0700 no POSIX; no Windows os bits são best-effort
     const mounts: string[] = [];
     let index = 0;
     for (const target of targets) {
