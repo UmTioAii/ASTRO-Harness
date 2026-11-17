@@ -28,23 +28,41 @@ export { AttachmentError };
 /** Chunk de leitura do range em arquivo acima do teto (ADR-0026). */
 const READ_CHUNK_BYTES = 64 * 1024;
 
-/** Bytes do início de cada linha guardados para reconhecer um marcador PEM cortado pelo chunk. */
-const PEM_HEAD_BYTES = 64;
+/** Overlap por onde um marcador PEM pode atravessar dois pedaços da mesma linha. */
+const PEM_SCAN_OVERLAP = 48;
+
+/** Marcadores que abrem/fecham um bloco de chave privada (mesmo par do `REDACT_PEM`). */
+const PEM_MARKERS = new RegExp(`${PRIVATE_KEY_BEGIN.source}|${PRIVATE_KEY_END.source}`, "g");
 
 /** Substituto de cada linha de um bloco PEM selecionado por faixa (preserva numeração). */
 const REDACTED = "[REDACTED]";
 
 /**
+ * Varre todos os bytes do texto em ordem: `begins` diz se algum BEGIN apareceu e
+ * `inside` é o estado do span depois do último marcador (END fecha, BEGIN abre).
+ */
+function pemMarkerScan(text: string, inside: boolean): { begins: boolean; inside: boolean } {
+  let begins = false;
+  let current = inside;
+  for (const match of text.matchAll(PEM_MARKERS)) {
+    if (match[0].startsWith("-----BEGIN")) {
+      begins = true;
+      current = true;
+    } else {
+      current = false;
+    }
+  }
+  return { begins, inside: current };
+}
+
+/**
  * Estado de span PEM por linha (I-03): um `range` que começa no interior de um
- * bloco não vê o BEGIN, então `redactSecrets` não o cobre. Aqui toda linha do
- * span vira `[REDACTED]`, mantendo a contagem de linhas original.
+ * bloco não vê o BEGIN, então `redactSecrets` não o cobre. Toda linha do span,
+ * ou que contenha um BEGIN, vira `[REDACTED]`, mantendo a contagem de linhas.
  */
 function pemLineState(line: string, inside: boolean): { secret: boolean; inside: boolean } {
-  const begin = PRIVATE_KEY_BEGIN.test(line);
-  const end = PRIVATE_KEY_END.test(line);
-  if (!inside && !begin) return { secret: false, inside: false };
-  // BEGIN e END na mesma linha fecham um span completo.
-  return { secret: true, inside: !end };
+  const scan = pemMarkerScan(line, inside);
+  return { secret: inside || scan.begins, inside: scan.inside };
 }
 
 /** Entrada de `loadAttachment`; `confirmOutsideCwd` é injetado pela superfície. */
@@ -178,17 +196,40 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
     let line = 1;
     let lastLine = 1;
     let pemInside = false;
-    let pemDecided = false;
-    let lineSecret = false;
-    let head = Buffer.alloc(0);
     let done = false;
     const redactedBytes = Buffer.from(REDACTED, "utf8");
-    const push = (bytes: Buffer): void => {
-      if (outputBytes + bytes.length > limit) throw rangeTooLarge(spec, limit, real);
+    const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+    // A linha só é classificada depois de varrer todos os bytes: um marcador pode
+    // começar depois do que já saiu para o output.
+    let lineOpen = false;
+    let lineSecret = false;
+    let lineRedacted = false;
+    let lineOverflow = false;
+    let lineStartOutput = 0;
+    let overlap = Buffer.alloc(0);
+
+    const write = (bytes: Buffer): void => {
+      if (lineOverflow) return;
+      const room = limit - outputBytes;
+      if (bytes.length > room) {
+        if (room > 0) bytes.copy(output, outputBytes, 0, room);
+        outputBytes += Math.max(0, room);
+        lineOverflow = true; // cobrado no fim da linha, depois da varredura
+        return;
+      }
       bytes.copy(output, outputBytes);
       outputBytes += bytes.length;
     };
-    const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+    // Marcador achado no meio da linha: desfaz o que já saiu e grava um único `[REDACTED]`.
+    const redactLine = (): void => {
+      outputBytes = lineStartOutput;
+      lineOverflow = false;
+      if (outputBytes + redactedBytes.length > limit) throw rangeTooLarge(spec, limit, real);
+      redactedBytes.copy(output, outputBytes);
+      outputBytes += redactedBytes.length;
+      lineRedacted = true;
+    };
+
     while (!done) {
       const read = readSync(fd, chunk, 0, READ_CHUNK_BYTES, null);
       if (read === 0) break;
@@ -203,49 +244,43 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
         const length = end - cursor;
         const selected = line >= requested.start && line <= requested.end;
 
-        if (!pemDecided) {
-          // O marcador pode começar num chunk e terminar no seguinte: junta o início da
-          // linha antes de decidir e de emitir qualquer byte dela (I-03).
-          const take = Math.min(length, PEM_HEAD_BYTES - head.length);
-          if (take > 0) head = Buffer.concat([head, view.subarray(cursor, cursor + take)]);
-          if (newline === -1 && head.length < PEM_HEAD_BYTES) {
-            cursor = read;
-            continue;
-          }
-          const pem = pemLineState(head.toString("latin1"), pemInside);
-          pemInside = pem.inside;
-          lineSecret = pem.secret;
-          pemDecided = true;
-          const restStart = cursor + take;
-          if (selected) {
-            if (lineSecret) {
-              push(redactedBytes);
-            } else {
-              push(head);
-              if (restStart < end) push(view.subarray(restStart, end));
-            }
-          } else {
-            skippedBytes += head.length + (end - restStart);
-          }
-          head = Buffer.alloc(0);
-          if (newline === -1) {
-            cursor = read;
-            continue;
-          }
-        } else {
-          if (selected) {
-            if (!lineSecret) push(view.subarray(cursor, end));
-          } else {
-            skippedBytes += length;
-          }
-          if (newline === -1) {
-            cursor = read;
-            continue;
-          }
+        if (!lineOpen) {
+          lineOpen = true;
+          lineStartOutput = outputBytes;
+          lineSecret = pemInside;
+          lineRedacted = false;
+          lineOverflow = false;
+          overlap = Buffer.alloc(0);
+          if (selected && lineSecret) redactLine();
         }
 
+        // Varre a linha inteira; o overlap cobre um marcador cortado entre pedaços/chunks.
+        const window = overlap.length === 0
+          ? view.subarray(cursor, end)
+          : Buffer.concat([overlap, view.subarray(cursor, end)]);
+        const scan = pemMarkerScan(window.includes(0x2d) ? window.toString("latin1") : "", pemInside);
+        pemInside = scan.inside;
+        if (scan.begins && !lineSecret) {
+          lineSecret = true;
+          if (selected && !lineRedacted) redactLine();
+        }
+        overlap = Buffer.from(window.length > PEM_SCAN_OVERLAP
+          ? window.subarray(window.length - PEM_SCAN_OVERLAP)
+          : window);
+
+        if (selected) {
+          if (!lineSecret) write(view.subarray(cursor, end));
+        } else {
+          skippedBytes += length;
+        }
+
+        if (newline === -1) {
+          cursor = read;
+          continue;
+        }
         // Newline presente: fecha a linha e libera o estado do span.
         if (selected) {
+          if (!lineSecret && lineOverflow) throw rangeTooLarge(spec, limit, real);
           // O newline da última linha selecionada não entra no payload: não cobra o cap.
           if (line < requested.end) {
             if (outputBytes + 1 > limit) throw rangeTooLarge(spec, limit, real);
@@ -257,24 +292,15 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
         line += 1;
         lastLine = line;
         cursor = newline + 1;
-        pemDecided = false;
-        lineSecret = false;
+        lineOpen = false;
         if (line > requested.end) {
           done = true;
           break;
         }
       }
     }
-    // Última linha sem newline: o head adiado precisa entrar na faixa (ou ser redigido).
-    if (!pemDecided && head.length > 0) {
-      const pem = pemLineState(head.toString("latin1"), pemInside);
-      if (line >= requested.start && line <= requested.end) {
-        if (pem.secret) push(redactedBytes);
-        else push(head);
-      } else {
-        skippedBytes += head.length;
-      }
-    }
+    // Última linha sem newline: o mesmo limite de payload vale no EOF.
+    if (lineOpen && !lineSecret && lineOverflow) throw rangeTooLarge(spec, limit, real);
     if (lastLine < requested.start) {
       throw new AttachmentError(
         "attachment_range_invalid",
