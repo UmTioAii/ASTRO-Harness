@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, loadConfig, providerAccountRefFor, providerCredentialRefFor, updateConfigPermissionsMode, validateConfig } from "../src/core/config";
@@ -279,5 +279,119 @@ describe("updateConfigPermissionsMode (#273)", () => {
     expect(() => updateConfigPermissionsMode(path, "ask")).toThrow(ConfigError);
     expect(readFileSync(path, "utf8")).toBe("{ não é json");
     expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+describe("erros distintos ao salvar a config via /config (#470)", () => {
+  const minimal = {
+    providers: { openai: { kind: "openai-compat", baseUrl: "https://api.openai.com/v1", credentialRef: "OPENAI_API_KEY" } },
+    models: [{ provider: "openai", id: "gpt-4o-mini", tags: ["writing-code"], context: 128000 }],
+    agent: { model: "openai/gpt-4o-mini", maxSteps: 12, tools: [] },
+    paths: { ledger: "l", audit: "a" },
+  };
+  const noTmp = (dir: string): void => {
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  };
+  const capture = (fn: () => void): ConfigError & { code?: string } => {
+    try {
+      fn();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      return error as ConfigError & { code?: string };
+    }
+    throw new Error("esperava ConfigError");
+  };
+
+  test("ENOENT: nomeia o caminho ausente e o próximo passo (--config), sem mensagem genérica", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
+    const path = join(dir, "astro.config.json"); // não existe
+    const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+    expect(err.code).toBe("config_not_found");
+    expect(err.message).toContain(path);
+    expect(err.message).toContain("--config");
+    expect(err.message).not.toContain("leitura/JSON falhou");
+    noTmp(dir);
+  });
+
+  test("JSON inválido: linha/coluna quando o parser informa, nunca o conteúdo (I-03)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
+    const path = join(dir, "astro.config.json");
+    const content = '{\n  "providers": {},\n  "models": [], "agent": {"model": "x", tokenAqui }\n}';
+    writeFileSync(path, content);
+    const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+    expect(err.code).toBe("config_invalid_json");
+    expect(err.message).toMatch(/JSON inválido/);
+    expect(err.message).toContain(path);
+    expect(err.message).toMatch(/linha \d+, coluna \d+/); // JSC (Bun) traz line/column no erro
+    expect(err.message).not.toContain("tokenAqui"); // conteúdo do arquivo nunca ecoa
+    expect(err.message).toContain("não foi alterado");
+    expect(readFileSync(path, "utf8")).toBe(content);
+    noTmp(dir);
+  });
+
+  test("raiz que não é objeto: erro de schema nomeando o problema; arquivo intacto", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
+    const path = join(dir, "astro.config.json");
+    writeFileSync(path, "[1, 2]");
+    const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+    expect(err.code).toBe("config_invalid_schema");
+    expect(err.message).toMatch(/raiz deve ser um objeto/);
+    expect(err.message).toContain(path);
+    expect(readFileSync(path, "utf8")).toBe("[1, 2]");
+    noTmp(dir);
+  });
+
+  test("schema inválido (validateConfig): nomeia o campo e o esperado; arquivo intacto", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
+    const path = join(dir, "astro.config.json");
+    const original = JSON.stringify({ ...minimal, agent: { model: "openai/gpt-4o-mini", maxSteps: -1, tools: [] } });
+    writeFileSync(path, original);
+    const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+    expect(err.code).toBe("config_invalid_schema");
+    expect(err.message).toContain("agent.maxSteps");
+    expect(err.message).toContain("inteiro positivo");
+    expect(err.message).toContain("não foi alterado");
+    expect(err.message).not.toContain("não foi possível atualizar");
+    expect(readFileSync(path, "utf8")).toBe(original);
+    noTmp(dir);
+  });
+
+  // Permissão só dá para expressar fora do Windows (ACL não mapeia para EACCES).
+  const itPosix = process.platform === "win32" ? test.skip : test;
+
+  itPosix("EACCES na leitura: nomeia caminho e operação negada", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
+    const path = join(dir, "astro.config.json");
+    writeFileSync(path, JSON.stringify(minimal));
+    chmodSync(path, 0o000);
+    try {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.code).toBe("config_read_denied");
+      expect(err.message).toContain(path);
+      expect(err.message).toMatch(/permissão/i);
+      expect(err.message).toContain("EACCES");
+    } finally {
+      chmodSync(path, 0o600);
+    }
+    noTmp(dir);
+  });
+
+  itPosix("EACCES na escrita: nomeia caminho e 'gravar'; original intacto e sem tmp", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
+    const path = join(dir, "astro.config.json");
+    const original = JSON.stringify(minimal);
+    writeFileSync(path, original);
+    chmodSync(dir, 0o555); // diretório sem escrita: o tmp+rename falha
+    try {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.code).toBe("config_write_denied");
+      expect(err.message).toContain(path);
+      expect(err.message).toMatch(/gravar/);
+      expect(err.message).toContain("original não foi alterado");
+      expect(readFileSync(path, "utf8")).toBe(original);
+      noTmp(dir);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
   });
 });
