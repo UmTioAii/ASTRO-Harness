@@ -111,13 +111,14 @@ export function SessionPicker({
       return;
     }
     if (confirmingRef.current !== undefined) {
-      // confirmação de exclusão: só `s`/`y` apagam; `n`/esc cancelam (já tratado acima)
-      if (value === "s" || value === "S" || value === "y" || value === "Y") {
+      // confirmação de exclusão: só `s`/`y` sem modificador apagam; `n`/esc cancelam (já tratado acima)
+      const plain = !key.ctrl && !key.meta;
+      if (plain && (value === "s" || value === "S" || value === "y" || value === "Y")) {
         const chosen = confirmingRef.current;
         const failure = chosen === undefined ? undefined : onDelete(chosen);
         cancelDelete();
         setError(failure);
-      } else if (value === "n" || value === "N") {
+      } else if (plain && (value === "n" || value === "N")) {
         cancelDelete();
       }
       return;

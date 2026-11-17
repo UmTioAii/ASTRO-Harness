@@ -203,6 +203,11 @@ export function toSessionRecord(snapshot: SessionSnapshot): SessionRecord {
   return { schemaVersion: 1, ...snapshot };
 }
 
+/** Sessão ainda viva no runtime: o id atual ou a origem retomada (#366). */
+export function isActiveSession(snapshot: SessionSnapshot, id: string): boolean {
+  return id === snapshot.id || id === snapshot.resumedFrom?.id;
+}
+
 /** Valida e sanitiza um registro v1 para persistência ou migração. */
 export function sanitizeSessionRecord(value: unknown): SessionRecord {
   const record = sanitizeValue(parseRecord(value)) as SessionRecord;

@@ -15,7 +15,7 @@ import type { ModelInfo, ProviderInfo, SendTurnOptions, SessionSnapshot, TurnRes
 import type { HealthCheck, HealthReport } from "../health";
 import type { CodexLoginStart } from "../providers/codex-login";
 import type { SessionApi, SessionSummary } from "./session-api";
-import { sessionSummaryLine, toSessionRecord } from "./store";
+import { isActiveSession, sessionSummaryLine, toSessionRecord } from "./store";
 import { exportSession } from "./export";
 import { initAgents } from "./init";
 import { isFatalSessionError } from "./session-errors";
@@ -342,7 +342,7 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
                 continue;
               }
             }
-            if (chosen.id === session.snapshot().id) {
+            if (isActiveSession(session.snapshot(), chosen.id)) {
               io.write("não é possível excluir a sessão atual");
               continue;
             }
