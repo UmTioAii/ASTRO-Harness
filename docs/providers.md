@@ -151,9 +151,9 @@ Mapas sugeridos: Anthropic `{0:"low",1:"low",2:"medium",3:"high",4:"max"}`; Open
 |---|---|---|
 | `off` (default) | nenhuma | — |
 | `on` | uma por completion | toda conclusão sem tool calls |
-| `auto` | uma por sinal | primeira completion, checkpoint gravado ou não-progresso retomado |
+| `auto` | uma por sinal | primeira completion, checkpoint gravado, não-progresso retomado ou `continue` anterior |
 
-O juiz usa o caminho normal de `Provider.complete` (`purpose: "cheap"`, sem tools), schema JSON estrito `{verdict, reason}` e prompt limitado ao objetivo + última saída (sem histórico, I-03). `done` mantém o sucesso; `continue` injeta o motivo redigido e segue o loop; `stop` para em ponto seguro (`judge_stop`). Fail-safe sem retry: saída malformada e erro de provider caem no sucesso normal, e budget, quota ou limite de time esgotados não fazem a chamada extra. Audit: `judge.verdict {step, verdict, reasonHash}`, `judge.failed {reason}` e `judge.skipped {reason}` — nunca o prompt nem a saída.
+Contrato completo (prompt, fail-safe, teto, audit) em `docs/adr/0014-loop-checkpoint-e-nao-progresso.md` (L4).
 
 ## Streaming (T3)
 

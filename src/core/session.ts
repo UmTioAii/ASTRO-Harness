@@ -34,6 +34,7 @@ import { BackgroundCompactor } from "../compaction/background";
 import {
   continuePrompt,
   evaluateGoal,
+  JudgeContinueError,
   JudgeStopError,
   reasonHash,
   type JudgeMode,
@@ -445,8 +446,8 @@ export async function runSession(
     return undefined;
   };
   const judgeGoal = async (output: string, step: number): Promise<JudgeVerdict | undefined> => {
-    completions += 1;
     if (judgeMode === "off") return undefined;
+    completions += 1; // só completion elegível conta para o gate do `auto`
     if (judgeMode === "auto" && completions > 1 && !judgeSignal) return undefined;
     judgeSignal = false;
     throwIfAborted(opts.signal); // cancelamento não vira sucesso do juiz (F-06)
@@ -465,14 +466,19 @@ export async function runSession(
       ...(opts.signal === undefined ? {} : { signal: opts.signal }),
     });
     if (result.response !== undefined) recordAuxUsage(result.response, opts.model, opts.agent);
-    if (!result.ok) {
+    if (result.ok) {
+      opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "judge.verdict",
+        payload: { step, verdict: result.verdict.verdict, reasonHash: reasonHash(result.verdict.reason) } });
+    } else {
       opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "judge.failed",
         payload: { step, reason: result.failure } });
-      return undefined;
     }
-    opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "judge.verdict",
-      payload: { step, verdict: result.verdict.verdict, reasonHash: reasonHash(result.verdict.reason) } });
-    return result.verdict;
+    if (result.response !== undefined) {
+      // B10/I-17: a chamada extra também não escapa do aviso nem do teto físico.
+      maybeWarnBudget(opts.agent);
+      checkCeiling(opts.agent);
+    }
+    return result.ok ? result.verdict : undefined;
   };
 
   if (opts.inheritAgentLock !== true) {
@@ -629,12 +635,18 @@ export async function runSession(
           throw new JudgeStopError();
         }
         if (verdict?.verdict === "continue") {
+          // O juiz disse "não concluído": a próxima completion volta ao juiz (não todo turno).
+          judgeSignal = true;
+          if (step >= effectiveMaxSteps) {
+            tracer?.end(stepSpan, { "tool.calls": 0, judge: "continue_exhausted" });
+            throw new JudgeContinueError();
+          }
           const assistantMessage: ChatMessage = { role: "assistant", content: response.content };
           const nudge: ChatMessage = { role: "user", content: continuePrompt(verdict.reason) };
           messages.push(assistantMessage, nudge);
           appended.push(assistantMessage, nudge);
           tracer?.end(stepSpan, { "tool.calls": 0, judge: "continue" });
-          continue; // limitado por maxSteps/run.maxTurns
+          continue; // limitado por maxSteps/run.maxTurns e pelo teto físico (B10)
         }
         opts.ledger.recordState(opts.run, "completed", { agent: opts.agent });
         if (opts.inheritAgentLock !== true) {
@@ -812,6 +824,7 @@ function interruptReason(error: unknown, signal?: AbortSignal): string {
   if (error instanceof BudgetExceededError) return "budget_exceeded";
   if (error instanceof NoProgressError) return "no_progress";
   if (error instanceof JudgeStopError) return "judge_stop";
+  if (error instanceof JudgeContinueError) return "judge_continue_exhausted";
   return error instanceof Error ? error.name : String(error);
 }
 

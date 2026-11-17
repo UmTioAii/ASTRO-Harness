@@ -47,9 +47,9 @@ function bounded(text: string, max: number): string {
   return clean.length <= max ? clean : `${clean.slice(0, max)}…`;
 }
 
-/** Neutraliza as cercas do bloco para o texto não fechar o quadro do prompt. */
+/** Escapa `<`/`>` de todo texto não confiável: nenhuma tag fecha o quadro do prompt. */
 function framed(text: string): string {
-  return text.replace(/<\/?(goal|output)>/gi, "[tag]");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 /** Prompt do juiz: objetivo + última saída apenas, nunca o histórico completo. */
@@ -89,16 +89,21 @@ export function parseJudgeVerdict(raw: string): JudgeVerdict | undefined {
   return { verdict, reason: reason.trim().slice(0, MAX_JUDGE_REASON_CHARS) };
 }
 
-/** Hash estável do motivo para o audit (I-03/I-04): o texto nunca é persistido. */
+/** Motivo sanitizado (I-03) e limitado: o mesmo texto que o loop recebe e que o hash cobre. */
+function safeReason(reason: string): string {
+  return bounded(reason, MAX_JUDGE_REASON_CHARS).replace(/\s+/g, " ").trim();
+}
+
+/** Hash estável do motivo já sanitizado para o audit (I-03/I-04): o texto nunca é persistido. */
 export function reasonHash(reason: string): string {
-  return createHash("sha256").update(reason.trim().toLowerCase()).digest("hex").slice(0, 16);
+  return createHash("sha256").update(safeReason(reason)).digest("hex").slice(0, 16);
 }
 
 /** Retomada injetada depois de `continue`: motivo redigido e limitado. */
 export function continuePrompt(reason: string): string {
   return [
     "O juiz do harness considerou o objetivo ainda não cumprido.",
-    `Motivo: ${bounded(reason, MAX_JUDGE_REASON_CHARS)}`,
+    `Motivo: ${safeReason(reason)}`,
     "Continue a tarefa pelos próximos passos, sem repetir o que já está pronto.",
   ].join("\n");
 }
@@ -149,5 +154,14 @@ export class JudgeStopError extends Error {
   constructor() {
     super("o juiz encerrou o run em ponto seguro; o objetivo não deve continuar");
     this.name = "JudgeStopError";
+  }
+}
+
+/** Juiz pediu continuar sem turno disponível: parada segura com razão estável (I-19). */
+export class JudgeContinueError extends Error {
+  readonly code = "judge_continue_exhausted";
+  constructor() {
+    super("o juiz pediu continuar, mas o limite de turnos acabou; run parado em ponto seguro");
+    this.name = "JudgeContinueError";
   }
 }
