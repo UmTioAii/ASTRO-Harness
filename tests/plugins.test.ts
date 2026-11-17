@@ -347,4 +347,26 @@ describe("plugin trust order (#255, P0)", () => {
       else process.env.ASTRO_PLUGIN_ALLOWLIST = original;
     }
   });
+
+  test("file URL fora do cwd é ignorada sem allowlist e carregada com ela", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-fileurl-inside-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-plugin-fileurl-outside-"));
+    const { entry, marker } = writeMarkerPlugin(outside);
+    const fileUrl = pathToFileURL(entry).href;
+    const original = process.env.ASTRO_PLUGIN_ALLOWLIST;
+    delete process.env.ASTRO_PLUGIN_ALLOWLIST;
+    try {
+      const blocked = await runPluginTask(dir, fileUrl);
+      expect(blocked.report.final).toBe("ok");
+      expect(existsSync(marker)).toBe(false);
+      expect(blocked.warnings.join("\n")).toMatch(/ASTRO_PLUGIN_ALLOWLIST/i);
+
+      const allowed = await runPluginTask(dir, fileUrl, undefined, { ASTRO_PLUGIN_ALLOWLIST: fileUrl });
+      expect(allowed.report.final).toBe("ok");
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env.ASTRO_PLUGIN_ALLOWLIST;
+      else process.env.ASTRO_PLUGIN_ALLOWLIST = original;
+    }
+  });
 });
