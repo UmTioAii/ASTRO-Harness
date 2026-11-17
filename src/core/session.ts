@@ -766,6 +766,14 @@ export interface MultiAgentSessionOptions {
   resolveIdentity?: IdentityResolver;
   /** Sinal de cancelamento para interromper a sessão (F-06). */
   signal?: AbortSignal;
+  /** Fração do limite do agente ativo em que o checkpoint é gravado (L5, #135); ausente = sem checkpoint. */
+  checkpointAt?: number;
+  /** Segmentos consecutivos sem mudança do agente ativo que disparam a pausa (L6, #135); ausente = sem guarda. */
+  noProgressSegments?: number;
+  /** Decisor de não-progresso (L6); ausente = para seguro com `NoProgressError` (I-19). */
+  onNoProgress?: NoProgressDecider;
+  /** Hash da tarefa (nunca o prompt cru) para o resumo do checkpoint (L5, I-03). */
+  taskHash?: string;
   /** Escolha do call profile (E1–E5); ausente = defaults do modelo. */
   call?: CallSelection;
   /** Limite de saída por tool (CMP-10); ausente = default 8000/5%. */
@@ -828,6 +836,10 @@ export async function runMultiAgentSession(
   /** Handoff ack nesta sessão; falha pós-ack grava handoff.failed (F-24). */
   let activeHandoff: { handoff_id: string; artifact: HandoffArtifactV1 } | undefined;
   const ackTimeoutMs = opts.ackTimeoutMs ?? DEFAULT_ACK_TIMEOUT_MS;
+  // L5/L6 (#135): checkpoint por agente ativo e guarda de não-progresso por agente.
+  const checkpointedAgents = new Set<string>();
+  const progressByAgent = new Map<string, ProgressTracker>();
+  const touchedFiles: string[] = [];
 
   const messages: ChatMessage[] = [
     { role: "system", content: currentSystemPrompt ?? DEFAULT_SYSTEM_PROMPT },
@@ -1121,6 +1133,29 @@ export async function runMultiAgentSession(
       maybeWarnBudget(currentAgentName);
       checkCeiling(currentAgentName);
 
+      // L5 (#135): checkpoint do agente ativo, uma vez, na fração do limite dele ou do gasto do escopo.
+      if (opts.checkpointAt !== undefined && !checkpointedAgents.has(currentAgentName)) {
+        const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
+        const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
+        const turnDue = turnCheckpointDue(agentSteps, currentMaxSteps, opts.checkpointAt);
+        const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
+          && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
+        if (turnDue || budgetDue) {
+          checkpointedAgents.add(currentAgentName);
+          const checkpoint = buildCheckpoint({
+            // nunca o prompt cru: só taskHash (o prompt do usuário não é persistido)
+            summary: response.content.trim() === ""
+              ? (opts.taskHash === undefined ? "[tarefa não registrada]" : `tarefa #${opts.taskHash}`)
+              : response.content,
+            changedFiles: touchedFiles,
+            nextStep: `continuar a partir do turno ${step + 1}`,
+          }, opts.cwd);
+          saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, currentAgentName));
+          opts.audit.append({ run: opts.run, agent: currentAgentName, tipo: "loop.checkpoint",
+            payload: { step, trigger: turnDue ? "turns" : "budget" } });
+        }
+      }
+
       if (response.toolCalls.length === 0) {
         opts.ledger.recordState(opts.run, "completed", { agent: currentAgentName });
         ensureAgentDestroyed(opts.ledger, opts.audit, opts.run, currentAgentName, "completed");
@@ -1137,6 +1172,8 @@ export async function runMultiAgentSession(
       });
 
       let handoffTriggered = false;
+      let toolErrors = 0;
+      const stepTouched: string[] = [];
       for (const [callIndex, call] of response.toolCalls.entries()) {
         throwIfAborted(opts.signal); // ponto seguro: nenhuma tool nova após cancelamento (I-16)
         const known = knownFor(currentAgentName);
@@ -1166,6 +1203,14 @@ export async function runMultiAgentSession(
         );
         tracer?.end(toolSpan, { isError: result.isError === true });
         messages.push({ role: "tool", content: redactSecrets(result.output), toolCallId: call.id });
+
+        // L6 (#135): sinal do segmento = arquivos tocados pelas tools + erros
+        if (result.isError === true) toolErrors++;
+        const touched = toolCallPath(call.arguments);
+        if (touched !== undefined) {
+          stepTouched.push(touched);
+          touchedFiles.push(touched);
+        }
 
         const handoff = call.name === "handoff" ? isHandoffResult(result.output) : null;
         if (handoff) {
@@ -1241,6 +1286,24 @@ export async function runMultiAgentSession(
       messages.push({ role: "system", content: `[Sistema: controle transferido para agent "${redactSecrets(currentAgentName)}"]` });
       continue; // próximo step com novo agent
     }
+    // L6 (#135): segmentos iguais consecutivos do mesmo agente → audit + pergunta;
+    // sem "continuar", para seguro. Troca de agente tem tracker próprio.
+    if (opts.noProgressSegments !== undefined) {
+      let tracker = progressByAgent.get(currentAgentName);
+      if (tracker === undefined) {
+        tracker = new ProgressTracker(opts.noProgressSegments);
+        progressByAgent.set(currentAgentName, tracker);
+      }
+      if (tracker.record(segmentHash(stepTouched, toolErrors))) {
+        opts.audit.append({ run: opts.run, agent: currentAgentName, tipo: "loop.no_progress",
+          payload: { step, segments: opts.noProgressSegments } });
+        const proceed = opts.onNoProgress === undefined
+          ? false
+          : await opts.onNoProgress({ run: opts.run, agent: currentAgentName, step, segments: opts.noProgressSegments });
+        if (!proceed) throw new NoProgressError(opts.noProgressSegments, step);
+        tracker.reset();
+      }
+    }
     tracer?.end(stepSpan);
     }
 
@@ -1259,6 +1322,9 @@ export async function runMultiAgentSession(
       !(error instanceof SwapDeniedError) &&
       !(error instanceof BudgetExceededError) &&
       !(error instanceof CompactionPausedError) &&
+      // Pausa por não-progresso também não é falha do handoff: a retomada
+      // pelo ledger continua possível (I-19).
+      !(error instanceof NoProgressError) &&
       !isAbortError(error, opts.signal)
     ) {
       recordHandoffEvent("handoff.failed", handoffDeps, activeHandoff.artifact, currentAgentName, {
