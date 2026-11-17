@@ -1,6 +1,6 @@
 # Doctor
 
-Diagnóstico local do ASTRO: versões, dependências, config, credenciais por nome e estado de disco; `--online` acrescenta o health dos providers (F6-6).
+Diagnóstico local do ASTRO: versões, dependências, config, credenciais por nome e disco; `--online` acrescenta o health dos providers (F6-6).
 
 | Cobre | Não cobre |
 |---|---|
@@ -8,75 +8,61 @@ Diagnóstico local do ASTRO: versões, dependências, config, credenciais por no
 
 ## Comando
 
-```bash
-astro doctor                  # offline, determinístico, sem rede
-astro doctor --json           # payload doctor/v1 para scripts e CI
-astro doctor --fix            # cria só $ASTRO_HOME (0700), idempotente
-astro doctor --online         # + health F6-6 dos providers
-astro doctor --json --online  # combina os dois
-```
-
 | Flag | Efeito |
 |---|---|
+| nenhuma | Checks offline, determinísticos, sem rede. |
 | `--json` | Emite só o payload JSON (uma linha por check fica de fora). |
-| `--fix` | Cria `$ASTRO_HOME` quando ausente; nunca cria a raiz de artefatos e recusa caminho relativo, com `..`, link simbólico ou que seja arquivo. |
-| `--online` | Roda `runHealthCheck` (F6-6): um check por provider e um agregado `online`. Sem a flag nenhuma chamada de rede acontece. |
+| `--fix` | Cria `$ASTRO_HOME` quando ausente (0700); nunca cria a raiz de artefatos e recusa caminho relativo, com `..`, link simbólico ou que seja arquivo. |
+| `--online` | Roda `runHealthCheck` (F6-6): um check por provider, o cofre (`vault`) e um agregado `online`. Sem a flag nenhuma chamada de rede acontece. |
 
-## Checks offline
+## Checks
 
-| Check | Fonte |
+| Check (exibição) | `name` |
 |---|---|
-| `bun`, `node` | versão em execução × `engines` do `package.json` |
-| `dependências` | resolução de `ink`, `react` e `bun` |
-| `dist` | `dist/cli.js` e `dist/launcher.js` |
-| `config`, `config global` | `astro.config.json` e `$ASTRO_HOME/config.json` |
-| `credencial <provider>` | `credentialRef` por nome, cofre local ou `credentialsPath` legível |
-| `mcp`, `skills` | config MCP (só nomes de env) e loader de skills |
-| `astro home`, `anexos`, `disco` | existência, escrita e espaço livre |
+| `bun`, `node` | `bun`, `node` |
+| `dependências`, `dist` | `dependencies`, `dist` |
+| `config`, `config global` | `config`, `configGlobal` |
+| `credencial <id>` | `credential:<id>` |
+| `mcp`, `skills` | `mcp`, `skills` |
+| `astro home`, `anexos`, `disco` | `astroHome`, `attachments`, `disk` |
 
-Nenhum valor de segredo entra na saída: label e detalhe passam por `redactSecrets` (I-03).
+Segredo nunca entra na saída: `name`, label e detalhe passam por `redactSecrets` (I-03). `name` é slug estável; `label` é só exibição.
 
 ## `--online`
 
-O health usa o mesmo caminho de `astro health`: `GET {baseUrl}/models` com a credencial do ambiente, `redirect: "error"` e timeout de 5s por provider. Cada `HealthCheck` vira um check do doctor:
+O health usa o mesmo caminho de `astro health`: `GET {baseUrl}/models` com a credencial do ambiente, `redirect: "error"` e timeout de 5s por provider. Cada `HealthCheck` vira um check, mais o agregado:
 
-| Health | Doctor |
-|---|---|
-| `provider:<id>` `ok` | `ok`, com latência no detalhe |
-| `provider:<id>` `down` | `error` (`fail` no alias legado) |
-| agregado `online` | `error` se algum provider caiu, senão segue `ok`/`warn` do health |
+| Health | Doctor | Nível |
+|---|---|---|
+| `provider:<id>` `ok` | `provider:<id>` | `ok`, com latência |
+| `provider:<id>` `down` | `provider:<id>` | `error` (`fail` no alias) |
+| `vault` | `vault` (label `cofre`) | `ok`; só metadados |
+| agregado | `online` | `ok` ou `error` |
 
-Config ausente vira `ok` ("nada para verificar"); config inválida vira `warn`. Falha inesperada do health vira um check `online` `error`, nunca exceção. O timeout é por provider; uma rede lenta não trava os outros checks.
+`degraded`/`down` do health só existem com provider fora, e ambos viram `error`: o agregado `online` nunca é `warn` e `degraded` (ex.: credencial ausente) sai com exit 1.
+
+`--online` usa `loadEffectiveConfig`: camada global (`$ASTRO_HOME/config.json`) e profile do ambiente contam. Se nenhum provider sobrar, `online` vira `ok` sem rede; config de projeto inválida vira `warn`; falha inesperada vira `online` `error`, nunca exceção.
 
 ## Payload `--json`
 
 ```json
 {
   "schema": "doctor/v1",
-  "checks": [
-    {
-      "name": "bun",
-      "status": "error",
-      "message": "1.3.9 abaixo do mínimo >=1.4.0",
-      "level": "fail",
-      "label": "bun",
-      "detail": "1.3.9 abaixo do mínimo >=1.4.0"
-    }
-  ],
-  "summary": { "ok": 0, "warn": 0, "fail": 1 },
-  "fixes": { "applied": [], "errors": [] }
+  "checks": [{ "name": "bun", "status": "error", "message": "1.3.9 abaixo do mínimo >=1.4.0", "level": "fail", "label": "bun" }],
+  "summary": { "ok": 0, "warn": 0, "fail": 1 }
 }
 ```
 
 | Campo | Contrato |
 |---|---|
-| `name` | identificador estável do check (`bun`, `config`, `provider:<id>`, `online`) |
+| `name` | slug estável: `bun`, `node`, `dependencies`, `dist`, `config`, `configGlobal`, `astroHome`, `attachments`, `skills`, `disk`, `mcp`, `credential:<id>`, `provider:<id>`, `vault`, `online` |
 | `status` | `ok`, `warn` ou `error` (#61) |
-| `message` | detalhe legível; vazio quando o check não tem detalhe |
-| `level`, `label`, `detail` | aliases legados de `status`, `name`, `message`; `error` aparece como `fail` |
-| `summary` | contagem por `level`, na ordem `ok`, `warn`, `fail` |
-| `fixes` | só com `--fix`; `applied` e `errors` redigidos |
+| `message` | detalhe legível; vazio sem detalhe |
+| `label` | exibição; pode mudar sem quebrar scripts |
+| `level`, `detail` | aliases de `status`, `message`; `error` aparece como `fail` |
+| `summary` | contagem por `level`: `ok`, `warn`, `fail` |
+| `fixes` | só com `--fix`; `applied`/`errors` redigidos |
 
-Exit code: `0` quando não há `fail`; `1` quando algum check falha (inclusive provider fora em `--online`) ou quando `--fix` registra erro.
+Exit code: `0` sem `fail`; `1` com algum check falho (inclusive provider fora) ou erro de `--fix`.
 
 Referências: I-03, #61, F6-6.
