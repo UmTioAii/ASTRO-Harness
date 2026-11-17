@@ -3,7 +3,7 @@ import { Box, Static, Text, useInput } from "ink";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { parseCommand, type ReplCommand } from "../chat/commands";
 import { statusLine, type ChatSession } from "../chat/repl";
-import { isActiveSession, toSessionRecord } from "../chat/store";
+import { activeSessionRefusal, toSessionRecord } from "../chat/store";
 import type { SessionApi, SessionSummary } from "../chat/session-api";
 import type { SessionSnapshot } from "../chat/agent-session";
 import { isFatalSessionError } from "../chat/session-errors";
@@ -678,8 +678,9 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         }}
         onDelete={(chosen) => {
           if (sessionApi === undefined) return "sem persistência configurada";
-          // a sessão atual (ou a origem retomada) segue viva no auto-save: excluí-la a deixaria tombstoned (#428)
-          if (isActiveSession(session.snapshot(), chosen.id)) return "não é possível excluir a sessão atual";
+          // a sessão atual segue no auto-save; a origem retomada segue na linhagem da conversa (#366)
+          const refusal = activeSessionRefusal(session.snapshot(), chosen.id);
+          if (refusal !== undefined) return refusal;
           try {
             const deleted = sessionApi.delete(chosen.id);
             setSessionList(sessionApi.list());

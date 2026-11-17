@@ -243,14 +243,14 @@ describe("/sessions delete (#366)", () => {
     }
   });
 
-  test("exclui pelo número exibido quando outra sessão entra na lista em paralelo (#366)", async () => {
+  test("resolve número e id exibidos mesmo com inserções concorrentes (#366)", async () => {
     class InterleavingIO extends ScriptedIO {
-      constructor(lines: string[], private readonly trigger: string, private readonly hook: () => void) {
+      constructor(lines: string[], private readonly hooks: Record<string, () => void>) {
         super(lines);
       }
       override async read(): Promise<string | null> {
         const line = await super.read();
-        if (line === this.trigger) this.hook();
+        if (line !== null) this.hooks[line]?.();
         return line;
       }
     }
@@ -261,17 +261,22 @@ describe("/sessions delete (#366)", () => {
     legacy.write(savedRecord("a", "2026-10-01T10:00:00.000Z"));
     const sessionApi = new SessionApi(astroDir);
     const other = new SessionApi(astroDir);
-    // /sessions imprime 1. b e 2. a; outra conexão grava c (01/11) no topo antes do delete
+    // /sessions imprime 1. b e 2. a; outra conexão grava c (01/11) antes do delete por número
+    // e d (02/11) depois da lista refrescada, exercitando o id fora do que foi exibido
     const io = new InterleavingIO(
-      ["/sessions", "/sessions delete 1", "s", "/exit"],
-      "/sessions delete 1",
-      () => other.create(savedRecord("c", "2026-11-01T00:00:00.000Z")),
+      ["/sessions", "/sessions delete 1", "s", "/sessions delete d", "s", "/exit"],
+      {
+        "/sessions delete 1": () => other.create(savedRecord("c", "2026-11-01T00:00:00.000Z")),
+        "/sessions delete d": () => other.create(savedRecord("d", "2026-11-02T00:00:00.000Z")),
+      },
     );
     try {
       await runRepl(new FakeSession(), io, { sessionApi, interactive: true });
 
       expect(io.outputs).toContain("sessão excluída: b");
-      expect(sessionApi.list().map(({ id }) => id)).toEqual(["c", "a"]);
+      expect(io.outputs).toContain("sessão excluída: d");
+      // o fechamento do REPL autosalva a sessão atual (s1, 28/10) entre c e a
+      expect(sessionApi.list().map(({ id }) => id)).toEqual(["c", "s1", "a"]);
     } finally {
       other.close();
       sessionApi.close();
