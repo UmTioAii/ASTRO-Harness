@@ -53,6 +53,8 @@ export function ackHandoff(deps: { ledger: Ledger; run: string; cwd?: string }, 
     .readHandoffs()
     .find((e) => e.kind === "handoff.created" && e.handoff_id === handoffId);
   if (created === undefined) {
+    // D-18: handoff_mismatch mapeia para invalid_request e NÃO é retryable;
+    // só handoff_ack_timeout é transient_rate_limit/retryable (RETRYABLE em types.ts).
     throw new HandoffError("handoff_mismatch", `handoff ${handoffId} não encontrado no ledger`, { hexIdentifiers: true });
   }
   // Verifier de identidade (F-26): o id gravado precisa casar com o artefato

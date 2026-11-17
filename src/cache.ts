@@ -62,6 +62,8 @@ export class CompletionCache {
     // Só `content` é texto livre do provider. `toolCalls[].arguments` fica
     // intacto: redigir o JSON inteiro corromperia diffs de edit/write_file no
     // replay do cache (o argumento é o contrato executável, não conteúdo).
+    // O SQLite usa as permissões do FS (sem chmod forçado); em POSIX o
+    // diretório do projeto deve ser 0700 (residual em docs/security-threat-matrix.md).
     const stored = JSON.stringify({ ...response, content: redactSecrets(response.content) });
     const tx = this.#db.transaction(() => {
       this.#db.run(
