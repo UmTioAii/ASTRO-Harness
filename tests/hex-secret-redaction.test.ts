@@ -46,6 +46,9 @@ describe("redação hex nos sinks (#252, P0)", () => {
     expect(event.payload.ledger_id).toBe(HEX);
     expect(event.payload.ref).toBe(artifactRef);
     expect(event.payload.hash).toBe(HEX);
+    audit.append({ run: "r1", tipo: "probe_bare_ref", payload: { ref: HEX } });
+    const bare = audit.readAll()[1]!;
+    expect(bare.payload.ref).toBe("[REDACTED]");
     const text = readFileSync(join(cwd, "audit.jsonl"), "utf8");
     expect(text).not.toContain(`chave ${HEX}`);
   });

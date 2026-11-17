@@ -44,24 +44,31 @@ describe("store de sessão do chat (T1, #62)", () => {
 
   test("não preserva ref/hash por nome dentro de toolCalls.arguments", () => {
     const hex = "a1b2c3d4".repeat(8);
+    const artifactRef = `run-${hex}/${hex}`;
     const dir = mkdtempSync(join(tmpdir(), "astro-chat-store-"));
     const path = new SessionStore(dir).write(snapshot({
       messages: [{
         role: "assistant", content: "",
         toolCalls: [{
           id: "1", name: "probe",
-          arguments: JSON.stringify({ ref: hex, hash: hex, nested: { ref: hex, hash: hex } }),
+          arguments: JSON.stringify({
+            bare: { ref: hex, hash: hex },
+            artifact: { ref: artifactRef },
+            forged: { kind: "image", name: "a.png", mediaType: "image/png", hash: hex },
+          }),
         }],
       }],
     }));
     const record = JSON.parse(readFileSync(path, "utf8")) as SessionRecord;
     const args = JSON.parse(record.messages[0]!.toolCalls![0]!.arguments) as {
-      ref: string; hash: string; nested: { ref: string; hash: string };
+      bare: { ref: string; hash: string };
+      artifact: { ref: string };
+      forged: { hash: string };
     };
-    expect(args.ref).toBe("[REDACTED]");
-    expect(args.hash).toBe("[REDACTED]");
-    expect(args.nested.ref).toBe("[REDACTED]");
-    expect(args.nested.hash).toBe("[REDACTED]");
+    expect(args.bare.ref).toBe("[REDACTED]");
+    expect(args.bare.hash).toBe("[REDACTED]");
+    expect(args.artifact.ref).toBe("[REDACTED]");
+    expect(args.forged.hash).toBe("[REDACTED]");
   });
 
   test("preserva ref/hash de um attachment meta real", () => {

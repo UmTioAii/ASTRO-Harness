@@ -258,6 +258,27 @@ describe("attachment resume (ADR-0026, #392)", () => {
     }
   });
 
+  test("resume descarta imagem cujo artefato sumiu e avisa", () => {
+    const { root, session, artifact, meta, stop } = setup();
+    const saved = artifact();
+    unlinkSync(join(root, ...saved.ref.split("/")));
+    const warnings: string[] = [];
+    const warning = spyOn(console, "warn").mockImplementation((message?: unknown) => {
+      warnings.push(String(message));
+    });
+    const chat = session();
+    try {
+      chat.resume(snapshot("s5", meta(saved)));
+      const user = chat.messages.find((message) => message.role === "user");
+      expect(user?.images).toBeUndefined();
+      expect(warnings.join("\n")).toMatch(/indisponível|ignorada|ausente/i);
+    } finally {
+      warning.mockRestore();
+      chat.close();
+      stop();
+    }
+  });
+
   test("GC na criação do store remove ref expirado e preserva o atual", () => {
     const { root, context, session, artifact, meta, stop } = setup();
     const current = artifact();
