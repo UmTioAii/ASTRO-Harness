@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { benchModel, filterModels, formatBenchTable, formatMarkdown, runBenchmark, type BenchReport } from "../src/eval/bench";
+import { benchModel, filterModels, formatBenchTable, formatMarkdown, runBenchmark, selectBenchModels, type BenchReport } from "../src/eval/bench";
 import type { ModelEntry } from "../src/registry";
 import type { CompletionResponse, Provider } from "../src/provider/types";
 
@@ -15,6 +15,9 @@ const model = (over: Partial<ModelEntry> = {}): ModelEntry => ({
   ...over,
 });
 
+/** Referências `provider/model`, na ordem da lista. */
+const refs = (list: readonly ModelEntry[]): string[] => list.map((m) => `${m.provider}/${m.id}`);
+
 /** Provider mock com delay determinístico para medir latência. */
 function delayedProvider(delayMs: number, out = 50): Provider {
   return {
@@ -26,12 +29,12 @@ function delayedProvider(delayMs: number, out = 50): Provider {
 }
 
 /** Provider mock que falha em uma chamada específica (1-based). */
-function flakyProvider(failOnCall: number, out = 40): Provider {
+function flakyProvider(failOnCall: number, out = 40, message = "falha simulada"): Provider {
   let calls = 0;
   return {
     async complete(): Promise<CompletionResponse> {
       calls++;
-      if (calls === failOnCall) throw new Error("falha simulada");
+      if (calls === failOnCall) throw new Error(message);
       return { content: "x".repeat(out), toolCalls: [], usage: { inputTokens: 100, outputTokens: out } };
     },
   };
@@ -103,33 +106,51 @@ describe("benchmark de providers (F5-4)", () => {
       model({ provider: "openrouter", id: "o1" }),
       model({ provider: "openrouter", id: "o2" }),
     ];
-    const ids = (list: ModelEntry[]) => list.map((m) => `${m.provider}/${m.id}`);
-    const all = ids(models);
-    expect(ids(filterModels(models, "nvidia"))).toEqual(["nvidia/n1"]);
-    expect(ids(filterModels(models, "openrouter/o2"))).toEqual(["openrouter/o2"]);
-    expect(ids(filterModels(models, " nvidia , openrouter/o2 "))).toEqual(["nvidia/n1", "openrouter/o2"]);
-    expect(ids(filterModels(models, ""))).toEqual(all);
-    expect(ids(filterModels(models, undefined))).toEqual(all);
+    const all = refs(models);
+    expect(refs(filterModels(models, "nvidia"))).toEqual(["nvidia/n1"]);
+    expect(refs(filterModels(models, "openrouter/o2"))).toEqual(["openrouter/o2"]);
+    expect(refs(filterModels(models, " nvidia , openrouter/o2 "))).toEqual(["nvidia/n1", "openrouter/o2"]);
+    expect(refs(filterModels(models, ""))).toEqual(all);
+    expect(refs(filterModels(models, undefined))).toEqual(all);
     expect(filterModels(models, "sem-match")).toEqual([]);
   });
 
-  test("filtro do CI matrix restringe o bench com mocks", async () => {
-    const filter = process.env.BENCH_PROVIDER_FILTER ?? "nvidia";
+  test("selectBenchModels aplica o filtro e recusa seleção vazia", () => {
     const models = [
-      model({ provider: "nvidia", id: "bench" }),
-      model({ provider: "openrouter", id: "bench" }),
+      model({ provider: "nvidia", id: "n1" }),
+      model({ provider: "openrouter", id: "o1" }),
     ];
-    const selected = filterModels(models, filter);
-    expect(selected.length).toBeGreaterThan(0);
-    expect(selected.every((m) => `${m.provider}/${m.id}`.includes(filter))).toBe(true);
-    const report = await runBenchmark({
-      models: selected,
-      runs: 1,
-      providerFor: () => delayedProvider(1),
-    });
-    expect(report.results.length).toBe(selected.length);
-    expect(report.results.every((r) => r.successRate === 1)).toBe(true);
+    const selected = selectBenchModels(models, "nvidia");
+    expect(selected.ok).toBe(true);
+    if (selected.ok) expect(refs(selected.models)).toEqual(["nvidia/n1"]);
+    const unfiltered = selectBenchModels(models, undefined);
+    expect(unfiltered.ok).toBe(true);
+    if (unfiltered.ok) expect(refs(unfiltered.models)).toEqual(["nvidia/n1", "openrouter/o1"]);
+    const none = selectBenchModels(models, "sem-match");
+    expect(none.ok).toBe(false);
+    expect(none.ok ? "" : none.error).toBe("nenhum modelo ativo corresponde ao filtro");
   });
+
+  // Duas pernas da matriz de CI (`.github/workflows/ci.yml`): sem depender de
+  // env ambiente, para que qualquer valor externo não altere o resultado.
+  for (const filter of ["nvidia", "openrouter"] as const) {
+    test(`filtro do CI matrix restringe o bench com mocks: ${filter}`, async () => {
+      const models = [
+        model({ provider: "nvidia", id: "bench" }),
+        model({ provider: "openrouter", id: "bench" }),
+      ];
+      const selected = filterModels(models, filter);
+      expect(refs(selected)).toEqual([`${filter}/bench`]);
+      const report = await runBenchmark({
+        models: selected,
+        runs: 1,
+        providerFor: () => delayedProvider(1),
+      });
+      expect(report.results.length).toBe(1);
+      expect(report.results[0]?.model).toBe(`${filter}/bench`);
+      expect(report.results[0]?.successRate).toBe(1);
+    });
+  }
 
   test("runBenchmark grava JSON e Markdown com data", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "astro-bench-"));
@@ -146,14 +167,34 @@ describe("benchmark de providers (F5-4)", () => {
     expect(md).toContain("| mock/bench-model");
     expect(md).toContain("n/d"); // custo null → n/d
     const json = JSON.parse(readFileSync(join(outDir, `bench-${date}.json`), "utf8")) as BenchReport;
+    expect(json.schema).toBe(2);
     expect(json.results).toHaveLength(1);
     expect(json.prompts).toBeGreaterThan(0);
     expect(json.results[0]?.successRate).toBe(1);
   });
 
+  test("erro do provider não vaza para JSON nem Markdown (I-03)", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "astro-bench-leak-"));
+    const sentinel = "sentinel-bench-erro-42";
+    const report = await runBenchmark({
+      models: [model()],
+      runs: 1,
+      outDir,
+      providerFor: () => flakyProvider(1, 40, `provider recusou: ${sentinel}`),
+    });
+    const json = readFileSync(join(outDir, `bench-${report.date}.json`), "utf8");
+    const md = readFileSync(join(outDir, `bench-${report.date}.md`), "utf8");
+    expect(json).not.toContain(sentinel);
+    expect(md).not.toContain(sentinel);
+    // Só contagem e taxa: a falha continua mensurável sem o texto do erro.
+    expect(json).toContain('"successRate": 0.8');
+    expect(json).toContain('"completed": 4');
+    expect(json).toContain('"total": 5');
+  });
+
   test("formatMarkdown inclui todos os modelos e tags", () => {
     const report: BenchReport = {
-      schema: 1, date: "2026-10-23", prompts: 5,
+      schema: 2, date: "2026-10-23", prompts: 5,
       results: [
         {
           model: "a/1", provider: "a", tags: ["fast"], runs: 1,
@@ -185,7 +226,7 @@ describe("benchmark de providers (F5-4)", () => {
 
   test("formatBenchTable mostra a taxa de sucesso por modelo", () => {
     const report: BenchReport = {
-      schema: 1, date: "2026-10-23", prompts: 5,
+      schema: 2, date: "2026-10-23", prompts: 5,
       results: [
         {
           model: "a/1", provider: "a", tags: ["fast"], runs: 1,
