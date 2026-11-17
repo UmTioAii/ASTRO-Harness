@@ -390,26 +390,20 @@ describe("sandbox: fontes de máscara não vazam em tmpdir (#391)", () => {
       mod.configureRunCommand({ sandbox: true });
       const cwd = mkdtempSync(join(tmpdir(), "astro-sb-mask-clean-"));
       writeFileSync(join(cwd, ".env"), "X=1");
-      const target = join(resolve(cwd), ".env");
+      const suffix = `:${join(resolve(cwd), ".env")}:ro`;
       const maskSource = (): string | undefined => {
         const argv = mock.runCalls.at(-1) ?? [];
-        const spec = argv.flatMap((v, i) => (v === "--volume" ? [argv[i + 1] as string] : []))
-          .find((s) => s.endsWith(`:${target}:ro`));
-        return spec?.slice(0, spec.length - `:${target}:ro`.length);
+        const index = argv.findIndex((value, i) => value === "--volume" && String(argv[i + 1]).endsWith(suffix));
+        return index < 0 ? undefined : argv[index + 1]!.slice(0, -suffix.length);
       };
-
-      const ok = await mod.runCommandTool.execute({ command: "echo ok" }, ctx(cwd));
-      expect(ok.isError).toBeFalsy();
-      const successMask = maskSource();
-      expect(successMask).toBeDefined();
-      expect(existsSync(successMask!)).toBe(false);
-
-      fail = true;
-      const bad = await mod.runCommandTool.execute({ command: "echo fail" }, ctx(cwd));
-      expect(bad.isError).toBe(true);
-      const failureMask = maskSource();
-      expect(failureMask).toBeDefined();
-      expect(existsSync(failureMask!)).toBe(false);
+      for (const shouldFail of [false, true]) {
+        fail = shouldFail;
+        const result = await mod.runCommandTool.execute({ command: "echo probe" }, ctx(cwd));
+        expect(result.isError === true).toBe(shouldFail);
+        const source = maskSource();
+        expect(source).toBeDefined();
+        expect(existsSync(source!)).toBe(false);
+      }
     } finally {
       mock.restore();
     }
