@@ -59,7 +59,7 @@ A mesma regra vive em `filterModels` (`src/eval/bench.ts`), usada pelos testes e
 `ci.yml`:
 
 - `eval` continua sendo o gate required (Ubuntu, threshold 0.85) com o golden dataset mock.
-- `bench-mock` roda a matriz OS × filtro (`nvidia`, `openrouter`) sobre `tests/bench.test.ts`, sem quota de provider.
+- `bench-mock` roda a matriz OS × filtro (`nvidia`, `openrouter`); cada perna executa o caso de filtro correspondente via `-t`, sem quota de provider.
 
 ## Referências
 

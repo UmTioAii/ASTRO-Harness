@@ -12,7 +12,7 @@ Resumo: jobs que rodam em todo PR, pré-requisitos de runner e equivalente local
 |---|---|---|---|
 | `test` | ubuntu-latest + windows-latest | `bun install --frozen-lockfile`, `bun run typecheck`, `bun test` | os mesmos comandos |
 | `eval` | ubuntu-latest | `bun src/cli.ts eval --threshold 0.85 --report eval-report.json` (mock) | idem |
-| `bench-mock` | ubuntu-latest + windows-latest × filtro `nvidia`/`openrouter` | `bun test tests/bench.test.ts` com providers mock; não é required | `BENCH_PROVIDER_FILTER=<filtro> bun test tests/bench.test.ts` |
+| `bench-mock` | ubuntu-latest + windows-latest × filtro `nvidia`/`openrouter` | `bun test tests/bench.test.ts -t "filtro do CI matrix restringe o bench com mocks: <filtro>"` com providers mock; não é required | idem |
 | `secrets` | ubuntu-latest | gitleaks no histórico | — |
 
 A matriz `test` roda nos dois SOs de propósito: há regressões específicas de win32 (paths, quirk de stdout do Bun) e de Linux (POSIX, Docker).
