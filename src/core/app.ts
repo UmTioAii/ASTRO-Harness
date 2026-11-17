@@ -807,7 +807,11 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       return cacheScope(model);
     }
   };
-  const withCache = (provider: Provider, scope: string | ((req: CompletionRequest) => string)): Provider => {
+  const withCache = (
+    provider: Provider,
+    scope: string | ((req: CompletionRequest) => string),
+    attribution?: { run: string; agent: string },
+  ): Provider => {
     const c = cache;
     if (c === undefined) return provider;
     return cachedProvider(provider, {
@@ -816,7 +820,12 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       ttlHours: config.cache!.ttlHours,
       maxEntries: config.cache!.maxEntries,
       onHit: (key) => {
-        audit.append({ run, agent: activeAgent.name, tipo: "cache.hit", payload: { key: key.slice(0, 16) } });
+        audit.append({
+          run: attribution?.run ?? run,
+          agent: attribution?.agent ?? activeAgent.name,
+          tipo: "cache.hit",
+          payload: { key: key.slice(0, 16) },
+        });
       },
     });
   };
@@ -878,7 +887,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
             config, target, env, loaded.providerFactories, audit, childRun, ledger,
             quotaLimits, targetProfile, () => childAgent,
           );
-      return withCache(built, cacheScope(target));
+      return withCache(built, cacheScope(target), { run: childRun, agent: childAgent });
     };
     const base = build(m, profile);
     if (routing === undefined || profile !== undefined) return base;
