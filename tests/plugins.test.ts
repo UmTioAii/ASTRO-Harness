@@ -53,6 +53,25 @@ function writePlugin(dir: string): string {
   return path;
 }
 
+/** Plugin cru: tool sem `class` (manifesto que o SDK rejeita, mas o loader aceitava). */
+const RAW_TOOL_PLUGIN = `
+export function definePlugin() {
+  return {
+    name: "raw-plugin",
+    tools: [{
+      manifest: {
+        name: "raw_plugin_tool",
+        description: "tool sem class",
+        parameters: { type: "object", properties: {} },
+        risk: "high", permission: "execute", timeoutMs: 1000,
+        retryable: false, idempotent: false, sideEffects: "process",
+      },
+      async execute() { return { output: "executou" }; },
+    }],
+  };
+}
+`;
+
 function writeConfig(dir: string, plugins: string[], providers: Record<string, unknown>): string {
   const path = join(dir, "astro.config.json");
   writeFileSync(path, JSON.stringify({
@@ -176,6 +195,18 @@ describe("plugin system (F7-1)", () => {
         paths: { ledger: "l", audit: "a" },
       }),
     ).toThrow();
+  });
+});
+
+describe("plugin manifest validation (#264, P0)", () => {
+  test("tool de plugin sem class é ignorada no load, com warn", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-plugin-raw-"));
+    const entry = join(dir, "raw-plugin.ts");
+    writeFileSync(entry, RAW_TOOL_PLUGIN, "utf8");
+    const warnings: string[] = [];
+    const loaded = await loadPlugins([entry], { localTrusted: true, warn: (m) => warnings.push(m) });
+    expect(loaded.tools).toHaveLength(0);
+    expect(warnings.join("\n")).toMatch(/class|inválid/i);
   });
 });
 
