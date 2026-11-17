@@ -121,11 +121,20 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
     },
     async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
       const raw = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
-      /** A2/A4: o teto conta agentes vivos; sem a dependência, assume o pai (fail closed). */
+      /**
+       * A2/A4: o teto conta agentes vivos; a flag `spawn.parallel` é quem
+       * liga a concorrência (o serial pré-#499 não é barrado por slot). Sem a
+       * dependência, assume o pai (fail closed); valores inválidos caem no
+       * default 2 e nunca viram NaN/negativo.
+       */
       const availableSlots = (): { maxActive: number; available: number } => {
-        const maxActive = deps.maxActive ?? 2;
-        return { maxActive, available: maxActive - (deps.activeCount?.() ?? 1) };
+        const configured = deps.maxActive ?? 2;
+        const maxActive = Number.isFinite(configured) && configured > 0 ? configured : 2;
+        const live = deps.activeCount?.() ?? 1;
+        const active = Number.isFinite(live) ? Math.max(0, live) : 1;
+        return { maxActive, available: Math.max(0, maxActive - active) };
       };
+      const gated = deps.parallel === true;
       const noSlot = (maxActive: number): ToolResult => ({
         output: JSON.stringify({
           error: "spawn_limit_exceeded",
@@ -158,10 +167,10 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           if (typeof parsed === "string") return invalid(parsed);
           tasks.push(parsed);
         }
-        // A2/A4: `maxActive` conta agentes vivos (o pai já segura um lock).
+        // A2/A4: o slot só é exigido quando a flag liga a concorrência.
         const slots = availableSlots();
-        if (slots.available < 1) return noSlot(slots.maxActive);
-        const { available } = slots;
+        if (gated && slots.available < 1) return noSlot(slots.maxActive);
+        const available = gated ? slots.available : 1;
         tasks.forEach((task, index) => {
           deps.audit.append({
             run: ctx.run,
@@ -230,7 +239,7 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         ? prompt
         : `${raw.context}\n\n${prompt}`;
       const slots = availableSlots();
-      if (slots.available < 1) return noSlot(slots.maxActive);
+      if (gated && slots.available < 1) return noSlot(slots.maxActive);
       deps.audit.append({
         run: ctx.run,
         agent: ctx.agent,
