@@ -379,6 +379,11 @@ export class AgentSession {
     return removed;
   }
 
+  /** Pastas confiáveis no mesmo store (`$ASTRO_HOME` da sessão) usado pela revogação (#267). */
+  trustedFolders(): string[] {
+    return new TrustedFolders(trustStatePath(this.#env)).list();
+  }
+
   /** Status do budget para `/usage` (#63): `undefined` sem budget na config; senão deriva do ledger. */
   budgetStatus(): BudgetStatus | undefined {
     return this.#config.budget === undefined ? undefined : budgetStatus(this.#config.budget, this.#ledger);

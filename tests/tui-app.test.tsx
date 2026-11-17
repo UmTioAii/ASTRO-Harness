@@ -772,6 +772,7 @@ test("/config revoga trust com store real, preserva o resto do state e esc não 
     expect(state.trust.folders).toEqual([second]);
     expect(state.migrations).toEqual({ providers: true, trust: true });
     instance.stdin.write("\u001b"); // fecha a config: a linha de info aparece no histórico
+    await waitFor(() => (instance.lastFrame() ?? "").includes("Configuração") === false);
     await waitFor(() => frameHas(instance, "trust revogado:"));
     expect(frameHas(instance, basename(first))).toBe(true);
     // reabre e cancela a revogação da pasta restante: nada é gravado

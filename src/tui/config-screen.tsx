@@ -155,7 +155,7 @@ export function ConfigScreen({ colors, summary, trustedFolders, onClose, onSaveM
       ) : null}
       {view === "revoke-confirm" ? (
         <>
-          <Text color={colors.error}>revogar trust de "{folders[revokeCursor]}"? o próximo open desta pasta pergunta de novo.</Text>
+          <Text color={colors.error}>revogar trust de "{folders[revokeCursor]}"? o próximo open/run desta pasta pergunta de novo, se nenhuma ancestral continuar confiável.</Text>
           <Text dimColor>c: confirmar · x/esc: cancelar</Text>
         </>
       ) : null}

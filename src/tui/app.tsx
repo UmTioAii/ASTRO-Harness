@@ -738,7 +738,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     }
     let trusted: readonly string[] = [];
     try {
-      trusted = loadTrustedStore(trustStatePath()).folders;
+      // mesma fonte que a revogação usa (env da sessão), não o process.env da UI (#267)
+      trusted = session.trustedFolders?.() ?? loadTrustedStore(trustStatePath()).folders;
     } catch {
       trusted = []; // store de trust inválido não impede ver a config
     }
