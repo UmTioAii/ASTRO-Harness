@@ -259,6 +259,12 @@ describe("turno acima da janela no REPL (ADR-0026, #392)", () => {
     const { cwd, home, bodies, session, stop } = e2eSetup(131072);
     writeFileSync(join(cwd, "big.txt"), BIG_TEXT);
     try {
+      // Histórico que o guard descartaria para caber; ele precisa sobreviver à rejeição.
+      session.resume({
+        id: "prev", startedAt: "2026-11-08T12:00:00.000Z", model: "p/m1",
+        messages: [{ role: "user", content: "antigo" }, { role: "assistant", content: "ok" }],
+        turns: 1, tokensIn: 1, tokensOut: 1, costUsd: 0,
+      });
       const big = await loadAttachment({ path: "big.txt", cwd, astroHome: home });
       let thrown: unknown;
       try {
@@ -269,7 +275,9 @@ describe("turno acima da janela no REPL (ADR-0026, #392)", () => {
       }
       expect(thrown).toMatchObject({ name: "AttachmentError", code: "attachment_turn_too_large" });
       expect(bodies).toHaveLength(0);
-      expect(session.snapshot().messages.map((message) => message.role)).toEqual(["system"]);
+      const messages = session.snapshot().messages;
+      expect(messages.map((message) => message.role)).toEqual(["system", "user", "assistant"]);
+      expect(messages[1]?.content).toBe("antigo");
     } finally {
       stop();
     }
