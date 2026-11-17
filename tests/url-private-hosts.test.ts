@@ -23,6 +23,33 @@ describe("url-safety: hosts privados (#249)", () => {
     }
   });
 
+  test("metadados IPv6, IPv4 mapeado e DNS são recusados com e sem opt-in", () => {
+    const prev = process.env.ASTRO_ALLOW_PRIVATE_URLS;
+    const urls = [
+      "http://[fd00:ec2::254]/latest/meta-data/",
+      "http://[fd00:0ec2:0:0:0:0:0:254]/latest/meta-data/",
+      "http://[::ffff:169.254.169.254]/latest/meta-data/",
+      "http://[::ffff:a9fe:a9fe]/latest/meta-data/",
+      "http://metadata.tencentyun.com/latest/meta-data/",
+      "http://instance-data.ec2.internal/latest/meta-data/",
+    ];
+    try {
+      delete process.env.ASTRO_ALLOW_PRIVATE_URLS;
+      for (const raw of urls) {
+        expect(urlProblem(raw)).toBeDefined();
+        expect(outboundUrlProblem(raw)).toBeDefined();
+      }
+      process.env.ASTRO_ALLOW_PRIVATE_URLS = "1";
+      for (const raw of urls) {
+        expect(outboundUrlProblem(raw)).toBeDefined();
+      }
+      expect(outboundUrlProblem("http://[fd00:1234::1]/v1")).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.ASTRO_ALLOW_PRIVATE_URLS;
+      else process.env.ASTRO_ALLOW_PRIVATE_URLS = prev;
+    }
+  });
+
   test("outbound recusa loopback e faixas privadas por padrão", () => {
     for (const raw of [
       "http://127.0.0.1:8080/x",
