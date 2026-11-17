@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -179,6 +179,32 @@ describe("astro doctor CLI (#61)", () => {
     expect(code).toBe(0);
     expect(out).toContain("[REDACTED]");
     expect(out).not.toContain(secretPath);
+  });
+
+  test("leitura aceita ASTRO_HOME em link simbólico sem exit 1", async () => {
+    const dir = sandbox();
+    const real = join(sandbox(), "real-home");
+    mkdirSync(real, { recursive: true });
+    const link = join(sandbox(), "linked-home");
+    symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
+
+    const { out, code } = await run(["doctor", "--json"], dir, { ASTRO_HOME: link });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out) as { checks: Array<{ label: string; level: string }> };
+    expect(parsed.checks.find((check) => check.label === "astro home")?.level).toBe("ok");
+  });
+
+  test("exit 1 quando a config global é malformada", async () => {
+    const dir = sandbox();
+    const home = sandbox();
+    writeFileSync(join(dir, "astro.config.json"), configWithCredential(), "utf8");
+    writeFileSync(join(home, "config.json"), "{not json", "utf8");
+
+    const { out, code } = await run(["doctor", "--json"], dir, { ASTRO_HOME: home });
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out) as { checks: Array<{ label: string; level: string }> };
+    expect(parsed.checks.find((check) => check.label === "config global")?.level).toBe("fail");
+    expect(out).not.toContain(SENTINEL);
   });
 
   test("flag desconhecida falha com erro de uso", async () => {

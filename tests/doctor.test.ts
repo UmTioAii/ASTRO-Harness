@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import {
   applyFixes,
+  collectFacts,
   doctorJson,
   exitCode,
   renderReport,
@@ -11,6 +12,13 @@ import {
   satisfiesMinimum,
   type DoctorFacts,
 } from "../scripts/doctor";
+
+const VALID_SKILL = `---\nname: ok\ndescription: ok\nversion: 1.0.0\n---\nPrompt\n`;
+
+function writeSkill(root: string, name: string, content: string): void {
+  mkdirSync(join(root, name), { recursive: true });
+  writeFileSync(join(root, name, "SKILL.md"), content, "utf8");
+}
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -229,6 +237,8 @@ test("disco sem escrita no cwd falha e reporta espaço livre", () => {
   const okCheck = valid.checks.find((item) => item.label === "disco");
   expect(okCheck?.level).toBe("ok");
   expect(okCheck?.detail).toContain("2.0 GiB");
+  expect(okCheck?.detail).toContain("atributo");
+  expect(okCheck?.detail).not.toContain("gravável");
 });
 
 test("checks redigem padrão de segredo no detalhe", () => {
@@ -352,4 +362,87 @@ test("sanitizeCheck redige também o label do check", () => {
   const text = lines(report);
   expect(text).toContain("[REDACTED]");
   expect(text).not.toContain(secret);
+});
+
+test("leitura aceita ASTRO_HOME que é link simbólico e reporta o caminho real", () => {
+  const base = sandbox();
+  const real = join(base, "real-home");
+  mkdirSync(real, { recursive: true });
+  const link = join(base, "linked-home");
+  symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
+
+  const collected = collectFacts(process.cwd(), {
+    env: { ...process.env, ASTRO_HOME: link },
+    checkPrivate: () => true,
+  });
+  expect(collected.astroHome.error).toBeUndefined();
+  expect(collected.astroHome.exists).toBe(true);
+  expect(collected.astroHome.path).toBe(realpathSync(real));
+
+  const report = runChecks(collected);
+  const check = report.checks.find((item) => item.label === "astro home");
+  expect(check?.level).toBe("ok");
+  expect(exitCode(report)).toBe(0);
+});
+
+test("skills do usuário vêm da raiz injetada e skill quebrada vira warn", () => {
+  const userRoot = join(sandbox(), "skills");
+  mkdirSync(userRoot, { recursive: true });
+  writeSkill(userRoot, "broken", "sem frontmatter");
+
+  const collected = collectFacts(process.cwd(), {
+    env: { ...process.env, ASTRO_HOME: join(sandbox(), "other-home") },
+    checkPrivate: () => true,
+    userSkillsRoot: userRoot,
+  });
+  expect(collected.skills?.user).toBe(0);
+  expect(collected.skills?.warnings.length).toBeGreaterThan(0);
+  const check = runChecks(collected).checks.find((item) => item.label === "skills");
+  expect(check?.level).toBe("warn");
+  expect(exitCode(runChecks(collected))).toBe(0);
+});
+
+test("skills válidas na raiz do usuário são contadas", () => {
+  const userRoot = join(sandbox(), "skills");
+  mkdirSync(userRoot, { recursive: true });
+  writeSkill(userRoot, "ok", VALID_SKILL);
+
+  const collected = collectFacts(process.cwd(), {
+    env: { ...process.env, ASTRO_HOME: join(sandbox(), "other-home") },
+    checkPrivate: () => true,
+    userSkillsRoot: userRoot,
+  });
+  expect(collected.skills).toEqual({ project: 0, user: 1, warnings: [] });
+  const check = runChecks(collected).checks.find((item) => item.label === "skills");
+  expect(check?.level).toBe("ok");
+  expect(check?.detail).toContain("1 do usuário");
+});
+
+test("config global malformada falha mesmo com config de projeto válida", () => {
+  const home = sandbox();
+  writeFileSync(join(home, "config.json"), "{not json", "utf8");
+
+  const collected = collectFacts(process.cwd(), {
+    env: { ...process.env, ASTRO_HOME: home },
+    checkPrivate: () => true,
+  });
+  expect(collected.config.global?.error).toBeString();
+  const report = runChecks(collected);
+  const check = report.checks.find((item) => item.label === "config global");
+  expect(check?.level).toBe("fail");
+  expect(exitCode(report)).toBe(1);
+});
+
+test("credencial vault:<id> é cofre local, não env ausente", () => {
+  const report = runChecks(facts({
+    config: {
+      path: "astro.config.json",
+      present: true,
+      providers: [{ id: "p", credentialRef: "vault:cred-12345678" }],
+    },
+  }));
+  const check = report.checks.find((item) => item.label === "credencial p");
+  expect(check?.level).toBe("ok");
+  expect(check?.detail).toContain("cofre");
+  expect(check?.detail).not.toContain("ausente");
 });
