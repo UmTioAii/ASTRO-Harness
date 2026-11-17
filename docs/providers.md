@@ -145,6 +145,16 @@ Mapas sugeridos: Anthropic `{0:"low",1:"low",2:"medium",3:"high",4:"max"}`; Open
 
 `src/tokens.ts` conta mensagens e requests sem chamada de rede: tokenizer nativo registrado por provider (`registerTokenizer`) ou estimativa documentada de 4 chars/token. O resultado é `{tokens, source: "measured"|"estimate", tokenizer?}`; texto não vazio nunca conta zero. `countMessageTokens`/`countRequestTokens` incluem conteúdo, tool calls e definições de tools; são determinísticos e não leem ambiente nem segredo (I-03). `sanitize-external` e `handoff/compact` reutilizam `estimateTokens`; o `context-guard` do chat mantém a própria fórmula até S-17. Compaction (S-17) e o retry de overflow consomem essa contagem.
 
+## Judge do objetivo (L4, ADR-0014, #450)
+
+| `run.judge` | Chamadas | Quando |
+|---|---|---|
+| `off` (default) | nenhuma | — |
+| `on` | uma por completion | toda conclusão sem tool calls |
+| `auto` | uma por sinal | primeira completion, checkpoint gravado ou não-progresso retomado |
+
+O juiz usa o caminho normal de `Provider.complete` (`purpose: "cheap"`, sem tools), schema JSON estrito `{verdict, reason}` e prompt limitado ao objetivo + última saída (sem histórico, I-03). `done` mantém o sucesso; `continue` injeta o motivo redigido e segue o loop; `stop` para em ponto seguro (`judge_stop`). Fail-safe sem retry: saída malformada e erro de provider caem no sucesso normal, e budget, quota ou limite de time esgotados não fazem a chamada extra. Audit: `judge.verdict {step, verdict, reasonHash}`, `judge.failed {reason}` e `judge.skipped {reason}` — nunca o prompt nem a saída.
+
 ## Streaming (T3)
 
 Com `CompletionRequest.onToken`, o `openai-compat` pede `stream: true` + `stream_options.include_usage` e consome SSE (`data:`), agregando conteúdo, tool calls fatiadas e usage. Resposta 200 que não é `text/event-stream` cai no parser JSON normal (sem deltas), e frames de erro (`data: {"error":...}`) ou stream sem nenhum frame viram `ProviderError("outage")`. Depois do primeiro token não há retry nem troca de provider/profile (`streamStarted`), para não duplicar texto; o custo usa o usage do chunk final (sem chunk de usage, usage fica zero).

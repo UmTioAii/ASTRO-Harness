@@ -1178,7 +1178,11 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           taskHash: shortTaskHash(opts.task),
           ...(config.run === undefined
             ? {}
-            : { checkpointAt: config.run.checkpointAt, noProgressSegments: config.run.noProgressSegments }),
+            : {
+                checkpointAt: config.run.checkpointAt,
+                noProgressSegments: config.run.noProgressSegments,
+                ...(config.run.judge === "off" ? {} : { judge: config.run.judge }),
+              }),
           ...(opts.onNoProgress === undefined ? {} : { onNoProgress: opts.onNoProgress }),
           ...(config.effort === undefined ? {} : { effort: config.effort }),
           ...(opts.history === undefined ? {} : { history: opts.history }),

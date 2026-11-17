@@ -2,7 +2,7 @@
 
 - Status: aceita
 - Data: 2026-10-28
-- Issue: #120
+- Issue: #120, #450
 - Decisões relacionadas: D-12, ADR-0010, ADR-0013
 
 ## Contexto
@@ -21,14 +21,14 @@
 
 **Não-progresso (L6).** Sinais por segmento: hash dos caminhos tocados pelas tools + número de falhas de tool (um teste que falha vira erro de tool). O tamanho do histórico não entra no hash porque cresce a cada turno e mascararia o loop. 3 segmentos sem mudança → pausa e pergunta.
 
-**Judge (L4).** Permanece `off` por default; `on`/`auto` ficam documentados sem implementação (v2, guarda-chuva #138).
+**Judge (L4, #450).** `run.judge` aceita `off` (default), `on` e `auto`. Antes de declarar sucesso, o juiz recebe só o objetivo e a última saída do assistente (limitados e redigidos, I-03) e devolve `{"verdict":"done|continue|stop","reason":"..."}` por uma chamada única ao provider existente (`purpose: "cheap"`, sem tools). `on` julga toda completion; `auto` só com sinal: primeira completion, checkpoint gravado ou não-progresso retomado. `done` segue o sucesso; `continue` injeta o motivo redigido e volta ao loop (limitado por `maxTurns`/`noProgressSegments`); `stop` para em ponto seguro (`judge_stop`, I-19). Sem retry: saída malformada ou erro de provider voltam ao caminho normal, e budget, quota ou limite de time esgotados não fazem a chamada extra. O audit guarda `judge.verdict {step, verdict, reasonHash}`, `judge.failed {reason}` e `judge.skipped {reason}`, nunca prompt nem saída (I-03/I-04).
 
 **Paradas físicas (L7).** Loop `unlimited` para por: conclusão, teto físico (`ceiling_hit`, ADR-0013) ou não-progresso — nunca roda sem parada física (golden §11.8).
 
 ## Consequências
 
 - Ganho: runs longos supervisionados, com estado seguro e retomável; sem loop infinito sem corte.
-- Custo: S-18 (#135) implementa; apresentação no REPL/TUI fica em T1/T2.
+- Custo: S-18 (#135) implementa; apresentação no REPL/TUI fica em T1/T2. Com `judge` diferente de `off`, uma chamada extra por completion julgada, auditada só pelo hash do motivo (#450).
 - Invariantes afetadas: I-19 (estado seguro e retomável), I-03 (checkpoint sanitizado).
 
 ## Alternativas descartadas
