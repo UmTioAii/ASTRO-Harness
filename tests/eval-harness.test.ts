@@ -336,6 +336,189 @@ describe("eval harness (F5-2)", () => {
     }
   });
 
+  test("runCase recusa webSearch sem baseUrl antes de qualquer fetch", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-websearch-default-"));
+    const caseDir = writeScenarioCase(root, "01-web-default", {
+      schema: 1,
+      kind: "app",
+      env: { EVAL_WEB_KEY: "eval-web-secret-123" },
+      config: {
+        agent: { model: "mock/mock-1", maxSteps: 6, tools: ["web_search", "write_file"] },
+        webSearch: { provider: "exa", apiKeyEnv: "EVAL_WEB_KEY" },
+      },
+      turns: [
+        { toolCalls: [
+          { name: "web_search", arguments: { query: "astro" } },
+          { name: "write_file", arguments: { path: "out/search.txt", content: "ok\n" } },
+        ] },
+        { content: "ok" },
+      ],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-web-default-cwd-"));
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("network blocked");
+    }) as unknown as typeof fetch;
+    try {
+      await expect(runScenario(
+        JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+        { cwd, caseDir, task: "tarefa" },
+      )).rejects.toThrow(/loopback|baseUrl/);
+      expect(fetchCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("runCase recusa telemetry habilitado com endpoint público default", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-telemetry-default-"));
+    const caseDir = writeScenarioCase(root, "01-telemetry", {
+      schema: 1,
+      kind: "app",
+      config: { telemetry: { enabled: true } },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-telemetry-cwd-"));
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/loopback|endpoint/);
+  });
+
+  test("runCase recusa provider codex-oauth", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-codex-provider-"));
+    const caseDir = writeScenarioCase(root, "01-codex", {
+      schema: 1,
+      kind: "app",
+      config: {
+        providers: { codex: { kind: "codex-oauth", credentialsPath: "/host/auth.json" } },
+        models: [{ provider: "codex", id: "m1", tags: ["writing-code"], context: 8192 }],
+        agent: { model: "codex/m1", maxSteps: 2, tools: [] },
+      },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-codex-cwd-"));
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/codex-oauth/);
+  });
+
+  test("runCase recusa paths de audit/ledger fora do workspace", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-paths-escape-"));
+    const caseDir = writeScenarioCase(root, "01-paths", {
+      schema: 1,
+      kind: "app",
+      config: { paths: { ledger: "../ledger-escape.jsonl", audit: "../audit-escape.jsonl" } },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-paths-cwd-"));
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/fora do diretório/);
+  });
+
+  test("runCase recusa MCP stdio e run_command", async () => {
+    const stdioRoot = mkdtempSync(join(tmpdir(), "astro-mcp-stdio-"));
+    const stdioDir = writeScenarioCase(stdioRoot, "01-stdio", {
+      schema: 1,
+      kind: "app",
+      config: { mcpServers: { local: { transport: "stdio", command: "bun", enabled: false } } },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const stdioCwd = mkdtempSync(join(tmpdir(), "astro-mcp-stdio-cwd-"));
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(stdioDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd: stdioCwd, caseDir: stdioDir, task: "tarefa" },
+    )).rejects.toThrow(/stdio/);
+
+    const shellRoot = mkdtempSync(join(tmpdir(), "astro-run-command-"));
+    const shellDir = writeScenarioCase(shellRoot, "01-shell", {
+      schema: 1,
+      kind: "app",
+      config: {
+        agent: { model: "mock/mock-1", maxSteps: 2, tools: ["run_command"] },
+        tools: { run_command: { sandbox: false } },
+      },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const shellCwd = mkdtempSync(join(tmpdir(), "astro-run-command-cwd-"));
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(shellDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd: shellCwd, caseDir: shellDir, task: "tarefa" },
+    )).rejects.toThrow(/run_command/);
+  });
+
+  test("runCase recusa symlink aninhado em diretório de seed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-seed-tree-"));
+    const caseDir = join(root, "case");
+    mkdirSync(join(caseDir, "fixtures", "tree"), { recursive: true });
+    writeFileSync(join(caseDir, "fixtures", "tree", "real.txt"), "ok\n");
+    symlinkSync(join(caseDir, "fixtures", "tree"), join(caseDir, "fixtures", "tree", "linked"), "junction");
+    const cwd = mkdtempSync(join(tmpdir(), "astro-seed-tree-cwd-"));
+    const spec: ScenarioSpec = {
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "fixtures/tree", to: "seeded" }],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    };
+
+    await expect(runScenario(spec, { cwd, caseDir, task: "tarefa" })).rejects.toThrow(/link/i);
+    expect(existsSync(join(cwd, "seeded"))).toBe(false);
+  });
+
+  test("env honesto curto não vira falso positivo de vazamento", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-honest-env-"));
+    writeScenarioCase(root, "01-honest", {
+      schema: 1,
+      kind: "app",
+      env: { EVAL_WORD: "test" },
+      seed: [{ from: "fixtures/audit.jsonl", to: ".astro/audit.jsonl" }],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    }, {
+      fixtures: {
+        "audit.jsonl": `${JSON.stringify({ seq: 1, run: "seeded", agent: "x", tipo: "seeded", payload: { value: "test" } })}\n`,
+      },
+    });
+
+    const result = await runTempCase(root, "01-honest");
+    expect(result.passed).toBe(true);
+  }, 30000);
+
+  test("sidecar aceita o formato legado de caminho de arquivo", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-sidecar-legacy-"));
+    const caseDir = writeScenarioCase(root, "01-legacy", {
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "fixtures/verify.md", to: ".astro/skills/verify/SKILL.md" }],
+      sidecars: [".astro/skills/verify/SKILL.md"],
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    }, { fixtures: { "verify.md": SKILL_OK } });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-sidecar-legacy-cwd-"));
+
+    const result = await runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    );
+    expect(result.diffSummary).toEqual([]);
+    expect(existsSync(join(cwd, ".astro", "skills", "verify", ".sha256"))).toBe(true);
+  });
+
   test("runCase isola a config global do ASTRO_HOME", async () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
     writeFileSync(join(home, "config.json"), JSON.stringify({ run: { maxTurns: 1 } }));
