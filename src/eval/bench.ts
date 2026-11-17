@@ -1,8 +1,8 @@
 /**
- * Benchmark de providers (F5-4): mede latência, tokens/sec e custo/1k tokens
- * por modelo, com a mesma suite de prompts. TTFT requer streaming, que o
- * contrato Provider ainda não expõe — o campo vai como null (follow-up).
- * Custo só é calculado para modelos com `price.verificado: true`.
+ * Benchmark de providers (F5-4): mede success rate, latência, tokens/sec e
+ * custo/1k tokens por modelo, com a mesma suite de prompts. TTFT requer
+ * streaming, que o contrato Provider ainda não expõe — o campo vai como null
+ * (follow-up). Custo só é calculado para modelos com `price.verificado: true`.
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
