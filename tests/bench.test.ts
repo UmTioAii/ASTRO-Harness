@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { benchModel, filterModels, formatBenchTable, formatMarkdown, runBenchmark, selectBenchModels, summarizeBench, type BenchModelResult, type BenchReport } from "../src/eval/bench";
+import { benchModel, filterModels, formatBenchTable, formatMarkdown, runBenchmark, selectBenchModels, summarizeBench, type BenchModelResult, type BenchModelResultLike, type BenchReport, type BenchReportLike } from "../src/eval/bench";
 import type { ModelEntry } from "../src/registry";
 import type { CompletionResponse, Provider } from "../src/provider/types";
 
@@ -213,11 +213,12 @@ describe("benchmark de providers (F5-4)", () => {
       model({ provider: "openai", id: "g1" }),
     ];
     const require = (filter: string) => selectBenchModels(models, filter, { requireFilter: true });
-    for (const filter of ["/", " ,, "]) {
-      const selected = require(filter);
-      expect(selected.ok).toBe(false);
-      expect(selected.ok ? "" : selected.error).toContain("sem termo alfanumérico");
-    }
+    const noTerms = require(" ,, ");
+    expect(noTerms.ok).toBe(false);
+    expect(noTerms.ok ? "" : noTerms.error).toContain("filtro ausente");
+    const slash = require("/");
+    expect(slash.ok).toBe(false);
+    expect(slash.ok ? "" : slash.error).toContain("sem termo alfanumérico");
     for (const filter of ["/,nvidia", "nvidia,openrouter,openai"]) {
       const selected = require(filter);
       expect(selected.ok).toBe(false);
@@ -238,17 +239,23 @@ describe("benchmark de providers (F5-4)", () => {
 
   test("CLI bench --require-filter falha fechado sem recorte", async () => {
     const { dir, cfgPath } = cliBenchConfig();
-    const cases: Array<[string, string]> = [
+    const cases: Array<[string | undefined, string]> = [
+      [undefined, "filtro ausente"],
       ["/", "sem termo alfanumérico"],
-      [" ,, ", "sem termo alfanumérico"],
+      [" ,, ", "filtro ausente"],
       ["/,nvidia", "seleciona todos os modelos"],
       ["sem-match", "nenhum modelo ativo corresponde ao filtro"],
     ];
     for (const [filter, message] of cases) {
-      const proc = Bun.spawn(
-        [process.execPath, entry, "bench", "--config", cfgPath, "--models", filter, "--require-filter"],
-        { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, ASTRO_HOME: dir } },
-      );
+      const args = [process.execPath, entry, "bench", "--config", cfgPath];
+      if (filter !== undefined) args.push("--models", filter);
+      args.push("--require-filter");
+      const proc = Bun.spawn(args, {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, ASTRO_HOME: dir },
+      });
       const err = await new Response(proc.stderr).text();
       expect(await proc.exited).toBe(1);
       expect(err).toContain(message);
@@ -359,6 +366,19 @@ describe("benchmark de providers (F5-4)", () => {
     expect(summarizeBench([unpriced]).cheapest).toBeNull();
   });
 
+  test("summarizeBench não elege maior success rate sem métrica v2", () => {
+    const v1Result: BenchModelResultLike = {
+      model: "a/1", provider: "a", tags: [], runs: 1,
+      latencyMs: { min: 1, p50: 2, p95: 3, max: 4 },
+      tokensInAvg: 10, tokensOutAvg: 20, tokensPerSec: 100,
+      costPer1kOutUsd: 1, ttftMs: null,
+    };
+    const summary = summarizeBench([v1Result]);
+    expect(summary.fastest).toBe("a/1");
+    expect(summary.cheapest).toBe("a/1");
+    expect(summary.highestSuccessRate).toBeNull();
+  });
+
   test("formatMarkdown inclui todos os modelos e tags", () => {
     const report: BenchReport = {
       schema: 2, date: "2026-10-23", prompts: 5,
@@ -406,34 +426,38 @@ describe("benchmark de providers (F5-4)", () => {
     expect(md).toContain("- Mais rápido: n/d");
     expect(md).toContain("- Mais barato: n/d");
     expect(md).toContain("- Maior success rate: n/d");
-    expect(md).toContain("Sucesso agregado: 0% (0/0)");
+    expect(md).toContain("Sucesso agregado: n/d.");
   });
 
-  test("formatMarkdown aceita relatório v1 sem summary", () => {
-    const v1 = {
+  test("formatMarkdown renderiza relatório v1 sem inventar métricas", () => {
+    // Shape real do schema 1: sem successRate/completed/total e sem summary.
+    const v1: BenchReportLike = {
       schema: 1,
       date: "2026-10-23",
       prompts: 5,
       results: [
-        benchResult({
-          model: "a/1",
+        {
+          model: "a/1", provider: "a", tags: ["fast"], runs: 1,
           latencyMs: { min: 1, p50: 2, p95: 3, max: 4 },
-          costPer1kOutUsd: 1.5,
-          successRate: 0.8,
-          completed: 4,
-          total: 5,
-        }),
-        benchResult({
-          model: "b/2",
+          tokensInAvg: 10, tokensOutAvg: 20, tokensPerSec: 100,
+          costPer1kOutUsd: 1.5, ttftMs: null,
+        },
+        {
+          model: "b/2", provider: "b", tags: ["reasoning"], runs: 1,
           latencyMs: { min: 1, p50: 3, p95: 4, max: 5 },
-          costPer1kOutUsd: null,
-        }),
+          tokensInAvg: 10, tokensOutAvg: 20, tokensPerSec: 50,
+          costPer1kOutUsd: null, ttftMs: null,
+        },
       ],
-    } as unknown as BenchReport;
+    };
     const md = formatMarkdown(v1);
+    expect(md).toContain("Sucesso agregado: n/d.");
+    expect(md).toContain("| a/1 | fast | n/d |");
     expect(md).toContain("- Mais rápido: `a/1` (p50 2ms)");
     expect(md).toContain("- Mais barato: `a/1` (US$ 1.5000/1k out)");
-    expect(md).toContain("- Maior success rate: `b/2` (100% (5/5))");
+    expect(md).toContain("- Maior success rate: n/d");
+    expect(md).not.toContain("NaN");
+    expect(md).not.toContain("undefined");
   });
 
   test("formatBenchTable mostra a taxa de sucesso por modelo", () => {
