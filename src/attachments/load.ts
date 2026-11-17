@@ -152,7 +152,6 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
   try {
     const output = Buffer.allocUnsafe(limit);
     let outputBytes = 0;
-    let selectedBytes = 0;
     let skippedBytes = 0;
     let line = 1;
     let lastLine = 1;
@@ -168,19 +167,20 @@ function readTextRange(real: string, spec: string, limit: number): { data: strin
         const end = newline === -1 ? read : newline;
         const length = end - cursor;
         if (line >= requested.start && line <= requested.end) {
-          if (selectedBytes + length > limit) throw rangeTooLarge(spec, limit, real);
+          if (outputBytes + length > limit) throw rangeTooLarge(spec, limit, real);
           view.copy(output, outputBytes, cursor, end);
           outputBytes += length;
-          selectedBytes += length;
         } else {
           skippedBytes += length;
           if (skippedBytes > limit) throw rangeTooLarge(spec, limit, real);
         }
         if (newline === -1) break;
         if (line >= requested.start && line <= requested.end) {
-          if (selectedBytes + 1 > limit) throw rangeTooLarge(spec, limit, real);
-          selectedBytes += 1;
-          if (line < requested.end) output[outputBytes++] = 0x0a;
+          // O newline da última linha selecionada não entra no payload: não cobra o cap.
+          if (line < requested.end) {
+            if (outputBytes + 1 > limit) throw rangeTooLarge(spec, limit, real);
+            output[outputBytes++] = 0x0a;
+          }
         } else {
           skippedBytes += 1;
           if (skippedBytes > limit) throw rangeTooLarge(spec, limit, real);
