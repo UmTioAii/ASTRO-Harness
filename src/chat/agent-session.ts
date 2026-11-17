@@ -350,6 +350,11 @@ export class AgentSession {
     return configSummaryOf(this.#config, this.#configPath, this.#permissionMode);
   }
 
+  /** `attachments.directory.showHidden` da config efetiva, lido por `/attach <dir>` (#392). */
+  attachmentsShowHidden(): boolean {
+    return this.#config.attachments.directory.showHidden;
+  }
+
   /**
    * Troca `permissions.mode` pela tela `/config` (#273): persiste no arquivo
    * primeiro (atômico e validado); se a escrita falhar, o runtime não muda.

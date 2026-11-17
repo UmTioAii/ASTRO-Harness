@@ -291,6 +291,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           ...(command.range === undefined ? {} : { range: command.range }),
           cwd,
           astroHome: resolveAstroHome(),
+          showHidden: session.attachmentsShowHidden?.() === true,
           confirmOutsideCwd: async (absolute) =>
             approvals === undefined
               ? false
