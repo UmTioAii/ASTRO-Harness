@@ -1,5 +1,27 @@
-import { expect, test } from "bun:test";
-import { exitCode, renderReport, runChecks, satisfiesMinimum, type DoctorFacts } from "../scripts/doctor";
+import { afterEach, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  applyFixes,
+  doctorJson,
+  exitCode,
+  renderReport,
+  runChecks,
+  satisfiesMinimum,
+  type DoctorFacts,
+} from "../scripts/doctor";
+
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function sandbox(): string {
+  const dir = mkdtempSync(join(tmpdir(), "astro-doctor-unit-"));
+  dirs.push(dir);
+  return dir;
+}
 
 const SENTINEL = "sentinel-xyz-do-not-print";
 
@@ -142,4 +164,114 @@ test("satisfiesMinimum compara versões com e sem range", () => {
   expect(satisfiesMinimum("1.3.9", ">=1.4.0")).toBe(false);
   expect(satisfiesMinimum("22.1.0", "18")).toBe(true);
   expect(satisfiesMinimum("16.20.0", ">=18")).toBe(false);
+});
+
+test("codex-oauth sem arquivo de credenciais é warn", () => {
+  const report = runChecks(facts({
+    config: {
+      path: "astro.config.json",
+      present: true,
+      providers: [{ id: "codex", kind: "codex-oauth", credentialsReadable: false }],
+    },
+  }));
+  const check = report.checks.find((item) => item.label === "credencial codex");
+  expect(check?.level).toBe("warn");
+  expect(check?.detail).toContain("credenciais");
+  expect(exitCode(report)).toBe(0);
+});
+
+test("MCP com header env ausente é warn e cita só o nome", () => {
+  const report = runChecks(facts({
+    config: {
+      path: "astro.config.json",
+      present: true,
+      mcp: { servers: 2, enabled: 1, missingHeaderEnv: ["MCP_TOKEN"] },
+    },
+  }));
+  const check = report.checks.find((item) => item.label === "mcp");
+  expect(check?.level).toBe("warn");
+  expect(check?.detail).toContain("MCP_TOKEN");
+  expect(exitCode(report)).toBe(0);
+});
+
+test("MCP sem servidor configurado é ok", () => {
+  const report = runChecks(facts({
+    config: { path: "astro.config.json", present: true, mcp: { servers: 0, enabled: 0, missingHeaderEnv: [] } },
+  }));
+  const check = report.checks.find((item) => item.label === "mcp");
+  expect(check?.level).toBe("ok");
+  expect(check?.detail).toContain("nenhum servidor");
+});
+
+test("skills válidas contam por fonte e inválidas viram warn", () => {
+  const valid = runChecks(facts({ skills: { project: 1, user: 2, warnings: [] } }));
+  const validCheck = valid.checks.find((item) => item.label === "skills");
+  expect(validCheck?.level).toBe("ok");
+  expect(validCheck?.detail).toContain("1 no projeto");
+  expect(validCheck?.detail).toContain("2 do usuário");
+
+  const invalid = runChecks(facts({
+    skills: { project: 0, user: 0, warnings: ['skill "broken" ignorada: frontmatter inválido'] },
+  }));
+  const invalidCheck = invalid.checks.find((item) => item.label === "skills");
+  expect(invalidCheck?.level).toBe("warn");
+  expect(invalidCheck?.detail).toContain("broken");
+  expect(exitCode(invalid)).toBe(0);
+});
+
+test("disco sem escrita no cwd falha e reporta espaço livre", () => {
+  const failing = runChecks(facts({ disk: { cwd: "/proj", writable: false, freeBytes: 1024 ** 3 } }));
+  const failCheck = failing.checks.find((item) => item.label === "disco");
+  expect(failCheck?.level).toBe("fail");
+  expect(exitCode(failing)).toBe(1);
+
+  const valid = runChecks(facts({ disk: { cwd: "/proj", writable: true, freeBytes: 2 * 1024 ** 3 } }));
+  const okCheck = valid.checks.find((item) => item.label === "disco");
+  expect(okCheck?.level).toBe("ok");
+  expect(okCheck?.detail).toContain("2.0 GiB");
+});
+
+test("checks redigem padrão de segredo no detalhe", () => {
+  const secret = ["sk", "-", "live", "-", "SECRET", "123456789"].join("");
+  const report = runChecks(facts({ astroHome: { path: join("/tmp", secret), exists: false, writable: false } }));
+  const text = lines(report);
+  expect(text).toContain("[REDACTED]");
+  expect(text).not.toContain(secret);
+});
+
+test("doctorJson tem schema, resumo e fixes opcional", () => {
+  const report = runChecks(facts());
+  const json = doctorJson(report);
+  expect(json.schema).toBe("doctor/v1");
+  expect(json.summary).toEqual({ ok: report.checks.length, warn: 0, fail: 0 });
+  expect(json).not.toHaveProperty("fixes");
+
+  const withFix = doctorJson(report, { applied: ["criado /tmp/home"], errors: [] });
+  expect(withFix.fixes).toEqual({ applied: ["criado /tmp/home"], errors: [] });
+});
+
+test("applyFixes cria ASTRO_HOME, é idempotente e não cria a raiz de artefatos", () => {
+  const base = sandbox();
+  const home = join(base, "nested", "home");
+  const env = { ...process.env, ASTRO_HOME: home };
+
+  const first = applyFixes(env);
+  expect(first.applied).toHaveLength(1);
+  expect(first.errors).toEqual([]);
+  expect(existsSync(home)).toBe(true);
+  expect(existsSync(join(home, "attachments"))).toBe(false);
+
+  const second = applyFixes(env);
+  expect(second.applied).toEqual([]);
+  expect(second.errors).toEqual([]);
+});
+
+test("applyFixes não sobrescreve ASTRO_HOME que é arquivo", () => {
+  const base = sandbox();
+  const home = join(base, "file-home");
+  writeFileSync(home, "x", "utf8");
+  const result = applyFixes({ ...process.env, ASTRO_HOME: home });
+  expect(result.applied).toEqual([]);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain("diretório");
 });
