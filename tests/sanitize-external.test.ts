@@ -26,6 +26,19 @@ test("redactSecrets redige hex longo só com contexto de credencial", () => {
   expect(redactSecrets(`commit ${hex}`)).toContain(hex);
 });
 
+test("redactSecrets redige hex de 64+ sem contexto e preserva SHA-1/MD5 comuns", () => {
+  const hex64 = "a1b2c3d4".repeat(8); // 64 hex: segredo provável (chave/hash de token)
+  const hex40 = "0123456789abcdef0123456789abcdef01234567"; // git SHA-1
+  const hex32 = "0123456789abcdef0123456789abcdef"; // MD5/checksum: residual
+  expect(redactSecrets(`chave ${hex64}`)).not.toContain(hex64);
+  expect(redactSecrets(`chave ${hex64}`)).toContain("[REDACTED]");
+  // 40 hex só com rótulo de credencial; saída normal de git continua legível
+  expect(redactSecrets(`KEY=${hex40}`)).not.toContain(hex40);
+  expect(redactSecrets(`token: ${hex40}`)).not.toContain(hex40);
+  expect(redactSecrets(`commit ${hex40}`)).toContain(hex40);
+  expect(redactSecrets(`checksum ${hex32}`)).toContain(hex32);
+});
+
 test("read_file sanitiza conteúdo externo antes de devolver à sessão", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-sanitize-"));
   writeFileSync(join(dir, "env.txt"), `TOKEN ${JWT}\n${PEM}\n`, "utf8");
