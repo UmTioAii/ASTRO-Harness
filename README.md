@@ -50,7 +50,7 @@ The current module boundaries are:
 | `src/audit.ts`, `src/ledger.ts`, `src/metrics.ts`, `src/tracing.ts` | Audit, cost, metrics and tracing. |
 | `src/chat/`, `src/tui/` | REPL and full-screen terminal UI. |
 | `src/attachments/` | Image artifact store and privacy checks. |
-| `scripts/doctor.ts` | Diagnostics behind `astro doctor`. |
+| `src/doctor.ts` | Diagnostics behind `astro doctor`. |
 | `tests/` | Test suites mirroring `src/`. |
 
 The orchestration and config modules now live under `src/core/`; the wider event-bus and runtime-boundary split (ADR-0020/0021/0022) is still not implemented, and the table above is the current contract.

@@ -27,7 +27,7 @@ import { runRepl } from "./chat/repl";
 import { chatApprovers } from "./chat/approvers";
 import { nodeReplIO } from "./chat/node-io";
 import { runHealthCheck, runPoolHealthCheck, formatProvidersList, testProvider } from "./health";
-import { applyFixes, collectFacts, doctorJson, exitCode as doctorExitCode, renderReport, runChecks } from "../scripts/doctor";
+import { applyFixes, collectFacts, doctorJson, exitCode as doctorExitCode, renderReport, runChecks } from "./doctor";
 import { GitHubConfigRegistry, prepareConfigForPush, preparePulledConfig } from "./config-share";
 import { runSkillsCommand } from "./skills/cli";
 import { runMcpCommand } from "./mcp/cli";

@@ -22,7 +22,7 @@ ASTRO é um harness CLI local, em Bun + TypeScript strict, multi-provider, com f
 - `src/tools/` — ferramentas e confinamento de caminho
 - `src/audit.ts`, `src/ledger.ts` — auditoria e custo
 - `src/core/` — orquestração e contrato (app, session, config, registry)
-- `src/cli.ts` — entrada da CLI
+- `src/cli.ts`, `src/doctor.ts` — entrada da CLI e diagnóstico local
 - `tests/` — espelha `src/`
 
 ## Regras inegociáveis
