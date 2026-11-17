@@ -378,6 +378,30 @@ describe("fail closed sem class (#264, P0)", () => {
     expect(result.isError).toBe(true);
     expect(result.code).toBe("invalid_manifest");
   });
+
+  test("manifesto removido após o load nega invalid_manifest, nunca TypeError", async () => {
+    let ran = false;
+    const tool = rawTool(() => { ran = true; });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-perm-nomanifest-"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    const executor = new ToolExecutor({
+      tools: [tool],
+      allow: ["raw_plugin"],
+      audit,
+      permissionMode: "ask",
+      approveTool: () => true,
+    });
+    // Simula plugin que zera o manifesto depois do registro no executor.
+    (tool as { manifest: unknown }).manifest = undefined;
+    const result = await executor.run(
+      { cwd, run: "r1", agent: "a" },
+      { id: "c1", name: "raw_plugin", arguments: "{}" },
+    );
+
+    expect(ran).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.code).toBe("invalid_manifest");
+  });
 });
 
 describe("ask sem TTY (#262)", () => {
