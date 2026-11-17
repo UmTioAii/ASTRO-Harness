@@ -216,6 +216,33 @@ test("d pede confirmação; n e esc cancelam; s exclui (#366)", async () => {
   } finally { instance.unmount(); }
 });
 
+test("ctrl+s, alt+s, ctrl+n e alt+n não confirmam nem cancelam a exclusão (#366)", async () => {
+  const deleted: string[] = [];
+  const instance = render(
+    <SessionPicker sessions={[summary("a")]} colors={colors}
+      onClose={() => {}} onResume={() => {}} onRename={() => undefined}
+      onDelete={(chosen) => { deleted.push(chosen.id); return undefined; }} />,
+  );
+  try {
+    await waitFor(() => frame(instance).includes("Sessões"));
+    instance.stdin.write("d");
+    await waitFor(() => frame(instance).includes("excluir a? (s/n)"));
+
+    instance.stdin.write("\u0013"); // ctrl+s
+    instance.stdin.write("\u001bs"); // alt+s
+    instance.stdin.write("\u000e"); // ctrl+n
+    instance.stdin.write("\u001bn"); // alt+n
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(deleted).toEqual([]);
+    expect(frame(instance)).toContain("excluir a? (s/n)");
+
+    instance.stdin.write("y"); // y simples continua confirmando
+    await waitFor(() => deleted.length === 1);
+    expect(deleted).toEqual(["a"]);
+    await waitFor(() => !frame(instance).includes("excluir a? (s/n)"));
+  } finally { instance.unmount(); }
+});
+
 test("erro da exclusão fica na tela e mantém o modal (#366)", async () => {
   let closed = 0;
   const instance = render(

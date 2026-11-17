@@ -49,13 +49,17 @@ class FakeSession implements ChatSession {
   setProvider(name: string): string {
     return `${name}/m1`;
   }
-  resume(): void {}
+  resumedFrom: SessionSnapshot["resumedFrom"];
+  resume(snapshot: SessionSnapshot): void {
+    this.resumedFrom = { id: snapshot.id, startedAt: snapshot.startedAt };
+  }
   snapshot(): SessionSnapshot {
     return {
       id: "s1", startedAt: "2026-10-28T12:00:00.000Z", model: this.model,
       messages: [{ role: "user", content: "x" }],
       turns: this.sent.length, tokensIn: 10 * this.sent.length, tokensOut: 5 * this.sent.length,
       costUsd: 0.001 * this.sent.length,
+      ...(this.resumedFrom === undefined ? {} : { resumedFrom: this.resumedFrom }),
     };
   }
   close(): void {}
@@ -242,6 +246,48 @@ describe("/sessions delete (#366)", () => {
       expect(io.outputs).toContain("índice fora da lista; use /sessions");
       expect(io.outputs).toContain("não é possível excluir a sessão atual");
       expect(sessionApi.list().map(({ id }) => id)).toEqual(["s1"]);
+    } finally {
+      sessionApi.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("recusa excluir a origem retomada, que segue viva na conversa (#366)", async () => {
+    class ConfirmingIO extends ScriptedIO {
+      async readFresh(prompt: string): Promise<string | null> {
+        return prompt.includes("excluir a sessão") ? "s" : super.read();
+      }
+    }
+    const dir = mkdtempSync(join(tmpdir(), "astro-chat-delete-resumed-"));
+    const sessionApi = new SessionApi(join(dir, ".astro"));
+    const session = new FakeSession();
+    session.resumedFrom = { id: "origin", startedAt: "2026-10-01T10:00:00.000Z" };
+    const io = new ConfirmingIO(["/sessions delete 1", "/exit"]);
+    try {
+      sessionApi.create(savedRecord("origin", "2026-10-01T10:00:00.000Z"));
+      await runRepl(session, io, { sessionApi, interactive: true });
+
+      expect(io.outputs).toContain("não é possível excluir a sessão atual");
+      expect(sessionApi.load("origin").id).toBe("origin");
+    } finally {
+      sessionApi.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("sem confirmação interativa, recusa a exclusão e preserva a sessão", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-chat-delete-notty-"));
+    const astroDir = join(dir, ".astro");
+    const legacy = new SessionStore(join(astroDir, "sessions"));
+    legacy.write(savedRecord("keep", "2026-10-01T10:00:00.000Z"));
+    const sessionApi = new SessionApi(astroDir);
+    const io = new ScriptedIO(["/sessions delete 1", "/exit"]);
+    try {
+      await runRepl(new FakeSession(), io, { sessionApi });
+
+      expect(io.outputs).toContain("exclusão exige confirmação interativa; use a TUI (/sessions, d)");
+      expect(sessionApi.load("keep").id).toBe("keep");
+      expect(legacy.list().map(({ id }) => id)).toEqual(["keep"]);
     } finally {
       sessionApi.close();
       rmSync(dir, { recursive: true, force: true });

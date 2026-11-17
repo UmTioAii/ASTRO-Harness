@@ -1087,6 +1087,43 @@ test("/sessions: d exclui a sessão selecionada e recusa a atual (#366)", async 
   }
 });
 
+test("/sessions: recusa excluir a sessão retomada que segue viva (#366)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-delete-resumed-"));
+  const store = new SessionStore(join(cwd, ".astro", "sessions"));
+  store.write({
+    id: "abc", startedAt: "2026-10-01T10:00:00.000Z", model: "p/m1",
+    messages: [{ role: "user", content: "velho" }], turns: 1, tokensIn: 10, tokensOut: 5, costUsd: 0.001,
+  });
+  const sessionApi = new SessionApi(join(cwd, ".astro"));
+  const session = new FakeSession();
+  const instance = render(<TuiApp session={session} cwd={cwd} sessionApi={sessionApi} />);
+  try {
+    await waitFor(() => frameHas(instance, "turno(s)"));
+    instance.stdin.write("/sessions");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "Sessões"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    instance.stdin.write("\r"); // retoma abc
+    await waitFor(() => session.resumed.length === 1);
+    await waitFor(() => frameHas(instance, "Sessões") === false);
+
+    instance.stdin.write("/sessions");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "Sessões"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    instance.stdin.write("d");
+    await waitFor(() => frameHas(instance, "excluir abc? (s/n)"));
+    instance.stdin.write("s");
+    await waitFor(() => frameHas(instance, "não é possível excluir a sessão atual"));
+
+    expect(sessionApi.list().map(({ id }) => id)).toContain("abc");
+    expect(store.list().map(({ id }) => id)).toContain("abc");
+  } finally {
+    instance.unmount();
+    sessionApi.close();
+  }
+});
+
 test("80x24 e resize encolhem o picker sem quebrar o input (#64)", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-viewport-"));
   const store = new SessionStore(join(cwd, ".astro", "sessions"));
