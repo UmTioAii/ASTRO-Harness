@@ -39,6 +39,10 @@ test("multi-agent-flow: planner spawna em outra conta, faz handoff e o filho esc
         { provider: "p2", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
       ],
       modelPool: { builder: { model: "p2/m1" } },
+      pricing: {
+        "p1/m1": { inputPerM: 2, outputPerM: 4, fonte: "teste", verificado: true },
+        "p2/m1": { inputPerM: 2, outputPerM: 4, fonte: "teste", verificado: true },
+      },
       agent: { model: "p1/m1", maxSteps: 8, tools: ["spawn_agent", "handoff", "write_file"], entryAgent: "planner" },
       agents: { planner: { model: "p1/m1", maxSteps: 8, tools: ["spawn_agent", "handoff", "write_file"] } },
       paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
