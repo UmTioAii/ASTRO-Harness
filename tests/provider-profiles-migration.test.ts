@@ -9,6 +9,7 @@ import {
   ProfileStoreError,
   ProfileStoreMigratedError,
   readGlobalProfileStore,
+  saveProfileStore,
 } from "../src/providers/profiles";
 import { ProfileManager } from "../src/providers/profile-manager";
 
@@ -86,6 +87,8 @@ test("a segunda carga não reescreve config.json nem relê o legado", () => {
 
   expect(again.profiles.map((profile) => profile.id)).toEqual(["a", "b"]);
   expect(readFileSync(join(home, "config.json"), "utf8")).toBe(before);
+  expect(readFileSync(legacy, "utf8")).toBe("lixo");
+  expect(() => saveProfileStore({ version: 1, profiles: [profileA] }, legacy)).toThrow(ProfileStoreMigratedError);
   expect(readFileSync(legacy, "utf8")).toBe("lixo");
 });
 
@@ -265,7 +268,8 @@ test("credentialRef cru na config não entra no store derivado (I-03)", () => {
 
   const store = readGlobalProfileStore({ ASTRO_HOME: home });
 
-  expect(store.profiles).toEqual([]);
+  expect(store.profiles).toHaveLength(1);
+  expect(store.profiles[0]?.credentialRef).toBeUndefined();
   expect(JSON.stringify(store)).not.toContain(SENTINEL);
 });
 

@@ -1,9 +1,12 @@
 /** CRUD de perfis de provider: store global + visão do projeto, com guardas. */
-import type { AstroConfig, ProviderConfig } from "../core/config";
+import { isPlainObject, type AstroConfig, type ProviderConfig } from "../core/config";
+import { globalConfigPath } from "../astro-home";
 import {
+  loadGlobalConfig,
   loadProfileStore,
   profileFromEnv,
   profilesPath,
+  readGlobalProfileStore,
   resolveEffectiveConfig,
   saveProfileStore,
   type ProfileModel,
@@ -74,8 +77,10 @@ function projectReferences(
 
 export class ProfileManager {
   readonly #storePath: string;
+  readonly #storeInjected: boolean;
   readonly #project: AstroConfig | undefined;
   readonly #projectRefs: { providers: string[]; modelProviders: string[] };
+  readonly #globalProviders: string[];
   readonly #env: NodeJS.ProcessEnv;
   readonly #provider: string | undefined;
   #store: ProviderStore;
@@ -87,9 +92,14 @@ export class ProfileManager {
       providers: Object.keys(opts.project?.providers ?? {}),
       modelProviders: (opts.project?.models ?? []).map((model) => model.provider),
     };
+    const global = this.#env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(this.#env);
+    this.#globalProviders = global !== undefined && isPlainObject(global.providers)
+      ? Object.keys(global.providers)
+      : [];
     this.#provider = opts.provider;
     this.#storePath = opts.storePath ?? profilesPath(this.#env);
-    this.#store = loadProfileStore(this.#storePath);
+    this.#storeInjected = opts.storePath !== undefined;
+    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : readGlobalProfileStore(this.#env);
   }
 
   list(): ProfileView[] {
@@ -122,7 +132,7 @@ export class ProfileManager {
     const name = draft.name.trim();
     const id = slug(name);
     if (id === "env") throw new Error('"env" é reservado para o perfil efêmero');
-    this.#assertNoProjectCollision(name);
+    this.#assertNoConfigCollision(name);
     if (this.#store.profiles.some((profile) => profile.id === id)) {
       throw new Error(`já existe um provider com esse nome: "${name}"`);
     }
@@ -138,7 +148,7 @@ export class ProfileManager {
     if (index < 0) throw new Error(`provider "${id}" não existe no store`);
     const name = draft.name.trim();
     if (slug(name) === "env") throw new Error('"env" é reservado para o perfil efêmero');
-    this.#assertNoProjectCollision(name);
+    this.#assertNoConfigCollision(name);
     const profile: ProviderProfile = { ...draft, id, name };
     const profiles = [...this.#store.profiles];
     profiles[index] = profile;
@@ -175,12 +185,18 @@ export class ProfileManager {
     return profile;
   }
 
-  #assertNoProjectCollision(name: string): void {
-    if (this.#project === undefined) return;
+  #assertNoConfigCollision(name: string): void {
     const wanted = slug(name);
     for (const key of this.#projectRefs.providers) {
       if (key === name || slug(key) === wanted) {
         throw new Error(`provider "${name}" está definido no astro.config.json; edite o arquivo`);
+      }
+    }
+    for (const key of this.#globalProviders) {
+      if (key === name || slug(key) === wanted) {
+        throw new Error(
+          `provider "${name}" está definido em "${globalConfigPath(this.#env)}"; edite o arquivo`,
+        );
       }
     }
   }
@@ -201,7 +217,7 @@ export class ProfileManager {
   }
 
   #reload(): void {
-    this.#store = loadProfileStore(this.#storePath);
+    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : readGlobalProfileStore(this.#env);
   }
 
   /** Variável de credencial presente no env desta execução. */
@@ -213,6 +229,9 @@ export class ProfileManager {
   #requireEditable(id: string): void {
     if (this.#projectRefs.providers.includes(id)) {
       throw new Error(`provider "${id}" está definido no astro.config.json; edite o arquivo`);
+    }
+    if (this.#globalProviders.includes(id)) {
+      throw new Error(`provider "${id}" está definido em "${globalConfigPath(this.#env)}"; edite o arquivo`);
     }
     if (profileFromEnv(this.#env)?.id === id) {
       throw new Error(`perfil "${id}" é efêmero (env) e não pode ser editado`);
