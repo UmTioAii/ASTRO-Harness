@@ -222,6 +222,11 @@ function webpDimensions(header: Uint8Array): { width: number; height: number } |
   return null;
 }
 
+/** Bytes decodificados estimados: 4 por pixel (RGBA), o formato comum aos tipos suportados. */
+export function decodedImageBytes(dimensions: { width: number; height: number }): number {
+  return dimensions.width * dimensions.height * 4;
+}
+
 /** Valida MPx, lado maior e bytes decodificados antes de qualquer decodificação. */
 export function assertImageLimits(header: Uint8Array, mediaType: string, decodedBytes: number): void {
   if (decodedBytes > MAX_IMAGE_BYTES) {

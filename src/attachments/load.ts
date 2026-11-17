@@ -13,7 +13,9 @@ import { canonicalize, realpathPreservingDots } from "../tools/paths";
 import {
   assertAttachmentSize,
   assertImageLimits,
+  decodedImageBytes,
   detectKind,
+  imageDimensions,
   MAX_ATTACHMENT_BYTES,
   MAX_DIRECTORY_ENTRIES,
   parseRange,
@@ -173,13 +175,15 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
     if (input.range !== undefined) {
       throw new AttachmentError("attachment_range_invalid", "range não vale para imagem", real);
     }
-    assertImageLimits(bytes, detected.mediaType, bytes.length);
-    assertAttachmentSize(bytes.length, name);
+    const dimensions = imageDimensions(bytes, detected.mediaType);
+    const decodedBytes = dimensions === null ? 0 : decodedImageBytes(dimensions);
+    assertImageLimits(bytes, detected.mediaType, decodedBytes);
+    assertAttachmentSize(decodedBytes, name);
     return {
       kind: "image",
       path: real,
       name,
-      sizeBytes: bytes.length,
+      sizeBytes: decodedBytes,
       mediaType: detected.mediaType,
       data: Buffer.from(bytes).toString("base64"),
       hash: sha256(bytes),
