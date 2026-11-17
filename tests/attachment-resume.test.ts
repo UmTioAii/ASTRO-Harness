@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentSession } from "../src/chat/agent-session";
+import { SessionApi } from "../src/chat/session-api";
 import { AttachmentError, type AttachmentMeta } from "../src/attachments/model";
 import { ArtifactStore, type ArtifactOwner } from "../src/attachments/store";
 import { FAKE_PRIVATE_ACL, testEnv } from "./setup";
@@ -206,6 +207,29 @@ describe("attachment resume (ADR-0026, #392)", () => {
       expect(summary?.attachments?.[0]).toMatchObject({ ref: saved.ref, hash: saved.hash });
     } finally {
       chat.close();
+      stop();
+    }
+  });
+
+  test("SessionApi save/load preserva ref/hash e resume reidrata a imagem", () => {
+    const { root, session, artifact, meta, stop } = setup();
+    const saved = artifact();
+    const api = new SessionApi(join(root, "..", "sessions-api"));
+    try {
+      api.save({ schemaVersion: 1, ...snapshot("s3", meta(saved)) });
+      const loaded = api.load("s3");
+      expect(loaded.messages[0]!.attachments?.[0]).toMatchObject({ ref: saved.ref, hash: saved.hash });
+
+      const chat = session();
+      try {
+        chat.resume(loaded);
+        const user = chat.messages.find((message) => message.role === "user");
+        expect(user?.images?.[0]?.dataBase64).toBe(PNG);
+      } finally {
+        chat.close();
+      }
+    } finally {
+      api.close();
       stop();
     }
   });

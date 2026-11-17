@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
+import { appendFileSync, mkdtempSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
 import { Auditor } from "../src/audit"; import { Ledger } from "../src/ledger";
 import { buildHandoffArtifact, handoffId, HandoffError, type HandoffArtifactV1, type HandoffDraft } from "../src/handoff/types";
 import { ackHandoff, scanHandoffs } from "../src/handoff/lifecycle";
@@ -119,5 +119,21 @@ describe("handoff com ack e retomada (F-24)", () => {
     expect(events.map((e) => e.kind)).toEqual(["handoff.created", "handoff.received", "handoff.failed"]);
     expect(events[2].reason).toBe("MaxStepsError");
     expect(scanHandoffs(o.ledger, "r1")[0].state).toBe("failed");
+  });
+
+  test("falha permanente redige segredo no reason e preserva o handoff_id", async () => {
+    const o = opts(dir(), { complete: async () => { throw new Error("receptor não deveria rodar"); } });
+    const a = seed(o.ledger);
+    const leak = "vazou " + "a".repeat(64);
+    appendFileSync(o.ledger.path, `${JSON.stringify({
+      schemaVersion: 1, ts: new Date().toISOString(), run: "r1", kind: "handoff.failed",
+      handoff_id: handoffId(a), artifact: a, agent: "coder", reason: leak, seq: 0,
+    })}\n`, "utf8");
+
+    const err = await runMultiAgentSession(o, "plan").then(() => null, (e) => e as Error);
+    expect(err).toBeInstanceOf(HandoffError);
+    expect(err?.message).toContain(handoffId(a));
+    expect(err?.message).not.toContain("a".repeat(64));
+    expect(err?.message).toContain("[REDACTED]");
   });
 });

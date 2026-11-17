@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConfig, ConfigError } from "../src/core/config";
@@ -87,6 +87,17 @@ describe("CompletionCache (F6-4)", () => {
       expect(cache.get("k1", 24)).toEqual(resp());
       expect(cache.get("k2", 24)).toBeNull();
       expect(cache.count()).toBe(1);
+    } finally {
+      cache.close();
+    }
+  });
+
+  test("cache.db nasce 0600 no POSIX (argumentos de tool em repouso)", () => {
+    if (process.platform === "win32") return; // ACL do Windows é outro caminho
+    const path = join(mkdtempSync(join(tmpdir(), "astro-cache-mode-")), "cache.db");
+    const cache = new CompletionCache(path);
+    try {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
     } finally {
       cache.close();
     }
