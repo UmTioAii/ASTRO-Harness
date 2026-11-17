@@ -14,8 +14,11 @@ import { Ledger } from "../src/ledger";
 import { redactSecrets } from "../src/sanitize-external";
 
 const ROOT = resolve(import.meta.dir, "..");
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "coverage", ".astro", ".sdd", "logs"]);
-const TEXT_FILE = /\.(?:ts|tsx|js|mjs|cjs|json|jsonl|md|txt|log|ya?ml|toml|lock|example|cfg|ini|sh|ps1)$/i;
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "coverage", ".astro", ".sdd", "logs",
+  ".worktrees-astro", ".serena", // worktrees/estado local não versionado
+]);
+const TEXT_FILE = /\.(?:ts|tsx|js|mjs|cjs|json|jsonl|md|txt|log|ya?ml|toml|lock|example|cfg|ini|sh|ps1|pem|key|crt)$/i;
 const MAX_BYTES = 2 * 1024 * 1024;
 
 /** Formatos de chave conhecidos; o valor nunca sai no relatório (I-03). */
@@ -33,9 +36,10 @@ const KEY_PATTERNS: ReadonlyArray<{ rule: string; pattern: RegExp }> = [
 ];
 
 /**
- * Allowlist de fixtures de redação: só valores com marca inequívoca de teste.
- * A varredura continua ativa em todo arquivo (inclusive testes); o que muda é
- * o valor sintético, não o caminho. Gitleaks cobre o resto no CI.
+ * Allowlist de fixtures de redação. A marca falsa só vale dentro de `tests/`:
+ * fora dele, uma chave que contenha "test"/"secret" não é dispensada (um
+ * segredo real não ganha passe livre por substring). `.gitleaks.toml` entra
+ * como arquivo inteiro porque o regex de allowlist do CI é uma fixture.
  */
 const FIXTURE_ALLOWLIST: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
   { pattern: /example|sample|placeholder/i, reason: "chave de exemplo publicada" },
@@ -43,6 +47,13 @@ const FIXTURE_ALLOWLIST: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
   { pattern: /sentinel|segredo|secret|do-not-store|not-a-real/i, reason: "sentinela de redação" },
   { pattern: /abcdef|123456789/i, reason: "sequência usada como fixture" },
 ];
+
+/** Arquivos cujo conteúdo é fixture de redação por inteiro (fora de `tests/`). */
+const FIXTURE_FILES: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
+  { pattern: /^\.gitleaks\.toml$/, reason: "allowlist do gitleaks (regex de fixture)" },
+];
+
+const TEST_FILE = /^tests\//;
 
 interface Hit {
   rule: string;
@@ -54,20 +65,21 @@ interface Finding extends Hit {
   line: number;
 }
 
-/** Um arquivo fixture de redação? Só o valor é dispensado, nunca o arquivo. */
-function isAllowedFixture(value: string): boolean {
-  return FIXTURE_ALLOWLIST.some((entry) => entry.pattern.test(value));
+/** Fixture de redação? A marca do valor só é aceita em arquivo de teste. */
+function isAllowedFixture(value: string, file: string): boolean {
+  if (FIXTURE_FILES.some((entry) => entry.pattern.test(file))) return true;
+  return TEST_FILE.test(file) && FIXTURE_ALLOWLIST.some((entry) => entry.pattern.test(value));
 }
 
 /** Casa os formatos de chave; devolve só a regra e a posição (sem o valor). */
-export function scanText(text: string): Hit[] {
+export function scanText(text: string, file = ""): Hit[] {
   const hits: Hit[] = [];
   for (const { rule, pattern } of KEY_PATTERNS) {
     pattern.lastIndex = 0;
     for (const match of text.matchAll(pattern)) {
       // `match.index` é sempre definido em matchAll; o guard mantém o tipo honesto.
       const index = match.index ?? 0;
-      if (!isAllowedFixture(match[0])) hits.push({ rule, index });
+      if (!isAllowedFixture(match[0], file)) hits.push({ rule, index });
     }
   }
   return hits.sort((a, b) => a.index - b.index || a.rule.localeCompare(b.rule));
@@ -93,9 +105,10 @@ function scanRepo(): Finding[] {
   for (const path of repoFiles(ROOT).sort()) {
     const text = readFileSync(path, "utf8");
     if (text.includes("\u0000")) continue; // binário disfarçado de texto
-    for (const hit of scanText(text)) {
+    const file = relative(ROOT, path).replaceAll("\\", "/");
+    for (const hit of scanText(text, file)) {
       findings.push({
-        file: relative(ROOT, path).replaceAll("\\", "/"),
+        file,
         line: text.slice(0, hit.index).split("\n").length,
         ...hit,
       });
@@ -114,7 +127,15 @@ describe("I-03 zero segredos", () => {
     const key = syntheticKey();
     expect(scanText(`chave ${key} no log`).map((hit) => hit.rule)).toEqual(["openai"]);
     expect(scanText("[REDACTED]")).toEqual([]);
-    expect(scanText(`${key}-do-not-store`)).toEqual([]); // allowlist de fixture
+    const fixture = `${key}-do-not-store`;
+    expect(scanText(fixture, "tests/security-zero-secret.test.ts")).toEqual([]); // allowlist de fixture
+    expect(scanText(fixture, "src/vazou.ts")).toHaveLength(1); // fora de tests/ não tem passe livre
+  });
+
+  test("marca de fixture não libera chave real fora de tests/", () => {
+    const fakeLooking = ["s", "k", "-", "proj", "-", "test", "9f8e7d6c5b"].join("");
+    expect(scanText(fakeLooking, "src/leak.ts").map((hit) => hit.rule)).toEqual(["openai"]);
+    expect(scanText(fakeLooking, "tests/leak.test.ts")).toEqual([]);
   });
 
   // A varredura percorre o repo inteiro: no Windows ela passa de 5s sob carga.

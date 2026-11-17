@@ -115,6 +115,23 @@ describe("FallbackProvider (C6)", () => {
     }
   });
 
+  test("callback de custo que lança não derruba o completion nem inventa costUsd", async () => {
+    const audit = auditOf();
+    const a: Provider = { complete: async () => resp() };
+    const fb = new FallbackProvider({
+      providers: [{
+        name: "a", priority: 1, create: () => a,
+        costUsd: () => { throw new Error("preço indisponível"); },
+      }],
+      retryBackoffMs: 1,
+      audit,
+      run: "r1",
+    });
+    await expect(fb.complete(req)).resolves.toMatchObject({ content: "ok", provider: "a" });
+    const event = audit.readAll().find((e) => e.tipo === "provider.complete")!;
+    expect(event.payload).not.toHaveProperty("costUsd");
+  });
+
   test("hard_quota não retrya: A uma vez, B responde", async () => {
     const { calls, track } = counter();
     const a: Provider = { complete: async () => { track("a"); throw new ProviderError("hard_quota", "cota"); } };
