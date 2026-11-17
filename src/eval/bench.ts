@@ -309,9 +309,11 @@ export function formatMarkdown(report: BenchReport): string {
   const completed = report.results.reduce((sum, r) => sum + r.completed, 0);
   const total = report.results.reduce((sum, r) => sum + r.total, 0);
   const success = total === 0 ? 0 : Math.round((completed / total) * 100);
-  const fastest = report.results.find((r) => r.model === report.summary.fastest);
-  const cheapest = report.results.find((r) => r.model === report.summary.cheapest);
-  const best = report.results.find((r) => r.model === report.summary.highestSuccessRate);
+  // Relatório v1 (antes do schema 2) não tem summary: calcula na leitura.
+  const summary = report.summary ?? summarizeBench(report.results);
+  const fastest = report.results.find((r) => r.model === summary.fastest);
+  const cheapest = report.results.find((r) => r.model === summary.cheapest);
+  const best = report.results.find((r) => r.model === summary.highestSuccessRate);
   const lines = [
     `# Benchmark de providers - ${report.date}`,
     "",
