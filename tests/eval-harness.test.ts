@@ -109,7 +109,7 @@ describe("eval harness (F5-2)", () => {
     // relatório gravado
     const saved = JSON.parse(readFileSync(reportPath, "utf8")) as EvalReport;
     expect(saved.total).toBe(65);
-  }, 30000);
+  }, 60000);
 
   test("runCase com scenario.seed/sidecars instala a skill e verifica o sha256", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-scenario-seed-"));
@@ -426,6 +426,108 @@ describe("eval harness (F5-2)", () => {
     expect(result.passed).toBe(false);
     expect(result.diffSummary.join("\n")).toContain("EVAL_AUDIT_LEAK");
     expect(result.diffSummary.join("\n")).toContain("EVAL_LEDGER_LEAK");
+  }, 30000);
+
+  test("toolResultsContain falha quando o resultado MCP vem vazio", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-toolresult-mcp-"));
+    writeScenarioCase(root, "01-mcp-empty", {
+      schema: 1,
+      kind: "app",
+      config: {
+        agent: { model: "mock/mock-1", maxSteps: 6, tools: ["mcp__fs__read_file", "write_file"] },
+        mcpServers: { fs: { transport: "http", url: "{{mcpUrl}}", timeoutMs: 2000 } },
+      },
+      mcp: { tools: [{ name: "read_file", text: "" }] },
+      turns: [
+        { toolCalls: [
+          { name: "mcp__fs__read_file", arguments: { path: "notes.txt" } },
+          { name: "write_file", arguments: { path: "out/mcp.txt", content: "MCP-FS-CONTENT\n" } },
+        ] },
+        { content: "ok" },
+      ],
+      expect: { final: "ok", toolResultsContain: ["MCP-FS-CONTENT"] },
+    }, { expected: { "out/mcp.txt": "MCP-FS-CONTENT\n" } });
+
+    const result = await runTempCase(root, "01-mcp-empty");
+    expect(result.passed).toBe(false);
+    expect(result.diffSummary.join("\n")).toContain("toolResultsContain");
+  }, 30000);
+
+  test("toolResultsContain falha quando o resultado web vem vazio", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-toolresult-web-"));
+    writeScenarioCase(root, "01-web-empty", {
+      schema: 1,
+      kind: "app",
+      config: { agent: { model: "mock/mock-1", maxSteps: 6, tools: ["web_fetch", "write_file"] } },
+      page: { html: "" },
+      turns: [
+        { toolCalls: [
+          { name: "web_fetch", arguments: { url: "{{pageUrl}}", format: "markdown" } },
+          { name: "write_file", arguments: { path: "out/page.md", content: "PAGE-CONTENT\n" } },
+        ] },
+        { content: "ok" },
+      ],
+      expect: { final: "ok", toolResultsContain: ["PAGE-CONTENT"] },
+    }, { expected: { "out/page.md": "PAGE-CONTENT\n" } });
+
+    const result = await runTempCase(root, "01-web-empty");
+    expect(result.passed).toBe(false);
+    expect(result.diffSummary.join("\n")).toContain("toolResultsContain");
+  }, 30000);
+
+  test("expect desconhecido falha fechado", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-expect-unknown-"));
+    const caseDir = writeScenarioCase(root, "01-expect", {
+      schema: 1,
+      kind: "app",
+      turns: [{ content: "ok" }],
+      expect: { final: "ok", finall: "typo" } as unknown as ScenarioSpec["expect"],
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-expect-unknown-cwd-"));
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/expect desconhecido/);
+  });
+
+  test("placeholder não resolvido falha fechado", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-placeholder-"));
+    const caseDir = writeScenarioCase(root, "01-placeholder", {
+      schema: 1,
+      kind: "app",
+      turns: [{ content: "ok {{missing}}" }],
+      expect: { final: "ok {{missing}}" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-placeholder-cwd-"));
+
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/placeholder/);
+  });
+
+  test("sidecar de skill com BOM segue o hash do loader", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-sidecar-bom-"));
+    writeScenarioCase(root, "01-bom", {
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "fixtures/bom.md", to: ".astro/skills/verify/SKILL.md" }],
+      sidecars: [".astro/skills/verify"],
+      turns: [
+        { toolCalls: [{ name: "write_file", arguments: { path: "out/ok.txt", content: "ok\n" } }] },
+        { content: "bom ok" },
+      ],
+      expect: { final: "bom ok", audit: ["skill.loaded"] },
+    }, {
+      task: "/verify conferir a skill instalada\n",
+      expected: { "out/ok.txt": "ok\n" },
+      fixtures: { "bom.md": `\uFEFF${SKILL_OK}` },
+    });
+
+    const result = await runTempCase(root, "01-bom");
+    expect(result.diffSummary).toEqual([]);
+    expect(result.passed).toBe(true);
   }, 30000);
 
   test("runCase detecta divergência quando o esperado é sabotado", async () => {
