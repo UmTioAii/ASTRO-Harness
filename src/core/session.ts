@@ -21,7 +21,7 @@ import type { SpanHandle, TracerLike } from "../tracing";
 import { assertWithinQuota, type QuotaLimit } from "../quota";
 import { assertAgentQuota, assertProjectBudget } from "../team";
 import { acquireAgentLock, findAgentLock, releaseAgentLock } from "../agent-lock";
-import { initialEffortJumpState, planAutoJump, type AppliedCallProfile, type CallSelection, type EffortEscalationConfig, type EffortJumpState } from "../call-profile";
+import { initialEffortJumpState, MAX_EFFORT_LEVEL, planAutoJump, type AppliedCallProfile, type CallSelection, type EffortEscalationConfig, type EffortJumpState } from "../call-profile";
 import type { ModelRouting } from "../providers/model-routing";
 import { CompactionPausedError } from "../compaction/breaker";
 import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "../compaction/engine";
@@ -84,12 +84,21 @@ class EffortEscalator {
     const cached = this.#states.get(agent);
     if (cached !== undefined) return cached;
     const last = this.ledger.lastEffortJump(this.run, agent);
-    const state: EffortJumpState = last === undefined ? initialEffortJumpState(base) : {
-      baseline: last.baseline, current: last.to, cumulative: last.cumulative,
-      ...(last.allowed || last.segment === undefined ? {} : { attemptedSegment: last.segment }),
-    };
-    this.#states.set(agent, state);
-    return state;
+    const level = (value: unknown): value is number =>
+      typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_EFFORT_LEVEL;
+    // Ledger corrompido não derruba o run: entrada fora de 0..4 é ignorada.
+    if (last !== undefined && level(last.baseline) && level(last.to)
+      && level(last.cumulative)) {
+      const state: EffortJumpState = {
+        baseline: last.baseline, current: last.to, cumulative: last.cumulative,
+        ...(last.allowed || last.segment === undefined ? {} : { attemptedSegment: last.segment }),
+      };
+      this.#states.set(agent, state);
+      return state;
+    }
+    const initial = initialEffortJumpState(base);
+    this.#states.set(agent, initial);
+    return initial;
   }
 }
 export interface SessionOptions {

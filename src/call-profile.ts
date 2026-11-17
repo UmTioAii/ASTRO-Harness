@@ -251,9 +251,10 @@ export function planAutoJump(
     ({ allowed: false, level: state.current, reason, state: mark ? { ...state, attemptedSegment: segment } : state });
   if (!config.auto) return denied("off", false);
   if (state.attemptedSegment === segment) return denied("segment_attempted", false);
-  const delta = Math.min(config.autoJumpMax, MAX_EFFORT_LEVEL - state.current);
-  if (delta <= 0) return denied("ceiling");
-  if (state.cumulative + delta > config.maxCumulativeJump) return denied("cumulative_cap");
+  const room = MAX_EFFORT_LEVEL - state.current;
+  const budget = config.maxCumulativeJump - state.cumulative;
+  const delta = Math.min(config.autoJumpMax, room, budget);
+  if (delta <= 0) return denied(room <= 0 ? "ceiling" : "cumulative_cap");
   return {
     allowed: true,
     level: state.current + delta,
