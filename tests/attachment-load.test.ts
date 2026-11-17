@@ -149,6 +149,55 @@ describe("loadAttachment", () => {
     expect(attachment.range).toEqual({ start: 3, end: 3 });
   });
 
+  test("marcador no meio da linha não escapa (offset 60 e 70)", async () => {
+    for (const offset of [60, 70]) {
+      const { cwd, astroHome } = sandbox();
+      writeFileSync(join(cwd, "meio.txt"), [
+        `${"x".repeat(offset)}${PEM_BEGIN}`,
+        PEM_BODY[0]!,
+        PEM_BODY[1]!,
+        PEM_END,
+        "z".repeat(5_000),
+      ].join("\n"));
+      const attachment = await loadAttachment({
+        ...base(cwd, astroHome),
+        path: "meio.txt",
+        range: "2:3",
+        maxBytes: 4_096,
+      });
+      expect(attachment.data).toBe("[REDACTED]\n[REDACTED]");
+      expect(attachment.data).not.toContain("MIIEow");
+    }
+  });
+
+  test("bloco PEM em uma linha só fecha o span e preserva a linha seguinte", async () => {
+    const { cwd, astroHome } = sandbox();
+    const oneLine = `${PEM_BEGIN} ${PEM_BODY[0]} ${PEM_BODY[1]} ${PEM_END}`;
+    expect(oneLine.length).toBeGreaterThan(64);
+    writeFileSync(join(cwd, "uma-linha.txt"), [oneLine, "alvo-2", "z".repeat(5_000)].join("\n"));
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "uma-linha.txt",
+      range: "1:2",
+      maxBytes: 4_096,
+    });
+    expect(attachment.data).toBe("[REDACTED]\nalvo-2");
+  });
+
+  test("linha maior que o teto mas com forma redigida cabível não estoura", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "linha-grande.txt"),
+      `${"x".repeat(1_500)}${PEM_BEGIN} ${PEM_BODY[0]} ${PEM_END}\n`);
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "linha-grande.txt",
+      range: "1:1",
+      maxBytes: 1_000,
+    });
+    expect(attachment.data).toBe("[REDACTED]");
+    expect(attachment.range).toEqual({ start: 1, end: 1 });
+  });
+
   test("marcador PEM cortado pela fronteira do chunk não vaza o corpo", async () => {
     const { cwd, astroHome } = sandbox();
     writeFileSync(join(cwd, "fronteira.txt"), [
