@@ -25,6 +25,18 @@ function delayedProvider(delayMs: number, out = 50): Provider {
   };
 }
 
+/** Provider mock que falha em uma chamada específica (1-based). */
+function flakyProvider(failOnCall: number, out = 40): Provider {
+  let calls = 0;
+  return {
+    async complete(): Promise<CompletionResponse> {
+      calls++;
+      if (calls === failOnCall) throw new Error("falha simulada");
+      return { content: "x".repeat(out), toolCalls: [], usage: { inputTokens: 100, outputTokens: out } };
+    },
+  };
+}
+
 describe("benchmark de providers (F5-4)", () => {
   test("benchModel mede latência, tokens/s e custo/1k (verificado)", async () => {
     const m = model({
@@ -59,6 +71,32 @@ describe("benchmark de providers (F5-4)", () => {
     expect(result.costPer1kOutUsd).toBeNull();
   });
 
+  test("success rate é 100% quando todos os prompts completam", async () => {
+    const result = await benchModel(model(), () => delayedProvider(1), 2);
+    expect(result.total).toBe(10);
+    expect(result.completed).toBe(10);
+    expect(result.successRate).toBe(1);
+  });
+
+  test("falha de prompt entra na success rate sem derrubar a suíte", async () => {
+    const result = await benchModel(model(), () => flakyProvider(2), 1);
+    expect(result.total).toBe(5);
+    expect(result.completed).toBe(4);
+    expect(result.successRate).toBe(0.8);
+    // Média de tokens só sobre as chamadas concluídas.
+    expect(result.tokensInAvg).toBe(100);
+    expect(result.tokensOutAvg).toBe(40);
+  });
+
+  test("falha em todos os prompts propaga o erro do provider", async () => {
+    const down: Provider = {
+      async complete(): Promise<CompletionResponse> {
+        throw new Error("provider fora do ar");
+      },
+    };
+    await expect(benchModel(model(), () => down, 1)).rejects.toThrow("provider fora do ar");
+  });
+
   test("runBenchmark grava JSON e Markdown com data", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "astro-bench-"));
     const report = await runBenchmark({
@@ -76,6 +114,7 @@ describe("benchmark de providers (F5-4)", () => {
     const json = JSON.parse(readFileSync(join(outDir, `bench-${date}.json`), "utf8")) as BenchReport;
     expect(json.results).toHaveLength(1);
     expect(json.prompts).toBeGreaterThan(0);
+    expect(json.results[0]?.successRate).toBe(1);
   });
 
   test("formatMarkdown inclui todos os modelos e tags", () => {
@@ -87,12 +126,14 @@ describe("benchmark de providers (F5-4)", () => {
           latencyMs: { min: 1, p50: 2, p95: 3, max: 3 },
           tokensInAvg: 10, tokensOutAvg: 20, tokensPerSec: 100,
           costPer1kOutUsd: 1.5, ttftMs: null,
+          successRate: 0.8, completed: 4, total: 5,
         },
         {
           model: "b/2", provider: "b", tags: ["reasoning"], runs: 1,
           latencyMs: { min: 1, p50: 2, p95: 3, max: 3 },
           tokensInAvg: 10, tokensOutAvg: 20, tokensPerSec: 50,
           costPer1kOutUsd: null, ttftMs: null,
+          successRate: 1, completed: 5, total: 5,
         },
       ],
     };
@@ -101,5 +142,10 @@ describe("benchmark de providers (F5-4)", () => {
     expect(md).toContain("| b/2 | reasoning |");
     expect(md).toContain("US$ 1.5000");
     expect(md).toContain("n/d");
+    // Success rate por modelo e agregada (completed / total).
+    expect(md).toContain("| Modelo | Tags | Sucesso |");
+    expect(md).toContain("80% (4/5)");
+    expect(md).toContain("100% (5/5)");
+    expect(md).toContain("Sucesso agregado: 90% (9/10)");
   });
 });
