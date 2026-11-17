@@ -4,6 +4,12 @@
   "env": {
     "EVAL_KEY": "eval-provider-secret"
   },
+  "seed": [
+    {
+      "from": "fixtures/skill.md",
+      "to": ".astro/skills/commit/SKILL.md"
+    }
+  ],
   "turns": [
     {
       "toolCalls": [

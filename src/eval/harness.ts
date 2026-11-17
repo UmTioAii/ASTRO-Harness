@@ -187,7 +187,7 @@ export async function runCase(golden: GoldenCase, opts: { mock: boolean }): Prom
 
     if (golden.scenario !== undefined) {
       // Cenário (#59): roda o app real contra os mocks declarados no scenario.json.
-      const scenario = await runScenario(golden.scenario, { cwd, task });
+      const scenario = await runScenario(golden.scenario, { cwd, caseDir: golden.dir, task });
       tokens = scenario.tokens;
       diffSummary.push(...scenario.diffSummary);
     } else {

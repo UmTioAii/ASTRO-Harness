@@ -4,8 +4,9 @@
  * provider consome `turns` declarados no `scenario.json`; o app roda de verdade
  * (allowlist, ledger, audit, fallback, multi-agent) contra servidores loopback.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { runTask } from "../app";
 import { validateConfig } from "../config";
 import { runHealthCheck, type HealthReport } from "../health";
@@ -73,6 +74,10 @@ export interface ScenarioSpec {
   /** Overrides profundos sobre a config base (placeholders inclusos). */
   config?: Record<string, unknown>;
   env?: Record<string, string>;
+  /** Arquivos do case copiados para o cwd antes do run (`.astro/` é gitignored). */
+  seed?: Array<{ from: string; to: string }>;
+  /** Destinos cujo `.sha256` é calculado dos bytes copiados (install-verify). */
+  sidecars?: string[];
   turns?: ScenarioTurn[];
   mcp?: ScenarioMcpServer;
   search?: ScenarioSearchServer;
@@ -353,10 +358,20 @@ function checkExpectations(expect: ScenarioExpectations, obs: Observation): stri
   return diff;
 }
 
+/** Caminho relativo confinado ao cwd do case (seed/sidecar nunca escapa). */
+function within(cwd: string, relativePath: string): string {
+  const destination = resolve(cwd, relativePath);
+  const rel = relative(cwd, destination);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`cenário com caminho fora do workspace: ${relativePath}`);
+  }
+  return destination;
+}
+
 /** Executa um `scenario.json`; o harness compara os arquivos esperados depois. */
 export async function runScenario(
   spec: ScenarioSpec,
-  opts: { cwd: string; task: string },
+  opts: { cwd: string; caseDir: string; task: string },
 ): Promise<ScenarioResult> {
   if (spec.schema !== 1) throw new Error(`scenario schema inválido: ${String(spec.schema)}`);
   const kind = spec.kind ?? "app";
@@ -371,6 +386,16 @@ export async function runScenario(
   const previousPrivate = process.env.ASTRO_ALLOW_PRIVATE_URLS;
   process.env.ASTRO_ALLOW_PRIVATE_URLS = "1";
   try {
+    for (const entry of spec.seed ?? []) {
+      const destination = within(opts.cwd, entry.to);
+      mkdirSync(dirname(destination), { recursive: true });
+      cpSync(join(opts.caseDir, entry.from), destination);
+    }
+    for (const relativePath of spec.sidecars ?? []) {
+      const destination = within(opts.cwd, relativePath);
+      const digest = createHash("sha256").update(readFileSync(destination)).digest("hex");
+      writeFileSync(`${destination}.sha256`, `${digest}\n`, "utf8");
+    }
     const page = spec.page === undefined ? undefined : startPage(spec.page);
     if (page !== undefined) { servers.push(page.server); vars.pageUrl = page.url; }
     const search = spec.search === undefined ? undefined : startSearch(spec.search, searchState);

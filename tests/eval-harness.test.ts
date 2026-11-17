@@ -98,6 +98,29 @@ describe("eval harness (F5-2)", () => {
     expect(result.passed).toBe(true);
   }, 30000);
 
+  test("runCase recusa seed que escapa do workspace", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-scenario-escape-"));
+    const dir = join(root, "01-escape");
+    mkdirSync(join(dir, "expected"), { recursive: true });
+    writeFileSync(join(dir, "task.md"), "cenário com seed fora do workspace\n");
+    writeFileSync(join(dir, "expected", "out.txt"), "ok\n");
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({
+      schema: 1, id: "scenario-escape", category: "skills", difficulty: 2, tags: ["writing-code"], files: ["out.txt"],
+    }));
+    writeFileSync(join(dir, "scenario.json"), JSON.stringify({
+      schema: 1,
+      kind: "app",
+      seed: [{ from: "meta.json", to: "../escape.json" }],
+      turns: [{ content: "não deveria rodar" }],
+      expect: { final: "não deveria rodar" },
+    }));
+
+    const [golden] = listGoldenCases(root);
+    const result = await runCase(golden!, { mock: true });
+    expect(result.passed).toBe(false);
+    expect(result.diffSummary.join("\n")).toContain("fora do workspace");
+  });
+
   test("runCase detecta divergência quando o esperado é sabotado", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-sabot-"));
     const dir = join(root, "01-case"); // listGoldenCases espera subdiretórios

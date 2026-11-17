@@ -4,6 +4,15 @@
   "env": {
     "EVAL_KEY": "eval-provider-secret"
   },
+  "seed": [
+    {
+      "from": "fixtures/verify.md",
+      "to": ".astro/skills/verify/SKILL.md"
+    }
+  ],
+  "sidecars": [
+    ".astro/skills/verify/SKILL.md"
+  ],
   "turns": [
     {
       "toolCalls": [
