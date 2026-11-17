@@ -3,11 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runTask } from "../../src/app";
 import { testEnv } from "../setup";
-import { newWorkspace, readAudit, startMockProvider, writeConfig } from "./helpers";
-
-interface RequestBody {
-  messages: Array<{ role: string; content: string }>;
-}
+import { newWorkspace, readAudit, removeWorkspace, requestMessages, startMockProvider, writeConfig } from "./helpers";
 
 const REPORT_SKILL = `---
 name: report
@@ -36,6 +32,7 @@ test("skills-flow: carrega a skill, injeta o prompt e executa as tools permitida
   ]);
   const dir = newWorkspace("skills-flow");
   try {
+    expect(provider.server.hostname).toBe("127.0.0.1");
     installSkill(dir, "report", REPORT_SKILL);
     writeFileSync(join(dir, "notes.txt"), "nota do relatório\n", "utf8");
     const configPath = writeConfig(dir, {
@@ -57,23 +54,23 @@ test("skills-flow: carrega a skill, injeta o prompt e executa as tools permitida
     expect(report.final).toBe("skill concluída");
     expect(readFileSync(join(dir, "out", "report.txt"), "utf8")).toBe("report: notas lidas\n");
 
-    const first = provider.state.bodies[0] as RequestBody;
-    const user = first.messages.find((message) => message.role === "user")!;
+    const first = requestMessages(provider.state.bodies[0]);
+    const user = first.find((message) => message.role === "user")!;
     expect(user.content).toContain("Leia notes.txt e registre o relatório");
     expect(user.content).toContain("revisar o diff");
     expect(user.content).toContain("- notes: read notes.txt");
 
-    const second = provider.state.bodies[1] as RequestBody;
-    expect(second.messages.some((message) => message.role === "tool" && message.content.includes("nota do relatório"))).toBe(true);
+    expect(requestMessages(provider.state.bodies[1]).some((message) => message.role === "tool" && message.content.includes("nota do relatório"))).toBe(true);
 
     const audit = readAudit(dir);
     const loaded = audit.events.find((event) => event.tipo === "skill.loaded");
     expect(loaded?.payload).toMatchObject({ name: "report", version: "1.0.0", source: "project" });
     expect(loaded?.payload.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(audit.text).not.toContain("Leia notes.txt"); // I-04: prompt da skill não é persistido
-    expect(audit.text).not.toContain("test-key");
+    expect(audit.text.includes("test-key")).toBe(false);
   } finally {
     provider.server.stop(true);
+    removeWorkspace(dir);
   }
 }, 30000);
 
@@ -81,6 +78,7 @@ test("skills-flow: skill fora da allowlist falha fechado antes de chamar o provi
   const provider = startMockProvider([{ content: "não deveria rodar" }]);
   const dir = newWorkspace("skills-deny");
   try {
+    expect(provider.server.hostname).toBe("127.0.0.1");
     installSkill(dir, "deploy", REPORT_SKILL.replace("name: report", "name: deploy")
       .replace("tools: [read_file, write_file]", "tools: [run_command]"));
     const configPath = writeConfig(dir, {
@@ -105,8 +103,9 @@ test("skills-flow: skill fora da allowlist falha fechado antes de chamar o provi
     const audit = readAudit(dir);
     expect(audit.text).toContain("run.stopped");
     expect(audit.events.some((event) => event.tipo === "skill.loaded")).toBe(false);
-    expect(audit.text).not.toContain("test-key");
+    expect(audit.text.includes("test-key")).toBe(false);
   } finally {
     provider.server.stop(true);
+    removeWorkspace(dir);
   }
 }, 30000);

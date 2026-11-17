@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { runTask } from "../../src/app";
 import { installDockerSpawnMock } from "../helpers/docker-mock";
 import { testEnv } from "../setup";
-import { newWorkspace, readAudit, startMockProvider, writeConfig } from "./helpers";
+import { newWorkspace, readAudit, removeWorkspace, startMockProvider, writeConfig } from "./helpers";
 
 const CREATED = "export function greet(name: string): string {\n  return \"oi \" + name;\n}\n";
 const EDITED = "export function greet(name: string): string {\n  return \"olá \" + name;\n}\n";
@@ -28,7 +28,10 @@ test("full-flow: create → edit → run → commit ponta a ponta", async () => 
   // Nada roda no host: docker é mockado, inclusive o commit (sem rede/repo real).
   const docker = installDockerSpawnMock((argv) => argv.join(" ").includes("git commit") ? "committed" : "tests passed");
   const dir = newWorkspace("flow");
+  const previousMode = process.env.ASTRO_PERMISSION_MODE;
+  process.env.ASTRO_PERMISSION_MODE = "bypass";
   try {
+    expect(provider.server.hostname).toBe("127.0.0.1");
     const configPath = writeConfig(dir, {
       providers: { mock: { kind: "openai-compat", baseUrl: provider.baseUrl, credentialRef: "TEST_KEY" } },
       models: [{ provider: "mock", id: "mock-1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } }],
@@ -43,6 +46,7 @@ test("full-flow: create → edit → run → commit ponta a ponta", async () => 
       task: "crie greet.ts, ajuste a saudação, rode os testes e faça commit",
       cwd: dir,
       env: testEnv({ TEST_KEY: "test-key" }),
+      permissionMode: "allow-edits",
       approveTool: () => true,
     });
 
@@ -55,7 +59,8 @@ test("full-flow: create → edit → run → commit ponta a ponta", async () => 
     const toolCalls = audit.events.filter((event) => event.tipo === "tool.call").map((event) => event.payload.name);
     expect(toolCalls).toEqual(["write_file", "edit", "run_command", "run_command"]);
     expect(audit.text).toContain("run.completed");
-    expect(audit.text).not.toContain("test-key");
+    expect(audit.events.find((event) => event.tipo === "mode.changed")?.payload.mode).toBe("allow-edits");
+    expect(audit.text.includes("test-key")).toBe(false);
 
     const commands = docker.runCalls.map((argv) => argv.join(" "));
     expect(commands.some((command) => command.includes("bun test"))).toBe(true);
@@ -65,5 +70,47 @@ test("full-flow: create → edit → run → commit ponta a ponta", async () => 
   } finally {
     docker.restore();
     provider.server.stop(true);
+    removeWorkspace(dir);
+    if (previousMode === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+    else process.env.ASTRO_PERMISSION_MODE = previousMode;
+  }
+}, 30000);
+
+test("full-flow: write_file não escapa do workspace por ../ nem por junction", async () => {
+  const provider = startMockProvider([
+    { toolCalls: [{ name: "write_file", arguments: { path: "../escape.txt", content: "escape\n" } }] },
+    { toolCalls: [{ name: "write_file", arguments: { path: "link/escape.txt", content: "escape\n" } }] },
+    { content: "confinado" },
+  ]);
+  const dir = newWorkspace("flow-escape");
+  const outside = newWorkspace("flow-outside");
+  try {
+    symlinkSync(outside, join(dir, "link"), "junction");
+    const configPath = writeConfig(dir, {
+      providers: { mock: { kind: "openai-compat", baseUrl: provider.baseUrl, credentialRef: "TEST_KEY" } },
+      models: [{ provider: "mock", id: "mock-1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } }],
+      agent: { model: "mock/mock-1", maxSteps: 4, tools: ["write_file"] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    });
+
+    const report = await runTask({
+      configPath,
+      task: "tente escrever fora do workspace",
+      cwd: dir,
+      env: testEnv({ TEST_KEY: "test-key" }),
+      permissionMode: "allow-edits",
+      approveTool: () => true,
+    });
+
+    expect(report.final).toBe("confinado");
+    const results = readAudit(dir).events.filter((event) => event.tipo === "tool.result");
+    expect(results).toHaveLength(2);
+    expect(results.every((event) => event.payload.isError === true)).toBe(true);
+    expect(existsSync(join(dir, "..", "escape.txt"))).toBe(false);
+    expect(existsSync(join(outside, "escape.txt"))).toBe(false);
+  } finally {
+    provider.server.stop(true);
+    removeWorkspace(dir);
+    removeWorkspace(outside);
   }
 }, 30000);

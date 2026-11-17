@@ -6,7 +6,7 @@ import { runTask } from "../../src/app";
 import { Ledger } from "../../src/ledger";
 import { rebuildAgentTree } from "../../src/resume";
 import { testEnv } from "../setup";
-import { newWorkspace, readAudit, startMockProvider, writeConfig } from "./helpers";
+import { newWorkspace, readAudit, removeWorkspace, startMockProvider, writeConfig } from "./helpers";
 
 const HANDOFF = {
   to: "sub-1",
@@ -25,7 +25,10 @@ test("multi-agent-flow: planner spawna em outra conta, faz handoff e o filho esc
     { content: "build ok" },
   ]);
   const dir = newWorkspace("multi-flow");
+  const previousMode = process.env.ASTRO_PERMISSION_MODE;
+  process.env.ASTRO_PERMISSION_MODE = "bypass";
   try {
+    expect(provider.server.hostname).toBe("127.0.0.1");
     const configPath = writeConfig(dir, {
       providers: {
         p1: { kind: "openai-compat", baseUrl: provider.baseUrl, credentialRef: "KEY1" },
@@ -46,6 +49,7 @@ test("multi-agent-flow: planner spawna em outra conta, faz handoff e o filho esc
       task: "planeje e delegue a construção",
       cwd: dir,
       env: testEnv({ KEY1: "key-one", KEY2: "key-two" }),
+      permissionMode: "allow-edits",
       approveTool: () => true,
       approveSwap: () => true,
     });
@@ -57,14 +61,18 @@ test("multi-agent-flow: planner spawna em outra conta, faz handoff e o filho esc
     const audit = readAudit(dir);
     expect(audit.events.some((event) => event.tipo === "agent.spawned")).toBe(true);
     expect(audit.events.some((event) => event.tipo === "agent.switch")).toBe(true);
-    expect(audit.text).not.toContain("key-one");
-    expect(audit.text).not.toContain("key-two");
+    expect(audit.events.find((event) => event.tipo === "mode.changed")?.payload.mode).toBe("allow-edits");
+    expect(audit.text.includes("key-one")).toBe(false);
+    expect(audit.text.includes("key-two")).toBe(false);
 
     const ledger = new Ledger(join(dir, ".astro", "ledger.jsonl"));
     expect(rebuildAgentTree(ledger, report.runId).nodes.map((node) => node.agent_id)).toEqual(["planner", "sub-1"]);
     expect(activeLocks(ledger)).toEqual([]);
   } finally {
     provider.server.stop(true);
+    removeWorkspace(dir);
+    if (previousMode === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+    else process.env.ASTRO_PERMISSION_MODE = previousMode;
   }
 }, 30000);
 
@@ -77,7 +85,10 @@ test("multi-agent-flow: task delega e o filho não excede a permissão do agente
     { content: "boundary ok" },
   ]);
   const dir = newWorkspace("multi-boundary");
+  const previousMode = process.env.ASTRO_PERMISSION_MODE;
+  process.env.ASTRO_PERMISSION_MODE = "bypass";
   try {
+    expect(provider.server.hostname).toBe("127.0.0.1");
     const configPath = writeConfig(dir, {
       providers: {
         p1: { kind: "openai-compat", baseUrl: provider.baseUrl, credentialRef: "KEY1" },
@@ -100,6 +111,7 @@ test("multi-agent-flow: task delega e o filho não excede a permissão do agente
       task: "delegue sem furar a permissão do filho",
       cwd: dir,
       env: testEnv({ KEY1: "key-one", KEY2: "key-two" }),
+      permissionMode: "allow-edits",
       approveTool: () => true,
       approveSwap: () => true,
     });
@@ -110,11 +122,15 @@ test("multi-agent-flow: task delega e o filho não excede a permissão do agente
 
     const audit = readAudit(dir);
     expect(audit.events.some((event) => event.tipo === "task.delegated")).toBe(true);
+    expect(audit.events.find((event) => event.tipo === "mode.changed")?.payload.mode).toBe("allow-edits");
     const denied = audit.events.find((event) => event.tipo === "tool.denied");
     expect(denied?.payload).toMatchObject({ name: "write_file" });
     expect(String(denied?.payload.reason)).toContain("read-only");
     expect(activeLocks(new Ledger(join(dir, ".astro", "ledger.jsonl")))).toEqual([]);
   } finally {
     provider.server.stop(true);
+    removeWorkspace(dir);
+    if (previousMode === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+    else process.env.ASTRO_PERMISSION_MODE = previousMode;
   }
 }, 30000);

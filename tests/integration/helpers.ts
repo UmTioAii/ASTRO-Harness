@@ -1,7 +1,8 @@
 /** Helpers dos fluxos de integração (#59): provider mock loopback e leitura de artefatos. */
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { canonicalize, isWithin } from "../../src/tools/paths";
 
 export interface TurnToolCall {
   name: string;
@@ -15,6 +16,7 @@ export interface Turn {
 
 export interface TestServer {
   port?: number;
+  hostname: string;
   url: URL;
   stop(force?: boolean): void;
 }
@@ -79,6 +81,13 @@ export function newWorkspace(prefix: string): string {
   return mkdtempSync(join(tmpdir(), `astro-${prefix}-`));
 }
 
+/** Remove apenas workspaces sob o tmpdir real; nunca um caminho arbitrário. */
+export function removeWorkspace(dir: string): void {
+  const root = canonicalize(tmpdir());
+  const target = canonicalize(dir);
+  if (target !== root && isWithin(root, target)) rmSync(dir, { recursive: true, force: true });
+}
+
 export function writeConfig(dir: string, config: Record<string, unknown>): string {
   const path = join(dir, "astro.config.json");
   writeFileSync(path, JSON.stringify(config, null, 2), "utf8");
@@ -92,11 +101,20 @@ export interface AuditEvent {
   payload: Record<string, unknown>;
 }
 
+function isAuditEvent(value: unknown): value is AuditEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const event = value as { run?: unknown; tipo?: unknown; payload?: unknown };
+  return typeof event.run === "string" && typeof event.tipo === "string"
+    && typeof event.payload === "object" && event.payload !== null;
+}
+
 export function readAudit(dir: string): { text: string; events: AuditEvent[] } {
   const text = readFileSync(join(dir, ".astro", "audit.jsonl"), "utf8");
   const events = text.trim() === ""
     ? []
-    : text.trim().split("\n").map((line) => JSON.parse(line) as AuditEvent);
+    : text.trim().split("\n")
+      .map((line) => JSON.parse(line) as unknown)
+      .filter(isAuditEvent);
   return { text, events };
 }
 
@@ -105,4 +123,16 @@ export function readLedger(dir: string): Array<Record<string, unknown>> {
   return text.trim() === ""
     ? []
     : text.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** Mensagens de um request mock sem cast cego; entradas fora do shape são descartadas. */
+export function requestMessages(body: unknown): Array<{ role: string; content: string }> {
+  if (typeof body !== "object" || body === null) return [];
+  const messages = (body as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) return [];
+  return messages.flatMap((message) => {
+    if (typeof message !== "object" || message === null) return [];
+    const { role, content } = message as { role?: unknown; content?: unknown };
+    return typeof role === "string" && typeof content === "string" ? [{ role, content }] : [];
+  });
 }

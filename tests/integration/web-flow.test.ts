@@ -3,11 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runTask } from "../../src/app";
 import { testEnv } from "../setup";
-import { newWorkspace, readAudit, startMockProvider, writeConfig, type TestServer } from "./helpers";
-
-interface RequestBody {
-  messages: Array<{ role: string; content: string }>;
-}
+import { newWorkspace, readAudit, removeWorkspace, startMockProvider, writeConfig, type TestServer } from "./helpers";
 
 interface SearchMock {
   server: TestServer;
@@ -55,6 +51,9 @@ test("web-flow: search com retry, fetch sanitizado e resultado no contexto", asy
   ]);
   const dir = newWorkspace("web-flow");
   try {
+    expect(provider.server.hostname).toBe("127.0.0.1");
+    expect(search.server.hostname).toBe("127.0.0.1");
+    expect(page.server.hostname).toBe("127.0.0.1");
     const configPath = writeConfig(dir, {
       providers: { mock: { kind: "openai-compat", baseUrl: provider.baseUrl, credentialRef: "TEST_KEY" } },
       models: [{ provider: "mock", id: "mock-1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } }],
@@ -87,11 +86,12 @@ test("web-flow: search com retry, fetch sanitizado e resultado no contexto", asy
       .toMatchObject({ provider: "exa", status: 200, resultsCount: 1 });
     expect(audit.events.find((event) => event.tipo === "web.fetch")?.payload)
       .toMatchObject({ status: 200 });
-    expect(audit.text).not.toContain("web-secret-value");
-    expect(audit.text).not.toContain("test-key");
+    expect(audit.text.includes("web-secret-value")).toBe(false);
+    expect(audit.text.includes("test-key")).toBe(false);
   } finally {
     provider.server.stop(true);
     search.server.stop(true);
     page.server.stop(true);
+    removeWorkspace(dir);
   }
 }, 30000);

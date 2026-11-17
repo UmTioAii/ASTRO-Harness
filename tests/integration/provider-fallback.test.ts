@@ -5,7 +5,7 @@ import { activeLocks } from "../../src/agent-lock";
 import { runTask } from "../../src/app";
 import { Ledger } from "../../src/ledger";
 import { testEnv } from "../setup";
-import { newWorkspace, readAudit, readLedger, startDownProvider, startMockProvider, writeConfig } from "./helpers";
+import { newWorkspace, readAudit, readLedger, removeWorkspace, startDownProvider, startMockProvider, writeConfig } from "./helpers";
 
 test("provider-fallback: primário em outage e o run continua no provider de reserva", async () => {
   const down = startDownProvider();
@@ -15,6 +15,8 @@ test("provider-fallback: primário em outage e o run continua no provider de res
   ]);
   const dir = newWorkspace("provider-fallback");
   try {
+    expect(backup.server.hostname).toBe("127.0.0.1");
+    expect(down.hostname).toBe("127.0.0.1");
     const configPath = writeConfig(dir, {
       providers: {
         primary: {
@@ -49,15 +51,16 @@ test("provider-fallback: primário em outage e o run continua no provider de res
 
     const audit = readAudit(dir);
     expect(audit.events.some((event) => event.tipo === "provider.failure")).toBe(true);
-    expect(audit.events.some((event) => event.tipo === "provider.success")).toBe(true);
+    expect(audit.events.some((event) => event.tipo === "provider.complete")).toBe(true);
     expect(audit.events.some((event) => event.tipo === "agent.lock.moved")).toBe(true);
-    expect(audit.text).not.toContain("key-a-secret");
-    expect(audit.text).not.toContain("key-b-secret");
+    expect(audit.text.includes("key-a-secret")).toBe(false);
+    expect(audit.text.includes("key-b-secret")).toBe(false);
 
     const ledger = new Ledger(join(dir, ".astro", "ledger.jsonl"));
     expect(activeLocks(ledger)).toEqual([]);
   } finally {
     backup.server.stop(true);
     down.stop(true);
+    removeWorkspace(dir);
   }
 }, 30000);
