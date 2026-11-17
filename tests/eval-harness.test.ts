@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import {
   compareFile,
@@ -110,6 +110,54 @@ describe("eval harness (F5-2)", () => {
     const saved = JSON.parse(readFileSync(reportPath, "utf8")) as EvalReport;
     expect(saved.total).toBe(65);
   }, 60000);
+
+  test("servidores mock do cenário ligam apenas em loopback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-loopback-"));
+    const caseDir = writeScenarioCase(root, "01-loopback", {
+      schema: 1,
+      kind: "app",
+      env: { EVAL_WEB_KEY: "eval-web-secret-123" },
+      config: {
+        agent: { model: "mock/mock-1", maxSteps: 2, tools: [] },
+        mcpServers: { fs: { transport: "http", url: "{{mcpUrl}}", timeoutMs: 1000 } },
+        webSearch: { provider: "exa", apiKeyEnv: "EVAL_WEB_KEY", baseUrl: "{{searchUrl}}" },
+      },
+      mcp: { tools: [{ name: "read_file", text: "x" }] },
+      search: { results: [] },
+      page: { html: "ok" },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-loopback-cwd-"));
+    const originalServe = Bun.serve;
+    const started: Array<{ hostname?: string; port?: number }> = [];
+    const bun = Bun as unknown as { serve: (opts: unknown) => { hostname?: string; port?: number } };
+    bun.serve = (opts) => {
+      const server = originalServe(opts as Parameters<typeof Bun.serve>[0]);
+      started.push(server);
+      return server;
+    };
+    try {
+      await runScenario(
+        JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+        { cwd, caseDir, task: "tarefa" },
+      );
+    } finally {
+      bun.serve = originalServe as unknown as (opts: unknown) => { hostname?: string; port?: number };
+    }
+
+    expect(started).toHaveLength(5);
+    expect(started.every((server) => server.hostname === "127.0.0.1")).toBe(true);
+
+    // Se houver uma interface não-loopback, a conexão a ela deve ser recusada.
+    const local = Object.values(networkInterfaces()).flat()
+      .find((entry) => entry !== undefined && !entry.internal && entry.family === "IPv4");
+    if (local !== undefined) {
+      const port = started[0]?.port;
+      await expect(fetch(`http://${local.address}:${port}/`, { signal: AbortSignal.timeout(750) }))
+        .rejects.toThrow();
+    }
+  }, 30000);
 
   test("runCase com scenario.seed/sidecars instala a skill e verifica o sha256", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-scenario-seed-"));
