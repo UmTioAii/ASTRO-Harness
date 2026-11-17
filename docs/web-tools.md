@@ -38,4 +38,4 @@ Resultado de busca é dado externo. O manifesto marca `risk: low`, `permission: 
 
 ## Opt-in de dev (saída)
 
-`ASTRO_ALLOW_PRIVATE_URLS=1` (por processo e filhos, só dev) libera loopback, RFC1918, ULA e faixas reservadas (`0.0.0.0/8`, multicast) nas URLs validadas por `outboundUrlProblem`; CGNAT (100.64/10), metadados e link-local continuam bloqueados. `webSearch.baseUrl` do provider `custom` usa só `urlProblem` e não é afetado.
+`ASTRO_ALLOW_PRIVATE_URLS=1` (por processo e filhos, só dev) libera loopback, RFC1918, ULA e faixas reservadas (`0.0.0.0/8`, multicast) nas URLs validadas por `outboundUrlProblem`; CGNAT (100.64/10), metadados (inclui IMDS IPv6 `fd00:ec2::254` e IPv4 mapeado) e link-local continuam bloqueados. `webSearch.baseUrl` usa só `urlProblem` (qualquer provider) e não é afetado.

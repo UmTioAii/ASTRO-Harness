@@ -48,9 +48,10 @@ Depois do merge, na raiz do repo, crie a tag no commit do merge e trabalhe nele 
 ```bash
 MERGE=$(gh pr view "<pr-do-bump>" --json state,mergeCommit -q 'select(.state=="MERGED") | .mergeCommit.oid') || exit 1
 [ -n "$MERGE" ] && [ "$MERGE" != "null" ] || exit 1
-git fetch origin main --force && git switch --detach "$MERGE" && [ -z "$(git status --porcelain)" ] || exit 1
+git fetch origin main --force && git switch --detach "$MERGE" && [ "$(git rev-parse HEAD)" = "$MERGE" ] && [ -z "$(git status --porcelain)" ] || exit 1
 TAG="v$(npm pkg get version | tr -d '"')" && [ "${#TAG}" -gt 1 ] || exit 1
-git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null && { echo "tag $TAG já existe"; exit 1; }
+REMOTE_TAG=$(git ls-remote --tags origin "refs/tags/$TAG") || exit 1
+[ -z "$REMOTE_TAG" ] || { echo "tag $TAG já existe"; exit 1; }
 gh release create "$TAG" --target "$MERGE" --prerelease --notes-file "<notas.md>"
 bun install --frozen-lockfile
 npm pack --dry-run                  # lista: dist/, README.md, LICENSE, package.json
@@ -87,7 +88,7 @@ createServer((req, res) => {
 }).listen(8787, "127.0.0.1", () => console.log("mock: http://127.0.0.1:8787/v1"));
 ```
 
-No diretório limpo do §4 (mesmo shell, terminal interativo). O mock é loopback; o opt-in abaixo vale para este processo e filhos e só afeta URLs validadas por `outboundUrlProblem` (provider, `web_fetch`, webhook, MCP, telemetria, skill); `webSearch.baseUrl` do `custom` usa só `urlProblem`; contrato e bloqueios (CGNAT 100.64/10, metadados, link-local) em `docs/web-tools.md`:
+No diretório limpo do §4 (mesmo shell, terminal interativo). O mock é loopback; o opt-in abaixo vale para este processo e filhos e só afeta URLs validadas por `outboundUrlProblem` (provider, `web_fetch`, webhook, MCP, telemetria, skill); `webSearch.baseUrl` usa só `urlProblem` (qualquer provider); contrato e bloqueios em `docs/web-tools.md`:
 
 ```bash
 node mock-openai.mjs &
@@ -97,8 +98,7 @@ ASTRO_ALLOW_PRIVATE_URLS=1 ./node_modules/.bin/astro    # opt-in de dev: só nes
 
 | Passo | Valor |
 |---|---|
-| adicionar (`a`) | `custom`, nome `mock` |
-| base URL | `http://127.0.0.1:8787/v1` |
+| adicionar (`a`) | `custom`, nome `mock`, base URL `http://127.0.0.1:8787/v1` |
 | modelos / credencial | `mock-model` / vazio (provider local, sem chave) |
 | salvar | ativa e fecha o setup; a TUI abre |
 | na TUI: `/providers` → `t` → enter | `ok` com latência |
@@ -114,7 +114,7 @@ Publique o `.tgz` já testado, com a tag de pré-release:
 npm publish "$TARBALL" --tag alpha "--@umtioai:registry=https://registry.npmjs.org/"
 ```
 
-- `publishConfig.access: public` vem do `package.json`; não passe `--access` divergente. Publish de `.tgz` não roda hooks (valem §3/§4). `--tag alpha` move só `alpha`; `latest` só por decisão (§7); publish que falha exige versão nova. 2FA: deixe o npm pedir o código; não passe `--otp` (fica no histórico); token por `npm login` ou `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` no `.npmrc` (nunca no repositório, `I-03`).
+- `publishConfig.access: public` vem do `package.json`; não passe `--access` divergente. Publish de `.tgz` não roda hooks (valem §3/§4). `--tag alpha` move só `alpha`; `latest` só por decisão (§7); publish que falha exige versão nova e limpeza da tag/Release (§8). 2FA: deixe o npm pedir o código; não passe `--otp` (fica no histórico); token por `npm login` ou `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` no `.npmrc` (nunca no repositório, `I-03`).
 
 ## 7. Verificação pós-publicação
 
@@ -138,7 +138,7 @@ npm install "$PKG@alpha" "--@umtioai:registry=https://registry.npmjs.org/"
 | Quando | Ação |
 |---|---|
 | Antes do merge | feche o PR; nada foi publicado |
-| Depois do merge, antes do publish | nada foi publicado; `gh release delete "v<versão>" --cleanup-tag --yes` |
+| Depois do merge, publish não concluído (falhou ou não rodou) | nada instalável; `gh release delete "v<versão>" --repo UmTioAii/ASTRO-Harness --cleanup-tag --yes` |
 | Versão com defeito (inclui segredo) | revogue a credencial (`I-03`); publique a próxima versão com a correção, sem reescrever a existente; `npm unpublish` só em até 72 h, sem dependentes e com decisão do dono |
 | Pré-release ou `latest` errado | `npm dist-tag add "$PKG@<boa>" alpha "--@umtioai:registry=https://registry.npmjs.org/"` (ou `latest`); se a versão ruim continua instalável, `npm deprecate "$PKG@<ruim>" "quebrada; use <boa>" "--@umtioai:registry=https://registry.npmjs.org/"` |
 
