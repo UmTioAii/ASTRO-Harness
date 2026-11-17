@@ -3,15 +3,17 @@
  * config, credenciais por NOME e ASTRO_HOME. Nunca imprime valor de segredo (I-03).
  */
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { DEFAULT_ATTACHMENTS, loadConfig } from "../src/config";
+import { DEFAULT_ATTACHMENTS, loadConfig, type MCPServerConfig } from "../src/config";
 import { loadEffectiveConfig } from "../src/provider/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "../src/attachments/store";
+import { headerEnvNames } from "../src/mcp/headers";
 import { resolveAstroHome } from "../src/permissions";
 import { redactSecrets } from "../src/sanitize-external";
+import { loadSkillsFromRoot } from "../src/skills/loader";
 
 export type CheckLevel = "ok" | "warn" | "fail";
 
@@ -28,6 +30,30 @@ export interface DoctorReport {
 export interface ProviderFact {
   id: string;
   credentialRef?: string;
+  kind?: string;
+  /** `codex-oauth`: o arquivo de credenciais está legível no disco. */
+  credentialsReadable?: boolean;
+}
+
+/** Seção `mcpServers` já validada pela config; só nomes de env, nunca valores (I-03). */
+export interface McpFact {
+  servers: number;
+  enabled: number;
+  missingHeaderEnv: string[];
+}
+
+/** Skills carregadas das raízes `project`/`user`; avisos do loader já redigidos. */
+export interface SkillsFact {
+  project: number;
+  user: number;
+  warnings: string[];
+}
+
+/** Fatos de disco: escrita no cwd (ledger/audit) e espaço livre no volume do estado. */
+export interface DiskFact {
+  cwd: string;
+  writable: boolean;
+  freeBytes?: number;
 }
 
 export interface DoctorFacts {
@@ -41,6 +67,7 @@ export interface DoctorFacts {
     present: boolean;
     error?: string;
     providers?: ProviderFact[];
+    mcp?: McpFact;
   };
   astroHome: { path: string; exists: boolean; writable: boolean };
   attachments: {
@@ -54,7 +81,29 @@ export interface DoctorFacts {
     artifacts?: number;
     lastGc?: string;
   };
+  skills?: SkillsFact;
+  disk?: DiskFact;
   env: Record<string, string | undefined>;
+}
+
+/** Ações aplicadas por `--fix` e falhas encontradas; nunca inclui valor de segredo. */
+export interface FixReport {
+  applied: string[];
+  errors: string[];
+}
+
+export interface DoctorSummary {
+  ok: number;
+  warn: number;
+  fail: number;
+}
+
+/** Payload estável de `astro doctor --json`. */
+export interface DoctorJson {
+  schema: "doctor/v1";
+  checks: Check[];
+  summary: DoctorSummary;
+  fixes?: FixReport;
 }
 
 const REQUIRED_MODULES = ["ink", "react", "bun"] as const;
@@ -98,12 +147,55 @@ function credentialChecks(
   if (providers === undefined || providers.length === 0) return [];
   return providers.map((provider) => {
     const label = `credencial ${provider.id}`;
+    if (provider.credentialsReadable !== undefined) {
+      return provider.credentialsReadable
+        ? { level: "ok", label, detail: "arquivo de credenciais legível" } satisfies Check
+        : { level: "warn", label, detail: "arquivo de credenciais ausente ou ilegível" } satisfies Check;
+    }
     if (provider.credentialRef === undefined) return { level: "ok", label, detail: "sem chave" } satisfies Check;
     const present = (env[provider.credentialRef] ?? "").length > 0;
     return present
       ? { level: "ok", label, detail: `${provider.credentialRef} presente` } satisfies Check
       : { level: "warn", label, detail: `${provider.credentialRef} ausente no ambiente` } satisfies Check;
   });
+}
+
+function mcpCheck(fact: McpFact | undefined): Check | undefined {
+  if (fact === undefined) return undefined;
+  const detail = fact.servers === 0
+    ? "nenhum servidor configurado"
+    : `${fact.servers} servidor${fact.servers === 1 ? "" : "es"} · ${fact.enabled} habilitado${fact.enabled === 1 ? "" : "s"}`;
+  return fact.missingHeaderEnv.length === 0
+    ? { level: "ok", label: "mcp", detail }
+    : { level: "warn", label: "mcp", detail: `${detail} · header env ausente: ${fact.missingHeaderEnv.join(", ")}` };
+}
+
+function skillsCheck(fact: SkillsFact | undefined): Check | undefined {
+  if (fact === undefined) return undefined;
+  const total = fact.project + fact.user;
+  if (fact.warnings.length > 0) {
+    return { level: "warn", label: "skills", detail: fact.warnings.join("; ") };
+  }
+  if (total === 0) return { level: "ok", label: "skills", detail: "nenhuma skill instalada (opcional)" };
+  return {
+    level: "ok",
+    label: "skills",
+    detail: `${total} válida${total === 1 ? "" : "s"} (${fact.project} no projeto, ${fact.user} do usuário)`,
+  };
+}
+
+function diskCheck(fact: DiskFact | undefined): Check | undefined {
+  if (fact === undefined) return undefined;
+  if (!fact.writable) {
+    return { level: "fail", label: "disco", detail: `${fact.cwd} sem permissão de escrita; ledger/audit não gravam` };
+  }
+  const free = fact.freeBytes === undefined ? "" : ` · ${formatBytes(fact.freeBytes)} livres`;
+  return { level: "ok", label: "disco", detail: `${fact.cwd} gravável${free}` };
+}
+
+/** Redação central do detalhe: caminho/erro com padrão de segredo nunca chega à saída (I-03). */
+function sanitizeCheck(check: Check): Check {
+  return check.detail === undefined ? check : { ...check, detail: redactSecrets(check.detail) };
 }
 
 function formatBytes(bytes: number): string {
@@ -140,6 +232,8 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
       detail: `${facts.config.path} válida (${count} provider${count === 1 ? "" : "s"})`,
     });
     checks.push(...credentialChecks(facts.config.providers, facts.env));
+    const mcp = mcpCheck(facts.config.mcp);
+    if (mcp !== undefined) checks.push(mcp);
   }
 
   if (!facts.astroHome.exists) {
@@ -166,7 +260,28 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
     });
   }
 
-  return { checks };
+  const skills = skillsCheck(facts.skills);
+  if (skills !== undefined) checks.push(skills);
+  const disk = diskCheck(facts.disk);
+  if (disk !== undefined) checks.push(disk);
+
+  return { checks: checks.map(sanitizeCheck) };
+}
+
+/** Contagem por nível, na ordem estável do payload JSON. */
+export function summarize(report: DoctorReport): DoctorSummary {
+  const count = (level: CheckLevel): number => report.checks.filter((check) => check.level === level).length;
+  return { ok: count("ok"), warn: count("warn"), fail: count("fail") };
+}
+
+/** Payload de `--json`; `fixes` só aparece quando `--fix` foi pedido. */
+export function doctorJson(report: DoctorReport, fixes?: FixReport): DoctorJson {
+  return {
+    schema: "doctor/v1",
+    checks: report.checks,
+    summary: summarize(report),
+    ...(fixes === undefined ? {} : { fixes }),
+  };
 }
 
 /** Imprime uma linha por check e o resumo. */
@@ -174,12 +289,35 @@ export function renderReport(report: DoctorReport, write: (line: string) => void
   for (const check of report.checks) {
     write(`[${check.level}] ${check.label}${check.detail === undefined ? "" : ` ${check.detail}`}`);
   }
-  const count = (level: CheckLevel): number => report.checks.filter((check) => check.level === level).length;
-  write(`Resumo: ${count("ok")} ok, ${count("warn")} warn, ${count("fail")} fail`);
+  const count = summarize(report);
+  write(`Resumo: ${count.ok} ok, ${count.warn} warn, ${count.fail} fail`);
 }
 
 export function exitCode(report: DoctorReport): 0 | 1 {
   return report.checks.some((check) => check.level === "fail") ? 1 : 0;
+}
+
+/**
+ * `--fix`: só estado local seguro e idempotente. Cria `$ASTRO_HOME` (0700)
+ * quando ausente; nunca cria a raiz de artefatos, o `.astro` do projeto nem
+ * toca em credenciais. Erros saem redigidos e sem derrubar o processo.
+ */
+export function applyFixes(env: NodeJS.ProcessEnv = process.env): FixReport {
+  const home = resolveAstroHome(env);
+  const applied: string[] = [];
+  const errors: string[] = [];
+  try {
+    if (!existsSync(home)) {
+      mkdirSync(home, { recursive: true, mode: 0o700 });
+      applied.push(redactSecrets(`criado ${home}`));
+    } else if (!statSync(home).isDirectory()) {
+      errors.push(redactSecrets(`${home} existe e não é um diretório`));
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    errors.push(redactSecrets(`não foi possível criar ${home}: ${detail}`));
+  }
+  return { applied, errors };
 }
 
 function readEngines(root: string): { bun?: string; node?: string } {
@@ -214,18 +352,59 @@ function readNodeVersion(): string | undefined {
   }
 }
 
-function readConfig(): DoctorFacts["config"] {
+/** `~`/`~/x` para o home do usuário; nunca resolve `~outro`. */
+function expandHome(input: string): string {
+  if (input === "~") return homedir();
+  if (input.startsWith("~/") || input.startsWith("~\\")) return join(homedir(), input.slice(2));
+  return input;
+}
+
+function readableFile(path: string): boolean {
+  try {
+    const target = expandHome(path);
+    accessSync(target, constants.R_OK);
+    return statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Só nomes de env referenciados por headers (`env:NOME`); valores nunca entram no fato (I-03). */
+function readMcpFact(
+  servers: Record<string, MCPServerConfig> | undefined,
+  env: NodeJS.ProcessEnv,
+): McpFact {
+  const list = Object.values(servers ?? {});
+  const missing = new Set<string>();
+  for (const server of list) {
+    if (!server.enabled) continue;
+    for (const name of headerEnvNames(server.headers)) {
+      if ((env[name] ?? "").length === 0) missing.add(name);
+    }
+  }
+  return {
+    servers: list.length,
+    enabled: list.filter((server) => server.enabled).length,
+    missingHeaderEnv: [...missing].sort(),
+  };
+}
+
+function readConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"] {
   const path = join(process.cwd(), "astro.config.json");
   if (!existsSync(path)) return { path, present: false };
   try {
     const config = loadConfig(path);
     const providers = Object.entries(config.providers).map(([id, provider]) => ({
       id,
+      kind: provider.kind,
       ...("credentialRef" in provider && typeof provider.credentialRef === "string"
         ? { credentialRef: provider.credentialRef }
         : {}),
+      ...("credentialsPath" in provider && typeof provider.credentialsPath === "string"
+        ? { credentialsReadable: readableFile(provider.credentialsPath) }
+        : {}),
     }));
-    return { path, present: true, providers };
+    return { path, present: true, providers, mcp: readMcpFact(config.mcpServers, env) };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return { path, present: true, error: redactSecrets(detail) };
@@ -233,15 +412,44 @@ function readConfig(): DoctorFacts["config"] {
 }
 
 function readAstroHome(env: Record<string, string | undefined>): DoctorFacts["astroHome"] {
-  const configured = env.ASTRO_HOME;
-  const path = configured === undefined || configured === "" ? join(homedir(), ".astro") : configured;
+  const path = resolveAstroHome(env);
   if (!existsSync(path)) return { path, exists: false, writable: false };
   try {
+    if (!statSync(path).isDirectory()) return { path, exists: true, writable: false };
     accessSync(path, constants.W_OK);
     return { path, exists: true, writable: true };
   } catch {
     return { path, exists: true, writable: false };
   }
+}
+
+/** Skills opcionais: carrega as raízes reais e converte avisos em fato (sem prompt, I-03). */
+function collectSkillFacts(env: NodeJS.ProcessEnv): SkillsFact {
+  const warnings: string[] = [];
+  const project = loadSkillsFromRoot(join(process.cwd(), ".astro", "skills"), "project", (message) => warnings.push(message));
+  const user = loadSkillsFromRoot(join(resolveAstroHome(env), "skills"), "user", (message) => warnings.push(message));
+  return { project: project.length, user: user.length, warnings: warnings.slice(0, 5) };
+}
+
+function collectDiskFacts(env: NodeJS.ProcessEnv): DiskFact {
+  const cwd = process.cwd();
+  let writable = false;
+  try {
+    accessSync(cwd, constants.W_OK);
+    writable = true;
+  } catch {
+    // sem escrita: ledger/audit não gravam
+  }
+  let freeBytes: number | undefined;
+  try {
+    const home = resolveAstroHome(env);
+    const stats = statfsSync(existsSync(home) ? home : cwd);
+    const bytes = Number(stats.bavail) * Number(stats.bsize);
+    if (Number.isFinite(bytes) && bytes >= 0) freeBytes = bytes;
+  } catch {
+    // statfs indisponível na plataforma: check segue só com a permissão
+  }
+  return { cwd, writable, ...(freeBytes === undefined ? {} : { freeBytes }) };
 }
 
 function readAttachmentConfig(env: NodeJS.ProcessEnv): { ttlDays: number; maxBytes: number } {
@@ -359,9 +567,11 @@ export function collectFacts(
     engines: readEngines(root),
     missingModules: REQUIRED_MODULES.filter((name) => !resolvesModule(name)),
     artifacts: ARTIFACTS.map((path) => ({ path, exists: existsSync(join(root, path)) })),
-    config: readConfig(),
+    config: readConfig(env),
     astroHome: readAstroHome(env),
     attachments: collectAttachmentFacts(env, options.checkPrivate, options.probeWritable),
+    skills: collectSkillFacts(env),
+    disk: collectDiskFacts(env),
     env,
   };
 }
