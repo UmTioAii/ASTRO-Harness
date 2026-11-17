@@ -418,6 +418,7 @@ export async function runSession(
     );
   }
 
+  let failed = false;
   try {
     let effectiveMaxSteps = opts.maxSteps;
     for (let step = 1; step <= effectiveMaxSteps; step++) {
@@ -652,6 +653,7 @@ export async function runSession(
     tracer?.end(rootSpan, { status: "max_steps" });
     throw new MaxStepsError(effectiveMaxSteps);
   } catch (error) {
+    failed = true;
     // HandoffSignal transfere o controle ao caller e não grava run_state:
     // single+handoff não é retomável por planResume (multi-agent tem loop próprio).
     if (!errorHasHandoffName(error)) {
@@ -676,8 +678,14 @@ export async function runSession(
     throw error;
   } finally {
     await compactionBackground.close();
-    // O resumo em background grava usage no ledger; reavalia o teto depois de drenar (CMP-9).
-    checkCeiling(opts.agent);
+    // O resumo em background grava usage no ledger; reavalia o teto depois de
+    // drenar. Se o corpo já falhou, preserva o erro terminal (I-04): o ceiling
+    // continua auditado, mas não sobrescreve a causa real da parada.
+    try {
+      checkCeiling(opts.agent);
+    } catch (error) {
+      if (!failed) throw error;
+    }
   }
 }
 
@@ -1112,6 +1120,7 @@ export async function runMultiAgentSession(
     }, identity.price);
   };
 
+  let failed = false;
   try {
     // Varredura de retomada (F-24): pendências do run no ledger do cwd corrente
     const resume = scanHandoffs(opts.ledger, opts.run).at(-1);
@@ -1449,6 +1458,7 @@ export async function runMultiAgentSession(
     tracer?.end(rootSpan, { status: "max_steps" });
     throw new MaxStepsError(effectiveBaseMaxSteps);
   } catch (error) {
+    failed = true;
     // Falha pós-ack é terminal para o handoff: grava handoff.failed (F-24, I-19).
     // Cancelamento (F-06) NÃO grava failed: o artefato permanece no ledger para auditoria;
     // a retomada determinística do passo do receptor é S-14 (#131).
@@ -1489,8 +1499,14 @@ export async function runMultiAgentSession(
     throw error;
   } finally {
     await compactionBackground.close();
-    // O resumo em background grava usage no ledger; reavalia o teto depois de drenar (CMP-9).
-    checkCeiling(currentAgentName);
+    // O resumo em background grava usage no ledger; reavalia o teto depois de
+    // drenar. Se o corpo já falhou, preserva o erro terminal (I-04): o ceiling
+    // continua auditado, mas não sobrescreve a causa real da parada.
+    try {
+      checkCeiling(currentAgentName);
+    } catch (error) {
+      if (!failed) throw error;
+    }
   }
 }
 

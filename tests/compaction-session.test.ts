@@ -7,6 +7,7 @@ import { runTask } from "../src/core/app";
 import { CompactionPausedError, recordCompactionFailure } from "../src/compaction/breaker";
 import { compactionArtifactPaths } from "../src/compaction/background";
 import { Ledger } from "../src/ledger";
+import type { BudgetConfig } from "../src/core/config";
 import type { CompletionResponse, Provider } from "../src/providers/types";
 import { ProviderError } from "../src/providers/types";
 import type { AgentEntry, ModelEntry } from "../src/core/registry";
@@ -69,7 +70,7 @@ const pricedModel = {
   price: { inputPerM: 100, outputPerM: 100, fonte: "teste", verificado: false },
 };
 /** US$ 5 por completion (reserva B9 = US$ 2,40 com a janela de 24k). */
-const ceilingBudget = {
+const ceilingBudget: BudgetConfig = {
   scope: "use-as-you-go", limitUsd: null, warnAt: 0.8, onExceed: "stop", hardCeilingUsd: 13,
 };
 const bigUsage = { inputTokens: 50_000, outputTokens: 0 };
