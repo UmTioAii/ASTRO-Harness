@@ -44,6 +44,16 @@ test("redactSecrets redige hex de 64+ sem contexto e preserva SHA-1/MD5 comuns",
   expect(redactSecrets(`checksum ${hex32}`)).toContain(hex32);
 });
 
+test("redactSecrets redige 40 hex em Authorization/AUTHORIZATION/oauth", () => {
+  const hex40 = "0123456789abcdef0123456789abcdef01234567";
+  expect(redactSecrets(`Authorization: ${hex40}`)).not.toContain(hex40);
+  expect(redactSecrets(`AUTHORIZATION=${hex40}`)).not.toContain(hex40);
+  expect(redactSecrets(`oauth: ${hex40}`)).not.toContain(hex40);
+  // author/monkey não são credencial (boundary, não substring)
+  expect(redactSecrets(`author: ${hex40}`)).toContain(hex40);
+  expect(redactSecrets(`monkey: ${hex40}`)).toContain(hex40);
+});
+
 test("redactSecrets redige hex 64+ colado a prefixo word-char (0x, api_key_)", () => {
   // `0x` e `_` são word chars: \b não separa do hex e deixava o valor passar
   expect(redactSecrets(`PRIVATE_KEY=0x${HEX64}`)).not.toContain(HEX64);
@@ -74,5 +84,16 @@ test("read_file redige hex 64+ colado a prefixo (0x, api_key_)", async () => {
 
   expect(result.isError).toBeUndefined();
   expect(result.output).not.toContain(HEX64);
+  expect(result.output).toContain("[REDACTED]");
+});
+
+test("read_file redige 40 hex em Authorization/AUTHORIZATION", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "astro-sanitize-auth-"));
+  const hex40 = "0123456789abcdef0123456789abcdef01234567";
+  writeFileSync(join(dir, "auth.txt"), `Authorization: ${hex40}\nAUTHORIZATION=${hex40}\n`, "utf8");
+  const result = await readFileTool.execute({ path: "auth.txt" }, { cwd: dir, run: "r1", agent: "a" });
+
+  expect(result.isError).toBeUndefined();
+  expect(result.output).not.toContain(hex40);
   expect(result.output).toContain("[REDACTED]");
 });
