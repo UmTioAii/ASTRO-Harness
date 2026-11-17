@@ -1,10 +1,10 @@
 /**
  * Gate local de release: roda qualidade opcional (typecheck + bun test), build,
  * smoke, `npm pack`, instala o tarball em um diretório temporário limpo e valida
- * `npx astro --help`. O pacote sob teste é local, mas as dependências de runtime
- * (`ink`, `react`, `bun`) ainda são resolvidas pelo registry. Nunca publica,
- * nunca imprime saída sem redigir segredos e falha fechado em qualquer erro,
- * inclusive na limpeza.
+ * o binário instalado com `--help`. O pacote sob teste é local, mas as
+ * dependências de runtime (`ink`, `react`, `bun`) ainda são resolvidas pelo
+ * registry. Nunca publica, nunca imprime saída sem redigir segredos e falha
+ * fechado em qualquer erro, inclusive na limpeza.
  *
  * Uso: bun scripts/release-check.ts [--skip-tests] [--json]
  */
@@ -14,7 +14,17 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { redactSecrets } from "../src/sanitize-external";
 import { sanitizedEnv } from "../src/tools/run-command";
 
-export type StepId = "typecheck" | "test" | "build" | "smoke" | "pack" | "install" | "help";
+export const EXPECTED_PACKAGE = "@umtioai/astro-harness";
+
+export type StepId =
+  | "typecheck"
+  | "test"
+  | "build"
+  | "smoke"
+  | "pack"
+  | "install"
+  | "identity"
+  | "help";
 export type StepStatus = "passed" | "failed" | "skipped";
 
 export interface PlannedStep {
@@ -48,7 +58,7 @@ export interface StepResult {
 }
 
 export interface Failure {
-  step: string;
+  step: StepId | "setup" | "cleanup";
   message: string;
 }
 
@@ -132,6 +142,14 @@ export function tarballFileName(name: string, version: string): string {
 
 export function tempDirPrefix(name: string): string {
   return `${TEMP_PREFIX}${packageSlug(name)}-`;
+}
+
+/** Binário criado pelo npm dentro do pacote instalado (nunca um `astro` global). */
+export function installedAstroBin(
+  tempDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return join(tempDir, "node_modules", ".bin", platform === "win32" ? "astro.cmd" : "astro");
 }
 
 const BASE_ENV_KEYS = new Set([
@@ -262,13 +280,23 @@ export function createPlan(input: PlanInput): ReleasePlan {
     display: `npm install --no-save --no-audit --no-fund ${quoteDisplay(tarball)}`,
   });
   steps.push({
+    id: "identity",
+    label: "identidade do pacote instalado",
+    bin: "internal",
+    args: [input.packageName, EXPECTED_PACKAGE],
+    cwd: input.tempDir,
+    envMode: "inherit",
+    display: `verificar identidade de ${EXPECTED_PACKAGE}`,
+  });
+  const astroBin = installedAstroBin(input.tempDir);
+  steps.push({
     id: "help",
     label: "astro --help no pacote instalado",
-    bin: "npx",
-    args: ["--no-install", "astro", "--help"],
+    bin: astroBin,
+    args: ["--help"],
     cwd: input.tempDir,
     envMode: "sanitized",
-    display: "npx --no-install astro --help",
+    display: `${quoteDisplay(astroBin)} --help`,
   });
 
   return {
@@ -309,6 +337,30 @@ export function readPackageMeta(root: string): PackageMeta {
     throw new Error("package.json sem versão válida");
   }
   return { name: manifest.name, version: manifest.version };
+}
+
+/** Confere o pacote realmente instalado, não só o nome lido do repositório. */
+export function verifyInstalledPackage(
+  tempDir: string,
+  packageName: string,
+  expected: string = EXPECTED_PACKAGE,
+): void {
+  if (!/^(@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/.test(packageName)) {
+    throw new Error("nome de pacote instalado inválido");
+  }
+  const manifestPath = join(tempDir, "node_modules", ...packageName.split("/"), "package.json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch {
+    throw new Error(`pacote instalado não encontrado: ${packageName}`);
+  }
+  const installed = (parsed as { name?: unknown }).name;
+  if (installed !== expected) {
+    throw new Error(
+      `identidade do pacote instalado divergente: esperado ${expected}, encontrado ${String(installed)}`,
+    );
+  }
 }
 
 export type TempWriter = (path: string, content: string) => void;
@@ -404,10 +456,35 @@ export function buildSummary(
   };
 }
 
-function runPlannedStep(step: PlannedStep): StepOutcome {
-  const bin = Bun.which(step.bin);
+export interface BinaryDeps {
+  which?: (name: string) => string | null;
+  exists?: (path: string) => boolean;
+}
+
+/** Resolve só o binário local quando o caminho é absoluto; nunca cai para o PATH. */
+export function resolveStepBinary(step: PlannedStep, deps: BinaryDeps = {}): string | null {
+  const exists = deps.exists ?? existsSync;
+  if (isAbsolute(step.bin)) return exists(step.bin) ? step.bin : null;
+  return (deps.which ?? Bun.which)(step.bin);
+}
+
+export function runPlannedStep(step: PlannedStep, deps: BinaryDeps = {}): StepOutcome {
+  if (step.id === "identity") {
+    try {
+      verifyInstalledPackage(step.cwd, step.args[0] ?? "", step.args[1]);
+      return { exitCode: 0, output: "" };
+    } catch (error) {
+      return {
+        exitCode: 1,
+        output: "",
+        error: redactSecrets(error instanceof Error ? error.message : String(error)),
+      };
+    }
+  }
+
+  const bin = resolveStepBinary(step, deps);
   if (bin === null) {
-    return { exitCode: null, output: "", error: `comando não encontrado: ${step.bin}` };
+    return { exitCode: null, output: "", error: `binário não encontrado: ${step.bin}` };
   }
   const env = step.envMode === "sanitized" ? stepEnv(process.env) : process.env;
   try {
