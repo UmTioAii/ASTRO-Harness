@@ -1114,7 +1114,7 @@ test("/sessions: recusa excluir a sessão retomada que segue viva (#366)", async
     instance.stdin.write("d");
     await waitFor(() => frameHas(instance, "excluir abc? (s/n)"));
     instance.stdin.write("s");
-    await waitFor(() => frameHas(instance, "não é possível excluir a sessão atual"));
+    await waitFor(() => frameHas(instance, "não é possível excluir a origem retomada (a conversa continua a partir dela)"));
 
     expect(sessionApi.list().map(({ id }) => id)).toContain("abc");
     expect(store.list().map(({ id }) => id)).toContain("abc");
