@@ -10,8 +10,8 @@ Fluxo completo: [docs/workflow.md](docs/workflow.md). Regras para agentes de có
 
 ## Nova tool ou skill
 
-- **Tool:** manifesto com `class` explícita, allowlist do agente, teste de negação (I-01) e de confinamento de caminho (I-11). Dependência nova só com ADR.
-- **Skill:** `SKILL.md` + sidecar, `permissions.tools` ⊆ allowlist do agente, install verificado na carga; teste de loader para skill inválida.
+- **Tool:** manifesto com `class` explícita, allowlist do agente, teste de negação (I-01), de confinamento de caminho (I-11) e saída sanitizada sem segredo (I-03). Dependência nova só com ADR.
+- **Skill:** `SKILL.md` + sidecar `.sha256`; sidecar presente e divergente é ignorado na carga com warn, skill manual sem sidecar continua carregando. `permissions.tools` ⊆ allowlist do agente; teste de loader para skill inválida.
 - Comportamento novo exige teste RED antes do GREEN; docs do dono atualizados no mesmo PR.
 
 ## Release
