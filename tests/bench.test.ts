@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { benchModel, filterModels, formatBenchTable, formatMarkdown, runBenchmark, selectBenchModels, summarizeBench, type BenchModelResult, type BenchReport } from "../src/eval/bench";
 import type { ModelEntry } from "../src/registry";
 import type { CompletionResponse, Provider } from "../src/provider/types";
+
+const root = join(import.meta.dir, "..");
+const entry = join(root, "src", "cli.ts");
 
 const model = (over: Partial<ModelEntry> = {}): ModelEntry => ({
   provider: "mock",
@@ -35,6 +38,31 @@ const benchResult = (over: Partial<BenchModelResult> = {}): BenchModelResult => 
 
 /** Referências `provider/model`, na ordem da lista. */
 const refs = (list: readonly ModelEntry[]): string[] => list.map((m) => `${m.provider}/${m.id}`);
+
+/** Config mínima do CLI de bench; a seleção falha antes de criar provider. */
+function cliBenchConfig(): { dir: string; cfgPath: string } {
+  const dir = mkdtempSync(join(tmpdir(), "astro-bench-cli-"));
+  const cfgPath = join(dir, "astro.config.json");
+  writeFileSync(
+    cfgPath,
+    JSON.stringify({
+      providers: {
+        nvidia: { kind: "openai-compat", baseUrl: "https://nvidia.example/v1" },
+        openrouter: { kind: "openai-compat", baseUrl: "https://openrouter.example/v1" },
+        openai: { kind: "openai-compat", baseUrl: "https://openai.example/v1" },
+      },
+      models: [
+        { provider: "nvidia", id: "n1", tags: ["writing-code"], context: 8192 },
+        { provider: "openrouter", id: "o1", tags: ["writing-code"], context: 8192 },
+        { provider: "openai", id: "g1", tags: ["writing-code"], context: 8192 },
+      ],
+      agent: { model: "nvidia/n1", maxSteps: 1, tools: ["read_file"] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    }),
+    "utf8",
+  );
+  return { dir, cfgPath };
+}
 
 /** Provider mock com delay determinístico para medir latência. */
 function delayedProvider(delayMs: number, out = 50): Provider {
@@ -176,6 +204,55 @@ describe("benchmark de providers (F5-4)", () => {
     expect(emptyFilter.ok ? "" : emptyFilter.error).toBe("nenhum modelo ativo corresponde ao filtro");
     const noMatch = selectBenchModels([model()], "sem-match");
     expect(noMatch.ok ? "" : noMatch.error).toBe("nenhum modelo ativo corresponde ao filtro");
+  });
+
+  test("selectBenchModels com requireFilter recusa filtros que não recortam", () => {
+    const models = [
+      model({ provider: "nvidia", id: "n1" }),
+      model({ provider: "openrouter", id: "o1" }),
+      model({ provider: "openai", id: "g1" }),
+    ];
+    const require = (filter: string) => selectBenchModels(models, filter, { requireFilter: true });
+    for (const filter of ["/", " ,, "]) {
+      const selected = require(filter);
+      expect(selected.ok).toBe(false);
+      expect(selected.ok ? "" : selected.error).toContain("sem termo alfanumérico");
+    }
+    for (const filter of ["/,nvidia", "nvidia,openrouter,openai"]) {
+      const selected = require(filter);
+      expect(selected.ok).toBe(false);
+      expect(selected.ok ? "" : selected.error).toContain("seleciona todos os modelos");
+    }
+    expect(require("nvidia").ok).toBe(true);
+    expect(require("nvidia,openrouter").ok).toBe(true);
+    // Registro de dois providers: a união dos dois também é "todos".
+    const two = models.slice(0, 2);
+    const allTwo = selectBenchModels(two, "nvidia,openrouter", { requireFilter: true });
+    expect(allTwo.ok).toBe(false);
+    expect(allTwo.ok ? "" : allTwo.error).toContain("seleciona todos os modelos");
+    // Sem a flag, o dispatch manual segue podendo rodar tudo.
+    const manual = selectBenchModels(models, "/");
+    expect(manual.ok).toBe(true);
+    if (manual.ok) expect(manual.models).toHaveLength(3);
+  });
+
+  test("CLI bench --require-filter falha fechado sem recorte", async () => {
+    const { dir, cfgPath } = cliBenchConfig();
+    const cases: Array<[string, string]> = [
+      ["/", "sem termo alfanumérico"],
+      [" ,, ", "sem termo alfanumérico"],
+      ["/,nvidia", "seleciona todos os modelos"],
+      ["sem-match", "nenhum modelo ativo corresponde ao filtro"],
+    ];
+    for (const [filter, message] of cases) {
+      const proc = Bun.spawn(
+        [process.execPath, entry, "bench", "--config", cfgPath, "--models", filter, "--require-filter"],
+        { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, ASTRO_HOME: dir } },
+      );
+      const err = await new Response(proc.stderr).text();
+      expect(await proc.exited).toBe(1);
+      expect(err).toContain(message);
+    }
   });
 
   // Duas pernas da matriz de CI (`.github/workflows/ci.yml`): sem depender de
