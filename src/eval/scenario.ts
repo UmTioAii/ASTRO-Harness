@@ -4,11 +4,12 @@
  * provider consome `turns` declarados no `scenario.json`; o app roda de verdade
  * (allowlist, ledger, audit, fallback, multi-agent) contra servidores loopback.
  */
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { runTask } from "../app";
-import { validateConfig } from "../config";
+import { validateConfig, type AstroConfig } from "../config";
 import { runHealthCheck, type HealthReport } from "../health";
+import { looksLikeSecret } from "../secrets";
 import { parseSkill } from "../skills/loader";
 import { resolveWithin } from "../tools/paths";
 
@@ -81,7 +82,7 @@ export interface ScenarioSpec {
   env?: Record<string, string>;
   /** Arquivos do case copiados para o cwd antes do run (`.astro/` é gitignored). */
   seed?: Array<{ from: string; to: string }>;
-  /** Diretórios de skill cujo `.sha256` é calculado dos bytes de `SKILL.md`. */
+  /** Diretórios de skill cujo `.sha256` é calculado dos bytes de `SKILL.md`; schema 1 aceita também o caminho legado `<dir>/SKILL.md`. */
   sidecars?: string[];
   turns?: ScenarioTurn[];
   mcp?: ScenarioMcpServer;
@@ -235,6 +236,8 @@ function leakedEnvNames(env: Record<string, string>, texts: readonly string[]): 
   const leaked: string[] = [];
   for (const [name, value] of Object.entries(env)) {
     if (value.length === 0) continue;
+    // Valor honesto curto não é segredo; só nomes de credencial ou valores com cara de segredo.
+    if (value.length < 8 && !/KEY$/i.test(name) && !looksLikeSecret(value)) continue;
     // Valor curto só casa como token JSON exato; evita falso positivo em números/booleanos.
     const found = value.length >= 4
       ? combined.includes(value)
@@ -407,8 +410,7 @@ function startPage(spec: ScenarioPageServer): { server: MockServer; url: string 
   return { server, url: `http://127.0.0.1:${server.port}/page` };
 }
 
-function readAudit(cwd: string): { text: string; events: AuditEventLike[] } {
-  const path = join(cwd, ".astro", "audit.jsonl");
+function readAudit(path: string): { text: string; events: AuditEventLike[] } {
   if (!existsSync(path)) return { text: "", events: [] };
   const text = readFileSync(path, "utf8");
   const events = text.trim() === ""
@@ -512,6 +514,56 @@ function checkExpectations(expect: ScenarioExpectations, obs: Observation): stri
   return diff;
 }
 
+/** Defaults de backend de web_search quando `baseUrl` não é declarado (espelha src/tools/web-search.ts). */
+const WEB_SEARCH_DEFAULT_BASE: Record<string, string> = {
+  exa: "https://api.exa.ai",
+  brave: "https://api.search.brave.com",
+  google: "https://www.googleapis.com/customsearch/v1",
+  custom: "",
+};
+
+/** Valida a config efetiva (defaults inclusos), não só os overrides do scenario. */
+function assertEffectiveLoopback(config: AstroConfig): void {
+  for (const [name, provider] of Object.entries(config.providers)) {
+    if (provider.kind === "codex-oauth") {
+      throw new Error(`cenário não permite provider codex-oauth: ${name}`);
+    }
+    const baseUrl = (provider as { baseUrl?: unknown }).baseUrl;
+    if (typeof baseUrl === "string") assertLoopbackUrl(baseUrl, `providers.${name}.baseUrl`);
+  }
+  for (const [name, server] of Object.entries(config.mcpServers ?? {})) {
+    if (server.transport === "stdio" || server.command !== undefined) {
+      throw new Error(`cenário não permite MCP stdio: ${name}`);
+    }
+    if (typeof server.url === "string") assertLoopbackUrl(server.url, `mcpServers.${name}.url`);
+  }
+  if (config.webSearch !== undefined) {
+    const base = config.webSearch.baseUrl ?? WEB_SEARCH_DEFAULT_BASE[config.webSearch.provider];
+    if (base === undefined || base === "") {
+      throw new Error(`cenário com webSearch.baseUrl ausente; o endpoint não é loopback`);
+    }
+    assertLoopbackUrl(base, "webSearch.baseUrl");
+  }
+  if (config.team?.auditWebhook !== undefined) {
+    assertLoopbackUrl(config.team.auditWebhook, "team.auditWebhook");
+  }
+  if (config.telemetry?.enabled === true) {
+    assertLoopbackUrl(config.telemetry.endpoint, "telemetry.endpoint");
+  }
+  const toolLists = [config.agent.tools, ...Object.values(config.agents ?? {}).map((agent) => agent.tools ?? [])];
+  if (config.tools?.run_command !== undefined || toolLists.some((tools) => tools.includes("run_command"))) {
+    throw new Error("cenário não permite run_command");
+  }
+}
+
+/** Recusa link em qualquer nível da árvore de seed antes de copiar. */
+function assertSeedTree(path: string, field: string): void {
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) throw new Error(`cenário seed com link: ${field}`);
+  if (!stat.isDirectory()) return;
+  for (const entry of readdirSync(path)) assertSeedTree(join(path, entry), `${field}/${entry}`);
+}
+
 /** Executa um `scenario.json`; o harness compara os arquivos esperados depois. */
 export async function runScenario(
   spec: ScenarioSpec,
@@ -544,16 +596,18 @@ export async function runScenario(
   process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
   try {
     for (const entry of spec.seed ?? []) {
-      // Fonte: só dentro do caseDir e nunca um link (symlink/junction).
+      // Fonte: só dentro do caseDir e sem link em nenhum nível da árvore.
       const source = resolveWithin(opts.caseDir, entry.from);
-      if (lstatSync(source).isSymbolicLink()) {
-        throw new Error(`cenário seed.from não pode ser link: ${entry.from}`);
-      }
+      assertSeedTree(source, entry.from);
       const destination = resolveWithin(opts.cwd, entry.to);
       mkdirSync(dirname(destination), { recursive: true });
-      cpSync(source, destination);
+      cpSync(source, destination, { recursive: lstatSync(source).isDirectory() });
     }
-    for (const relativeDir of spec.sidecars ?? []) {
+    for (const relativePath of spec.sidecars ?? []) {
+      // Schema 1 aceita o diretório da skill e o caminho legado `<dir>/SKILL.md`.
+      const relativeDir = basename(relativePath).toLowerCase() === "skill.md"
+        ? dirname(relativePath)
+        : relativePath;
       const skillDir = resolveWithin(opts.cwd, relativeDir); // recusa junction/symlink antes de ler
       const skillFile = join(skillDir, "SKILL.md");
       const sidecar = resolveWithin(opts.cwd, join(relativeDir, ".sha256"));
@@ -585,6 +639,10 @@ export async function runScenario(
 
     const rawConfig = substitute(deepMerge(BASE_CONFIG, spec.config ?? {}), vars);
     assertNoUnresolvedPlaceholders(rawConfig, "config");
+    const effectiveConfig = validateConfig(rawConfig);
+    assertEffectiveLoopback(effectiveConfig);
+    const auditPath = resolveWithin(opts.cwd, effectiveConfig.paths.audit);
+    const ledgerPath = resolveWithin(opts.cwd, effectiveConfig.paths.ledger);
     const configPath = join(opts.cwd, "astro.config.json");
     writeFileSync(configPath, JSON.stringify(rawConfig, null, 2), "utf8");
 
@@ -593,7 +651,7 @@ export async function runScenario(
     let health: HealthReport | undefined;
 
     if (kind === "health") {
-      health = await runHealthCheck(validateConfig(rawConfig), env, { timeoutMs: 2_000 });
+      health = await runHealthCheck(effectiveConfig, env, { timeoutMs: 2_000 });
     } else {
       try {
         report = await runTask({
@@ -613,8 +671,7 @@ export async function runScenario(
       }
     }
 
-    const audit = readAudit(opts.cwd);
-    const ledgerPath = join(opts.cwd, ".astro", "ledger.jsonl");
+    const audit = readAudit(auditPath);
     const ledgerText = existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8") : "";
     const observation: Observation = {
       cwd: opts.cwd,
