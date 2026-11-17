@@ -113,7 +113,7 @@ export function detectKind(header: Uint8Array): DetectedKind | null {
   }
 }
 
-/** Converte `a:b`/`a` em faixa 1-based; fora dos limites lança `attachment_range_invalid`. */
+/** Converte `a:b`/`a` em faixa 1-based; `end` além do EOF clampa (ADR-0026). */
 export function parseRange(spec: string, totalLines: number): AttachmentRange {
   const match = /^(\d+)(?::(\d+))?$/.exec(spec.trim());
   if (!match) {
@@ -121,13 +121,13 @@ export function parseRange(spec: string, totalLines: number): AttachmentRange {
   }
   const start = Number(match[1]);
   const end = match[2] === undefined ? start : Number(match[2]);
-  if (start < 1 || end < start || end > totalLines) {
+  if (start < 1 || end < start || start > totalLines) {
     throw new AttachmentError(
       "attachment_range_invalid",
       `faixa fora do arquivo: "${spec}" (o arquivo tem ${totalLines} linha(s))`,
     );
   }
-  return { start, end };
+  return { start, end: Math.min(end, totalLines) };
 }
 
 /** Chave de dedupe: texto/diretório por path+range, imagem/clipboard por hash. */
