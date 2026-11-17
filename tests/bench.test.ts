@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { benchModel, filterModels, formatMarkdown, runBenchmark, type BenchReport } from "../src/eval/bench";
+import { benchModel, filterModels, formatBenchTable, formatMarkdown, runBenchmark, type BenchReport } from "../src/eval/bench";
 import type { ModelEntry } from "../src/registry";
 import type { CompletionResponse, Provider } from "../src/provider/types";
 
@@ -181,5 +181,23 @@ describe("benchmark de providers (F5-4)", () => {
     expect(md).toContain("80% (4/5)");
     expect(md).toContain("100% (5/5)");
     expect(md).toContain("Sucesso agregado: 90% (9/10)");
+  });
+
+  test("formatBenchTable mostra a taxa de sucesso por modelo", () => {
+    const report: BenchReport = {
+      schema: 1, date: "2026-10-23", prompts: 5,
+      results: [
+        {
+          model: "a/1", provider: "a", tags: ["fast"], runs: 1,
+          latencyMs: { min: 1, p50: 2, p95: 3, max: 3 },
+          tokensInAvg: 10, tokensOutAvg: 20, tokensPerSec: 100,
+          costPer1kOutUsd: 1.5, ttftMs: null,
+          successRate: 0.8, completed: 4, total: 5,
+        },
+      ],
+    };
+    const table = formatBenchTable(report);
+    expect(table).toContain("sucesso 80% (4/5)");
+    expect(table).toContain("p50 2ms");
   });
 });
