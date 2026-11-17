@@ -54,8 +54,9 @@ export function sanitize(value: unknown): unknown {
       Object.entries(value).map(([key, child]) => {
         // I-03: campo com cara de credencial nunca vai para o arquivo.
         if (SECRET_KEY.test(key) && typeof child !== "number") return [key, REDACTED];
-        // #252: ID interno só é preservado na forma do harness; `ref`/`hash`
-        // arbitrários (output de tool) continuam redigidos.
+        // #252: `ref` exige o padrão de artifact ref e `hash` exige 64-hex
+        // minúsculo. Demais IDs internos são preservados por chave; o payload
+        // de audit não carrega prova de provenance.
         if (typeof child === "string" && INTERNAL_ID_KEY.test(key)) {
           const lower = key.toLowerCase();
           if (lower === "ref") return [key, ARTIFACT_REF_PATTERN.test(child) ? child : redactSecrets(child)];

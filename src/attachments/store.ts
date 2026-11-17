@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
-import { ARTIFACT_REF_PATTERN } from "../internal-ids";
+import { ARTIFACT_KEY_PATTERN, ARTIFACT_REF_PATTERN } from "../internal-ids";
 import { canonicalize, isWithin } from "../tools/paths";
 import { defaultCheckPrivate, hardenWindowsAcl, type WindowsAcl, windowsAclIsPrivate } from "./acl";
 import { AttachmentError, MAX_ATTACHMENT_BYTES } from "./model";
@@ -62,7 +62,6 @@ export interface GcMarker {
   removed: number;
 }
 
-const KEY_PATTERN = /^(?:session|run)-[a-f0-9]{64}$/;
 const GC_FILE = "gc.json";
 const DEFAULT_TTL_DAYS = 7;
 const DEFAULT_MAX_BYTES = 1024 ** 3;
@@ -358,7 +357,7 @@ export class ArtifactStore {
 
   #keys(): string[] {
     try {
-      return readdirSync(this.root).filter((name) => KEY_PATTERN.test(name));
+      return readdirSync(this.root).filter((name) => ARTIFACT_KEY_PATTERN.test(name));
     } catch {
       return [];
     }

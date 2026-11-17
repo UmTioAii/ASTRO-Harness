@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameS
 import { join, resolve, sep } from "node:path";
 import type { ChatMessage } from "../providers/types";
 import type { SessionSnapshot } from "./agent-session";
-import { ARTIFACT_REF_PATTERN, INTERNAL_ID_KEY, SHA256_HEX, isAttachmentMeta } from "../internal-ids";
+import { ARTIFACT_REF_PATTERN, SHA256_HEX } from "../internal-ids";
 import { redactSecrets } from "../sanitize-external";
 
 const SECRET_KEY = /(token(?!s)|secret|password|api[-_]?key|access[-_]?key)/i;
@@ -179,33 +179,40 @@ function parseResumedFrom(value: unknown): { resumedFrom?: { id: string; started
   return { resumedFrom: { id: origin.id, startedAt: origin.startedAt } };
 }
 
+/** Objeto de mensagem do chat: só nele `attachments` é a coleção do harness. */
+function isMessageObject(value: Record<string, unknown>): boolean {
+  return value.role === "system" || value.role === "user" || value.role === "assistant" || value.role === "tool";
+}
+
 /** Sanitiza strings JSON estruturalmente (inclusive `toolCalls.arguments`). */
-function sanitizeValue(value: unknown, key?: string, attachmentMeta = false): unknown {
-  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, key, attachmentMeta));
+function sanitizeValue(value: unknown, key?: string, attachmentMeta = false, harness = true): unknown {
+  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, key, attachmentMeta, harness));
   if (value !== null && typeof value === "object") {
-    const meta = isAttachmentMeta(value);
+    const message = harness && isMessageObject(value as Record<string, unknown>);
     return Object.fromEntries(Object.entries(value).map(([childKey, item]) => [
-      childKey, SECRET_KEY.test(childKey) ? "[REDACTED]" : sanitizeValue(item, childKey, meta),
+      childKey,
+      SECRET_KEY.test(childKey)
+        ? "[REDACTED]"
+        : sanitizeValue(item, childKey, attachmentMeta || (message && childKey === "attachments"), harness),
     ]));
   }
   if (typeof value !== "string") return value;
   const text = value.trim();
   if (text.startsWith("{") || text.startsWith("[")) {
     try {
-      return JSON.stringify(sanitizeValue(JSON.parse(text), key, attachmentMeta));
+      // JSON de toolCalls/content é output do modelo: nunca herda o trust de
+      // `attachments`; ref/hash forjados aqui são redigidos (#252).
+      return JSON.stringify(sanitizeValue(JSON.parse(text), key, false, false));
     } catch {
       // não era JSON: cai na redação textual
     }
   }
-  const field = key ?? "";
-  if (!INTERNAL_ID_KEY.test(field)) return redactSecrets(value);
-  // O session store carrega output do modelo: nome de chave não basta. Só
-  // preserva ref/hash com a forma exata do artifact store; o resto redige.
-  if (field.toLowerCase() === "ref") {
-    return ARTIFACT_REF_PATTERN.test(value) ? value : redactSecrets(value);
+  const field = (key ?? "").toLowerCase();
+  if (field === "ref") {
+    return attachmentMeta && ARTIFACT_REF_PATTERN.test(value) ? value : "[REDACTED]";
   }
-  if (field.toLowerCase() === "hash") {
-    return attachmentMeta && SHA256_HEX.test(value) ? value : redactSecrets(value);
+  if (field === "hash") {
+    return attachmentMeta && SHA256_HEX.test(value) ? value : "[REDACTED]";
   }
   return redactSecrets(value);
 }

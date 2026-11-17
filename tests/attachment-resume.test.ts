@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentSession } from "../src/chat/agent-session";
 import { SessionApi } from "../src/chat/session-api";
-import { AttachmentError, type AttachmentMeta } from "../src/attachments/model";
+import { type AttachmentMeta } from "../src/attachments/model";
 import { ArtifactStore, type ArtifactOwner } from "../src/attachments/store";
 import { FAKE_PRIVATE_ACL, testEnv } from "./setup";
 
@@ -83,17 +83,8 @@ describe("attachment resume (ADR-0026, #392)", () => {
     }
   });
 
-  test("resume falha tipado para artefato ausente, adulterado ou de outra sessão", async () => {
+  test("resume falha tipado para artefato adulterado ou de outra sessão", async () => {
     const { root, session, artifact, meta, stop } = setup();
-    const missing = artifact();
-    unlinkSync(join(root, ...missing.ref.split("/")));
-    const missingChat = session();
-    try {
-      expect(() => missingChat.resume(snapshot("s2", meta(missing)))).toThrow(AttachmentError);
-      expect(missingChat.messages.map((message) => message.role)).toEqual(["system"]);
-    } finally {
-      missingChat.close();
-    }
 
     const tampered = artifact();
     writeFileSync(join(root, ...tampered.ref.split("/")), "adulterado");
@@ -250,7 +241,7 @@ describe("attachment resume (ADR-0026, #392)", () => {
       }));
       const user = chat.messages.find((message) => message.role === "user");
       expect(user?.images).toBeUndefined();
-      expect(warnings.join("\n")).toMatch(/ref redigido|ignorada/i);
+      expect(warnings.join("\n")).toMatch(/indisponível|ignorada/i);
     } finally {
       warning.mockRestore();
       chat.close();

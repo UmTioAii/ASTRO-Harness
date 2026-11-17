@@ -11,14 +11,8 @@ export const INTERNAL_ID_KEY =
 /** Ref do artifact store (ADR-0026): `<session|run>-<sha256>/<sha256>` minúsculo. */
 export const ARTIFACT_REF_PATTERN = /^(?:session|run)-[a-f0-9]{64}\/[a-f0-9]{64}$/;
 
+/** Chave do artifact store (diretório): `<session|run>-<sha256>` minúsculo. */
+export const ARTIFACT_KEY_PATTERN = /^(?:session|run)-[a-f0-9]{64}$/;
+
 /** SHA-256 em hex minúsculo; forma do `hash` gravado pelo artifact store. */
 export const SHA256_HEX = /^[a-f0-9]{64}$/;
-
-/** Metadado de anexo: só neste objeto `hash` é ID interno, não texto do modelo. */
-export function isAttachmentMeta(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const meta = value as Record<string, unknown>;
-  return (meta.kind === "text" || meta.kind === "image" || meta.kind === "directory")
-    && typeof meta.name === "string"
-    && typeof meta.mediaType === "string";
-}

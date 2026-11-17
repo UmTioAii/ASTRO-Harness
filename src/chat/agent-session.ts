@@ -640,10 +640,14 @@ export class AgentSession {
           const bytes = store.read(attachment.ref);
           images.push({ mediaType: meta.mediaType, dataBase64: Buffer.from(bytes).toString("base64") });
         } catch (error) {
-          // Snapshot antigo com ref já redigido não pode derrubar o resume:
-          // descarta a imagem, avisa e mantém a sessão retomável (#252).
-          if (error instanceof AttachmentError && error.code === "attachment_image_invalid" && attachment.ref.includes("[REDACTED]")) {
-            console.warn("aviso: imagem com ref redigido ignorada ao retomar a sessão");
+          // Snapshot antigo com ref redigido ou artefato ausente/expirado não
+          // pode derrubar o resume: descarta a imagem, avisa e mantém a
+          // sessão retomável (#252). Integridade/linhagem continuam fatais.
+          const unavailable = error instanceof AttachmentError
+            && error.code === "attachment_image_invalid"
+            && (attachment.ref.includes("[REDACTED]") || /ausente|expirado/i.test(error.message));
+          if (unavailable) {
+            console.warn("aviso: imagem indisponível ignorada ao retomar a sessão");
             continue;
           }
           throw error;
