@@ -322,15 +322,17 @@ export async function loadAttachment(input: LoadAttachmentInput): Promise<Loaded
     };
   }
 
-  let text = redactSecrets(Buffer.from(bytes).toString("utf8"));
+  // Ordem do ADR-0026 (mesma de `readTextRange`): fatiar → redigir → medir.
+  // Redigir antes de fatiar colapsa bloco multi-linha (PEM) e desloca `start`/`end`.
+  const rawText = Buffer.from(bytes).toString("utf8");
+  const lines = rawText.split("\n");
+  let text = rawText;
   let range: LoadedAttachment["range"];
   if (rangeSpec !== undefined) {
-    range = parseRange(rangeSpec, text.split("\n").length);
-    text = text
-      .split("\n")
-      .slice(range.start - 1, range.end)
-      .join("\n");
+    range = parseRange(rangeSpec, lines.length);
+    text = lines.slice(range.start - 1, range.end).join("\n");
   }
+  text = redactSecrets(text);
   const sizeBytes = Buffer.byteLength(text, "utf8");
   assertAttachmentSize(sizeBytes, name);
   return {

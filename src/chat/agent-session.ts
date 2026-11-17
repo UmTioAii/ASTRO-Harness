@@ -736,12 +736,16 @@ export class AgentSession {
         ...(metas === undefined ? {} : { attachments: metas }),
         ...(images === undefined ? {} : { images }) }], this.contextLimit());
       const history = guard.messages.slice(0, -1); // o último é o prompt deste turno
-      if (images !== undefined) {
+      // Pré-check de anexo antes de qualquer request (ADR-0026/D-22): tokens do turno
+      // inteiro + reserva de saída. `originalTokens` (antes do descarte) impede que o
+      // anexo caiba só porque o guard descartou histórico em silêncio; o guardContext
+      // não é backstop.
+      if (metas !== undefined && metas.length > 0) {
         const window = this.contextLimit();
         const reserve = effectiveOutputCap(this.#config.outputLimit, window);
-        if (guard.tokens + reserve > window) {
+        if (guard.originalTokens + reserve > window) {
           throw new AttachmentError("attachment_turn_too_large",
-            `imagem excede a janela de contexto do modelo: ~${guard.tokens} tokens + ${reserve} de saída > ${window}`);
+            `anexos excedem a janela de contexto do modelo: ~${guard.originalTokens} tokens + ${reserve} de saída > ${window}`);
         }
       }
       this.#append("chat.prompt", { taskHash: shortTaskHash(prompt) });
