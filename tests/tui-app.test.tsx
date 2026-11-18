@@ -1307,13 +1307,34 @@ test("estado repetido aparece uma vez só na sessão (#480)", async () => {
   const instance = render(<TuiApp session={new FakeSession()} cwd="/tmp/astro" />);
   try {
     await waitFor(() => frameHas(instance, "enter envia"));
-    for (let index = 0; index < 2; index++) {
-      instance.stdin.write("/model p/m2");
-      instance.stdin.write("\r");
-      await waitFor(() => frameHas(instance, "modelo: p/m2"));
-    }
+    instance.stdin.write("/model p/m2");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "modelo: p/m2"));
+    // volta para m1 e depois para m2: a terceira mensagem é idêntica à primeira
+    instance.stdin.write("/model p/m1");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "modelo: p/m1"));
+    instance.stdin.write("/model p/m2");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "p/m2 · n/d"));
     const frame = instance.lastFrame() ?? "";
     expect(frame.split("modelo: p/m2").length - 1).toBe(1);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("comando comum repete a saída: só estado deduplica (#480)", async () => {
+  const instance = render(<TuiApp session={new FakeSession()} cwd="/tmp/astro" />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    for (let index = 0; index < 2; index++) {
+      instance.stdin.write("/clear");
+      instance.stdin.write("\r");
+      await waitFor(() => (instance.lastFrame() ?? "").split("contexto limpo").length - 1 >= index + 1);
+    }
+    const frame = instance.lastFrame() ?? "";
+    expect(frame.split("contexto limpo").length - 1).toBe(2);
   } finally {
     instance.unmount();
   }

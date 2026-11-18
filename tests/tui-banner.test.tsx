@@ -54,8 +54,8 @@ test("footerBase só mostra campos com valor (#480)", () => {
   expect(footerBase({ place: "~", turns: 0, tokensIn: 0, tokensOut: 0, costUsd: null })).toBe("~");
   expect(footerBase({ place: "~", turns: 2, tokensIn: 10, tokensOut: 5, costUsd: 0.5 }))
     .toBe("~ · 2 turno(s) · 10/5 tokens · US$ 0.500000");
-  expect(footerBase({ place: "~", turns: 1, tokensIn: 1, tokensOut: 0, costUsd: null, budget: "budget: 10%" }))
-    .toBe("~ · 1 turno(s) · 1/0 tokens · budget: 10%");
+  expect(footerBase({ place: "~", turns: 1, tokensIn: 1, tokensOut: 0, costUsd: null }))
+    .toBe("~ · 1 turno(s) · 1/0 tokens");
 });
 
 test("modeColor: só bypass usa cor de alerta (#270)", () => {
@@ -63,4 +63,11 @@ test("modeColor: só bypass usa cor de alerta (#270)", () => {
   expect(modeColor("allow-edits", colors)).toBeUndefined();
   expect(modeColor("ask", colors)).toBeUndefined();
   expect(modeColor(undefined, colors)).toBeUndefined();
+});
+
+test("headerLine remove controle e não deixa o provider forjar uma linha (#480)", () => {
+  const line = headerLine({ provider: "p\u001b]0;x\u0007", model: "m\nok", health: "ok", version: "1.0.0" });
+  expect(line).not.toContain("\u001b");
+  expect(line).not.toContain("\n");
+  expect(line.endsWith(" · ok")).toBe(true);
 });
