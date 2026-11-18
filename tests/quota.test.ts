@@ -271,5 +271,5 @@ test("#476 quota mensal com preço desconhecido ainda dispara quando o piso atin
     }
   })();
   expect(error).toBeInstanceOf(QuotaExceededError);
-  expect(error?.message).toContain("pelo menos");
+  expect(error?.message).toContain("(pelo menos US$ 12.0000)");
 });
