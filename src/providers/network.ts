@@ -12,6 +12,12 @@ export interface NetworkCall {
   signal: AbortSignal;
   /** O timeout próprio disparou (distinto de o caller ter cancelado). */
   timedOut(): boolean;
+  /**
+   * Reinicia o prazo (#475): no stream o timeout mede inatividade, então cada
+   * chunk recebido conta como atividade. Depois de estourar ou de o caller
+   * cancelar, não faz nada.
+   */
+  reset(): void;
   /** Cancela o timer e remove o listener do caller. */
   dispose(): void;
 }
@@ -24,14 +30,22 @@ export function networkCall(caller: AbortSignal | undefined, timeoutMs: number):
   if (caller?.aborted === true) controller.abort(caller.reason);
   else caller?.addEventListener("abort", onCallerAbort, { once: true });
 
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new DOMException(`timeout de rede após ${timeoutMs}ms`, "TimeoutError"));
-  }, timeoutMs);
+  const arm = (): ReturnType<typeof setTimeout> =>
+    setTimeout(() => {
+      timedOut = true;
+      controller.abort(new DOMException(`timeout de rede após ${timeoutMs}ms`, "TimeoutError"));
+    }, timeoutMs);
+
+  let timer = arm();
 
   return {
     signal: controller.signal,
     timedOut: () => timedOut,
+    reset: () => {
+      if (timedOut || controller.signal.aborted) return;
+      clearTimeout(timer);
+      timer = arm();
+    },
     dispose: () => {
       clearTimeout(timer);
       caller?.removeEventListener("abort", onCallerAbort);

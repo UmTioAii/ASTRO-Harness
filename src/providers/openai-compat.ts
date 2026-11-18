@@ -278,6 +278,8 @@ export class OpenAICompatProvider implements Provider {
   private async request(req: CompletionRequest, signal?: AbortSignal): Promise<CompletionResponse> {
     const { body, call } = this.bodyFor(req);
     // Timeout próprio por tentativa: um servidor pendurado não segura o run (I-09).
+    // Sem streaming ele limita a chamada inteira; com streaming limita só a
+    // inatividade, porque cada chunk reinicia o prazo (#475).
     const net = networkCall(signal, this.timeoutMs);
     try {
       let response: Response;
@@ -290,7 +292,7 @@ export class OpenAICompatProvider implements Provider {
           signal: net.signal,
         });
       } catch (error) {
-        throw this.networkError(error, signal, net, "falha de rede ao chamar o provider");
+        throw this.networkError(error, signal, net, "falha de rede ao chamar o provider", "total");
       }
 
       if (!response.ok) {
@@ -306,12 +308,14 @@ export class OpenAICompatProvider implements Provider {
       const sse = (response.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream");
       if (req.onToken !== undefined && sse) {
         try {
-          const streamed = await this.streamResponse(req, response, req.onToken);
+          const streamed = await this.streamResponse(req, response, req.onToken, net);
           return { ...streamed, call };
         } catch (error) {
           // Erros já classificados do stream (ex.: corpo vazio) seguem como estão.
           if (isAbortError(error, signal)) throw error;
-          if (net.timedOut()) throw this.networkError(error, signal, net, "falha ao ler o stream do provider");
+          if (net.timedOut()) {
+            throw this.networkError(error, signal, net, "falha ao ler o stream do provider", "idle");
+          }
           throw error;
         }
       }
@@ -320,7 +324,7 @@ export class OpenAICompatProvider implements Provider {
       try {
         text = await response.text();
       } catch (error) {
-        throw this.networkError(error, signal, net, "falha ao ler a resposta do provider", response.status);
+        throw this.networkError(error, signal, net, "falha ao ler a resposta do provider", "total", response.status);
       }
 
       return { ...parseCompletion(text), call };
@@ -329,12 +333,16 @@ export class OpenAICompatProvider implements Provider {
     }
   }
 
-  /** Classifica falha de rede: cancelamento do run, timeout próprio ou outage (I-09). */
+  /**
+   * Classifica falha de rede: cancelamento do run, timeout próprio ou outage (I-09).
+   * `timeout` diz qual prazo estourou: o total da chamada ou a inatividade do stream (#475).
+   */
   private networkError(
     error: unknown,
     caller: AbortSignal | undefined,
     net: NetworkCall,
     label: string,
+    timeout: "idle" | "total",
     status?: number,
   ): unknown {
     if (isAbortError(error, caller)) return error;
@@ -346,16 +354,25 @@ export class OpenAICompatProvider implements Provider {
       );
     }
     if (net.timedOut()) {
-      return new ProviderError("network_timeout", `${label}: sem resposta em ${this.timeoutMs}ms`, status);
+      const limit = timeout === "idle"
+        ? `parado por ${this.timeoutMs}ms (timeout de inatividade)`
+        : `sem resposta em ${this.timeoutMs}ms (timeout total da chamada)`;
+      const hint = "aumente providers.<name>.timeoutMs ou reduza o request";
+      return new ProviderError("network_timeout", `${label}: ${limit}; ${hint}`, status);
     }
     return new ProviderError("outage", `${label}: ${this.describe(error)}`, status);
   }
 
-  /** Lê SSE (`data: {...}`) e entrega cada delta; devolve a resposta consolidada. */
+  /**
+   * Lê SSE (`data: {...}`) e entrega cada delta; devolve a resposta consolidada.
+   * Cada chunk recebido reinicia o prazo do `net`: o timeout do stream mede
+   * inatividade, não a duração total (#475).
+   */
   private async streamResponse(
     req: CompletionRequest,
     response: Response,
     onToken: (text: string) => void,
+    net: NetworkCall,
   ): Promise<CompletionResponse> {
     if (response.body === null) {
       throw new ProviderError("outage", "resposta sem corpo para streaming", response.status);
@@ -442,6 +459,7 @@ export class OpenAICompatProvider implements Provider {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      net.reset();
       buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
       for (;;) {
         const end = buffer.indexOf("\n\n");
