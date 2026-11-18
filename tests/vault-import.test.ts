@@ -89,10 +89,11 @@ describe("vault-import apply (#311 B.3)", () => {
     expect(readFileSync(s.configPath, "utf8")).toBe(configBefore);
   });
 
-  test("pós-migração falha citando config.json e ignora o legado corrompido", () => {
+  test("pós-migração atualiza config.json, ignora o legado corrompido e preserva outras chaves (#491)", () => {
     const home = mkdtempSync(join(tmpdir(), "astro-vault-import-migrated-"));
     writeFileSync(join(home, "config.json"), JSON.stringify({
-      providers: { g: { kind: "openai-compat", baseUrl: "https://g.example/v1", credentialRef: "GLOBAL_KEY" } },
+      permissions: { mode: "ask" },
+      providers: { g: { kind: "openai-compat", baseUrl: "https://g.example/v1", credentialRef: "GLOBAL_KEY", timeoutMs: 5000 } },
       models: [{ provider: "g", id: "m1", tags: ["writing-code"], context: 8192 }],
     }));
     writeFileSync(join(home, "providers.json"), JSON.stringify({ version: 1, profiles: [profile("g")] }));
@@ -100,17 +101,21 @@ describe("vault-import apply (#311 B.3)", () => {
     writeFileSync(join(home, "providers.json"), "corrompido");
     const env = { ASTRO_HOME: home, GLOBAL_KEY: SENTINEL };
     const vault = new Vault(join(home, "vault.json"), fake);
-    let thrown: unknown;
-    try {
-      importVaultCredential({
-        provider: "g", env, configPath: join(home, "astro.config.json"), vault, apply: true, platform: "win32",
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("config.json");
-    expect((thrown as Error).message).not.toContain("JSON inválido");
+    const result = importVaultCredential({
+      provider: "g", env, configPath: join(home, "astro.config.json"), vault, apply: true, platform: "win32",
+    });
+    expect(result.status).toBe("imported");
+    const raw = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as {
+      permissions: unknown;
+      providers: { g: { credentialRef: string; timeoutMs: number } };
+      models: unknown[];
+    };
+    expect(raw.providers.g.credentialRef).toBe(result.vaultRef!);
+    expect(raw.providers.g.timeoutMs).toBe(5000); // campo extra preservado
+    expect(raw.permissions).toEqual({ mode: "ask" }); // chave alheia intacta
+    expect(raw.models).toHaveLength(1);
+    expect(readFileSync(join(home, "config.json"), "utf8")).not.toContain(SENTINEL);
+    expect(readFileSync(join(home, "providers.json"), "utf8")).toBe("corrompido"); // legado não é escrito
   });
 });
 
