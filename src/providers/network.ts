@@ -14,8 +14,8 @@ export interface NetworkCall {
   timedOut(): boolean;
   /**
    * Reinicia o prazo (#475): no stream o timeout mede inatividade, então cada
-   * chunk recebido conta como atividade. Depois de estourar ou de o caller
-   * cancelar, não faz nada.
+   * chunk recebido conta como atividade. Depois de estourar, de o caller
+   * cancelar ou de `dispose()`, não faz nada.
    */
   reset(): void;
   /** Cancela o timer e remove o listener do caller. */
