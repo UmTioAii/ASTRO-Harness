@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ConfigError, validateConfig } from "../src/core/config";
 import { CodexOAuthProvider } from "../src/providers/codex-oauth";
 import { OpenAICompatProvider } from "../src/providers/openai-compat";
+import { networkCall } from "../src/providers/network";
 import { errorPolicy } from "../src/providers/policy";
 import { ProviderError } from "../src/providers/types";
 
@@ -172,6 +173,15 @@ test("codex-oauth: stream silencioso vira network_timeout citando limite e ajust
   expect(error.message).toContain("120ms");
   expect(error.message).toContain("inatividade");
   expect(error.message).toContain("providers.codex.timeoutMs");
+});
+
+test("networkCall: reset depois de dispose não re-arma o prazo", async () => {
+  const net = networkCall(undefined, 10);
+  net.dispose();
+  net.reset();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  expect(net.timedOut()).toBe(false);
+  net.dispose();
 });
 
 test("openai-compat: stream saudável mais longo que o timeout completa", async () => {
