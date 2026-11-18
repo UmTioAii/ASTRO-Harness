@@ -169,3 +169,41 @@ test("quota esgotada no domínio de destino bloqueia antes de chamar o provider"
     up.stop(true);
   }
 });
+
+function singleConfig(server: { port?: number }, modelId: string, pricing: Record<string, unknown> = {}) {
+  return {
+    providers: { p: provider(baseUrl(server), "KEY_P", { maxRetries: 0, retryBackoffMs: 1 }) },
+    models: [{ ...model("p", modelId), ...pricing }],
+    agent: { model: `p/${modelId}`, maxSteps: 3, tools: [] as string[] },
+  };
+}
+
+test("#476 entrada histórica sem preço não torna n/d o custo de um run precificado", async () => {
+  const server = mockServer(200, "ok");
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "astro-f476-a-"));
+    mkdirSync(join(dir, ".astro"), { recursive: true });
+    new Ledger(join(dir, ".astro", "ledger.jsonl"), { warn: () => {} }).record({
+      run: "old", agent: "old", provider: "old", model: "sem-preco",
+      credentialRef: "OLD", quotaDomain: "d", tokensIn: 10, tokensOut: 0,
+    });
+    const cfgPath = writeConfig(dir, singleConfig(server, "m1", { price: price(1_000_000, 0) }));
+    const report = await runTask({ configPath: cfgPath, task: "x", cwd: dir, env: testEnv({ KEY_P: "k" }) });
+    expect(typeof report.costUsd).toBe("number");
+    expect(report.costUsd!).toBeGreaterThan(0);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("#476 modelo FREE sem preço curado reporta custo 0, nunca n/d", async () => {
+  const server = mockServer(200, "ok");
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "astro-f476-b-"));
+    const cfgPath = writeConfig(dir, singleConfig(server, "llama3:free"));
+    const report = await runTask({ configPath: cfgPath, task: "x", cwd: dir, env: testEnv({ KEY_P: "k" }) });
+    expect(report.costUsd).toBe(0);
+  } finally {
+    server.stop(true);
+  }
+});

@@ -6,6 +6,7 @@ import { validateConfig, ConfigError } from "../src/core/config";
 import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
 import { assertWithinQuota, quotaAvailable, quotaStatus, QuotaExceededError } from "../src/quota";
+import { quotaSegment } from "../src/chat/usage";
 import type { CompletionResponse, Provider } from "../src/providers/types";
 import type { ModelEntry } from "../src/core/registry";
 import { runSession, type SessionOptions } from "../src/core/session";
@@ -243,4 +244,14 @@ describe("sessão com quota (F6-3)", () => {
     expect(err).toBeInstanceOf(ProviderError);
     expect(err.errClass).toBe("hard_quota");
   });
+});
+test("#476 custo do mês com preço desconhecido exibe n/d, sem soma parcial", () => {
+  const dir = mkdtempSync(join(tmpdir(), "astro-quota-476-"));
+  const l = new Ledger(join(dir, "ledger.jsonl"), { warn: () => {} });
+  const usage = { run: "r", agent: "a", provider: "p", credentialRef: "K", quotaDomain: "d" };
+  l.record({ ...usage, model: "precificado", tokensIn: 1, tokensOut: 0 }, { inputPerM: 1_000_000, outputPerM: 0, fonte: "t", verificado: true });
+  l.record({ ...usage, model: "sem-preco", tokensIn: 1, tokensOut: 0 }, undefined);
+  const status = quotaStatus(l, { d: { monthlyCostUsd: 10 } }, "d")!;
+  expect(status.monthlyCostUsd?.known).toBe(false);
+  expect(quotaSegment(status)).toContain("n/d");
 });
