@@ -27,6 +27,8 @@ interface OpenAICompatProviderOptions {
   fetchFn?: FetchLike;
   /** Timeout de rede por tentativa; default `DEFAULT_PROVIDER_TIMEOUT_MS`. */
   timeoutMs?: number;
+  /** Nome do provider na config, usado só na mensagem do timeout (#475). */
+  providerName?: string;
   /** Call profile do modelo (E1-E8). */
   call?: CallConfig;
 }
@@ -227,6 +229,7 @@ export class OpenAICompatProvider implements Provider {
   private readonly fetchFn: FetchLike;
   private readonly call: CallConfig | undefined;
   private readonly timeoutMs: number;
+  private readonly providerName: string | undefined;
 
   constructor(opts: OpenAICompatProviderOptions) {
     this.url = `${opts.baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -234,6 +237,7 @@ export class OpenAICompatProvider implements Provider {
     this.fetchFn = opts.fetchFn ?? fetch;
     this.call = opts.call;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
+    this.providerName = opts.providerName;
 
     const headers = new Headers();
     for (const [name, value] of Object.entries(opts.headers ?? {})) {
@@ -357,7 +361,7 @@ export class OpenAICompatProvider implements Provider {
       const limit = timeout === "idle"
         ? `parado por ${this.timeoutMs}ms (timeout de inatividade)`
         : `sem resposta em ${this.timeoutMs}ms (timeout total da chamada)`;
-      const hint = "aumente providers.<name>.timeoutMs ou reduza o request";
+      const hint = `aumente providers.${this.providerName ?? "<name>"}.timeoutMs ou reduza o request`;
       return new ProviderError("network_timeout", `${label}: ${limit}; ${hint}`, status);
     }
     return new ProviderError("outage", `${label}: ${this.describe(error)}`, status);
