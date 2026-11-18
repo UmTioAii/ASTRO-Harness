@@ -26,6 +26,7 @@ class FakeSession implements ChatSession {
       },
       { ref: "p/m2", provider: "p", id: "m2", tags: ["fast"], context: 4096, status: "active" },
       { ref: "p/fast", provider: "p", id: "fast", tags: ["fast"], context: 4096, status: "active" },
+      { ref: "p/g:free", provider: "p", id: "g:free", tags: ["fast"], context: 4096, status: "active" },
     ];
   }
   listProviders(): ProviderInfo[] {
@@ -80,6 +81,11 @@ test("helpers do seletor: filtro, ordem, recente, favorito e detalhe", () => {
   expect(modelDetail({ ...a, price: { inputPerM: 1, outputPerM: 2, fonte: "t", verificado: false } }))
     .toContain("in 1/M");
   expect(modelDetail(b)).toContain("n/d");
+  // #511: FREE aparece como grátis, nunca como n/d
+  expect(modelDetail({ ...b, id: "b:free", ref: "p/b:free" })).toContain("preço: grátis");
+  expect(modelDetail({ ...b, id: "b:free", ref: "p/b:free" })).not.toContain("n/d");
+  expect(modelDetail({ ...b, price: { inputPerM: 0, outputPerM: 0, fonte: "t", verificado: true } }))
+    .toContain("preço: grátis");
 });
 
 test("/model abre o seletor, filtra e troca o modelo persistindo o recente", async () => {
@@ -91,6 +97,9 @@ test("/model abre o seletor, filtra e troca o modelo persistindo o recente", asy
     expect(instance.lastFrame()).toContain("p/m1");
     expect(instance.lastFrame()).toContain("contexto 8192");
     expect(instance.lastFrame()).toContain("in 1/M");
+    // #511: linha da lista mostra o estado do preço (grátis para FREE, n/d para desconhecido)
+    expect(instance.lastFrame()).toContain("grátis");
+    expect(instance.lastFrame()).toContain("p/g:free active contexto 4096 · grátis");
 
     instance.stdin.write("m2");
     await waitFor(() => instance.lastFrame()?.includes("p/m2") === true && instance.lastFrame()?.includes("p/m1") === false);
