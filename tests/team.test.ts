@@ -115,8 +115,8 @@ describe("custo por agente com profile (F-30)", () => {
     expect(costs).toHaveLength(3);
     expect(costs.find((c) => c.profile === "premium")).toMatchObject({ agent: "planner", profile: "premium", costUsd: 0.0015 });
     expect(costs.find((c) => c.agent === "planner" && c.profile === undefined)!.costUsd).toBeCloseTo(0.00015, 12);
-    const sum = costs.reduce((acc, c) => acc + c.costUsd, 0);
-    expect(sum).toBeCloseTo(ledger.total().costUsd, 12); // D-10: leitura do ledger, sem segundo contador
+    const sum = costs.reduce((acc, c) => acc + (c.costUsd ?? 0), 0);
+    expect(sum).toBeCloseTo(ledger.total().costUsd!, 12); // D-10: leitura do ledger, sem segundo contador
 
     const table = formatCostByAgent(ledger);
     expect(table).toContain("planner");

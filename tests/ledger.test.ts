@@ -64,8 +64,8 @@ describe("byAgent com profile (F-30)", () => {
     expect(byAgent.planner).toMatchObject({ agent: "planner", model: "gpt-4o-mini", tokensIn: 10, tokensOut: 5 }); // sem profile soma separado
     expect("profile" in byAgent.planner && byAgent.planner.profile !== undefined).toBe(false);
     expect(byAgent.coder).toMatchObject({ agent: "coder", tokensIn: 200, tokensOut: 100 }); // entrada antiga continua somando
-    const totalCost = Object.values(byAgent).reduce((acc, a) => acc + a.costUsd, 0);
-    expect(totalCost).toBeCloseTo(l.total().costUsd, 12); // custo por agente bate com o ledger
+    const totalCost = Object.values(byAgent).reduce((acc, a) => acc + (a.costUsd ?? 0), 0);
+    expect(totalCost).toBeCloseTo(l.total().costUsd!, 12); // custo por agente bate com o ledger
   });
 });
 
@@ -99,11 +99,11 @@ describe("byAgent (F3-3)", () => {
     expect(byAgent.coder.costUsd).toBeCloseTo(0.002, 10);
   });
 
-  test("byAgent com costUsd null trata como 0", () => {
-    const l = new Ledger(join(dir(), "ledger.jsonl"));
+  test("byAgent com costUsd null devolve null (exibe n/d, #476)", () => {
+    const l = new Ledger(join(dir(), "ledger.jsonl"), { warn: () => {} });
     l.record({ ...entry, agent: "planner" }, undefined);
     const byAgent = l.byAgent();
-    expect(byAgent.planner.costUsd).toBe(0);
+    expect(byAgent.planner.costUsd).toBeNull();
   });
 
   test("um run com 3 agents mostra 3 entradas com agent diferentes", () => {
