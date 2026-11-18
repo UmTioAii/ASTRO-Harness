@@ -156,6 +156,21 @@ test("openai-compat: chamada sem streaming mantém o timeout total", async () =>
   expect(error.message).toContain("providers.<name>.timeoutMs");
 });
 
+test("openai-compat: timeout cita o provider real quando o nome é conhecido", async () => {
+  const p = new OpenAICompatProvider({
+    baseUrl: "http://127.0.0.1:9/v1",
+    apiKey: "k",
+    timeoutMs: 20,
+    providerName: "mock",
+    retry: { maxAttempts: 1 },
+    fetchFn: hungFetch,
+  });
+
+  const error = (await p.complete(req).catch((e) => e)) as ProviderError;
+  expect(error.message).toContain("providers.mock.timeoutMs");
+  expect(error.message).not.toContain("<name>");
+});
+
 test("openai-compat: abort do caller durante o stream continua cancelamento", async () => {
   const controller = new AbortController();
   const p = new OpenAICompatProvider({
