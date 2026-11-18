@@ -1,6 +1,7 @@
 /** Seletor de modelos da TUI (#227): busca, favoritos, recentes e detalhe. */
 import { Box, Text, useInput } from "ink";
 import { useState, type ReactElement } from "react";
+import { priceLabel } from "../pricing";
 import { filterModels, groupModels, modelDetail, orderModels, toggleFavorite, type ModelOption } from "./models";
 import type { ThemeColors } from "./theme";
 
@@ -83,7 +84,7 @@ export function ModelPicker({
               <Text key={model.ref} color={index === selected ? colors.accent : undefined}>
                 {index === selected ? "> " : "  "}
                 {favorites.includes(model.ref) ? "* " : "  "}
-                {model.ref} {model.status} contexto {model.context ?? "n/d"}
+                {model.ref} {model.status} contexto {model.context ?? "n/d"} · {priceLabel(model.ref, model.price)}
               </Text>
             );
           })}

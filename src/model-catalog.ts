@@ -1,5 +1,6 @@
 /** Catálogo efetivo de modelos derivado da config (#307): listagem sem tocar segredo (I-03). */
 import type { ModelStatus, PriceConfig } from "./core/config";
+import { priceLabel } from "./pricing";
 import {
   providerIdentityFor,
   type EffectiveConfig,
@@ -48,9 +49,8 @@ export function formatModelCatalog(models: readonly CatalogModel[]): string {
   if (models.length === 0) return "nenhum modelo";
   return models.map((model) => {
     const tags = model.tags.length === 0 ? "-" : model.tags.join(", ");
-    const price = model.price === undefined
-      ? "n/d"
-      : `in ${model.price.inputPerM}/M out ${model.price.outputPerM}/M (${model.price.fonte})`;
+    // #511: três estados — FREE vira `grátis`, preço curado no formato completo, só desconhecido é `n/d`
+    const price = priceLabel(model.ref, model.price);
     return `${model.ref} · ${model.source} · ${model.status} · ${tags} · ${model.context} · ${price}`;
   }).join("\n");
 }

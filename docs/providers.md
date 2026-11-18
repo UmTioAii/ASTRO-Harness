@@ -64,7 +64,7 @@ Migração: `astro providers vault-import <provider>` (`src/providers/vault-impo
 
 | Campo | Tipo | Comportamento |
 |---|---|---|
-| `price` | opcional por modelo | Sem preço curado, o ledger grava `costUsd: null` e o CLI mostra `n/d` |
+| `price` | opcional por modelo | Sem preço curado, o ledger grava `costUsd: null` e os cards/listas mostram `n/d` — modelo FREE (slug `:free` ou preço 0/0, ADR-0025) mostra `grátis` (#511) |
 | `price.fonte` / `price.verificado` | string / boolean | Curadoria: mantenha `verificado: false` até conferir na fonte |
 | `pricing` (global) | `Record<"provider/model-id", PriceConfig>` | Sobrescreve `model.price` de modelos declarados para todo cálculo de custo; curadoria igual à de `price` |
 
