@@ -1360,3 +1360,49 @@ test("aviso de contexto inline traz o percentual real e aparece uma vez (#480)",
     instance.unmount();
   }
 });
+
+test("/log abre a tela com o cabeçalho da sessão (endpoint incluso) e o buffer; esc volta (#514)", async () => {
+  const instance = render(<TuiApp session={new FakeSession()} cwd="/tmp/astro" />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("/log");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "log da sess"));
+    const frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
+    expect(frame).toMatch(/ASTRO v\S+ · p\/m1 · endpoint/);
+    // o header principal continua sem endpoint (#520)
+    instance.stdin.write("\u001b");
+    await waitFor(() => frameHas(instance, "enter envia"));
+    const back = instance.lastFrame() ?? "";
+    expect(back.split("\n")[0] ?? "").not.toContain("endpoint");
+    expect(frameHas(instance, "modo:")).toBe(true);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("turno concluído e a linha por turno vão para o buffer; /log <n> mostra só as últimas n (#514)", async () => {
+  const instance = render(<TuiApp session={new FakeSession()} cwd="/tmp/astro" />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "eco:oi"));
+    instance.stdin.write("/log 2");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "log da sess"));
+    let frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
+    expect(frame).toContain("turno conclu");
+    expect(frame).toContain("[p/m1] 1 step(s)");
+    instance.stdin.write("\u001b");
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("/log 1");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "log da sess"));
+    frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
+    expect(frame).toContain("[p/m1] 1 step(s)");
+    expect(frame).not.toContain("turno conclu");
+  } finally {
+    instance.unmount();
+  }
+});
