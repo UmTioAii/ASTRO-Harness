@@ -255,3 +255,21 @@ test("#476 custo do mês com preço desconhecido exibe n/d, sem soma parcial", (
   expect(status.monthlyCostUsd?.known).toBe(false);
   expect(quotaSegment(status)).toContain("n/d");
 });
+
+test("#476 quota mensal com preço desconhecido ainda dispara quando o piso atinge o limite", () => {
+  const dir = mkdtempSync(join(tmpdir(), "astro-quota-floor-"));
+  const l = new Ledger(join(dir, "ledger.jsonl"), { warn: () => {} });
+  const usage = { run: "r", agent: "a", provider: "p", credentialRef: "K", quotaDomain: "d" };
+  l.record({ ...usage, model: "precificado", tokensIn: 1, tokensOut: 0 }, { inputPerM: 12_000_000, outputPerM: 0, fonte: "t", verificado: true });
+  l.record({ ...usage, model: "sem-preco", tokensIn: 1, tokensOut: 0 }, undefined);
+  const error = (() => {
+    try {
+      assertWithinQuota(l, { d: { monthlyCostUsd: 10 } }, "d");
+      return null;
+    } catch (caught) {
+      return caught as QuotaExceededError;
+    }
+  })();
+  expect(error).toBeInstanceOf(QuotaExceededError);
+  expect(error?.message).toContain("pelo menos");
+});

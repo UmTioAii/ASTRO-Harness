@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -204,6 +204,49 @@ test("#476 modelo FREE sem preço curado reporta custo 0, nunca n/d", async () =
     const report = await runTask({ configPath: cfgPath, task: "x", cwd: dir, env: testEnv({ KEY_P: "k" }) });
     expect(report.costUsd).toBe(0);
   } finally {
+    server.stop(true);
+  }
+});
+
+test("#476 custo do run ignora entrada de outro run gravada na mesma janela", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "astro-f476-c-"));
+  mkdirSync(join(dir, ".astro"), { recursive: true });
+  const ledgerPath = join(dir, ".astro", "ledger.jsonl");
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => {
+      // writer concorrente no mesmo arquivo, com seq dentro da janela do run
+      new Ledger(ledgerPath, { warn: () => {} }).record({
+        run: "intruder", agent: "x", provider: "p", model: "m",
+        credentialRef: "K", quotaDomain: "d", tokensIn: 1, tokensOut: 0,
+      }, { inputPerM: 1_000_000, outputPerM: 0, fonte: "t", verificado: true });
+      return Response.json({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+    },
+  });
+  try {
+    const cfgPath = writeConfig(dir, singleConfig(server, "m1", { price: price(1_000_000, 0) }));
+    const report = await runTask({ configPath: cfgPath, task: "x", cwd: dir, env: testEnv({ KEY_P: "k" }) });
+    expect(report.costUsd).toBeCloseTo(10, 10); // só os 10 tokens deste run, sem o US$ 1 do intruso
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("#476 aviso de preço ausente é único entre turnos com o mesmo Set", async () => {
+  const server = mockServer(200, "ok");
+  const warns: string[] = [];
+  const spy = spyOn(console, "warn").mockImplementation((message?: unknown) => {
+    warns.push(String(message));
+  });
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "astro-f476-d-"));
+    const cfgPath = writeConfig(dir, singleConfig(server, "m1"));
+    const warned = new Set<string>();
+    await runTask({ configPath: cfgPath, task: "a", cwd: dir, env: testEnv({ KEY_P: "k" }), warnedNoPrice: warned });
+    await runTask({ configPath: cfgPath, task: "b", cwd: dir, env: testEnv({ KEY_P: "k" }), warnedNoPrice: warned });
+    expect(warns.filter((m) => m.includes("sem preço curado")).length).toBe(1);
+  } finally {
+    spy.mockRestore();
     server.stop(true);
   }
 });
