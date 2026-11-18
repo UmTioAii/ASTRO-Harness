@@ -7,6 +7,7 @@ describe("pricing (#476 FREE, #511 cards)", () => {
     expect(isFreeModel("m", { inputPerM: 0, outputPerM: 0, fonte: "t", verificado: true })).toBe(true);
     expect(isFreeModel("m")).toBe(false);
     expect(isFreeModel("m", { inputPerM: 1, outputPerM: 0, fonte: "t", verificado: true })).toBe(false);
+    expect(isFreeModel("m", { inputPerM: 0, outputPerM: 1, fonte: "t", verificado: true })).toBe(false);
     expect(isFreeModel("free", undefined)).toBe(false); // slug precisa do sufixo ":free"
   });
 
@@ -18,5 +19,13 @@ describe("pricing (#476 FREE, #511 cards)", () => {
     expect(priceLabel("m", { inputPerM: 1, outputPerM: 2, fonte: "t", verificado: false }))
       .toBe("in 1/M out 2/M (t, não verificado)");
     expect(priceLabel("m")).toBe("n/d");
+  });
+
+  test("priceLabel converge com o ledger: :free com preço curado não-zero mostra o preço, não grátis", () => {
+    // ledger: estimateCost(…, price não-zero) ?? … → cobra o preço; o card não pode dizer grátis
+    expect(priceLabel("x:free", { inputPerM: 5, outputPerM: 10, fonte: "t", verificado: true }))
+      .toBe("in 5/M out 10/M (t)");
+    expect(priceLabel("x:free", { inputPerM: 5, outputPerM: 10, fonte: "t", verificado: true }))
+      .not.toBe("grátis");
   });
 });

@@ -12,11 +12,16 @@ export function isFreeModel(model: string, price?: PriceConfig): boolean {
 }
 
 /**
- * Rótulo do preço para cards e listas (#511): FREE renderiza `grátis` e nunca
- * cai em `n/d`; sem preço curado é `n/d`; com preço é `in X/M out Y/M (fonte[, não verificado])`.
+ * Rótulo do preço para cards e listas (#511): converge com o ledger
+ * (src/ledger.ts — `estimateCost(...) ?? (isFreeModel ? 0 : null)`), que é a
+ * fonte de verdade do custo. Preço curado não-zero renderiza a linha de preço
+ * mesmo com slug `:free` (o ledger cobraria o preço); FREE (slug `:free` sem
+ * preço, ou preço 0/0) renderiza `grátis` e nunca cai em `n/d`; sem preço é `n/d`.
  */
 export function priceLabel(model: string, price?: PriceConfig): string {
+  if (price !== undefined && (price.inputPerM !== 0 || price.outputPerM !== 0)) {
+    return `in ${price.inputPerM}/M out ${price.outputPerM}/M (${price.fonte}${price.verificado ? "" : ", não verificado"})`;
+  }
   if (isFreeModel(model, price)) return "grátis";
-  if (price === undefined) return "n/d";
-  return `in ${price.inputPerM}/M out ${price.outputPerM}/M (${price.fonte}${price.verificado ? "" : ", não verificado"})`;
+  return "n/d";
 }
