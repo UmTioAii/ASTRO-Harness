@@ -153,7 +153,7 @@ test("#515 limite de turnos default (500) nomeia run.maxTurns, não o agent.maxS
   };
   const message = maxStepsMessage(config, { maxSteps: 500 });
   expect(message).toContain("limite de turnos padrão \"run.maxTurns\" = 500");
-  expect(message).toContain("preset");
+  expect(message).toContain('declare "run.maxTurns"');
   expect(message).not.toContain('limite "agent.maxSteps" = 1000');
 });
 

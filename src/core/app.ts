@@ -80,7 +80,9 @@ export function maxStepsMessage(
   const turnCap = effectiveMaxTurns(config);
   if (turnCap !== "unlimited" && turnCap < config.agent.maxSteps) {
     const limit = config.run?.maxTurns === undefined
-      ? `limite de turnos padrão "run.maxTurns" = ${turnCap} (ausente; use "preset": "control" para alterar)`
+      ? config.preset === "simple"
+        ? `limite de turnos padrão "run.maxTurns" = ${turnCap} (ausente; use "preset": "control" e declare "run.maxTurns" para alterar)`
+        : `limite de turnos padrão "run.maxTurns" = ${turnCap} (ausente; declare "run.maxTurns" para alterar)`
       : `limite de turnos "run.maxTurns" = ${turnCap}`;
     return `a tarefa excedeu ${error.maxSteps} passos sem resposta final — ${limit}; ajuste "run.maxTurns" na configuração`;
   }
