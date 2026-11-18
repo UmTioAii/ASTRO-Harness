@@ -20,6 +20,28 @@ export function looksLikeSecret(value: string): boolean {
   return SECRET_VALUE.test(text);
 }
 
+/**
+ * Campo de `mcpServers` com valor em forma de segredo (#496): `env.CHAVE` ou
+ * `args[i]`. Devolve só o caminho do campo, nunca o valor (I-03).
+ */
+export function mcpSecretProblem(mcpServers: unknown): string | undefined {
+  if (typeof mcpServers !== "object" || mcpServers === null) return undefined;
+  for (const [name, server] of Object.entries(mcpServers as Record<string, unknown>)) {
+    if (typeof server !== "object" || server === null) continue;
+    const record = server as Record<string, unknown>;
+    if (Array.isArray(record.args)) {
+      const index = record.args.findIndex((arg) => typeof arg === "string" && looksLikeSecret(arg));
+      if (index >= 0) return `mcpServers.${name}.args[${index}]`;
+    }
+    if (typeof record.env === "object" && record.env !== null && !Array.isArray(record.env)) {
+      for (const [key, value] of Object.entries(record.env as Record<string, unknown>)) {
+        if (typeof value === "string" && looksLikeSecret(value)) return `mcpServers.${name}.env.${key}`;
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Prefixo de `credentialRef` que aponta para o cofre local (ADR-0019). */
 export const VAULT_REF_PREFIX = "vault:";
 /** Id de credencial do cofre: `cred-<uuid>`. */

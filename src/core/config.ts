@@ -9,7 +9,7 @@ import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "../compaction/
 import type { ModelRouting } from "../providers/model-routing";
 import type { WebSearchConfig, WebSearchProvider } from "../tools/web-search";
 import { isPermissionMode, DEFAULT_PERMISSION_MODE, isAgentPermission, type AgentPermission, type PermissionMode } from "../permissions";
-import { isAuthHeader, isEnvName, isVaultCredentialRef, looksLikeSecret } from "../secrets";
+import { isAuthHeader, isEnvName, isVaultCredentialRef, looksLikeSecret, mcpSecretProblem } from "../secrets";
 import { headerEnvName, isValidHeaderName } from "../mcp/headers";
 import { outboundUrlProblem, urlProblem } from "../url-safety";
 import { CAPACITY_TAGS, ROLE_TAGS, isKnownTag } from "../tags";
@@ -1404,6 +1404,12 @@ function validateMcpServers(value: unknown): Record<string, MCPServerConfig> {
       args = raw2.args as string[];
     }
     const env = raw2.env === undefined ? undefined : stringRecord(expectObject(raw2.env, `${field}.env`), `${field}.env`);
+    // I-03 (#496): args e env vão literais para o filho e para o registry; valor
+    // em forma de segredo é recusado nomeando só o campo, nunca o valor.
+    const secretField = mcpSecretProblem({ [name]: { args, ...(env === undefined ? {} : { env }) } });
+    if (secretField !== undefined) {
+      fail(`config inválida: "${secretField}" parece conter credencial; remova o valor (segredo só via variável de ambiente ou cofre)`);
+    }
     const headers = raw2.headers === undefined ? undefined : mcpHeaders(expectObject(raw2.headers, `${field}.headers`), `${field}.headers`);
     const timeoutMs = raw2.timeoutMs === undefined ? 30_000 : expectPositiveInteger(raw2.timeoutMs, `${field}.timeoutMs`);
     const retryBackoffMs = raw2.retryBackoffMs === undefined

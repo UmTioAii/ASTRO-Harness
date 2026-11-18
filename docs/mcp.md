@@ -9,7 +9,7 @@ Cliente MCP (Model Context Protocol) no ASTRO (C2, #56): config `mcpServers`, tr
 | Campo | Regra | Default |
 |---|---|---|
 | `transport` | `stdio` \| `sse` \| `http` | obrigatório |
-| `command` + `args` + `env` | `command` obrigatório em stdio | `args: []` |
+| `command` + `args` + `env` | `command` obrigatório em stdio; valor de `env` e entrada de `args` em forma de credencial é recusado nomeando só o campo — é o mesmo screening de `config push` (#496) | `args: []` |
 | `url` + `headers` | `url` obrigatória em sse/http; nome de header segue o token grammar (RFC 7230); header de autenticação só como `env:NOME`; o prefixo `env:` é reservado e valor literal com cara de credencial é recusado | — |
 | `retryBackoffMs` | inteiro positivo, base do backoff exponencial entre reconexões; teto de 30s | `1000` |
 | `timeoutMs` | inteiro positivo, por requisição | `30000` |
