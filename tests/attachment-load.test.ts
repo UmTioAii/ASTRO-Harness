@@ -32,6 +32,9 @@ const PEM_BODY = [
   "VTLw5Zs5DDnbqZ6rJ1QxJw9pQ0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l",
   "Q2h1Y2sxMjM0NTY3ODkwYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo",
 ];
+/** Marcador com label no limite do bound (`[A-Z ]{0,32}`, aqui 31 letras + o espaço) e `BLOCK`. */
+const PEM_LONG_LABEL = ["-----BEGIN", `${"A".repeat(31)} PRIVATE KEY BLOCK-----`].join(" ");
+const PEM_LONG_END = ["-----END", `${"A".repeat(31)} PRIVATE KEY BLOCK-----`].join(" ");
 
 /** Header PNG mínimo com IHDR: suficiente para magic bytes e dimensões (não é PNG completo). */
 function pngHeader(width: number, height: number): Buffer {
@@ -196,6 +199,40 @@ describe("loadAttachment", () => {
     });
     expect(attachment.data).toBe("[REDACTED]");
     expect(attachment.range).toEqual({ start: 1, end: 1 });
+  });
+
+  test("marcador com label no limite não escapa em nenhuma posição da fronteira", async () => {
+    for (const pre of [47, 48, 49, 55, 59, 64, 65]) {
+      const { cwd, astroHome } = sandbox();
+      writeFileSync(join(cwd, "fronteira-label.txt"), [
+        `${"x".repeat(65_536 - pre)}${PEM_LONG_LABEL}`,
+        PEM_BODY[0]!,
+        PEM_BODY[1]!,
+        PEM_LONG_END,
+        "z".repeat(5_000),
+      ].join("\n"));
+      const attachment = await loadAttachment({
+        ...base(cwd, astroHome),
+        path: "fronteira-label.txt",
+        range: "2:3",
+        maxBytes: 70_000,
+      });
+      expect(attachment.data).toBe("[REDACTED]\n[REDACTED]");
+      expect(attachment.data).not.toContain("MIIEow");
+    }
+  });
+
+  test("BEGIN sem END no caminho de streaming redige até o EOF", async () => {
+    const { cwd, astroHome } = sandbox();
+    writeFileSync(join(cwd, "sem-end.txt"), [PEM_BEGIN, PEM_BODY[0]!, "final-sem-end"].join("\n"));
+    const attachment = await loadAttachment({
+      ...base(cwd, astroHome),
+      path: "sem-end.txt",
+      range: "2:3",
+      maxBytes: 40,
+    });
+    expect(attachment.data).toBe("[REDACTED]\n[REDACTED]");
+    expect(attachment.data).not.toContain("MIIEow");
   });
 
   test("marcador PEM cortado pela fronteira do chunk não vaza o corpo", async () => {
