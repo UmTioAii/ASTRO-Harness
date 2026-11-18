@@ -580,4 +580,17 @@ describe("#476 preço ausente: n/d no status e aviso uma vez por modelo por sess
     l.record(structuredClone(entry), price);
     expect(l.byAgent().default.costUsd).toBeCloseTo(0.002, 10);
   });
+
+  test("entrada legada sem campo costUsd conta como preço desconhecido (n/d), não como 0 nem NaN", () => {
+    const path = join(dir(), "ledger.jsonl");
+    // linha pré-custo: sem costUsd, sem kind, sem seq
+    const old = { run: "r0", agent: "default", provider: "openai", model: "antigo", quotaDomain: "d", tokensIn: 5, tokensOut: 5, ts: "2026-01-01T00:00:00Z" };
+    writeFileSync(path, `${JSON.stringify(old)}\n`, "utf8");
+    const l = new Ledger(path, { warn: () => {} });
+    l.record(structuredClone(entry), price);
+    const t = l.total();
+    expect(Number.isNaN(t.costUsd)).toBe(false);
+    expect(t.costUsd).toBeNull();
+    expect(l.byAgent().default.costUsd).toBeNull();
+  });
 });
