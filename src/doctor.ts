@@ -853,9 +853,12 @@ export async function collectOnlineChecks(
 /** Relatório do CLI: checks offline e, só com `online: true`, o health F6-6. */
 export async function runDoctor(
   root: string,
-  options: { online?: boolean; env?: NodeJS.ProcessEnv } & OnlineOptions = {},
+  options: { online?: boolean; env?: NodeJS.ProcessEnv; artifactRoot?: string } & OnlineOptions = {},
 ): Promise<DoctorReport> {
-  const report = runChecks(collectFacts(root, options.env === undefined ? {} : { env: options.env }));
+  const report = runChecks(collectFacts(root, {
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.artifactRoot === undefined ? {} : { artifactRoot: options.artifactRoot }),
+  }));
   if (options.online !== true) return report;
   report.checks.push(...await collectOnlineChecks(options.env ?? process.env, options));
   return report;

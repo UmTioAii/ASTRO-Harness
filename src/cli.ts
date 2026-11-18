@@ -318,12 +318,9 @@ interface HealthCommand {
 interface DoctorCommand {
   json: boolean;
   fix: boolean;
-<<<<<<< HEAD
   online: boolean;
-=======
   /** `--artifact-root`: mesma precedência flag > env do chat/tui (ADR-0026). */
   artifactRoot?: string;
->>>>>>> 8d28bc3 (fix: pass --artifact-root through the doctor command)
 }
 
 interface ProvidersCommand {
@@ -693,21 +690,13 @@ function parseArgs(argv: string[]): ParsedCommand {
   if (command === "doctor") {
     let json = false;
     let fix = false;
-<<<<<<< HEAD
     let online = false;
-    for (const arg of rest) {
-      if (arg === "--json") { json = true; continue; }
-      if (arg === "--fix") { fix = true; continue; }
-      if (arg === "--online") { online = true; continue; }
-      throw new UsageError(`opção desconhecida: "${arg}"`);
-    }
-    return { kind: "doctor", options: { json, fix, online } };
-=======
     let artifactRoot: string | undefined;
     for (let i = 0; i < rest.length; i++) {
       const arg = rest[i] as string;
       if (arg === "--json") { json = true; continue; }
       if (arg === "--fix") { fix = true; continue; }
+      if (arg === "--online") { online = true; continue; }
       if (arg === "--artifact-root") {
         const value = rest.at(i + 1);
         if (value === undefined || value.startsWith("-") || value.trim() === "") {
@@ -719,8 +708,7 @@ function parseArgs(argv: string[]): ParsedCommand {
       }
       throw new UsageError(`opção desconhecida: "${arg}"`);
     }
-    return { kind: "doctor", options: { json, fix, ...(artifactRoot === undefined ? {} : { artifactRoot }) } };
->>>>>>> 8d28bc3 (fix: pass --artifact-root through the doctor command)
+    return { kind: "doctor", options: { json, fix, online, ...(artifactRoot === undefined ? {} : { artifactRoot }) } };
   }
 
   if (command === "pool") {
@@ -1120,12 +1108,10 @@ async function main(argv: string[]): Promise<number> {
     // `--fix` só mexe em estado local seguro (ver applyFixes); roda antes dos checks.
     const fixes = o.fix ? applyFixes(process.env) : undefined;
     // Raiz do pacote (`src/..` ou `dist/..`): valida deps e dist da instalação, não do cwd.
-<<<<<<< HEAD
-    const report = await runDoctor(resolve(import.meta.dir, ".."), { online: o.online });
-=======
-    const report = runChecks(collectFacts(resolve(import.meta.dir, ".."),
-      o.artifactRoot === undefined ? {} : { artifactRoot: o.artifactRoot }));
->>>>>>> 8d28bc3 (fix: pass --artifact-root through the doctor command)
+    const report = await runDoctor(resolve(import.meta.dir, ".."), {
+      online: o.online,
+      ...(o.artifactRoot === undefined ? {} : { artifactRoot: o.artifactRoot }),
+    });
     if (o.json) {
       console.log(JSON.stringify(doctorJson(report, fixes), null, 2));
     } else {
