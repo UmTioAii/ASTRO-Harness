@@ -380,6 +380,31 @@ describe("erros distintos ao salvar a config via /config (#470)", () => {
       const err = capture(() => updateConfigPermissionsMode(path, "ask"));
       expect(err.message).not.toMatch(/linha \d+/); // fora do arquivo (4 linhas): descarta
     });
+    // Offset bruto além do fim do arquivo: descartado, não realocado para o EOF
+    // (realocar daria uma linha plausível e falsa).
+    withParseError(new SyntaxError("Unexpected end of JSON input at position 9999"), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).not.toMatch(/linha \d+/);
+    });
+    // Offset com dígitos demais (Number -> Infinity) e offset não inteiro seguro (2^53).
+    withParseError(new SyntaxError(`Bad JSON at position ${"9".repeat(400)}`), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).not.toMatch(/linha \d+/);
+    });
+    withParseError(new SyntaxError("Bad JSON at position 9007199254740992"), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).not.toMatch(/linha \d+/);
+    });
+    // Fim da entrada: continua válido, uma coluna depois do último caractere.
+    withParseError(new SyntaxError(`Unexpected end of JSON input at position ${content.length}`), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).toContain("na linha 5, coluna 1");
+    });
+    // Coluna além do fim da linha citada: mesma régua do offset.
+    withParseError(new SyntaxError("Bad JSON at position 4 (line 1 column 999)"), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).not.toMatch(/linha \d+/);
+    });
     // Bun: line/column do frame da pilha (config.ts:1714), sem posição na mensagem.
     withParseError(Object.assign(new SyntaxError("JSON Parse error: Property name must be a string literal"), { line: 1714, column: 5 }), () => {
       const err = capture(() => updateConfigPermissionsMode(path, "ask"));
