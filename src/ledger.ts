@@ -492,7 +492,8 @@ export class Ledger {
     for (const entry of this.readAll()) {
       tokensIn += entry.tokensIn;
       tokensOut += entry.tokensOut;
-      if (entry.costUsd === null) costUsd = null;
+      // entrada legada sem o campo costUsd é preço desconhecido (n/d), nunca 0 nem NaN
+      if (typeof entry.costUsd !== "number") costUsd = null;
       else if (costUsd !== null) costUsd += entry.costUsd;
     }
     return { tokensIn, tokensOut, costUsd };
@@ -506,7 +507,8 @@ export class Ledger {
       const agg = (result[key] ??= { agent: entry.agent, ...(entry.profile === undefined ? {} : { profile: entry.profile }), provider: entry.provider, model: entry.model, tokensIn: 0, tokensOut: 0, costUsd: 0 });
       agg.tokensIn += entry.tokensIn;
       agg.tokensOut += entry.tokensOut;
-      if (entry.costUsd === null) agg.costUsd = null;
+      // entrada legada sem o campo costUsd é preço desconhecido (n/d), nunca 0 nem NaN
+      if (typeof entry.costUsd !== "number") agg.costUsd = null;
       else if (agg.costUsd !== null) agg.costUsd += entry.costUsd;
     }
     return result;
