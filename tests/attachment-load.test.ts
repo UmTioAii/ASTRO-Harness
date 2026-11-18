@@ -32,9 +32,9 @@ const PEM_BODY = [
   "VTLw5Zs5DDnbqZ6rJ1QxJw9pQ0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l0l",
   "Q2h1Y2sxMjM0NTY3ODkwYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo",
 ];
-/** Marcador com label no limite do bound (`[A-Z ]{0,32}`, aqui 31 letras + o espaço) e `BLOCK`. */
-const PEM_LONG_LABEL = ["-----BEGIN", `${"A".repeat(31)} PRIVATE KEY BLOCK-----`].join(" ");
-const PEM_LONG_END = ["-----END", `${"A".repeat(31)} PRIVATE KEY BLOCK-----`].join(" ");
+/** Marcador com label longo (acima de qualquer bound antigo): detecção por faixa é por prefixo. */
+const PEM_LONG_LABEL = ["-----BEGIN", `${"A".repeat(40)} PRIVATE KEY BLOCK-----`].join(" ");
+const PEM_LONG_END = ["-----END", `${"A".repeat(40)} PRIVATE KEY BLOCK-----`].join(" ");
 
 /** Header PNG mínimo com IHDR: suficiente para magic bytes e dimensões (não é PNG completo). */
 function pngHeader(width: number, height: number): Buffer {
@@ -202,7 +202,7 @@ describe("loadAttachment", () => {
   });
 
   test("marcador com label no limite não escapa em nenhuma posição da fronteira", async () => {
-    for (const pre of [47, 48, 49, 55, 59, 64, 65]) {
+    for (const pre of [47, 48, 49, 55, 59, 63, 64]) {
       const { cwd, astroHome } = sandbox();
       writeFileSync(join(cwd, "fronteira-label.txt"), [
         `${"x".repeat(65_536 - pre)}${PEM_LONG_LABEL}`,
@@ -219,6 +219,32 @@ describe("loadAttachment", () => {
       });
       expect(attachment.data).toBe("[REDACTED]\n[REDACTED]");
       expect(attachment.data).not.toContain("MIIEow");
+    }
+  });
+
+  test("label acima do bound antigo redige no range e no texto inteiro", async () => {
+    for (const size of [33, 70]) {
+      const { cwd, astroHome } = sandbox();
+      const begin = ["-----BEGIN", `${"A".repeat(size)} PRIVATE KEY-----`].join(" ");
+      const end = ["-----END", `${"A".repeat(size)} PRIVATE KEY-----`].join(" ");
+      writeFileSync(join(cwd, "label-longo.txt"), [
+        begin,
+        PEM_BODY[0]!,
+        PEM_BODY[1]!,
+        end,
+        "alvo-5",
+      ].join("\n"));
+      const whole = await loadAttachment({ ...base(cwd, astroHome), path: "label-longo.txt" });
+      expect(whole.data).not.toContain("MIIEow");
+      expect(whole.data).toContain("[REDACTED]");
+      const ranged = await loadAttachment({
+        ...base(cwd, astroHome),
+        path: "label-longo.txt",
+        range: "2:3",
+        maxBytes: 128,
+      });
+      expect(ranged.data).toBe("[REDACTED]\n[REDACTED]");
+      expect(ranged.data).not.toContain("MIIEow");
     }
   });
 
