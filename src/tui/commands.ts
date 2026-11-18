@@ -37,6 +37,8 @@ export interface CommandOutcome {
   openConfig?: boolean;
   /** Abre o modal de sessões (`/sessions`, #64). */
   openSessions?: boolean;
+  /** Abre a tela de log (`/log`, #514): `null` = buffer inteiro, número = últimas n linhas. */
+  openLog?: number | null;
 }
 
 type SlashCommand = Exclude<ReplCommand, { kind: "prompt" } | { kind: "empty" }>;
@@ -132,6 +134,16 @@ export async function runCommand(
       } catch (error) {
         return { entries: [{ kind: "error", text: `erro: ${messageOf(error)}` }] };
       }
+    }
+    case "log": {
+      // o buffer vive no app (memória da sessão); aqui só abrimos a tela (#514)
+      if (command.arg === undefined) return { entries: [], openLog: null };
+      const n = Number(command.arg);
+      // isSafeInteger barra arg gigante (vira Infinity) além de 0/negativo/quebrado
+      if (!/^\d+$/.test(command.arg) || !Number.isSafeInteger(n) || n < 1) {
+        return { entries: [{ kind: "error", text: "uso: /log [n] — n inteiro ≥ 1" }] };
+      }
+      return { entries: [], openLog: n };
     }
     case "providers":
       return { entries: [], openProviders: { mode: "list" } };

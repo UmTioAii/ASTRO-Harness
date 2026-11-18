@@ -69,6 +69,15 @@ describe("comandos do chat (T1, #62)", () => {
     for (const command of ["/help", "/model", "/clear", "/exit"]) expect(HELP_TEXT).toContain(command);
   });
 
+  test("/log: parser guarda o argumento cru, entra nos nomes e na ajuda (#514)", () => {
+    expect(parseCommand("/log")).toEqual({ kind: "log" });
+    expect(parseCommand("/log 5")).toEqual({ kind: "log", arg: "5" });
+    expect(parseCommand("/log abc")).toEqual({ kind: "log", arg: "abc" });
+    expect(COMMAND_NAMES).toContain("log");
+    expect(HELP_TEXT).toContain("/log");
+    expect(suggestCommand("lo")).toBe("/log");
+  });
+
 
   test("/sessions e /resume", () => {
     expect(parseCommand("/sessions")).toEqual({ kind: "sessions" });

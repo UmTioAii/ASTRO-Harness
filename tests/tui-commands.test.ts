@@ -81,6 +81,22 @@ describe("comandos da TUI (T2, #63)", () => {
     expect(outcome.entries).toEqual([]);
   });
 
+  test("/log abre a tela de log: sem arg é o buffer todo (null), com n as últimas n; arg inválido dá erro (#514)", async () => {
+    const session = new FakeSession();
+    const all = await runCommand({ kind: "log" }, session, {});
+    expect(all.openLog).toBeNull();
+    expect(all.entries).toEqual([]);
+    const tail = await runCommand({ kind: "log", arg: "3" }, session, {});
+    expect(tail.openLog).toBe(3);
+    expect(tail.entries).toEqual([]);
+    for (const bad of ["0", "abc", "-1", "2.5", "3 4", "9".repeat(400)]) {
+      const outcome = await runCommand({ kind: "log", arg: bad }, session, {});
+      expect(outcome.openLog).toBeUndefined();
+      expect(outcome.entries[0]?.kind).toBe("error");
+      expect(outcome.entries[0]?.text).toContain("/log");
+    }
+  });
+
   test("session mostra o último arquivo; sem persistência avisa", async () => {
     const session = new FakeSession();
     const sessionApi = new SessionApi(mkdtempSync(join(tmpdir(), "astro-tui-session-")));

@@ -543,4 +543,15 @@ describe("REPL do chat (T1, #62)", () => {
     expect(session.sent).toEqual([]);
     expect(session.closed).toBe(1);
   });
+
+  test("/log no REPL avisa que o log é da TUI e nunca cai no send (#514)", async () => {
+    const session = new FakeSession();
+    const io = new ScriptedIO(["/log", "/log 10", "/exit"]);
+    await runRepl(session, io);
+    const text = io.outputs.join("\n");
+    expect(text).toContain("/log");
+    expect(text).toContain("TUI");
+    expect(session.sent).toEqual([]);
+    expect(session.closed).toBe(1);
+  });
 });

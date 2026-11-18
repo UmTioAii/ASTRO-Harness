@@ -19,6 +19,11 @@ describe("completions do editor (T2, #63)", () => {
     expect(completionItems("leia @notas/", COMMANDS, files)).toEqual(["@notas/ideias.md"]);
   });
 
+  test("/log entra na completion de comandos com descrição (#514)", () => {
+    expect(completionItems("/lo")).toEqual(["/log"]);
+    expect(commandDescription("/log")).toContain("log");
+  });
+
   test("applyCompletion substitui comando e insere arquivo com espaço", () => {
     expect(applyCompletion("/mo", "/model")).toBe("/model");
     expect(applyCompletion("leia @app", "@src/app.ts")).toBe("leia @src/app.ts ");
