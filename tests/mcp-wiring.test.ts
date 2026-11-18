@@ -24,6 +24,43 @@ test("config rejeita nome de servidor MCP com separador do namespace", () => {
   expect(configWith({ a_b: { transport: "stdio", command: "x" } }).mcpServers!.a_b).toBeDefined();
 });
 
+test("config recusa env de MCP com valor em forma de segredo (#496)", () => {
+  const secret = "nvapi-abcdefghijklmnopqrstuvwxyz";
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", env: { API_KEY: secret } } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.env.API_KEY"');
+  expect(message).not.toContain(secret);
+});
+
+test("config recusa arg de MCP com valor em forma de segredo (#496)", () => {
+  const secret = "sk-live-abcdefghijklmnopqrstuvwxyz";
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", args: ["--port", "8080", secret] } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.args[2]"');
+  expect(message).not.toContain(secret);
+});
+
+test("config aceita env e args de MCP sem forma de segredo (#496)", () => {
+  const config = configWith({
+    api: {
+      transport: "stdio",
+      command: "x",
+      args: ["--port", "8080"],
+      env: { NODE_ENV: "production", LOG_LEVEL: "debug" },
+    },
+  });
+  expect(config.mcpServers!.api.args).toEqual(["--port", "8080"]);
+  expect(config.mcpServers!.api.env).toEqual({ NODE_ENV: "production", LOG_LEVEL: "debug" });
+});
+
 const MOCK_SRC = `
 import { writeFileSync } from "node:fs";
 if (process.env.PID_FILE !== undefined) writeFileSync(process.env.PID_FILE, String(process.pid));

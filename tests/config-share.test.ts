@@ -164,6 +164,23 @@ describe("plugin provenance (I-13, #255)", () => {
     }
   });
 
+  test("push recusa env de MCP em forma de segredo sem ecoar o valor (#496)", () => {
+    const secret = "nvapi-abcdefghijklmnopqrstuvwxyz";
+    const result = prepareConfigForPush(
+      {
+        ...validConfig,
+        mcpServers: { api: { transport: "stdio", command: "x", env: { API_KEY: secret } } },
+      },
+      "org/repo",
+      false,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("mcpServers.api.env.API_KEY");
+      expect(result.error).not.toContain(secret);
+    }
+  });
+
   test("pull sem aprovação quarentena os plugins e mantém a config válida", () => {
     const result = preparePulledConfig(withPlugins, "org/repo", false);
     expect(result.removedPlugins).toEqual(["evil-pkg"]);
