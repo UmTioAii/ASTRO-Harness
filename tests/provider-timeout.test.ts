@@ -55,6 +55,122 @@ test("openai-compat: abort do caller continua sendo cancelamento, não timeout",
   expect(error.name).toBe("AbortError");
 });
 
+/** Stream SSE controlado por relógio: emite um chunk a cada `gapMs` (I-09, #475). */
+interface SlowStream {
+  gapMs: number;
+  chunks: number;
+  /** Emite só os N primeiros chunks e fica pendurado, sem fechar o corpo. */
+  hangAfter?: number;
+}
+
+const slowSse = (spec: SlowStream): ((url: string, init?: RequestInit) => Promise<Response>) => {
+  return async (_url, init) => {
+    const encoder = new TextEncoder();
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const abort = (): void => {
+      for (const timer of timers) clearTimeout(timer);
+    };
+    const body = new ReadableStream({
+      start(controller) {
+        init?.signal?.addEventListener("abort", () => {
+          abort();
+          controller.error(init.signal?.reason ?? new DOMException("Abortado", "AbortError"));
+        }, { once: true });
+        const emit = (text: string): void => {
+          try {
+            controller.enqueue(encoder.encode(text));
+          } catch {
+            // corpo já encerrado pelo abort
+          }
+        };
+        const sent = spec.hangAfter ?? spec.chunks;
+        for (let index = 0; index < sent; index++) {
+          timers.push(setTimeout(
+            () => emit(`data: ${JSON.stringify({ choices: [{ delta: { content: `t${index}` } }] })}\n\n`),
+            spec.gapMs * (index + 1),
+          ));
+        }
+        if (spec.hangAfter === undefined) {
+          timers.push(setTimeout(() => {
+            emit("data: [DONE]\n\n");
+            try {
+              controller.close();
+            } catch {
+              // corpo já encerrado pelo abort
+            }
+          }, spec.gapMs * spec.chunks + 20));
+        }
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+};
+
+test("openai-compat: stream saudável mais longo que o timeout completa", async () => {
+  // 500ms de stream contra timeoutMs 200: nenhum silêncio chega perto do limite.
+  const p = new OpenAICompatProvider({
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "k",
+    timeoutMs: 200,
+    retry: { maxAttempts: 1 },
+    fetchFn: slowSse({ gapMs: 50, chunks: 10 }),
+  });
+
+  const deltas: string[] = [];
+  const response = await p.complete({ ...req, onToken: (text) => deltas.push(text) });
+  expect(deltas).toEqual(["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"]);
+  expect(response.content).toBe("t0t1t2t3t4t5t6t7t8t9");
+});
+
+test("openai-compat: stream silencioso vira network_timeout citando limite e ajuste", async () => {
+  const p = new OpenAICompatProvider({
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "k",
+    timeoutMs: 120,
+    retry: { maxAttempts: 1 },
+    fetchFn: slowSse({ gapMs: 20, chunks: 3, hangAfter: 1 }),
+  });
+
+  const error = (await p.complete({ ...req, onToken: () => {} }).catch((e) => e)) as ProviderError;
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.errClass).toBe("network_timeout");
+  expect(error.message).toContain("120ms");
+  expect(error.message).toContain("inatividade");
+  expect(error.message).toContain("providers.<name>.timeoutMs");
+});
+
+test("openai-compat: chamada sem streaming mantém o timeout total", async () => {
+  const p = new OpenAICompatProvider({
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "k",
+    timeoutMs: 30,
+    retry: { maxAttempts: 1 },
+    fetchFn: hungFetch,
+  });
+
+  const error = (await p.complete(req).catch((e) => e)) as ProviderError;
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.errClass).toBe("network_timeout");
+  expect(error.message).toContain("30ms");
+  expect(error.message).toContain("timeout total");
+  expect(error.message).toContain("providers.<name>.timeoutMs");
+});
+
+test("openai-compat: abort do caller durante o stream continua cancelamento", async () => {
+  const controller = new AbortController();
+  const p = new OpenAICompatProvider({
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "k",
+    timeoutMs: 5_000,
+    retry: { maxAttempts: 1 },
+    fetchFn: slowSse({ gapMs: 50, chunks: 10 }),
+  });
+
+  setTimeout(() => controller.abort(new DOMException("cancelado", "AbortError")), 30);
+  const error = (await p.complete({ ...req, onToken: () => {} }, controller.signal).catch((e) => e)) as Error;
+  expect(error.name).toBe("AbortError");
+});
+
 test("codex-oauth: servidor pendurado vira network_timeout", async () => {
   const p = new CodexOAuthProvider({
     credentialsPath: authPath(4102444800),
