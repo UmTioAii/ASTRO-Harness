@@ -97,7 +97,6 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 |---|---|---|
 | CRUD de provider da TUI/REPL gravar `config.json` | quando #459 entrar, `saveProfileStore` recusa e o CRUD para; falta o escritor de config | #492 (próximo slice de #401) |
 | `providers vault-import` de perfil global gravar `config.json` | mesmo bloqueio após #459 | #491 |
-| `/config` validar o merge com a camada global antes de gravar | `updateConfigFile` valida só a camada: um `mode` mais largo passa, a sessão aplica e o próximo load falha em `assertNarrowed` | #494 (contrato R5) |
 | `astro config migrate` e `CONFIG_SCHEMA_VERSION` (ADR-0028) | não há migração de major nem rejeição de chave desconhecida | #493 |
 | `config pull` usa `writeFileSync` simples | não é atômico/0600 como os demais escritores | #495 |
 | `/config` em projeto sem arquivo | modo não persiste; S3 não cria config | #469 |

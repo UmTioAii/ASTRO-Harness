@@ -10,13 +10,14 @@ import { budgetStatus, type BudgetDecider, type BudgetStatus } from "../budget";
 import type { ToolApprover } from "../tools/executor";
 import type { TrustAsk } from "../trust";
 import { canonicalFolder, TrustedFolders, trustStatePath } from "../trust";
-import { updateConfigPermissionsMode } from "../core/config";
+import { isPlainObject, updateConfigPermissionsMode } from "../core/config";
+import { assertModeWithinGlobal } from "../config-overlay";
 import type { AstroConfig } from "../core/config";
 import { SANDBOX_DISABLED_WARNING } from "../tools/run-command";
 import { configSummaryOf, type ConfigSummary } from "./config-summary";
 import type { CodexLoginStart } from "../providers/codex-login";
 import { expandHomePath, saveCodexAuth, startCodexLogin } from "../providers/codex-login";
-import { loadEffectiveConfig, providerIdentityFor, type ProviderSelection, type ProviderSource } from "../providers/profiles";
+import { loadEffectiveConfig, loadGlobalConfig, providerIdentityFor, type ProviderSelection, type ProviderSource } from "../providers/profiles";
 import type { ChatMessage, FetchLike, ImagePart } from "../providers/types";
 import type { WindowsAcl } from "../attachments/acl";
 import { AttachmentError, type AttachmentMeta, type LoadedAttachment } from "../attachments/model";
@@ -379,6 +380,13 @@ export class AgentSession {
       throw new Error(`modo inválido: ${String(mode)} (use bypass, allow-edits ou ask)`);
     }
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
+    // #494: a escrita no projeto não pode ampliar o teto global; falhou, nada é
+    // gravado e a sessão continua no modo anterior.
+    const env = this.#env ?? process.env;
+    if (env.ASTRO_NO_GLOBAL_CONFIG !== "1") {
+      const permissions = loadGlobalConfig(env)?.permissions;
+      assertModeWithinGlobal(isPlainObject(permissions) ? permissions.mode : undefined, mode);
+    }
     updateConfigPermissionsMode(this.#configPath, mode);
     this.#config = { ...this.#config, permissions: { mode } };
     return this.setPermissionMode(mode);

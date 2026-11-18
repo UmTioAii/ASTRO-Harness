@@ -489,8 +489,9 @@ describe("AgentSession configSummary / savePermissionMode (#273)", () => {
     const { configPath, session, stop } = setup();
     try {
       const chat = session({ env: testEnv({ KEY: "k", ASTRO_HOME: home }) });
-      expect(() => chat.savePermissionMode("bypass")).toThrow(/"permissions\.mode".*"ask"/);
-      expect(loadConfig(configPath).permissions?.mode).toBeUndefined(); // nada gravado
+      expect(() => chat.savePermissionMode("bypass")).toThrow(/permissions\.mode.*mais amplo que o teto global \(ask\)/);
+      // nada gravado: o arquivo cru continua sem a seção permissions
+      expect((JSON.parse(readFileSync(configPath, "utf8")) as { permissions?: unknown }).permissions).toBeUndefined();
       expect(chat.permissionMode()).toBe("ask"); // sessão inalterada
       chat.close();
     } finally {
