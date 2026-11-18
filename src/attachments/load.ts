@@ -8,7 +8,7 @@ import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } fr
 import { homedir, userInfo } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { classifyPath, createPathClassifier, type PathClassifierContext } from "../path-class";
-import { redactSecrets, PRIVATE_KEY_BEGIN, PRIVATE_KEY_END } from "../sanitize-external";
+import { redactSecrets, PRIVATE_KEY_BEGIN, PRIVATE_KEY_END, PEM_MAX_MARKER_BYTES } from "../sanitize-external";
 import { canonicalize, realpathPreservingDots } from "../tools/paths";
 import {
   assertAttachmentSize,
@@ -28,11 +28,12 @@ export { AttachmentError };
 /** Chunk de leitura do range em arquivo acima do teto (ADR-0026). */
 const READ_CHUNK_BYTES = 64 * 1024;
 
-/** Overlap por onde um marcador PEM pode atravessar dois pedaços da mesma linha. */
-const PEM_SCAN_OVERLAP = 48;
+/** Overlap por onde um marcador PEM pode atravessar dois pedaços da mesma linha: o maior marcador cabe inteiro (`maxMarkerBytes - 1`). */
+const PEM_SCAN_OVERLAP = PEM_MAX_MARKER_BYTES - 1;
 
-/** Marcadores que abrem/fecham um bloco de chave privada (mesmo par do `REDACT_PEM`). */
-const PEM_MARKERS = new RegExp(`${PRIVATE_KEY_BEGIN.source}|${PRIVATE_KEY_END.source}`, "g");
+/** Marcadores que abrem/fecham um bloco de chave privada; flags derivadas das fontes + `g` para `matchAll`. */
+const PEM_SCAN_FLAGS = [...new Set([...PRIVATE_KEY_BEGIN.flags, ...PRIVATE_KEY_END.flags, "g"])].sort().join("");
+const PEM_MARKERS = new RegExp(`${PRIVATE_KEY_BEGIN.source}|${PRIVATE_KEY_END.source}`, PEM_SCAN_FLAGS);
 
 /** Substituto de cada linha de um bloco PEM selecionado por faixa (preserva numeração). */
 const REDACTED = "[REDACTED]";
