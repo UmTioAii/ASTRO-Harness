@@ -143,15 +143,16 @@ function validatePreset(value: unknown): Preset {
 }
 
 /**
- * Preset `simple`: limites fixos. Declarar outro valor é erro com o próximo
- * passo; 500 explícito é aceito porque é o próprio default.
+ * Preset `simple`: teto de 500. Uma camada mais restritiva (global/projeto com
+ * 30, por exemplo) continua valendo; acima de 500 é erro com o próximo passo.
  */
 function applySimplePreset(root: Record<string, unknown>): Record<string, unknown> {
   const check = (field: string, value: unknown): void => {
-    if (value === undefined || value === SIMPLE_MAX_STEPS) return;
+    if (value === undefined) return;
+    if (typeof value === "number" && Number.isInteger(value) && value > 0 && value <= SIMPLE_MAX_STEPS) return;
     fail(
       `config inválida: "${field}" só pode ser alterado com "preset": "control" ` +
-        `(no simple o limite é ${SIMPLE_MAX_STEPS})`,
+        `(no simple o teto é ${SIMPLE_MAX_STEPS})`,
     );
   };
 
@@ -173,9 +174,13 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
     : undefined;
   check("run.maxTurns", run?.maxTurns);
 
+  // Só injeta quando `agent` é objeto: entrada de tipo errado segue para o
+  // validador normal, que reporta a causa certa (nunca mascara o erro).
+  if (agent === undefined) return root;
+  const declared = typeof agent.maxSteps === "number" ? agent.maxSteps : SIMPLE_MAX_STEPS;
   return {
     ...root,
-    agent: { ...(agent ?? {}), maxSteps: SIMPLE_MAX_STEPS },
+    agent: { ...agent, maxSteps: Math.min(declared, SIMPLE_MAX_STEPS) },
   };
 }
 

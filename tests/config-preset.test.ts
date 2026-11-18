@@ -37,16 +37,25 @@ describe("preset simple/control (#515)", () => {
     expect(effectiveMaxTurns(cfg)).toBe(500);
   });
 
-  test("simple recusa agent.maxSteps diferente de 500 citando preset control", () => {
+  test("simple aceita um teto mais restrito vindo de outra camada", () => {
     const raw = base() as unknown as Record<string, unknown>;
-    (raw.agent as Record<string, unknown>).maxSteps = 12;
+    (raw.agent as Record<string, unknown>).maxSteps = 30;
+    raw.run = { maxTurns: 10 };
+    const cfg = validateConfig({ ...raw, preset: "simple" });
+    expect(cfg.agent.maxSteps).toBe(30);
+    expect(effectiveMaxTurns(cfg)).toBe(10);
+  });
+
+  test("simple recusa agent.maxSteps acima de 500 citando preset control", () => {
+    const raw = base() as unknown as Record<string, unknown>;
+    (raw.agent as Record<string, unknown>).maxSteps = 600;
     expect(() => validateConfig({ ...raw, preset: "simple" })).toThrow(ConfigError);
     expect(() => validateConfig({ ...raw, preset: "simple" })).toThrow(/preset.*control/);
   });
 
-  test("simple recusa agents.*.maxSteps e run.maxTurns diferentes de 500", () => {
+  test("simple recusa agents.*.maxSteps acima de 500 e run.maxTurns não numérico", () => {
     const withAgent = base() as unknown as Record<string, unknown>;
-    withAgent.agents = { coder: { model: "p/m1", maxSteps: 7 } };
+    withAgent.agents = { coder: { model: "p/m1", maxSteps: 700 } };
     expect(() => validateConfig({ ...withAgent, preset: "simple" })).toThrow(/preset.*control/);
 
     const withTurns = base() as unknown as Record<string, unknown>;
@@ -54,7 +63,7 @@ describe("preset simple/control (#515)", () => {
     expect(() => validateConfig({ ...withTurns, preset: "simple" })).toThrow(/preset.*control/);
   });
 
-  test("simple aceita 500 explícito, que é o próprio default", () => {
+  test("simple aceita 500 explícito, que é o próprio teto", () => {
     const raw = base() as unknown as Record<string, unknown>;
     (raw.agent as Record<string, unknown>).maxSteps = 500;
     raw.run = { maxTurns: 500 };
@@ -63,5 +72,9 @@ describe("preset simple/control (#515)", () => {
 
   test("preset desconhecido falha", () => {
     expect(() => validateConfig({ ...base(), preset: "turbo" })).toThrow(ConfigError);
+  });
+
+  test("agent de tipo errado não é mascarado pelo preset", () => {
+    expect(() => validateConfig({ ...base(), agent: "p/m1", preset: "simple" })).toThrow(/agent/);
   });
 });

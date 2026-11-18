@@ -63,6 +63,31 @@ import { resolvePermissionMode, mostRestrictive, type ActionClass, type Permissi
 import { ensureTrustedCwd, type TrustAsk } from "../trust";
 import type { NoProgressDecider } from "../loop-guard";
 
+/**
+ * Mensagem do limite de passos (#473, #515): nomeia o limite efetivo que
+ * disparou. Turnos ausentes valem 500, então o texto cita o default e o preset
+ * control, nunca um `agent.maxSteps` declarado que não era o teto real.
+ */
+export function maxStepsMessage(
+  config: Pick<AstroConfig, "agent" | "run" | "preset">,
+  error: { maxSteps: number; agentName?: string },
+): string {
+  if (error.agentName !== undefined) {
+    const field = `agents.${error.agentName}.maxSteps`;
+    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "${field}" = ${error.maxSteps}; ajuste "${field}" na configuração`;
+  }
+
+  const turnCap = effectiveMaxTurns(config);
+  if (turnCap !== "unlimited" && turnCap < config.agent.maxSteps) {
+    const limit = config.run?.maxTurns === undefined
+      ? `limite de turnos padrão "run.maxTurns" = ${turnCap} (ausente; use "preset": "control" para alterar)`
+      : `limite de turnos "run.maxTurns" = ${turnCap}`;
+    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final — ${limit}; ajuste "run.maxTurns" na configuração`;
+  }
+
+  return `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "agent.maxSteps" = ${config.agent.maxSteps}; ajuste "agent.maxSteps" na configuração`;
+}
+
 export interface RunOptions {
   configPath: string;
   task: string;
@@ -1253,19 +1278,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       });
       // #473: a mensagem nomeia o limite que disparou, o valor e a setting.
       // Multi-agent: o teto do agent nomeado (`agents.<nome>.maxSteps`) vem no erro.
-      // `run.maxTurns` só capa `agent.maxSteps` (Q-01/L2): se é o menor, é ele quem disparou.
-      const turnCap = config.run?.maxTurns;
-      const turnBinding = error.agentName === undefined
-        && typeof turnCap === "number" && turnCap < config.agent.maxSteps;
-      const namedField = error.agentName === undefined ? undefined : `agents.${error.agentName}.maxSteps`;
-      throw new Error(
-        namedField !== undefined
-          ? `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "${namedField}" = ${error.maxSteps}; ajuste "${namedField}" na configuração`
-          : turnBinding
-            ? `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite de turnos "run.maxTurns" = ${turnCap}; ajuste "run.maxTurns" na configuração`
-            : `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "agent.maxSteps" = ${config.agent.maxSteps}; ajuste "agent.maxSteps" na configuração`,
-        { cause: error },
-      );
+      // `run.maxTurns` capa `agent.maxSteps` (Q-01/L2); ausente vale 500 (#515).
+      throw new Error(maxStepsMessage(config, error), { cause: error });
     }
 
     // Cancelamento explícito (F-06): o estado interrupted já foi gravado pela sessão
