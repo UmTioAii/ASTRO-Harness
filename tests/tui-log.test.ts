@@ -24,6 +24,13 @@ describe("buffer de log da sessão em memória (#514, docs/tui-layout.md §/log)
     expect(line).not.toContain("\u001b");
   });
 
+  test("segredo com caractere de controle embutido também é redigido: redact roda no texto sem controle (I-03)", () => {
+    const [line] = appendLog([], "chave sk-\u001babcdef1234 fim");
+    expect(line).toContain("[REDACTED]");
+    expect(line).not.toContain("abcdef1234");
+    expect(line).not.toContain("\u001b");
+  });
+
   test("tailLog: sem n devolve tudo; com n devolve as últimas n; n fora de 1..∞ devolve vazio", () => {
     const lines = ["1", "2", "3", "4"];
     expect(tailLog(lines)).toEqual(lines);

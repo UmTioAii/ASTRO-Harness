@@ -33,6 +33,19 @@ test("LogScreen mostra o cabeçalho da sessão (com endpoint) e as linhas do buf
   }
 });
 
+test("LogScreen re-sanitiza as linhas no render (defesa em depth, I-03) (#514)", () => {
+  const instance = render(
+    <LogScreen colors={colors} header="ASTRO v1.2.3 · p/m1 · endpoint -" lines={["falha token=abcdef123456"]} onClose={() => {}} />,
+  );
+  try {
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("[REDACTED]");
+    expect(frame).not.toContain("abcdef123456");
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("LogScreen com buffer vazio avisa; esc e ctrl+c fecham (#514)", async () => {
   let closed = 0;
   const instance = render(

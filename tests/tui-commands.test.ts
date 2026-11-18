@@ -89,7 +89,7 @@ describe("comandos da TUI (T2, #63)", () => {
     const tail = await runCommand({ kind: "log", arg: "3" }, session, {});
     expect(tail.openLog).toBe(3);
     expect(tail.entries).toEqual([]);
-    for (const bad of ["0", "abc", "-1", "2.5", "3 4"]) {
+    for (const bad of ["0", "abc", "-1", "2.5", "3 4", "9".repeat(400)]) {
       const outcome = await runCommand({ kind: "log", arg: bad }, session, {});
       expect(outcome.openLog).toBeUndefined();
       expect(outcome.entries[0]?.kind).toBe("error");

@@ -1348,6 +1348,83 @@ class ContextWarnSession extends FakeSession {
   }
 }
 
+test("aviso de contexto: 1ª ocorrência só inline, repetições só no /log (#514, revisão B)", async () => {
+  const instance = render(<TuiApp session={new ContextWarnSession()} cwd="/tmp/astro" />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("oi1");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "eco:oi1"));
+    instance.stdin.write("oi2");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "eco:oi2"));
+    instance.stdin.write("/log");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "log da sess"));
+    const frame = instance.lastFrame() ?? "";
+    expect(frame.split("contexto 85%").length - 1).toBe(1);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("saúde: só transições vão para o /log; repetir /provider use não duplica a linha (#514, revisão B)", async () => {
+  const session = new FakeSession();
+  const instance = render(<TuiApp session={session} cwd="/tmp/astro" />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    for (let i = 0; i < 2; i++) {
+      instance.stdin.write("/provider use p");
+      instance.stdin.write("\r");
+      await waitFor(() => frameHas(instance, "provider: p/m1"));
+    }
+    await waitFor(() => session.healthCalls >= 2);
+    instance.stdin.write("/log");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "log da sess"));
+    const frame = instance.lastFrame() ?? "";
+    expect(frame.split("saúde:").length - 1).toBe(1);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("budget: 1ª faixa de aviso sai só no toast e não entra no /log (#514, revisão B)", async () => {
+  const session = new WarningBudgetSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-log-budget-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "custo alto")); // efeito do budget já rodou
+    instance.stdin.write("/log");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "log da sess"));
+    expect((instance.lastFrame() ?? "").includes("custo alto")).toBe(false);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("quota: 1ª faixa de aviso sai só no toast e não entra no /log (#514, revisão B)", async () => {
+  const session = new WarningQuotaSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-log-quota-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "quota d:")); // efeito da quota já rodou
+    instance.stdin.write("/log");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "log da sess"));
+    expect((instance.lastFrame() ?? "").includes("quota d:")).toBe(false);
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("aviso de contexto inline traz o percentual real e aparece uma vez (#480)", async () => {
   const instance = render(<TuiApp session={new ContextWarnSession()} cwd="/tmp/astro" />);
   try {
