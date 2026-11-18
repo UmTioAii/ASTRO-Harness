@@ -29,16 +29,32 @@ export interface RunTuiOptions {
 /** Ink desmontaria no ctrl+c antes do handler da app; a app decide a saída. */
 export const TUI_RENDER_OPTIONS = { exitOnCtrlC: false } as const;
 
-/** Abre a sessão já com o último modelo; modelo removido da config cai no default. */
-export function openSession<T>(create: (model?: string) => T, cwd: string): T {
+/**
+ * Abre a sessão já com o último modelo salvo — mas só quando a config não
+ * declara `agent.model` (#497, I-08): o modelo do projeto nunca é trocado em
+ * silêncio. Modelo salvo removido/ inválido cai no default.
+ */
+export function openSession<T>(create: (model?: string) => T, cwd: string, declaredModel?: string): T {
   const saved = loadTuiConfig(cwd).lastModel;
   if (saved === undefined) return create();
+  // Modelo declarado na config vence o estado de UI: sem troca silenciosa (I-08).
+  if (declaredModel !== undefined) return create();
   try {
     return create(saved);
   } catch (error) {
     if (error instanceof ConfigError) return create();
     throw error;
   }
+}
+
+/** Decisão de boot da TUI (#497): `--provider` e `agent.model` declarado desligam o modelo salvo. */
+export function bootSession<T>(
+  create: (model?: string) => T,
+  cwd: string,
+  opts: { declaredModel?: string; provider?: string },
+): T {
+  if (opts.provider !== undefined) return create();
+  return openSession(create, cwd, opts.declaredModel);
 }
 
 /** Branch git do cwd; ausente fora de um repositório. */
@@ -170,9 +186,12 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       ...(opts.artifactRoot === undefined ? {} : { artifactRoot: opts.artifactRoot }),
       ...(model === undefined ? {} : { model }),
     });
-    // `--provider` explícito vence o último modelo salvo em .astro/tui.json.
+    // `--provider` explícito e `agent.model` declarado vencem o último modelo salvo (#497).
     const boot = await bootstrapTui({
-      createSession: () => (opts.provider === undefined ? openSession(createSession, cwd) : createSession()),
+      createSession: () => bootSession(createSession, cwd, {
+        ...(project?.agent.model === undefined ? {} : { declaredModel: project.agent.model }),
+        ...(opts.provider === undefined ? {} : { provider: opts.provider }),
+      }),
       setup: () => setupProvider(manager, cwd, saveSecret, discardSecret),
       createShell: () => createShellRunner({
         configPath, cwd, env: opts.env ?? process.env,

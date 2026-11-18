@@ -42,7 +42,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | providers e models | camadas 2–3 | lê | lê + CRUD guiado (provider/perfil) | lê + CRUD guiado (provider/perfil) | compartilhado: contrato do run |
 | pricing, quota, paths, MCP, plugins | camadas 2–3 | lê | lê | lê | compartilhado; edição só no arquivo |
 | provider ativo | `activeProfileId` (store legado hoje; `config.json` após #459/#492) | `--provider` efêmero | tela; só perfil global | `/provider use`; só global | compartilhado; flag CLI-only |
-| modelo do turno | `agent.model`/`modelPool` (camadas 2–3) | sem flag | `lastModel` no boot; `/model` em runtime | só config; `/model` em runtime | compartilhado; memória TUI-only |
+| modelo do turno | `agent.model`/`modelPool` (camadas 2–3) | sem flag | `/model` em runtime; `lastModel` só vale sem `agent.model` declarado (#497) | só config; `/model` em runtime | compartilhado; memória TUI-only |
 | `permissions.mode` | camada 3 | `--permission-mode`/env efêmeros | `/config` grava; `/mode` runtime | `/config` só imprime; `/mode` runtime | compartilhado; persistência TUI-only |
 | trust | `$ASTRO_HOME/state.json` | pergunta no TTY | pergunta; revoga no `/config` | pergunta | compartilhado; revogação TUI-only |
 | tema, `lastModel`, favoritos, recentes | estado de UI (`.astro/tui.json` hoje; #468 define a raiz) | não lê | lê/grava | não lê | TUI-only: preferência de terminal |
@@ -79,7 +79,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 | `$ASTRO_HOME/trusted.json` | legado de trust | só antes de `migrations.trust` | importado e preservado; `saveTrustedStore` com caminho explícito ainda grava |
 | `.astro/tui.json` | tema, `lastModel`, favoritos, recentes | só TUI | só TUI |
 
-- `.astro/tui.json` é estado de UI, não config: ausente ou inválido cai nos defaults, o CLI/REPL nunca leem e ele não vence config explícita. A exceção é `lastModel` no boot da TUI, e só sem `--provider`: ele é passado como `opts.model` e vence `agent.model`, então o modelo do projeto é trocado sem aprovação — gap de I-08.
+- `.astro/tui.json` é estado de UI, não config: ausente ou inválido cai nos defaults, o CLI/REPL nunca leem e ele não vence config explícita. `lastModel` no boot da TUI só é aplicado quando a config não declara `agent.model` e sem `--provider` (#497): o modelo declarado nunca é trocado em silêncio (I-08).
 - #468 move a raiz desse estado para `$ASTRO_HOME` (tema global com override por projeto); a autoridade continua TUI-only.
 - `activeProfileId` mora junto dos providers (store legado; `config.json` após #459/#492); `lastModel` é dica de UI. Depois de `/model`, `●` (ativo salvo) e `em uso` (sessão) podem divergir — é esperado.
 - O rótulo de exibição do provider vive em `providers.<id>.name` no `config.json` e faz round-trip pelo CRUD/dump (#492); no projeto, o mesmo campo vence o id na lista. Escrita em `config.json`/`astro.config.json` que seja symlink é recusada com `config_write_denied` (#495). `config.json` inválido faz o CRUD falhar fechado (nada é gravado) até a camada ser corrigida.
@@ -98,7 +98,6 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 |---|---|---|
 | `astro config migrate` e `CONFIG_SCHEMA_VERSION` (ADR-0028) | não há migração de major nem rejeição de chave desconhecida | #493 |
 | `/config` em projeto sem arquivo | modo não persiste; S3 não cria config | #469 |
-| `lastModel` da TUI vence `agent.model` no boot | troca de modelo sem aprovação explícita (I-08); `--provider` desliga | #497 |
 
 - `preset` (`simple`/`control`, default `control`) é escalar: a camada de projeto vence. Em `simple`, `agent.maxSteps`, `agents.*.maxSteps` e `run.maxTurns` têm teto 500: um valor menor vindo de outra camada é mantido e acima de 500 é erro com `preset: "control"` como próximo passo; sem `run.maxTurns`, o teto efetivo é 500 (#515).
 
