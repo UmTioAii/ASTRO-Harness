@@ -506,6 +506,11 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         }
         continue;
       }
+      if (command.kind === "log") {
+        // buffer de log é só da TUI (#514); no REPL não há tela para abrir
+        io.write("log da sessão: disponível só na TUI (astro tui · /log)");
+        continue;
+      }
       if (command.kind === "theme") {
         io.write("tema: disponível só na TUI (astro tui · /theme)");
         continue;

@@ -2,7 +2,7 @@
 import { Box, Static, Text, useInput } from "ink";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { parseCommand, type ReplCommand } from "../chat/commands";
-import type { ChatSession } from "../chat/repl";
+import { statusLine, type ChatSession } from "../chat/repl";
 import { activeSessionRefusal, toSessionRecord } from "../chat/store";
 import type { SessionApi, SessionSummary } from "../chat/session-api";
 import type { SessionSnapshot } from "../chat/agent-session";
@@ -20,7 +20,9 @@ import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
 import type { ShellRunner } from "./shell";
 import { COMMANDS, applyCompletion, commandDescription, completionItems, suggestionWindow } from "./editor";
-import { Header, budgetColor, footerBase, modeColor } from "./banner";
+import { Header, budgetColor, footerBase, modeColor, packageVersion } from "./banner";
+import { appendLog, sessionHeaderLine, tailLog } from "./log";
+import { LogScreen } from "./log-screen";
 import { errorLine } from "./error-hint";
 import { indexFiles } from "./files";
 import { Markdown } from "./markdown";
@@ -160,11 +162,14 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       if (token !== healthToken.current) return;
       const state = providerHealth(report, provider);
       setHealth(state === undefined ? undefined : { provider, state });
+      // Transições de saúde vão para o /log (#514)
+      if (state !== undefined) logLine(`saúde: ${provider} ${state}`);
     } catch {
       if (token === healthToken.current) setHealth(undefined);
     }
   };
   const [screen, setScreen] = useState<{ mode: "list" | "add" | "edit" | "remove"; target?: string } | undefined>(undefined);
+  const [logScreen, setLogScreen] = useState<{ n?: number } | undefined>(undefined); // tela `/log` (#514)
   const [configOpen, setConfigOpen] = useState(false); // tela `/config` (#273)
   const [modelPicker, setModelPicker] = useState(false);
   const [sessionPicker, setSessionPicker] = useState(false); // modal `/sessions` (#64)
@@ -174,6 +179,21 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const [favorites, setFavorites] = useState<string[]>(initialConfig.favoriteModels ?? []);
   const [recents, setRecents] = useState<string[]>(initialConfig.recentModels ?? []);
   const commandState = useRef<CommandState>({});
+  // Buffer de log da sessão em memória (#514): ring em ref, nunca persiste (audit/ledger são a fonte durável)
+  const logRef = useRef<string[]>([]);
+  const lastLogHeaderRef = useRef<string | undefined>(undefined);
+  const logLine = (line: string): void => {
+    logRef.current = appendLog(logRef.current, line);
+  };
+  const endpointOf = (): string =>
+    manager?.list().find((item) => item.id === activeProvider())?.baseUrl ?? "-";
+  /** Cabeçalho da sessão vai para o /log (versão, provider/modelo, endpoint); só grava quando muda. */
+  const logSessionHeader = (): void => {
+    const header = sessionHeaderLine({ version: packageVersion(), model: session.snapshot().model, endpoint: endpointOf() });
+    if (lastLogHeaderRef.current === header) return;
+    lastLogHeaderRef.current = header;
+    logLine(header);
+  };
   const pendingAttachments = useRef<LoadedAttachment[]>([]);
   const exited = useRef(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -219,6 +239,12 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   useEffect(() => {
     setFiles(indexFiles(cwd));
   }, [cwd]);
+
+  // Cabeçalho da sessão entra no buffer de /log ao abrir (#514)
+  useEffect(() => {
+    logSessionHeader();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- roda só no mount
+  }, []);
 
   const persist = (report: boolean): { path?: string; failed: boolean } => {
     if (sessionApi === undefined) return { failed: false };
@@ -398,6 +424,11 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       commandState.current.theme = theme;
       commandState.current.setTheme = persistTheme;
       const outcome = await runCommand(command, session, commandState.current, { cwd, sessionApi });
+      if (outcome.openLog !== undefined) {
+        // /log abre a tela com o buffer; null = tudo, n = últimas n linhas (#514)
+        setLogScreen(outcome.openLog === null ? {} : { n: outcome.openLog });
+        return;
+      }
       if (outcome.openProviders !== undefined) {
         if (manager === undefined) {
           setEntries((current) => [...current, { kind: "error", text: "tela de providers indisponível" }]);
@@ -435,6 +466,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         } catch (error) {
           added.push({ kind: "error", text: errorLine(error, messageOf(error)) });
         }
+        logSessionHeader(); // novo cabeçalho da sessão vai para o /log (#514)
         if (command.kind === "provider" && command.action === "use") void refreshHealth();
       }
       // Só estado da sessão deduplica (#480): /help, /usage e /save repetem.
@@ -470,6 +502,10 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       pendingAttachments.current = [];
       sink.flush();
       setPartial(undefined);
+      // Resumo do turno sai da conversa e vai para o /log (#514, docs/tui-layout.md)
+      logLine(`turno concluído · ${result.steps} step(s)`);
+      logLine(statusLine(result));
+      if (result.warning) logLine(`⚠ contexto ${Math.round(result.contextRatio * 100)}% (≥80%)`);
       appendEntries([
         { kind: "assistant", text: result.final },
         // Aviso que muda a resposta fica inline uma vez; repetição é estado (#480).
@@ -493,7 +529,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     }
   };
 
-  useInput((value, key) => {    if (screen !== undefined || modelPicker || configOpen || sessionPicker || diffOpen) return; const ctrl = key.ctrl === true;
+  useInput((value, key) => {    if (screen !== undefined || modelPicker || configOpen || sessionPicker || diffOpen || logScreen !== undefined) return; const ctrl = key.ctrl === true;
     if (ctrl && (value === "c" || value === "d")) {
       approvals?.answer("");
       finish();
@@ -600,8 +636,10 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const budgetAlarm = useRef(false);
   useEffect(() => {
     const high = budget !== undefined && (budget.warning || budget.exhausted || budget.ceilingHit);
-    if (high && budget !== undefined && !budgetAlarm.current) {
-      addToast({ kind: "warning", text: `custo alto · ${budgetSegment(budget)}` });
+    if (high && budget !== undefined) {
+      // aviso de orçamento repetido vai para o /log; o toast sai só na 1ª vez (#514, #64)
+      logLine(`custo alto · ${budgetSegment(budget)}`);
+      if (!budgetAlarm.current) addToast({ kind: "warning", text: `custo alto · ${budgetSegment(budget)}` });
     }
     budgetAlarm.current = high;
   }, [budget]);
@@ -618,11 +656,24 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const quotaAlarm = useRef(false);
   useEffect(() => {
     const high = quota !== undefined && (quota.warning || quota.exhausted);
-    if (high && quota !== undefined && !quotaAlarm.current) {
-      addToast({ kind: "warning", text: quotaSegment(quota) });
+    if (high && quota !== undefined) {
+      logLine(quotaSegment(quota)); // aviso de quota repetido vai para o /log (#514)
+      if (!quotaAlarm.current) addToast({ kind: "warning", text: quotaSegment(quota) });
     }
     quotaAlarm.current = high;
   }, [quota]);
+
+  if (logScreen !== undefined) {
+    // Tela /log (#514): cabeçalho da sessão com endpoint + buffer em memória (tail n)
+    return (
+      <LogScreen
+        colors={colors}
+        header={sessionHeaderLine({ version: packageVersion(), model: status.model, endpoint: endpointOf() })}
+        lines={tailLog(logRef.current, logScreen.n)}
+        onClose={() => setLogScreen(undefined)}
+      />
+    );
+  }
 
   if (diffOpen && question?.diff !== undefined) {
     return (
@@ -717,6 +768,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
             setRecents(nextRecents);
             setStatus(statusOf(session.snapshot()));
             setEntries((current) => [...current, { kind: "info", text: `modelo: ${model}` }]);
+            logSessionHeader(); // novo cabeçalho da sessão vai para o /log (#514)
           } catch (error) {
             setEntries((current) => [...current, { kind: "error", text: errorLine(error, messageOf(error)) }]);
           }
@@ -781,6 +833,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           });
           setStatus(statusOf(session.snapshot()));
           setEntries((current) => [...current, { kind: "info", text: `provider: ${session.model}` }]);
+          logSessionHeader(); // novo cabeçalho da sessão vai para o /log (#514)
           void refreshHealth();
         }}
         onChanged={() => {
