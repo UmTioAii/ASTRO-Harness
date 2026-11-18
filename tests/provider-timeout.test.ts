@@ -106,6 +106,74 @@ const slowSse = (spec: SlowStream): ((url: string, init?: RequestInit) => Promis
   };
 };
 
+/** Mesmo relógio do `slowSse`, mas com eventos SSE do Codex (responses). */
+const slowCodexSse = (spec: SlowStream): ((url: string, init?: RequestInit) => Promise<Response>) => {
+  return async (_url, init) => {
+    const encoder = new TextEncoder();
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const body = new ReadableStream({
+      start(controller) {
+        init?.signal?.addEventListener("abort", () => {
+          for (const timer of timers) clearTimeout(timer);
+          controller.error(init.signal?.reason ?? new DOMException("Abortado", "AbortError"));
+        }, { once: true });
+        const sent = spec.hangAfter ?? spec.chunks;
+        for (let index = 0; index < sent; index++) {
+          timers.push(setTimeout(() => {
+            const event = index === spec.chunks - 1
+              ? { type: "response.completed", response: { usage: { input_tokens: 10, output_tokens: 5 } } }
+              : { type: "response.output_text.delta", delta: `t${index}` };
+            try {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+            } catch {
+              // corpo já encerrado pelo abort
+            }
+          }, spec.gapMs * (index + 1)));
+        }
+        if (spec.hangAfter === undefined) {
+          timers.push(setTimeout(() => {
+            try {
+              controller.close();
+            } catch {
+              // corpo já encerrado pelo abort
+            }
+          }, spec.gapMs * spec.chunks + 20));
+        }
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+};
+
+test("codex-oauth: stream saudável mais longo que o timeout completa", async () => {
+  const p = new CodexOAuthProvider({
+    credentialsPath: authPath(4102444800),
+    timeoutMs: 200,
+    providerName: "codex",
+    fetchFn: slowCodexSse({ gapMs: 50, chunks: 8 }),
+  });
+
+  const response = await p.complete(req);
+  expect(response.content).toBe("t0t1t2t3t4t5t6");
+  expect(response.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+});
+
+test("codex-oauth: stream silencioso vira network_timeout citando limite e ajuste", async () => {
+  const p = new CodexOAuthProvider({
+    credentialsPath: authPath(4102444800),
+    timeoutMs: 120,
+    providerName: "codex",
+    fetchFn: slowCodexSse({ gapMs: 20, chunks: 3, hangAfter: 1 }),
+  });
+
+  const error = (await p.complete(req).catch((e) => e)) as ProviderError;
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.errClass).toBe("network_timeout");
+  expect(error.message).toContain("120ms");
+  expect(error.message).toContain("inatividade");
+  expect(error.message).toContain("providers.codex.timeoutMs");
+});
+
 test("openai-compat: stream saudável mais longo que o timeout completa", async () => {
   // 500ms de stream contra timeoutMs 200: nenhum silêncio chega perto do limite.
   const p = new OpenAICompatProvider({
