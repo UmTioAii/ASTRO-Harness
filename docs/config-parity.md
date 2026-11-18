@@ -67,7 +67,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 
 ## D-CFG2: um store, não dois
 
-A TUI e o REPL **não** criam store de configuração próprio. O contrato é escrever os mesmos arquivos da CLI, por um escritor validado e atômico (`updateConfigFile` para a camada de projeto; o mesmo contrato para a global após #459/#492), exceto `config pull`, que ainda usa `writeFileSync` (lacuna). Divergência é bug, não contrato.
+A TUI e o REPL **não** criam store de configuração próprio. O contrato é escrever os mesmos arquivos da CLI, por um escritor validado e atômico (`updateConfigFile` para a camada de projeto; o mesmo contrato para a global após #459/#492; `config pull` usa `writeConfigFileAtomic`, #495). Divergência é bug, não contrato.
 
 | Arquivo | Guarda | Lido por | Gravado por |
 |---|---|---|---|
@@ -98,7 +98,6 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 | CRUD de provider da TUI/REPL gravar `config.json` | quando #459 entrar, `saveProfileStore` recusa e o CRUD para; falta o escritor de config | #492 (próximo slice de #401) |
 | `providers vault-import` de perfil global gravar `config.json` | mesmo bloqueio após #459 | #491 |
 | `astro config migrate` e `CONFIG_SCHEMA_VERSION` (ADR-0028) | não há migração de major nem rejeição de chave desconhecida | #493 |
-| `config pull` usa `writeFileSync` simples | não é atômico/0600 como os demais escritores | #495 |
 | `/config` em projeto sem arquivo | modo não persiste; S3 não cria config | #469 |
 | `lastModel` da TUI vence `agent.model` no boot | troca de modelo sem aprovação explícita (I-08); `--provider` desliga | #497 |
 

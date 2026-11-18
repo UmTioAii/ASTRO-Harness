@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CAPABILITY_KEYS, isKnownCapability, missingCapabilities, type Capability } from "../capabilities";
 import { PROTECTED_FORBIDDEN_ROOTS, DEFAULT_EFFORT_ESCALATION, MAX_AUTO_JUMP, MAX_EFFORT_LEVEL, type CallConfig, type EffortEscalationConfig, type EffortLevel, type ThinkingMode } from "../call-profile";
 import { DEFAULT_OUTPUT_LIMIT, type OutputLimitConfig } from "../output-limit";
@@ -1823,8 +1825,49 @@ function writeConfigFailure(path: string, error: unknown): ConfigError {
 }
 
 /**
+ * Grava `contents` de forma atômica: tmp no mesmo diretório (0600 no POSIX),
+ * fsync, rename. Destino symlink ou não-regular é recusado nomeando só o
+ * caminho; falha deixa o destino anterior intacto e sem tmp órfão
+ * (#495, ADR-0028, I-03).
+ */
+export function writeConfigFileAtomic(path: string, contents: string): void {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new ConfigError(
+        `não foi possível gravar "${path}": o destino é um symlink — use um arquivo regular; nada foi gravado`,
+        "config_write_denied",
+      );
+    }
+    if (existsSync(path) && !statSync(path).isFile()) {
+      throw new ConfigError(
+        `não foi possível gravar "${path}": o destino não é um arquivo regular; nada foi gravado`,
+        "config_write_denied",
+      );
+    }
+  } catch (error) {
+    if (error instanceof ConfigError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw writeConfigFailure(path, error);
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  try {
+    const fd = openSync(tmp, "wx", 0o600);
+    try {
+      writeFileSync(fd, contents, "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
+    throw writeConfigFailure(path, error);
+  }
+}
+
+/**
  * Lê o JSON cru, aplica `mutate`, valida o resultado com `validateConfig` e
- * grava de forma atômica (tmp + rename, modo 0600). As quatro falhas de
+ * grava de forma atômica (tmp + fsync + rename, modo 0600). As quatro falhas de
  * leitura/parse/schema são `ConfigError` distintos, cada um com o próximo
  * passo (#470); qualquer falha deixa o arquivo original intacto (sem tmp
  * órfão) e nenhuma mensagem contém conteúdo do arquivo, segredo ou stack (I-03).
@@ -1856,14 +1899,7 @@ function updateConfigFile(path: string, mutate: (raw: Record<string, unknown>) =
     const detail = error instanceof Error ? error.message : String(error);
     throw new ConfigError(`${detail} — corrija o campo indicado em "${path}"; o arquivo não foi alterado`, "config_invalid_schema");
   }
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    renameSync(tmp, path);
-  } catch (error) {
-    try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
-    throw writeConfigFailure(path, error);
-  }
+  writeConfigFileAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
 }
 
 /**

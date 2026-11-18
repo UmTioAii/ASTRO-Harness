@@ -5,7 +5,7 @@ import { validateAllowlistFlags, type AllowlistFlags, type CliAllowlists } from 
 import { AllowlistInvalidError } from "./path-class";
 import { denyDisplayPath, isPermissionMode, nonInteractiveApprover, type PermissionMode } from "./permissions";
 import { defaultArgs, isInteractive } from "./cli-default";
-import { validateConfig } from "./core/config";
+import { validateConfig, writeConfigFileAtomic } from "./core/config";
 import { loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "./providers/profiles";
 import { ProfileManager } from "./providers/profile-manager";
 import { formatVaultImport, importVaultCredential } from "./providers/vault-import";
@@ -1374,7 +1374,8 @@ async function main(argv: string[]): Promise<number> {
         console.warn(`aviso: plugins removidos da config "${o.name}" (publique/puxe com --allow-plugins): ${prepared.removedPlugins.join(", ")}`);
       }
       const configPath = resolve(o.configPath);
-      writeFileSync(configPath, prepared.json, "utf8");
+      // #495: mesma garantia dos demais escritores (tmp + fsync + rename, 0600).
+      writeConfigFileAtomic(configPath, prepared.json);
       console.log(`config "${o.name}" validada e gravada em ${o.configPath}`);
       return 0;
     } catch (error) {
