@@ -5,7 +5,7 @@ import { Auditor } from "../audit";
 import { isAbortError } from "../abort";
 import { SwapDeniedError, swapDelta, type SwapApprover, type SwapRequest } from "../approval";
 import type { AstroConfig, CodexOAuthProviderConfig, OpenAICompatProviderConfig, PriceConfig, ProviderConfig } from "./config";
-import { ConfigError, providerAccountRefFor, providerCredentialRefFor } from "./config";
+import { ConfigError, effectiveMaxTurns, providerAccountRefFor, providerCredentialRefFor } from "./config";
 import { loadEffectiveConfig, providerIdentityFor } from "../providers/profiles";
 import { estimateCost, Ledger } from "../ledger";
 import { CodexOAuthProvider } from "../providers/codex-oauth";
@@ -575,10 +575,11 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       ...(identity.credentialRef === undefined ? {} : { credentialRef: identity.credentialRef }),
     };
   };
-  /** Teto global de turnos (Q-01/L2): `run.maxTurns` só **capa**, nunca eleva
-   * `agent.maxSteps`; "unlimited" fica limitado ao agente até o corte físico (B10). */
-  const sessionMaxSteps = config.run?.maxTurns !== undefined && config.run.maxTurns !== "unlimited"
-    ? Math.min(config.agent.maxSteps, config.run.maxTurns)
+  /** Teto global de turnos (Q-01/L2, #515): `run.maxTurns` declarado vence; ausente
+   * vale 500 e só **capa** `agent.maxSteps`; "unlimited" fica limitado ao agente. */
+  const turnCap = effectiveMaxTurns(config);
+  const sessionMaxSteps = turnCap !== "unlimited"
+    ? Math.min(config.agent.maxSteps, turnCap)
     : config.agent.maxSteps;
 
   // Sandbox do run_command (F4-6): configurado antes de qualquer execução
