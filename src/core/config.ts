@@ -346,13 +346,26 @@ export interface AstroConfig {
   paths: PathsConfig;
 }
 
+/** Códigos estáveis das falhas de save da config (#470); sem código = erro legado. */
+export type ConfigErrorCode =
+  | "config_not_found"
+  | "config_read_denied"
+  | "config_read_failed"
+  | "config_write_denied"
+  | "config_write_failed"
+  | "config_invalid_json"
+  | "config_invalid_schema";
+
 export class ConfigError extends Error {
-  /** Código estável da falha (ex.: "config_not_found"); ausente nos erros antigos. */
-  readonly code?: string;
-  constructor(message: string, code?: string) {
+  /**
+   * Código estável da falha; a propriedade só existe quando há código, porque
+   * consumidores gateiam por shape (`"code" in error`).
+   */
+  declare readonly code?: ConfigErrorCode;
+  constructor(message: string, code?: ConfigErrorCode) {
     super(message);
     this.name = "ConfigError";
-    this.code = code;
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -1640,6 +1653,7 @@ export function loadConfig(path: string): AstroConfig {
 
 /** Código de erro de sistema de arquivos (ENOENT, EACCES...), quando presente. */
 function fsCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
 }
@@ -1669,23 +1683,27 @@ function readConfigFailure(path: string, error: unknown): ConfigError {
 }
 
 /**
- * Posição do erro de JSON quando o parser a informa: JSC (Bun) traz
- * `line`/`column` no próprio erro; V8 (Node) às vezes traz `position N` na
- * mensagem. Nunca usamos o trecho do arquivo que o parser cita (I-03).
+ * Posição do erro de JSON, derivada **só da mensagem** do parser: V8 (Node) põe
+ * `position N` e, em versões novas, `(line N column M)`; JSC (Bun) não põe
+ * posição na mensagem. `error.line`/`error.column` são ignorados: no Bun eles
+ * são o frame da pilha de quem chamou `JSON.parse` (ex.: config.ts), então um
+ * token ruim na linha 9 apareceria como linha 1714. Posição fora do arquivo é
+ * descartada. Nunca usamos o trecho do arquivo que o parser cita (I-03).
  */
 function jsonErrorPosition(text: string, error: unknown): { line: number; column: number } | undefined {
-  const err = error as { line?: unknown; column?: unknown; message?: unknown };
-  if (typeof err.line === "number" && typeof err.column === "number" && err.line >= 1 && err.column >= 1) {
-    return { line: err.line, column: err.column };
-  }
-  const message = typeof err.message === "string" ? err.message : "";
+  const message = error instanceof Error ? error.message : "";
+  const lastLine = text.split("\n").length;
+  const accept = (line: number, column: number): { line: number; column: number } | undefined =>
+    line >= 1 && line <= lastLine && column >= 1 ? { line, column } : undefined;
+
+  const inMessage = /\(line (\d+) column (\d+)\)/.exec(message);
+  if (inMessage !== null) return accept(Number(inMessage[1]), Number(inMessage[2]));
+
   const offset = /position (\d+)/.exec(message)?.[1];
-  if (offset !== undefined) {
-    const index = Math.min(Number(offset), text.length);
-    const before = text.slice(0, index);
-    return { line: before.split("\n").length, column: index - before.lastIndexOf("\n") };
-  }
-  return undefined;
+  if (offset === undefined) return undefined;
+  const index = Math.min(Number(offset), text.length);
+  const before = text.slice(0, index);
+  return accept(before.split("\n").length, index - before.lastIndexOf("\n"));
 }
 
 /** Mensagem de JSON inválido com linha/coluna quando disponível; nunca o conteúdo (I-03). */
