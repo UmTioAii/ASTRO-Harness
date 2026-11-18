@@ -918,6 +918,9 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   // Guarda o último `seq` do arquivo, não um total: o custo do run vem só das
   // entradas que ele gravou, então uma linha histórica sem preço não contamina (#476).
   const baselineSeq = ledger.lastSeq();
+  // Runs deste processo (raiz + filhos `run.task.*`): custo de outro processo no
+  // mesmo arquivo não é atribuído a este run (#476).
+  const runIds = new Set<string>([redactSecrets(run)]);
 
   // MCP (C2, #56): descoberta no início; falha individual não derruba a sessão.
   const mcpServers = config.mcpServers ?? {};
@@ -1016,6 +1019,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       });
       // Run própria para o filho: não sobrescreve o estado do run pai no ledger.
       const childRun = `${run}.task.${randomUUID()}`;
+      runIds.add(redactSecrets(childRun));
       const targetIdentity = providerIdentity(config, targetModel.provider);
       const childProvider = sameAccount
         ? providerFor(targetModel, target.profile, target.modelRouting)
@@ -1302,10 +1306,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     mcpRegistry?.close(); // sem processo/cliente órfão ao fim do run
   }
 
-  // #476: custo do run sai só das entradas deste run. Preço desconhecido em uma
-  // delas vira n/d; FREE sem preço curado grava 0 e o run reporta 0.
+  // #476: custo do run sai só das entradas deste processo. Preço desconhecido em
+  // uma delas vira n/d; FREE sem preço curado grava 0 e o run reporta 0.
   const runEntries = ledger.readAll().filter(
-    (entry) => typeof entry.seq === "number" && entry.seq > baselineSeq,
+    (entry) => typeof entry.seq === "number" && entry.seq > baselineSeq && runIds.has(entry.run),
   );
   const tokensIn = runEntries.reduce((sum, entry) => sum + entry.tokensIn, 0);
   const tokensOut = runEntries.reduce((sum, entry) => sum + entry.tokensOut, 0);

@@ -142,9 +142,11 @@ export function assertWithinQuota(
     );
   }
   if (limit.monthlyCostUsd !== undefined && usage.monthCostUsd >= limit.monthlyCostUsd) {
-    const prefix = usage.monthCostKnown ? "custo do mês" : "custo conhecido do mês (pelo menos)";
+    const spent = usage.monthCostKnown
+      ? `US$ ${usage.monthCostUsd.toFixed(4)}`
+      : `pelo menos US$ ${usage.monthCostUsd.toFixed(4)}`;
     reasons.push(
-      `${prefix} (US$ ${usage.monthCostUsd.toFixed(4)}) atingiu o limite mensal (US$ ${limit.monthlyCostUsd})`,
+      `custo do mês (${spent}) atingiu o limite mensal (US$ ${limit.monthlyCostUsd})`,
     );
   }
 
