@@ -1340,3 +1340,23 @@ test("comando comum repete a saída: só estado deduplica (#480)", async () => {
   }
 });
 
+
+class ContextWarnSession extends FakeSession {
+  async send(prompt: string): Promise<TurnResult> {
+    const result = await super.send(prompt);
+    return { ...result, warning: true, contextRatio: 0.85 };
+  }
+}
+
+test("aviso de contexto inline traz o percentual real e aparece uma vez (#480)", async () => {
+  const instance = render(<TuiApp session={new ContextWarnSession()} cwd="/tmp/astro" />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "contexto 85%"));
+    expect(frameHas(instance, "≥80%")).toBe(true);
+  } finally {
+    instance.unmount();
+  }
+});

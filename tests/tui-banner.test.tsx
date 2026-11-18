@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { render } from "ink-testing-library";
-import { HEADER_WIDTH, Header, footerBase, headerLine, modeColor, packageVersion, truncateMiddle } from "../src/tui/banner";
+import { HEADER_WIDTH, Header, budgetColor, footerBase, headerLine, modeColor, packageVersion, truncateMiddle } from "../src/tui/banner";
 import { getThemeColors } from "../src/tui/theme";
 
 const colors = getThemeColors("dark");
@@ -70,4 +70,12 @@ test("headerLine remove controle e não deixa o provider forjar uma linha (#480)
   expect(line).not.toContain("\u001b");
   expect(line).not.toContain("\n");
   expect(line.endsWith(" · ok")).toBe(true);
+});
+
+
+test("budgetColor: teto em erro, aviso em warning, resto sem cor (#480)", () => {
+  expect(budgetColor({ warning: false, exhausted: false, ceilingHit: true }, colors)).toBe(colors.error);
+  expect(budgetColor({ warning: false, exhausted: true, ceilingHit: false }, colors)).toBe(colors.error);
+  expect(budgetColor({ warning: true, exhausted: false, ceilingHit: false }, colors)).toBe(colors.warning);
+  expect(budgetColor({ warning: false, exhausted: false, ceilingHit: false }, colors)).toBeUndefined();
 });

@@ -20,7 +20,7 @@ import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
 import type { ShellRunner } from "./shell";
 import { COMMANDS, applyCompletion, commandDescription, completionItems, suggestionWindow } from "./editor";
-import { Header, footerBase, modeColor } from "./banner";
+import { Header, budgetColor, footerBase, modeColor } from "./banner";
 import { errorLine } from "./error-hint";
 import { indexFiles } from "./files";
 import { Markdown } from "./markdown";
@@ -473,7 +473,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       appendEntries([
         { kind: "assistant", text: result.final },
         // Aviso que muda a resposta fica inline uma vez; repetição é estado (#480).
-        ...(result.warning ? [{ kind: "info" as const, state: true, text: "⚠ contexto ≥80%" }] : []),
+        ...(result.warning ? [{ kind: "info" as const, state: true, text: `⚠ contexto ${Math.round(result.contextRatio * 100)}% (≥80%)` }] : []),
         ...(result.trimmed ? [{ kind: "info" as const, state: true, text: "turno antigo descartado" }] : []),
       ]);
     } catch (error) {
@@ -872,11 +872,11 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           costUsd: status.costUsd,
         })}
         {budget === undefined ? null : (
-          <Text {...(budget.exhausted || budget.ceilingHit
-            ? { color: colors.error }
-            : budget.warning
-              ? { color: colors.warning }
-              : { dimColor: true })}>
+          <Text
+            {...(budgetColor(budget, colors) === undefined
+              ? { dimColor: true }
+              : { color: budgetColor(budget, colors) })}
+          >
             {` · ${budgetSegment(budget)}`}
           </Text>
         )}
@@ -886,6 +886,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     </Box>
   );
 }
+
+
 
 
 

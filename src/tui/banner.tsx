@@ -101,6 +101,15 @@ export function modeColor(mode: string | undefined, colors: ThemeColors): string
   return mode === "bypass" ? colors.error : undefined;
 }
 
+/** Cor do segmento de budget (#480): teto em vermelho, aviso em amarelo. */
+export function budgetColor(
+  budget: { warning: boolean; exhausted: boolean; ceilingHit: boolean },
+  colors: ThemeColors,
+): string | undefined {
+  if (budget.exhausted || budget.ceilingHit) return colors.error;
+  return budget.warning ? colors.warning : undefined;
+}
+
 /** Header renderizado: sem caixa; a cor segue a saúde (#480). */
 export function Header({ colors, ...data }: HeaderData & { colors: ThemeColors }): ReactElement {
   const color = data.health === "down" ? colors.error : data.health === "n/d" ? undefined : colors.accent;
