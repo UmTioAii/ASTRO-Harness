@@ -371,5 +371,5 @@ test("#476 orçamento com preço desconhecido não apresenta soma parcial como c
   ledger.record({ ...usage, model: "sem-preco", tokensIn: 1, tokensOut: 0 }, undefined);
   const err = capture(() => assertProjectBudget(ledger, 10));
   expect(err.message).toContain("pelo menos");
-  expect(err.message).not.toContain("US$ 12.0000 de US$ 10");
+  expect(err.message).not.toContain("atingido: US$ 12.0000");
 });
