@@ -25,6 +25,7 @@ export interface NetworkCall {
 export function networkCall(caller: AbortSignal | undefined, timeoutMs: number): NetworkCall {
   const controller = new AbortController();
   let timedOut = false;
+  let disposed = false;
 
   const onCallerAbort = (): void => controller.abort(caller?.reason);
   if (caller?.aborted === true) controller.abort(caller.reason);
@@ -42,11 +43,12 @@ export function networkCall(caller: AbortSignal | undefined, timeoutMs: number):
     signal: controller.signal,
     timedOut: () => timedOut,
     reset: () => {
-      if (timedOut || controller.signal.aborted) return;
+      if (disposed || timedOut || controller.signal.aborted) return;
       clearTimeout(timer);
       timer = arm();
     },
     dispose: () => {
+      disposed = true;
       clearTimeout(timer);
       caller?.removeEventListener("abort", onCallerAbort);
     },
