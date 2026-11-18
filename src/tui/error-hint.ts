@@ -30,8 +30,12 @@ export function errorHint(error: unknown): string | undefined {
   return undefined;
 }
 
+/** C0/C1 e marcas de direção: a mensagem não pode forjar uma linha no painel. */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
 /** Linha de erro com próximo passo quando conhecido (#480). */
 export function errorLine(error: unknown, message: string): string {
+  const safe = message.replace(CONTROL, " ").trim();
   const hint = errorHint(error);
-  return hint === undefined ? `erro: ${message}` : `erro: ${message} · ${hint}`;
+  return hint === undefined ? `erro: ${safe}` : `erro: ${safe} · ${hint}`;
 }

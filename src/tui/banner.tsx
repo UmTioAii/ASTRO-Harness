@@ -22,6 +22,13 @@ export function packageVersion(): string {
 /** Teto do header em colunas (#480). */
 export const HEADER_WIDTH = 80;
 
+/** C0/C1 e marcas de direção não podem entrar no header (forja de linha/OSC). */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+function clean(value: string): string {
+  return value.replace(CONTROL, " ");
+}
+
 export interface HeaderData {
   provider: string;
   /** Ref completa (`provider/modelo`) ou só o id; o provider é normalizado. */
@@ -54,11 +61,11 @@ export function truncateMiddle(text: string, max: number): string {
  * Acima de 80 colunas corta o modelo e, se ainda faltar, o provider.
  */
 export function headerLine(data: HeaderData): string {
-  const prefix = `ASTRO v${data.version ?? packageVersion()} · `;
-  const suffix = ` · ${data.health}`;
+  const prefix = `ASTRO v${clean(data.version ?? packageVersion())} · `;
+  const suffix = ` · ${clean(data.health)}`;
   const budget = Math.max(1, HEADER_WIDTH - prefix.length - suffix.length);
-  let provider = data.provider;
-  let model = modelId(data.model, data.provider);
+  let provider = clean(data.provider);
+  let model = modelId(clean(data.model), provider);
   if (`${provider}/${model}`.length > budget) {
     model = truncateMiddle(model, Math.max(8, budget - provider.length - 1));
     if (`${provider}/${model}`.length > budget) {
@@ -74,21 +81,18 @@ export interface FooterData {
   tokensIn: number;
   tokensOut: number;
   costUsd: number | null;
-  /** Segmento do budget já formatado (`budget: …`); ausente não aparece. */
-  budget?: string;
 }
 
 /**
- * Footer (#480): só campos com valor. Sem turnos, sem tokens, sem custo
- * conhecido ou sem budget, o campo não aparece. O modo é anexado pelo
- * componente para receber cor.
+ * Footer (#480): só campos com valor. Sem turnos, sem tokens ou sem custo
+ * conhecido, o campo não aparece. Budget e modo são anexados pelo componente
+ * para receber cor.
  */
 export function footerBase(data: FooterData): string {
   const parts = [data.place];
   if (data.turns > 0) parts.push(`${data.turns} turno(s)`);
   if (data.tokensIn + data.tokensOut > 0) parts.push(`${data.tokensIn}/${data.tokensOut} tokens`);
   if (data.costUsd !== null) parts.push(`US$ ${data.costUsd.toFixed(6)}`);
-  if (data.budget !== undefined) parts.push(data.budget);
   return parts.join(" · ");
 }
 

@@ -80,10 +80,6 @@ function statusOf(snapshot: SessionSnapshot): Status {
   };
 }
 
-function money(value: number | null): string {
-  return value === null ? "n/d" : `US$ ${value.toFixed(6)}`;
-}
-
 function messageOf(error: unknown): string {
   return redactSecrets(error instanceof Error ? error.message : String(error));
 }
@@ -120,11 +116,11 @@ export function activateProvider(
 
 export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, manager, onExit, toastTtlMs = TOAST_TTL_MS, streamThrottleMs = STREAM_THROTTLE_MS, historyLimit = HISTORY_LIMIT, saveSecret, discardSecret }: TuiAppProps): ReactElement {
   const [entries, setEntries] = useState<Entry[]>([{ kind: "info", text: WELCOME }]);
-  /** Estado cinza aparece uma vez por sessão (#480): texto idêntico não repete. */
+  /** Estado da sessão aparece uma vez por sessão (#480): só entradas marcadas. */
   const appendEntries = (added: Entry[]): void => {
     setEntries((current) => {
-      const seen = new Set(current.filter((entry) => entry.kind === "info").map((entry) => entry.text));
-      const fresh = added.filter((entry) => entry.kind !== "info" || !seen.has(entry.text));
+      const seen = new Set(current.filter((entry) => entry.state === true).map((entry) => entry.text));
+      const fresh = added.filter((entry) => entry.state !== true || !seen.has(entry.text));
       return fresh.length === 0 ? current : [...current, ...fresh];
     });
   };
@@ -184,7 +180,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const addToast = (toast: { kind: Toast["kind"]; text: string }): void => {
     setToasts((current) => pushToast(current, toast, Date.now()));
   };
-  const seenEntries = useRef(0);
   // Virtualização do histórico (#64): o <Static> do ink é append-only por
   // contagem (items.slice(index)), então o corte da janela acontece num update
   // separado (efeito abaixo), nunca atomicamente com o append — senão itens na
@@ -442,7 +437,10 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         }
         if (command.kind === "provider" && command.action === "use") void refreshHealth();
       }
-      appendEntries(added);
+      // Só estado da sessão deduplica (#480): /help, /usage e /save repetem.
+      const stateful = command.kind === "model" || command.kind === "provider"
+        || command.kind === "resume" || command.kind === "theme" || command.kind === "mode";
+      appendEntries(stateful ? added.map((entry) => (entry.kind === "info" ? { ...entry, state: true } : entry)) : added);
       setStatus(statusOf(session.snapshot()));
       if (outcome.exit) finish();
       return;
@@ -474,6 +472,9 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       setPartial(undefined);
       appendEntries([
         { kind: "assistant", text: result.final },
+        // Aviso que muda a resposta fica inline uma vez; repetição é estado (#480).
+        ...(result.warning ? [{ kind: "info" as const, state: true, text: "⚠ contexto ≥80%" }] : []),
+        ...(result.trimmed ? [{ kind: "info" as const, state: true, text: "turno antigo descartado" }] : []),
       ]);
     } catch (error) {
       appendEntries([{ kind: "error", text: errorLine(error, messageOf(error)) }]);
@@ -815,7 +816,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const win = suggestionWindow(suggestions.length, selectedIndex);
   const visibleSuggestions = suggestions.slice(win.start, win.end);
   const providerId = session.providerName?.() ?? status.model.split("/")[0]!;
-  const endpoint = manager?.list().find((item) => item.id === providerId)?.baseUrl ?? "-";
   const healthState = health?.provider === providerId ? health.state : "n/d";
   const inputLines = input.split("\n");
   // Modo de permissão sempre visível (#270); bypass em cor de alerta
@@ -870,14 +870,23 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           tokensIn: status.tokensIn,
           tokensOut: status.tokensOut,
           costUsd: status.costUsd,
-          ...(budget === undefined ? {} : { budget: budgetSegment(budget) }),
         })}
+        {budget === undefined ? null : (
+          <Text {...(budget.exhausted || budget.ceilingHit
+            ? { color: colors.error }
+            : budget.warning
+              ? { color: colors.warning }
+              : { dimColor: true })}>
+            {` · ${budgetSegment(budget)}`}
+          </Text>
+        )}
         {" · modo: "}
         <Text color={modeColor(mode, colors)}>{mode}</Text>
       </Text>
     </Box>
   );
 }
+
 
 
 
