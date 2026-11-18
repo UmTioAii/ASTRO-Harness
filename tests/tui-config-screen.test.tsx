@@ -1,8 +1,11 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { render } from "ink-testing-library";
 import { ConfigScreen } from "../src/tui/config-screen";
 import type { ConfigSummary } from "../src/chat/config-summary";
-import { ConfigError } from "../src/core/config";
+import { updateConfigPermissionsMode } from "../src/core/config";
 import type { PermissionMode } from "../src/permissions";
 import { getThemeColors } from "../src/tui/theme";
 
@@ -154,14 +157,24 @@ test("esc no main fecha; esc no seletor volta; ctrl+c fecha; falha de save mostr
 });
 
 test("falha de save mostra a mensagem específica uma única vez, sem linha genérica (#470)", async () => {
-  const specific = 'configuração não encontrada: "/tmp/proj/astro.config.json" — crie o arquivo explicitamente ou passe --config com outro caminho';
+  // A mensagem vem do core (arquivo ausente), não de um stub: o teste só passa se
+  // updateConfigPermissionsMode produzir o erro específico e a tela mostrar uma vez.
+  const missing = join(mkdtempSync(join(tmpdir(), "astro-tui-470-")), "astro.config.json");
+  let shown = "";
   const instance = render(
     <ConfigScreen
       colors={colors}
       summary={summary}
       trustedFolders={[]}
       onClose={() => undefined}
-      onSaveMode={(mode) => { if (mode === "allow-edits") throw new ConfigError(specific, "config_not_found"); }}
+      onSaveMode={(mode) => {
+        try {
+          updateConfigPermissionsMode(missing, mode);
+        } catch (error) {
+          shown = error instanceof Error ? error.message : String(error);
+          throw error;
+        }
+      }}
     />,
   );
   try {
@@ -173,6 +186,8 @@ test("falha de save mostra a mensagem específica uma única vez, sem linha gen�
     instance.stdin.write("\r"); // falha de save
     await waitFor(() => instance.lastFrame()?.includes("configuração não encontrada") === true);
     const frame = instance.lastFrame() ?? "";
+    expect(shown).toContain("configuração não encontrada");
+    expect(shown).toContain("--config"); // próximo passo no erro do core
     // mensagem específica aparece exatamente uma vez, sem a linha genérica antiga
     expect(frame.split("configuração não encontrada").length - 1).toBe(1);
     expect(frame).not.toContain("não foi possível atualizar");

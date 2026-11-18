@@ -310,10 +310,23 @@ describe("erros distintos ao salvar a config via /config (#470)", () => {
     expect(err.message).toContain(path);
     expect(err.message).toContain("--config");
     expect(err.message).not.toContain("leitura/JSON falhou");
+    expect(err.message).not.toContain("não foi possível atualizar"); // mensagem genérica sumiu
     noTmp(dir);
   });
 
-  test("JSON inválido: linha/coluna quando o parser informa, nunca o conteúdo (I-03)", () => {
+  test("EISDIR (caminho de diretório): leitura falhou, não é 'não encontrado'", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
+    // `dir` é um diretório: readFileSync falha com EISDIR
+    const err = capture(() => updateConfigPermissionsMode(dir, "ask"));
+    expect(err.code).toBe("config_read_failed");
+    expect(err.message).toContain("não foi possível ler");
+    expect(err.message).toContain(dir);
+    expect(err.message).toContain("EISDIR");
+    expect(err.message).not.toContain("não foi possível atualizar");
+    noTmp(dir);
+  });
+
+  test("JSON inválido: a posição reportada fica dentro do arquivo, nunca no frame da pilha", () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
     const path = join(dir, "astro.config.json");
     const content = '{\n  "providers": {},\n  "models": [], "agent": {"model": "x", tokenAqui }\n}';
@@ -322,11 +335,67 @@ describe("erros distintos ao salvar a config via /config (#470)", () => {
     expect(err.code).toBe("config_invalid_json");
     expect(err.message).toMatch(/JSON inválido/);
     expect(err.message).toContain(path);
-    expect(err.message).toMatch(/linha \d+, coluna \d+/); // JSC (Bun) traz line/column no erro
     expect(err.message).not.toContain("tokenAqui"); // conteúdo do arquivo nunca ecoa
     expect(err.message).toContain("não foi alterado");
+    // Bun põe no erro o line/column do frame que chamou JSON.parse (config.ts), não o do
+    // JSON; posição fora do arquivo nunca é reportada. Parser sem posição na mensagem
+    // (Bun) => nenhuma linha/coluna é afirmada.
+    const reported = /linha (\d+), coluna (\d+)/.exec(err.message);
+    if (reported !== null) {
+      const line = Number(reported[1]);
+      expect(line).toBeGreaterThanOrEqual(1);
+      expect(line).toBeLessThanOrEqual(content.split("\n").length);
+      expect(Number(reported[2])).toBeGreaterThanOrEqual(1);
+    }
     expect(readFileSync(path, "utf8")).toBe(content);
     noTmp(dir);
+  });
+
+  test("posição do JSON vem só da mensagem do parser (V8), com limites do arquivo", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-470-"));
+    const path = join(dir, "astro.config.json");
+    const content = '{\n  "a": 1,\n  "b": foo\n}\n';
+    writeFileSync(path, content);
+    const index = content.indexOf("foo"); // linha 3, coluna 8
+    /** Joga o erro que o parser jogaria; Bun não põe posição na mensagem, V8 põe. */
+    const withParseError = (error: unknown, run: () => void): void => {
+      const original = JSON.parse;
+      JSON.parse = () => { throw error; };
+      try {
+        run();
+      } finally {
+        JSON.parse = original;
+      }
+    };
+
+    withParseError(new SyntaxError(`Unexpected token 'o', "..." is not valid JSON at position ${index}`), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).toContain("na linha 3, coluna 8"); // position -> linha/coluna
+    });
+    withParseError(new SyntaxError(`Expected property name or '}' in JSON at position ${index} (line 3 column 8)`), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).toContain("na linha 3, coluna 8"); // (line N column M) vence position
+    });
+    withParseError(new SyntaxError("Bad JSON at position 4 (line 99 column 2)"), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).not.toMatch(/linha \d+/); // fora do arquivo (4 linhas): descarta
+    });
+    // Bun: line/column do frame da pilha (config.ts:1714), sem posição na mensagem.
+    withParseError(Object.assign(new SyntaxError("JSON Parse error: Property name must be a string literal"), { line: 1714, column: 5 }), () => {
+      const err = capture(() => updateConfigPermissionsMode(path, "ask"));
+      expect(err.message).not.toMatch(/linha \d+/);
+    });
+    expect(readFileSync(path, "utf8")).toBe(content);
+    noTmp(dir);
+  });
+
+  test("ConfigError.code é opcional de verdade: sem código a propriedade não existe", () => {
+    const legacy = new ConfigError("mensagem antiga");
+    expect("code" in legacy).toBe(false); // consumidores gateiam por shape ("code" in error)
+    expect(legacy.code).toBeUndefined();
+    const coded = new ConfigError("falhou", "config_write_failed");
+    expect("code" in coded).toBe(true);
+    expect(coded.code).toBe("config_write_failed");
   });
 
   test("raiz que não é objeto: erro de schema nomeando o problema; arquivo intacto", () => {
