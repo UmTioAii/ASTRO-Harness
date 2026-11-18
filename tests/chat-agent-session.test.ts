@@ -483,6 +483,36 @@ describe("AgentSession configSummary / savePermissionMode (#273)", () => {
     }
   });
 
+  test("savePermissionMode recusa modo mais amplo que o teto global, sem gravar nem aplicar (#494)", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-mode-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ permissions: { mode: "ask" } }));
+    const { configPath, session, stop } = setup();
+    try {
+      const chat = session({ env: testEnv({ KEY: "k", ASTRO_HOME: home }) });
+      expect(() => chat.savePermissionMode("bypass")).toThrow(/"permissions\.mode".*"ask"/);
+      expect(loadConfig(configPath).permissions?.mode).toBeUndefined(); // nada gravado
+      expect(chat.permissionMode()).toBe("ask"); // sessão inalterada
+      chat.close();
+    } finally {
+      stop();
+    }
+  });
+
+  test("savePermissionMode persiste modo mais restrito que o teto global (#494)", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-mode-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ permissions: { mode: "bypass" } }));
+    const { configPath, session, stop } = setup();
+    try {
+      const chat = session({ env: testEnv({ KEY: "k", ASTRO_HOME: home }) });
+      expect(chat.savePermissionMode("allow-edits")).toBe("allow-edits");
+      expect(loadConfig(configPath).permissions?.mode).toBe("allow-edits");
+      expect(chat.permissionMode()).toBe("allow-edits");
+      chat.close();
+    } finally {
+      stop();
+    }
+  });
+
   test("savePermissionMode persiste no arquivo, troca em runtime, audita e o próximo run usa o modo novo", async () => {
     const { cwd, configPath, session, stop } = setup();
     const saved = process.env.ASTRO_PERMISSION_MODE;
