@@ -162,8 +162,14 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       if (token !== healthToken.current) return;
       const state = providerHealth(report, provider);
       setHealth(state === undefined ? undefined : { provider, state });
-      // Transições de saúde vão para o /log (#514)
-      if (state !== undefined) logLine(`saúde: ${provider} ${state}`);
+      // Só transições de saúde vão para o /log (#514, docs/tui-layout.md §/log)
+      if (state !== undefined) {
+        const line = `saúde: ${provider} ${state}`;
+        if (lastHealthLogRef.current !== line) {
+          lastHealthLogRef.current = line;
+          logLine(line);
+        }
+      }
     } catch {
       if (token === healthToken.current) setHealth(undefined);
     }
@@ -182,6 +188,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   // Buffer de log da sessão em memória (#514): ring em ref, nunca persiste (audit/ledger são a fonte durável)
   const logRef = useRef<string[]>([]);
   const lastLogHeaderRef = useRef<string | undefined>(undefined);
+  const lastHealthLogRef = useRef<string | undefined>(undefined); // só transições de saúde vão para o /log (#514)
+  const contextInlineRef = useRef(false); // 1ª ocorrência do aviso de contexto fica só inline (#514)
   const logLine = (line: string): void => {
     logRef.current = appendLog(logRef.current, line);
   };
@@ -505,11 +513,16 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       // Resumo do turno sai da conversa e vai para o /log (#514, docs/tui-layout.md)
       logLine(`turno concluído · ${result.steps} step(s)`);
       logLine(statusLine(result));
-      if (result.warning) logLine(`⚠ contexto ${Math.round(result.contextRatio * 100)}% (≥80%)`);
+      const contextNote = result.warning ? `⚠ contexto ${Math.round(result.contextRatio * 100)}% (≥80%)` : undefined;
+      if (contextNote !== undefined) {
+        // 1ª ocorrência fica só inline; repetições vão para o /log (#514, doc §/log)
+        if (contextInlineRef.current) logLine(contextNote);
+        else contextInlineRef.current = true;
+      }
       appendEntries([
         { kind: "assistant", text: result.final },
         // Aviso que muda a resposta fica inline uma vez; repetição é estado (#480).
-        ...(result.warning ? [{ kind: "info" as const, state: true, text: `⚠ contexto ${Math.round(result.contextRatio * 100)}% (≥80%)` }] : []),
+        ...(contextNote === undefined ? [] : [{ kind: "info" as const, state: true, text: contextNote }]),
         ...(result.trimmed ? [{ kind: "info" as const, state: true, text: "turno antigo descartado" }] : []),
       ]);
     } catch (error) {
@@ -637,9 +650,9 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   useEffect(() => {
     const high = budget !== undefined && (budget.warning || budget.exhausted || budget.ceilingHit);
     if (high && budget !== undefined) {
-      // aviso de orçamento repetido vai para o /log; o toast sai só na 1ª vez (#514, #64)
-      logLine(`custo alto · ${budgetSegment(budget)}`);
-      if (!budgetAlarm.current) addToast({ kind: "warning", text: `custo alto · ${budgetSegment(budget)}` });
+      // 1ª faixa de aviso sai só no toast (transitório); repetições vão para o /log (#514, #64, doc §/log)
+      if (budgetAlarm.current) logLine(`custo alto · ${budgetSegment(budget)}`);
+      else addToast({ kind: "warning", text: `custo alto · ${budgetSegment(budget)}` });
     }
     budgetAlarm.current = high;
   }, [budget]);
@@ -657,8 +670,9 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   useEffect(() => {
     const high = quota !== undefined && (quota.warning || quota.exhausted);
     if (high && quota !== undefined) {
-      logLine(quotaSegment(quota)); // aviso de quota repetido vai para o /log (#514)
-      if (!quotaAlarm.current) addToast({ kind: "warning", text: quotaSegment(quota) });
+      // mesma regra do budget: 1ª vez só no toast, repetições no /log (#514, doc §/log)
+      if (quotaAlarm.current) logLine(quotaSegment(quota));
+      else addToast({ kind: "warning", text: quotaSegment(quota) });
     }
     quotaAlarm.current = high;
   }, [quota]);

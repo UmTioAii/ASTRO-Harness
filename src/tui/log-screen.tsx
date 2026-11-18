@@ -5,7 +5,7 @@
  */
 import { Box, Text, useInput } from "ink";
 import type { ReactElement } from "react";
-import { redactSecrets } from "../sanitize-external";
+import { sanitizeLogLine } from "./log";
 import type { ThemeColors } from "./theme";
 
 export interface LogScreenProps {
@@ -23,12 +23,13 @@ export function LogScreen({ colors, header, lines, onClose }: LogScreenProps): R
   });
   return (
     <Box flexDirection="column">
-      <Text bold>{redactSecrets(header)}</Text>
+      <Text bold>{sanitizeLogLine(header)}</Text>
       <Text dimColor>log da sessão (memória)</Text>
       {lines.length === 0 ? (
         <Text dimColor>log vazio</Text>
       ) : (
-        lines.map((line, index) => <Text key={index}>{line}</Text>)
+        // defesa em depth (I-03): o buffer já vem sanitizado, a tela re-sanitiza no render
+        lines.map((line, index) => <Text key={index}>{sanitizeLogLine(line)}</Text>)
       )}
       <Text dimColor>esc voltar</Text>
     </Box>

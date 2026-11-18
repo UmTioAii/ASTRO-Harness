@@ -13,7 +13,10 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u20
 
 /** Linha pronta para o buffer: sem segredo (I-03) e sem caractere de controle. */
 export function sanitizeLogLine(line: string): string {
-  return redactSecrets(line.replace(CONTROL, " "));
+  // redact roda no texto SEM controle: um segredo com controle embutido
+  // (ex.: sk-<ESC>...) não pode quebrar o padrão de redação; o strip final no
+  // resultado é defesa em depth
+  return redactSecrets(line.replace(CONTROL, "")).replace(CONTROL, " ");
 }
 
 /**

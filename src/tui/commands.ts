@@ -138,10 +138,12 @@ export async function runCommand(
     case "log": {
       // o buffer vive no app (memória da sessão); aqui só abrimos a tela (#514)
       if (command.arg === undefined) return { entries: [], openLog: null };
-      if (!/^\d+$/.test(command.arg) || Number(command.arg) < 1) {
+      const n = Number(command.arg);
+      // isSafeInteger barra arg gigante (vira Infinity) além de 0/negativo/quebrado
+      if (!/^\d+$/.test(command.arg) || !Number.isSafeInteger(n) || n < 1) {
         return { entries: [{ kind: "error", text: "uso: /log [n] — n inteiro ≥ 1" }] };
       }
-      return { entries: [], openLog: Number(command.arg) };
+      return { entries: [], openLog: n };
     }
     case "providers":
       return { entries: [], openProviders: { mode: "list" } };

@@ -99,6 +99,7 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 
 - `/log` abre a tela com o buffer da sessão; `/log <n>` mostra as últimas `n` linhas.
 - O buffer é de memória: a fonte durável continua sendo audit/ledger.
+- Lacuna conhecida: detalhe de tool (nome, duração, custo) precisa de hook de evento de tool em `ChatSession` (análogo à lacuna do `onStep` acima) e fica para issue própria; nesta entrega o buffer não recebe detalhe de tool.
 - Implementação (#514): buffer ring em `src/tui/log.ts` (`LOG_CAP = 1000`, linhas sanitizadas com `redactSecrets` + controle), tela em `src/tui/log-screen.tsx`, comando em `src/tui/commands.ts` (`openLog`) ligado em `src/tui/app.tsx`. Cabeçalho da sessão (com endpoint), resumo por turno, transições de saúde e avisos repetidos de orçamento/contexto são anexados ao buffer; no REPL `/log` avisa que é só da TUI.
 
 ## Estados removidos
