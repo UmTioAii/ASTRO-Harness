@@ -28,7 +28,7 @@ Formato: `ASTRO v<versão> · <provider>/<modelo> · <saúde>`
 | Caso | Linha | Colunas |
 |---|---|---|
 | Par mais longo do catálogo: `nvidia/meta/llama-3.3-70b-instruct` | `ASTRO v0.1.0-alpha.4 · nvidia/meta/llama-3.3-70b-instruct · ok` | 62 |
-| Limite do catálogo: provider `openai-compatible` (sem modelos) com o modelo mais longo | `ASTRO v0.1.0-alpha.4 · openai-compatible/meta/llama-3.3-70b-instruct · ok` | 73 |
+| Limite sintético: provider `openai-compatible` (sem modelos) com o modelo mais longo | `ASTRO v0.1.0-alpha.4 · openai-compatible/meta/llama-3.3-70b-instruct · ok` | 73 |
 | O mesmo, sem check | `… · n/d` | 74 |
 | O mesmo, provider fora | `… · down` | 75 |
 
@@ -113,7 +113,7 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 
 - Header: a tabela acima é o teste; 62 no par real mais longo do catálogo e 73 no limite sintético, ambos abaixo de 80.
 - Footer: nenhum campo do header aparece nele.
-- Avisos: cada aviso desta página aparece em uma única coluna da tabela de `/log`.
+- Avisos: nenhum texto aparece nos dois lugares; o de contexto tem a primeira ocorrência inline e as repetições em `/log`.
 
 ## Fora de escopo
 
