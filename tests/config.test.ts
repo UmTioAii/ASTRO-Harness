@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, loadConfig, providerAccountRefFor, providerCredentialRefFor, updateConfigPermissionsMode, validateConfig } from "../src/core/config";
+import { ConfigError, loadConfig, providerAccountRefFor, providerCredentialRefFor, updateConfigPermissionsMode, validateConfig, writeConfigFileAtomic } from "../src/core/config";
 import { accountRefOf } from "../src/agent-lock";
 import type { ModelConfig, ModelStatus } from "../src/core/config";
 import type { PermissionMode } from "../src/permissions";
@@ -487,5 +487,56 @@ describe("erros distintos ao salvar a config via /config (#470)", () => {
     } finally {
       chmodSync(dir, 0o755);
     }
+  });
+});
+
+describe("writeConfigFileAtomic (#495)", () => {
+  const noTmp = (dir: string): void => {
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  };
+
+  test("grava conteúdo via tmp+rename e 0600 no POSIX", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-495-"));
+    const path = join(dir, "astro.config.json");
+    writeConfigFileAtomic(path, "{\n  \"a\": 1\n}\n");
+    expect(readFileSync(path, "utf8")).toBe("{\n  \"a\": 1\n}\n");
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
+    noTmp(dir);
+  });
+
+  test("recusa destino symlink sem tocar no alvo e sem tmp (#495)", () => {
+    if (process.platform === "win32") return; // symlink de arquivo exige privilégio no Windows
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-495-"));
+    const target = join(dir, "real.json");
+    writeFileSync(target, "original");
+    const link = join(dir, "link.json");
+    symlinkSync(target, link);
+    let message = "";
+    try {
+      writeConfigFileAtomic(link, "novo");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      message = (error as Error).message;
+    }
+    expect(message).toContain(link);
+    expect(message).not.toContain("original");
+    expect(readFileSync(target, "utf8")).toBe("original");
+    noTmp(dir);
+  });
+
+  test("recusa destino não-regular nomeando só o caminho (#495)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-495-"));
+    const path = join(dir, "dir-destino");
+    mkdirSync(path);
+    let message = "";
+    try {
+      writeConfigFileAtomic(path, "novo");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      message = (error as Error).message;
+    }
+    expect(message).toContain(path);
+    expect(statSync(path).isDirectory()).toBe(true);
+    noTmp(dir);
   });
 });
