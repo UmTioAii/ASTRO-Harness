@@ -22,6 +22,8 @@ interface CodexOAuthProviderOptions {
   fetchFn?: FetchLike;
   /** Timeout de rede por tentativa; default `DEFAULT_PROVIDER_TIMEOUT_MS`. */
   timeoutMs?: number;
+  /** Teto total opcional do stream (o Codex sempre transmite SSE); sem default = sem teto (#519). */
+  streamTimeoutMs?: number;
   /** Nome do provider na config, usado só na mensagem do timeout (#475). */
   providerName?: string;
   /** Relógio em milissegundos desde a epoch (default: `Date.now`). */
@@ -321,6 +323,7 @@ export class CodexOAuthProvider implements Provider {
   private tokens: CodexTokens | undefined;
   private readonly call: CallConfig | undefined;
   private readonly timeoutMs: number;
+  private readonly streamTimeoutMs: number | undefined;
   private readonly providerName: string | undefined;
 
   constructor(opts: CodexOAuthProviderOptions) {
@@ -331,13 +334,15 @@ export class CodexOAuthProvider implements Provider {
     this.now = opts.now ?? (() => Date.now());
     this.call = opts.call;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
+    this.streamTimeoutMs = opts.streamTimeoutMs;
     this.providerName = opts.providerName;
   }
 
   async complete(req: CompletionRequest, signal?: AbortSignal): Promise<CompletionResponse> {
     const tokens = await this.validTokens(signal);
     const { body, call } = this.bodyFor(req);
-    const net = networkCall(signal, this.timeoutMs);
+    // Codex sempre transmite SSE: o teto total opcional `streamTimeoutMs` também se aplica (#519).
+    const net = networkCall(signal, this.timeoutMs, this.streamTimeoutMs);
 
     try {
       let response: Response;
@@ -354,15 +359,17 @@ export class CodexOAuthProvider implements Provider {
       }
 
       let text: string;
+      const activity = { chunks: 0 };
       try {
-        text = await this.readBody(response, net);
+        text = await this.readBody(response, net, activity);
       } catch (error) {
+        // Sem chunk recebido, o prazo que estorou é de fato o total da chamada (#519).
         throw this.networkError(
           error,
           signal,
           net,
           "falha ao ler a resposta do provider Codex",
-          "idle",
+          activity.chunks > 0 ? "idle" : "total",
           response.status,
         );
       }
@@ -380,8 +387,9 @@ export class CodexOAuthProvider implements Provider {
   /**
    * Lê o corpo SSE do Codex contando atividade: cada chunk reinicia o prazo, então
    * o timeout mede inatividade e uma geração longa e saudável não morre no limite (#475).
+   * `activity.chunks` conta os chunks para rotular o timeout antes do primeiro como total (#519).
    */
-  private async readBody(response: Response, net: NetworkCall): Promise<string> {
+  private async readBody(response: Response, net: NetworkCall, activity: { chunks: number }): Promise<string> {
     if (response.body === null) return "";
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -389,34 +397,51 @@ export class CodexOAuthProvider implements Provider {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      activity.chunks++;
       net.reset();
       text += decoder.decode(value, { stream: true });
     }
     return text + decoder.decode();
   }
 
-  /** Classifica falha de rede: cancelamento do run, timeout próprio ou outage (I-09). */
+  /**
+   * Classifica falha de rede: cancelamento do run, timeout próprio ou outage (I-09).
+   * O timer próprio vence sobre o abort do caller na mesma janela (#519); `fallback`
+   * rotula o timer de inatividade como total da chamada ou inatividade do stream (#475).
+   */
   private networkError(
     error: unknown,
     caller: AbortSignal | undefined,
     net: NetworkCall,
     label: string,
-    timeout: "idle" | "total",
+    fallback: "idle" | "total",
     status?: number,
   ): unknown {
-    if (isAbortError(error, caller)) return error;
-    if (isRedirectRefusal(error)) {
+    const own = net.ownTimeout(error);
+    if (own === undefined && isAbortError(error, caller)) return error;
+    if (own === undefined && isRedirectRefusal(error)) {
       return new ProviderError(
         "invalid_request",
         `${label}: redirect recusado; configure uma URL final (sem redirect) em baseUrl`,
         status,
       );
     }
-    if (net.timedOut()) {
-      const limit = timeout === "idle"
-        ? `parado por ${this.timeoutMs}ms (timeout de inatividade)`
-        : `sem resposta em ${this.timeoutMs}ms (timeout total da chamada)`;
-      const hint = `aumente providers.${this.providerName ?? "<name>"}.timeoutMs ou reduza o request`;
+    const kind: "idle" | "total" | "streamTotal" | undefined =
+      own === "total" || (own === undefined && net.totalTimedOut())
+        ? "streamTotal"
+        : own === "idle" || net.timedOut()
+          ? fallback
+          : undefined;
+    if (kind !== undefined) {
+      const name = this.providerName ?? "<name>";
+      const limit = kind === "streamTotal"
+        ? `stream durou mais de ${this.streamTimeoutMs}ms (timeout total do stream)`
+        : kind === "idle"
+          ? `parado por ${this.timeoutMs}ms (timeout de inatividade)`
+          : `sem resposta em ${this.timeoutMs}ms (timeout total da chamada)`;
+      const hint = kind === "streamTotal"
+        ? `ajuste providers.${name}.streamTimeoutMs`
+        : `aumente providers.${name}.timeoutMs ou reduza o request`;
       return new ProviderError("network_timeout", `${label}: ${limit}; ${hint}`, status);
     }
     return new ProviderError("outage", label, status);
@@ -437,8 +462,10 @@ export class CodexOAuthProvider implements Provider {
     try {
       this.tokens = await refreshCodexTokens(this.tokens, this.fetchFn, net.signal);
     } catch (error) {
-      if (isAbortError(error, signal)) throw error;
-      if (net.timedOut()) {
+      // O timer próprio vence sobre o abort do caller na mesma janela (#519).
+      const own = net.ownTimeout(error);
+      if (own === undefined && isAbortError(error, signal)) throw error;
+      if (own !== undefined || net.timedOut()) {
         throw new ProviderError(
           "network_timeout",
           `renovação das credenciais do Codex sem resposta em ${this.timeoutMs}ms`,
