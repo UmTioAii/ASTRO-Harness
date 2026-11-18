@@ -53,19 +53,9 @@ const REDACT_ENV = new RegExp(
 
 const REDACTED = "[REDACTED]";
 
-/** Bound do label entre `BEGIN`/`END` e `PRIVATE KEY`: mantém o maior marcador constante. */
-const PEM_LABEL_MAX = 32;
-const PEM_LABEL = `[A-Z ]{0,${PEM_LABEL_MAX}}`;
-
-/** Marcadores de bloco PEM (OpenSSH/RSA/PGP); `REDACT_PEM` e os leitores por faixa usam o mesmo par. */
-export const PRIVATE_KEY_BEGIN = new RegExp(`-----BEGIN ${PEM_LABEL}PRIVATE KEY(?: BLOCK)?-----`);
-export const PRIVATE_KEY_END = new RegExp(`-----END ${PEM_LABEL}PRIVATE KEY(?: BLOCK)?-----`);
-
-/** Maior marcador possível com o bound acima; dimensiona o overlap de leitura por faixa. */
-export const PEM_MAX_MARKER_BYTES = Math.max(
-  "-----BEGIN ".length + PEM_LABEL_MAX + "PRIVATE KEY BLOCK-----".length,
-  "-----END ".length + PEM_LABEL_MAX + "PRIVATE KEY BLOCK-----".length,
-);
+/** Marcadores de bloco PEM (OpenSSH/RSA/PGP) com label ilimitado, para redação por texto inteiro. */
+export const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/;
+export const PRIVATE_KEY_END = /-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/;
 
 // JWT (header eyJ…, reusa o prefixo de `src/secrets.ts`) e bloco PEM de chave privada.
 const REDACT_JWT = new RegExp(`\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b`, "g");

@@ -8,7 +8,7 @@ import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } fr
 import { homedir, userInfo } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { classifyPath, createPathClassifier, type PathClassifierContext } from "../path-class";
-import { redactSecrets, PRIVATE_KEY_BEGIN, PRIVATE_KEY_END, PEM_MAX_MARKER_BYTES } from "../sanitize-external";
+import { redactSecrets } from "../sanitize-external";
 import { canonicalize, realpathPreservingDots } from "../tools/paths";
 import {
   assertAttachmentSize,
@@ -28,25 +28,32 @@ export { AttachmentError };
 /** Chunk de leitura do range em arquivo acima do teto (ADR-0026). */
 const READ_CHUNK_BYTES = 64 * 1024;
 
-/** Overlap por onde um marcador PEM pode atravessar dois pedaços da mesma linha: o maior marcador cabe inteiro (`maxMarkerBytes - 1`). */
-const PEM_SCAN_OVERLAP = PEM_MAX_MARKER_BYTES - 1;
+/** Prefixos fixos de bloco PEM: a detecção por faixa não depende do label. */
+const PEM_BEGIN_PREFIX = "-----BEGIN ";
+const PEM_END_PREFIX = "-----END ";
 
-/** Marcadores que abrem/fecham um bloco de chave privada; flags derivadas das fontes + `g` para `matchAll`. */
-const PEM_SCAN_FLAGS = [...new Set([...PRIVATE_KEY_BEGIN.flags, ...PRIVATE_KEY_END.flags, "g"])].sort().join("");
-const PEM_MARKERS = new RegExp(`${PRIVATE_KEY_BEGIN.source}|${PRIVATE_KEY_END.source}`, PEM_SCAN_FLAGS);
+/**
+ * Overlap por onde um prefixo pode atravessar dois pedaços da mesma linha. O maior
+ * prefixo fixo tem 11 bytes; 16 cobre com margem e independe do label do bloco.
+ */
+const PEM_SCAN_OVERLAP = 16;
+
+/** Prefixos que abrem/fecham um bloco PEM; `-----BEGIN `/`-----END ` são literais. */
+const PEM_PREFIX_MARKERS = new RegExp(`${PEM_BEGIN_PREFIX}|${PEM_END_PREFIX}`, "g");
 
 /** Substituto de cada linha de um bloco PEM selecionado por faixa (preserva numeração). */
 const REDACTED = "[REDACTED]";
 
 /**
  * Varre todos os bytes do texto em ordem: `begins` diz se algum BEGIN apareceu e
- * `inside` é o estado do span depois do último marcador (END fecha, BEGIN abre).
+ * `inside` é o estado do span depois do último prefixo (END fecha, BEGIN abre).
+ * Só os prefixos fixos contam: qualquer label `[A-Z ]*` abre/fecha o span.
  */
 function pemMarkerScan(text: string, inside: boolean): { begins: boolean; inside: boolean } {
   let begins = false;
   let current = inside;
-  for (const match of text.matchAll(PEM_MARKERS)) {
-    if (match[0].startsWith("-----BEGIN")) {
+  for (const match of text.matchAll(PEM_PREFIX_MARKERS)) {
+    if (match[0] === PEM_BEGIN_PREFIX) {
       begins = true;
       current = true;
     } else {
