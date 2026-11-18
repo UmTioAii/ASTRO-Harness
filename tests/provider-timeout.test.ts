@@ -149,20 +149,20 @@ const slowCodexSse = (spec: SlowStream): ((url: string, init?: RequestInit) => P
 test("codex-oauth: stream saudável mais longo que o timeout completa", async () => {
   const p = new CodexOAuthProvider({
     credentialsPath: authPath(4102444800),
-    timeoutMs: 200,
+    timeoutMs: 400,
     providerName: "codex",
-    fetchFn: slowCodexSse({ gapMs: 50, chunks: 8 }),
+    fetchFn: slowCodexSse({ gapMs: 50, chunks: 10 }),
   });
 
   const response = await p.complete(req);
-  expect(response.content).toBe("t0t1t2t3t4t5t6");
+  expect(response.content).toBe("t0t1t2t3t4t5t6t7t8");
   expect(response.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
 });
 
 test("codex-oauth: stream silencioso vira network_timeout citando limite e ajuste", async () => {
   const p = new CodexOAuthProvider({
     credentialsPath: authPath(4102444800),
-    timeoutMs: 120,
+    timeoutMs: 300,
     providerName: "codex",
     fetchFn: slowCodexSse({ gapMs: 20, chunks: 3, hangAfter: 1 }),
   });
@@ -170,9 +170,23 @@ test("codex-oauth: stream silencioso vira network_timeout citando limite e ajust
   const error = (await p.complete(req).catch((e) => e)) as ProviderError;
   expect(error).toBeInstanceOf(ProviderError);
   expect(error.errClass).toBe("network_timeout");
-  expect(error.message).toContain("120ms");
+  expect(error.message).toContain("300ms");
   expect(error.message).toContain("inatividade");
   expect(error.message).toContain("providers.codex.timeoutMs");
+});
+
+test("codex-oauth: abort do caller durante o stream continua cancelamento", async () => {
+  const controller = new AbortController();
+  const p = new CodexOAuthProvider({
+    credentialsPath: authPath(4102444800),
+    timeoutMs: 5_000,
+    providerName: "codex",
+    fetchFn: slowCodexSse({ gapMs: 50, chunks: 10 }),
+  });
+
+  setTimeout(() => controller.abort(new DOMException("cancelado", "AbortError")), 80);
+  const error = (await p.complete(req, controller.signal).catch((e) => e)) as Error;
+  expect(error.name).toBe("AbortError");
 });
 
 test("networkCall: reset depois de dispose não re-arma o prazo", async () => {
@@ -185,19 +199,19 @@ test("networkCall: reset depois de dispose não re-arma o prazo", async () => {
 });
 
 test("openai-compat: stream saudável mais longo que o timeout completa", async () => {
-  // 500ms de stream contra timeoutMs 200: nenhum silêncio chega perto do limite.
+  // 600ms de stream contra timeoutMs 400: nenhum silêncio de 50ms chega perto do limite.
   const p = new OpenAICompatProvider({
     baseUrl: "http://127.0.0.1:1/v1",
     apiKey: "k",
-    timeoutMs: 200,
+    timeoutMs: 400,
     retry: { maxAttempts: 1 },
-    fetchFn: slowSse({ gapMs: 50, chunks: 10 }),
+    fetchFn: slowSse({ gapMs: 50, chunks: 12 }),
   });
 
   const deltas: string[] = [];
   const response = await p.complete({ ...req, onToken: (text) => deltas.push(text) });
-  expect(deltas).toEqual(["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"]);
-  expect(response.content).toBe("t0t1t2t3t4t5t6t7t8t9");
+  expect(deltas).toEqual(["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11"]);
+  expect(response.content).toBe("t0t1t2t3t4t5t6t7t8t9t10t11");
 });
 
 test("openai-compat: stream silencioso vira network_timeout citando limite e ajuste", async () => {
