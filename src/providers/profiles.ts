@@ -274,6 +274,83 @@ function writeConfigRaw(raw: Record<string, unknown>, path: string): void {
   }
 }
 
+/**
+ * Grava o store de perfis na camada global de `config.json` (#492): `providers`
+ * e `models` de cada perfil, `activeProfileId`; chaves alheias sobrevivem.
+ * Provider com modelos que saiu do store sai do arquivo; campos extras do
+ * provider/modelo (timeoutMs, price, status…) são preservados.
+ */
+export function saveProfileStoreToConfig(store: ProviderStore, configPath: string): void {
+  const valid = validateProfileStore(store);
+  const raw = existsSync(configPath) ? loadConfigRaw(configPath) : {};
+  const providers: Record<string, unknown> = isPlainObject(raw.providers) ? { ...raw.providers } : {};
+  const models: unknown[] = Array.isArray(raw.models) ? [...raw.models] : [];
+  const storeIds = new Set(valid.profiles.map((profile) => profile.id));
+  const modelProviders = new Set(
+    models
+      .filter((model): model is Record<string, unknown> => isPlainObject(model))
+      .map((model) => model.provider)
+      .filter((provider): provider is string => typeof provider === "string"),
+  );
+  // Provider que tinha modelos e não está mais no store foi removido pela TUI.
+  for (const id of Object.keys(providers)) {
+    if (!storeIds.has(id) && modelProviders.has(id)) delete providers[id];
+  }
+  let nextModels = models.filter((model) => (
+    !isPlainObject(model) || typeof model.provider !== "string" || providers[model.provider] !== undefined
+  ));
+  for (const profile of valid.profiles) {
+    const existing = providers[profile.id];
+    providers[profile.id] = { ...(isPlainObject(existing) ? existing : {}), ...profileToProvider(profile) };
+    const wanted = new Set(profile.models.map((model) => model.id));
+    nextModels = nextModels.filter((model) => (
+      !isPlainObject(model) || model.provider !== profile.id || wanted.has(String(model.id))
+    ));
+    for (const model of profile.models) {
+      const index = nextModels.findIndex((item) => (
+        isPlainObject(item) && item.provider === profile.id && item.id === model.id
+      ));
+      const before = index >= 0 ? nextModels[index] : undefined;
+      const entry = {
+        ...(isPlainObject(before) ? before : {}),
+        provider: profile.id,
+        id: model.id,
+        tags: model.tags,
+        context: model.context,
+      };
+      if (index >= 0) nextModels[index] = entry;
+      else nextModels.push(entry);
+    }
+  }
+  const { activeProfileId: _previousActive, ...rest } = raw;
+  writeConfigRaw({
+    ...rest,
+    providers,
+    models: nextModels,
+    ...(valid.activeProfileId === undefined ? {} : { activeProfileId: valid.activeProfileId }),
+  }, configPath);
+}
+
+/**
+ * Troca só `credentialRef` do provider na camada global de `config.json` (#491);
+ * a escrita é atômica e valida a forma da camada.
+ */
+export function updateGlobalProviderCredentialRef(env: NodeJS.ProcessEnv, provider: string, ref: string): void {
+  const path = globalConfigPath(env);
+  const raw = existsSync(path) ? loadConfigRaw(path) : {};
+  const providers = isPlainObject(raw.providers) ? raw.providers : undefined;
+  const entry = providers?.[provider];
+  if (!isPlainObject(entry)) {
+    throw new ConfigError(`provider "${provider}" não está no "${path}"`);
+  }
+  if (entry.kind !== "openai-compat") {
+    throw new ConfigError(`provider "${provider}" usa kind "${String(entry.kind)}" e não lê o cofre`);
+  }
+  entry.credentialRef = ref;
+  assertLayerSchema(raw);
+  writeConfigRaw(raw, path);
+}
+
 /** Importa o store legado no `config.json`: `config.json` vence por chave (ADR-0029, #459). */
 function importProfiles(configPath: string, legacy: ProviderStore): void {
   const raw = existsSync(configPath) ? loadConfigRaw(configPath) : {};

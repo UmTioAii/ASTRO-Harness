@@ -3,12 +3,13 @@ import { isPlainObject, type AstroConfig, type ProviderConfig } from "../core/co
 import { globalConfigPath } from "../astro-home";
 import {
   loadGlobalConfig,
+  loadGlobalProfileStore,
   loadProfileStore,
   profileFromEnv,
   profilesPath,
-  readGlobalProfileStore,
   resolveEffectiveConfig,
   saveProfileStore,
+  saveProfileStoreToConfig,
   type ProfileModel,
   type ProviderProfile,
   type ProviderSource,
@@ -108,7 +109,7 @@ export class ProfileManager {
     this.#provider = opts.provider;
     this.#storePath = opts.storePath ?? profilesPath(this.#env);
     this.#storeInjected = opts.storePath !== undefined;
-    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : readGlobalProfileStore(this.#env);
+    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : loadGlobalProfileStore(this.#env);
   }
 
   list(): ProfileView[] {
@@ -226,7 +227,8 @@ export class ProfileManager {
   }
 
   #reload(): void {
-    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : readGlobalProfileStore(this.#env);
+    // #492: a mesma fonte da escrita (`config.json` depois do import de #459).
+    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : loadGlobalProfileStore(this.#env);
   }
 
   /** Variável de credencial presente no env desta execução. */
@@ -277,7 +279,9 @@ export class ProfileManager {
     if (!this.#storeInjected && this.#env.ASTRO_NO_GLOBAL_CONFIG === "1") {
       throw new GlobalStoreDisabledError();
     }
-    saveProfileStore(store, this.#storePath);
+    // #492: a leitura é `config.json`; a escrita vai para a mesma camada global.
+    if (this.#storeInjected) saveProfileStore(store, this.#storePath);
+    else saveProfileStoreToConfig(store, globalConfigPath(this.#env));
     this.#store = store;
   }
 }

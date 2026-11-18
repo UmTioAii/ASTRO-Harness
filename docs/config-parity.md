@@ -67,11 +67,11 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 
 ## D-CFG2: um store, não dois
 
-A TUI e o REPL **não** criam store de configuração próprio. O contrato é escrever os mesmos arquivos da CLI, por um escritor validado e atômico (`updateConfigFile` para a camada de projeto; o mesmo contrato para a global após #459/#492; `config pull` usa `writeConfigFileAtomic`, #495). Divergência é bug, não contrato.
+A TUI e o REPL **não** criam store de configuração próprio. O contrato é escrever os mesmos arquivos da CLI, por um escritor validado e atômico: `updateConfigFile` para a camada de projeto, `saveProfileStoreToConfig`/`updateGlobalProviderCredentialRef` para a global (#492/#491) e `writeConfigFileAtomic` no `config pull` (#495). Divergência é bug, não contrato.
 
 | Arquivo | Guarda | Lido por | Gravado por |
 |---|---|---|---|
-| `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` passam pelo screening de segredo (#496) | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492) |
+| `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` passam pelo screening de segredo (#496) | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492); `vault-import --apply` (#491) |
 | `astro.config.json`/`--config` | política do projeto | CLI/TUI/REPL | usuário; `/config` da TUI (`permissions.mode`); `config pull`; `vault-import` de provider do projeto |
 | `$ASTRO_HOME/state.json` | trust e `migrations.*` | todas | prompt de trust (TTY), revogação da TUI, migrações |
 | `$ASTRO_HOME/vault.json` | segredo de API key (OAuth Codex: `~/.codex/auth.json`) | runtime | wizard da TUI; `vault-import --apply` |
@@ -95,10 +95,9 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 
 | Lacuna | Efeito hoje | Onde |
 |---|---|---|
-| CRUD de provider da TUI/REPL gravar `config.json` | quando #459 entrar, `saveProfileStore` recusa e o CRUD para; falta o escritor de config | #492 (próximo slice de #401) |
-| `providers vault-import` de perfil global gravar `config.json` | mesmo bloqueio após #459 | #491 |
 | `astro config migrate` e `CONFIG_SCHEMA_VERSION` (ADR-0028) | não há migração de major nem rejeição de chave desconhecida | #493 |
 | `/config` em projeto sem arquivo | modo não persiste; S3 não cria config | #469 |
 | `lastModel` da TUI vence `agent.model` no boot | troca de modelo sem aprovação explícita (I-08); `--provider` desliga | #497 |
 
 - `preset` (`simple`/`control`, default `control`) é escalar: a camada de projeto vence. Em `simple`, `agent.maxSteps`, `agents.*.maxSteps` e `run.maxTurns` têm teto 500: um valor menor vindo de outra camada é mantido e acima de 500 é erro com `preset: "control"` como próximo passo; sem `run.maxTurns`, o teto efetivo é 500 (#515).
+
