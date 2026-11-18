@@ -13,28 +13,30 @@ Onde cada informação da TUI vive: header de identidade, footer de números, er
 | Elemento | Hoje | Depois |
 |---|---|---|
 | Header | Caixa com versão, provider, modelo, endpoint, estado e modo; pode passar de 80 colunas | Uma linha sem caixa: versão, provider/modelo e saúde |
-| Footer | Repete provider, modelo, saúde e modo; mostra `0 turno(s)`, `0/0 tokens`, `n/d` e orçamento ausente | Só campos com valor; modo sempre; bypass em vermelho |
+| Footer | Repete provider, modelo, saúde e modo; mostra `0 turno(s)`, `0/0 tokens`, `n/d` e nenhum orçamento quando não há | Só campos com valor; modo sempre; bypass em vermelho |
 | Erro | Linha vermelha sem saída + toast com o mesmo texto | Linha vermelha com próximo passo, uma vez, sem toast |
 | Estado | Aviso reimpresso a cada turno e às vezes em toast | Uma linha cinza, uma vez por sessão |
 | Progresso | `pensando…`, sem passo | `pensando… passo n/max` |
 | Status do turno | Entrada `[modelo] N step(s) · tokens · total` na conversa + toast | Só em `/log`; o footer já tem os números |
-| Endpoint | No header, competindo com modelo | `/status` e `/log` |
+| Endpoint | No header, competindo com modelo | `/log`, no cabeçalho da sessão |
 | Modo | No header e no footer | Só no footer; bypass também pinta a borda do input |
 
 ## Header
 
 Formato: `ASTRO v<versão> · <provider>/<modelo> · <saúde>`
 
-| Caso (pior par do catálogo) | Linha | Colunas |
+| Caso | Linha | Colunas |
 |---|---|---|
-| saudável | `ASTRO v0.1.0-alpha.4 · openai-compatible/meta/llama-3.3-70b-instruct · ok` | 74 |
-| sem check | `… · n/d` | 75 |
-| provider fora | `… · down` | 76 |
+| Par mais longo do catálogo: `nvidia/meta/llama-3.3-70b-instruct` | `ASTRO v0.1.0-alpha.4 · nvidia/meta/llama-3.3-70b-instruct · ok` | 62 |
+| Limite do catálogo: provider `openai-compatible` (sem modelos) com o modelo mais longo | `ASTRO v0.1.0-alpha.4 · openai-compatible/meta/llama-3.3-70b-instruct · ok` | 73 |
+| O mesmo, sem check | `… · n/d` | 74 |
+| O mesmo, provider fora | `… · down` | 75 |
 
-- Teto de 80 colunas. Sobram 4 no pior caso do catálogo (`openai-compatible` + `meta/llama-3.3-70b-instruct`); versão, provider e saúde são fixos.
-- Acima de 80, o modelo é cortado no meio com `…`, preservando provider e saúde. Nunca quebra linha, nunca esconde a saúde.
+- Teto de 80 colunas. Versão, provider, modelo e saúde são os únicos campos.
+- Acima de 80, o modelo é cortado no meio com `…` até sobrar 8 colunas para ele; se ainda passar, o provider é cortado no meio. A saúde nunca é cortada e a linha nunca quebra.
+- Um id de provider pode chegar a 64 colunas (limite do slug); é por isso que o corte do provider existe, mesmo sem caso no catálogo.
 - Saúde é `ok`, `n/d` ou `down`; `down` em vermelho, `n/d` em cinza.
-- Endpoint sai do header: vive em `/status` e em `/log`. A versão fica porque é o primeiro dado de um bug report.
+- Endpoint sai do header e aparece no cabeçalho da sessão em `/log`: é dado de diagnóstico, não de estado. A versão fica porque é o primeiro dado de um bug report.
 - A borda da caixa sai; a cor do texto segue a saúde.
 
 ## Footer
@@ -81,17 +83,19 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 ## Progresso
 
 - `pensando… passo n/max`, com `max = agent.maxSteps`.
-- Lacuna conhecida: `ChatSession.send` devolve `steps` só no fim, sem evento de passo. A implementação exige um `onStep` na sessão; fica registrada como issue própria, sem mudar este desenho.
+- Lacuna conhecida: `ChatSession.send` devolve `steps` só no fim, sem evento de passo. A implementação exige um `onStep` na sessão e precisa de issue própria; este desenho não muda por causa disso.
 
 ## /log
 
 | Move para `/log` | Fica inline |
 |---|---|
-| `turno concluído · N step(s)` | mensagens do usuário e do assistente |
-| Linha `[modelo] N step(s) · tokens · total` por turno | erro com próximo passo |
-| Transições de saúde do provider | pergunta de aprovação e diff |
-| Avisos de orçamento repetidos | progresso `passo n/max` |
-| Detalhe de tool: nome, duração, custo | aviso de contexto, uma vez |
+| Cabeçalho da sessão: versão, provider, modelo e endpoint | mensagens do usuário e do assistente |
+| `turno concluído · N step(s)` | erro com próximo passo |
+| Linha `[modelo] N step(s) · tokens · total` por turno | pergunta de aprovação e diff |
+| Transições de saúde do provider | progresso `passo n/max` |
+| Avisos de orçamento repetidos | aviso de contexto, uma vez |
+| Repetições do aviso de contexto | |
+| Detalhe de tool: nome, duração, custo | |
 
 - `/log` abre a tela com o buffer da sessão; `/log <n>` mostra as últimas `n` linhas.
 - O buffer é de memória: a fonte durável continua sendo audit/ledger.
@@ -107,9 +111,9 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 
 ## Como verificar
 
-- Header: a tabela de 80 colunas acima é o teste; o pior par do catálogo mede 74.
+- Header: a tabela acima é o teste; 62 no par real mais longo do catálogo e 73 no limite sintético, ambos abaixo de 80.
 - Footer: nenhum campo do header aparece nele.
-- Avisos: cada linha desta página aparece em uma única coluna da tabela de `/log`.
+- Avisos: cada aviso desta página aparece em uma única coluna da tabela de `/log`.
 
 ## Fora de escopo
 
