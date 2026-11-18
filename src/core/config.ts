@@ -1687,21 +1687,29 @@ function readConfigFailure(path: string, error: unknown): ConfigError {
  * `position N` e, em versões novas, `(line N column M)`; JSC (Bun) não põe
  * posição na mensagem. `error.line`/`error.column` são ignorados: no Bun eles
  * são o frame da pilha de quem chamou `JSON.parse` (ex.: config.ts), então um
- * token ruim na linha 9 apareceria como linha 1714. Posição fora do arquivo é
- * descartada. Nunca usamos o trecho do arquivo que o parser cita (I-03).
+ * token ruim na linha 9 apareceria como linha 1714. As duas fontes passam pela
+ * mesma régua: a linha precisa existir e a coluna precisa caber nela (mais uma
+ * posição depois do fim, onde o parser aponta erro de fim de entrada). Offset
+ * fora do arquivo é descartado, não realocado para o EOF. Nunca usamos o trecho
+ * do arquivo que o parser cita (I-03).
  */
 function jsonErrorPosition(text: string, error: unknown): { line: number; column: number } | undefined {
   const message = error instanceof Error ? error.message : "";
-  const lastLine = text.split("\n").length;
-  const accept = (line: number, column: number): { line: number; column: number } | undefined =>
-    line >= 1 && line <= lastLine && column >= 1 ? { line, column } : undefined;
+  const lines = text.split("\n");
+  const accept = (line: number, column: number): { line: number; column: number } | undefined => {
+    if (!Number.isSafeInteger(line) || !Number.isSafeInteger(column)) return undefined;
+    if (line < 1 || line > lines.length || column < 1) return undefined;
+    const target = lines[line - 1] ?? "";
+    return column <= target.length + 1 ? { line, column } : undefined;
+  };
 
   const inMessage = /\(line (\d+) column (\d+)\)/.exec(message);
   if (inMessage !== null) return accept(Number(inMessage[1]), Number(inMessage[2]));
 
   const offset = /position (\d+)/.exec(message)?.[1];
   if (offset === undefined) return undefined;
-  const index = Math.min(Number(offset), text.length);
+  const index = Number(offset);
+  if (!Number.isSafeInteger(index) || index < 0 || index > text.length) return undefined;
   const before = text.slice(0, index);
   return accept(before.split("\n").length, index - before.lastIndexOf("\n"));
 }
