@@ -6,6 +6,7 @@
  * passam quando o valor tem marca óbvia de teste; um segredo real não tem.
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
@@ -100,12 +101,12 @@ function repoFiles(dir: string, out: string[] = []): string[] {
 }
 
 /** Varre o repo inteiro; a mensagem cita arquivo:linha e regra, nunca o valor. */
-function scanRepo(): Finding[] {
+function scanRepo(root: string = ROOT): Finding[] {
   const findings: Finding[] = [];
-  for (const path of repoFiles(ROOT).sort()) {
+  for (const path of repoFiles(root).sort()) {
     const text = readFileSync(path, "utf8");
     if (text.includes("\u0000")) continue; // binário disfarçado de texto
-    const file = relative(ROOT, path).replaceAll("\\", "/");
+    const file = relative(root, path).replaceAll("\\", "/");
     for (const hit of scanText(text, file)) {
       findings.push({
         file,
@@ -142,6 +143,24 @@ describe("I-03 zero segredos", () => {
   test("repo versionado não tem chave real em fonte, doc, config ou fixture", () => {
     const findings = scanRepo();
     expect(findings.map((finding) => `${finding.file}:${finding.line} (${finding.rule})`)).toEqual([]);
+  }, 30_000);
+
+  test("corpus Git-aware exclui ignorados e cobre versionados e candidatos", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-zero-secret-git-"));
+    try {
+      writeFileSync(join(dir, ".gitignore"), "astro.config.json\n", "utf8");
+      writeFileSync(join(dir, "tracked.txt"), syntheticKey(), "utf8");
+      writeFileSync(join(dir, "candidate.txt"), syntheticKey(), "utf8");
+      writeFileSync(join(dir, "astro.config.json"), syntheticKey(), "utf8");
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["add", "--", ".gitignore", "tracked.txt"], { cwd: dir, stdio: "ignore" });
+
+      const findings = scanRepo(dir).map((finding) => finding.file);
+      expect(findings).toEqual(["candidate.txt", "tracked.txt"]);
+      expect(findings).not.toContain("astro.config.json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 
   test("audit, ledger e log gerados não contêm o segredo", () => {

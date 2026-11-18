@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectFacts, runChecks } from "../src/doctor";
+import { collectFacts, exitCode, runChecks } from "../src/doctor";
 import { ArtifactStore } from "../src/attachments/store";
 import { FAKE_PRIVATE_ACL } from "./setup";
 
@@ -151,6 +151,41 @@ describe("doctor de anexos (#392)", () => {
     }));
     const facts = collectFacts(process.cwd(), { env: envFor(astroHome, root), checkPrivate: () => true });
     expect(facts.attachments).toMatchObject({ ttlDays: 30, maxBytes: 4096 });
+  });
+
+  test("config efetiva inválida vira fail sanitizado e não mostra defaults", () => {
+    const { base, astroHome, root } = sandbox();
+    const projectCwd = join(base, "project");
+    mkdirSync(projectCwd, { recursive: true });
+    writeFileSync(join(astroHome, "config.json"), JSON.stringify({
+      providers: { p: { kind: "openai-compat", baseUrl: "https://api.example.com/v1", credentialRef: "KEY" } },
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "p/m1", tools: [] },
+      attachments: { artifactTtlDays: 30, artifactMaxBytes: 4096 },
+    }));
+    writeFileSync(join(projectCwd, "astro.config.json"), JSON.stringify({
+      providers: { p: { kind: "openai-compat", baseUrl: "https://api.example.com/v1", credentialRef: "KEY" } },
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "p/m1", tools: ["read_file"] },
+      attachments: { artifactTtlDays: 45, artifactMaxBytes: 8192 },
+    }));
+
+    const facts = collectFacts(process.cwd(), {
+      projectCwd,
+      env: envFor(astroHome, root),
+      checkPrivate: () => true,
+    });
+    expect(facts.config.effectiveError).toContain("amplia a allowlist global");
+
+    const report = runChecks(facts);
+    const config = report.checks.find((item) => item.name === "config");
+    const attachments = report.checks.find((item) => item.name === "attachments");
+    expect(config?.level).toBe("fail");
+    expect(config?.detail).toContain("config efetiva inválida");
+    expect(attachments?.level).toBe("fail");
+    expect(attachments?.detail).not.toContain("TTL");
+    expect(attachments?.detail).not.toContain("1.0 GiB");
+    expect(exitCode(report)).toBe(1);
   });
 
   test("raiz válida reporta uso, artefatos e último GC", () => {

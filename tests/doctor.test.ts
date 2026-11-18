@@ -371,15 +371,19 @@ test("sanitizeCheck redige também o label do check", () => {
 
 test("leitura aceita ASTRO_HOME que é link simbólico e reporta o caminho real", () => {
   const base = sandbox();
+  const projectCwd = sandbox();
   const real = join(base, "real-home");
   mkdirSync(real, { recursive: true });
   const link = join(base, "linked-home");
   symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
 
   const collected = collectFacts(process.cwd(), {
+    projectCwd,
     env: { ...process.env, ASTRO_HOME: link },
     checkPrivate: () => true,
   });
+  expect(collected.config.path).toBe(join(projectCwd, "astro.config.json"));
+  expect(collected.config.present).toBe(false);
   expect(collected.astroHome.error).toBeUndefined();
   expect(collected.astroHome.exists).toBe(true);
   expect(collected.astroHome.path).toBe(realpathSync(real));
@@ -390,16 +394,24 @@ test("leitura aceita ASTRO_HOME que é link simbólico e reporta o caminho real"
   expect(exitCode(report)).toBe(0);
 });
 
-test("skills do usuário vêm da raiz injetada e skill quebrada vira warn", () => {
+test("skills usam raízes injetadas e skill quebrada vira warn", () => {
+  const projectCwd = sandbox();
+  const projectRoot = join(projectCwd, ".astro", "skills");
   const userRoot = join(sandbox(), "skills");
+  mkdirSync(projectRoot, { recursive: true });
   mkdirSync(userRoot, { recursive: true });
+  writeSkill(projectRoot, "project-ok", VALID_SKILL);
   writeSkill(userRoot, "broken", "sem frontmatter");
 
   const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    projectSkillsRoot: projectRoot,
     env: { ...process.env, ASTRO_HOME: join(sandbox(), "other-home") },
     checkPrivate: () => true,
     userSkillsRoot: userRoot,
   });
+  expect(collected.config.path).toBe(join(projectCwd, "astro.config.json"));
+  expect(collected.skills?.project).toBe(1);
   expect(collected.skills?.user).toBe(0);
   expect(collected.skills?.warnings.length).toBeGreaterThan(0);
   const check = runChecks(collected).checks.find((item) => item.label === "skills");
