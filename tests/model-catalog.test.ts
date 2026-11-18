@@ -6,7 +6,7 @@ import {
   type EffectiveConfig,
   type ProviderStore,
 } from "../src/providers/profiles";
-import { buildModelCatalog, formatModelCatalog } from "../src/model-catalog";
+import { buildModelCatalog, formatModelCatalog, type CatalogModel } from "../src/model-catalog";
 
 const SENTINEL = "sentinel-xyz";
 
@@ -175,4 +175,28 @@ test("formatação não ecoa valor de ambiente", () => {
 
 test("catálogo vazio formata como nenhum modelo", () => {
   expect(formatModelCatalog([])).toBe("nenhum modelo");
+});
+
+test("#511 formatModelCatalog: grátis para FREE, preço para curado, n/d só para desconhecido", () => {
+  const card = (id: string, price?: CatalogModel["price"]): CatalogModel => ({
+    ref: `p/${id}`, provider: "p", id, tags: [], context: 4096, status: "active", source: "project",
+    ...(price === undefined ? {} : { price }),
+  });
+  const models = [
+    card("gratis:free"),
+    card("zero", { inputPerM: 0, outputPerM: 0, fonte: "t", verificado: true }),
+    card("paid", { inputPerM: 1, outputPerM: 2, fonte: "t", verificado: true }),
+    card("unknown"),
+  ];
+  const out = formatModelCatalog(models);
+  const lineOf = (id: string): string => out.split("\n").find((line) => line.startsWith(`p/${id} `))!;
+  expect(lineOf("gratis:free")).toContain("grátis");
+  expect(lineOf("gratis:free")).not.toContain("n/d");
+  expect(lineOf("zero")).toContain("grátis");
+  expect(lineOf("zero")).not.toContain("n/d");
+  expect(lineOf("paid")).toContain("in 1/M out 2/M");
+  expect(lineOf("paid")).not.toContain("n/d");
+  expect(lineOf("unknown")).toContain("n/d");
+  expect(lineOf("unknown")).not.toContain("grátis");
+  expect(out.match(/grátis/g)).toHaveLength(2);
 });

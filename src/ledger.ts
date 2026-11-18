@@ -6,9 +6,11 @@ import { DEFAULT_LOCK_TIMEOUT_MS, FileLockError, processAlive, withFileLock } fr
 import type { FallbackRecord } from "./providers/types";
 import { handoffId, sanitizeHandoffArtifact, type HandoffArtifactV1 } from "./handoff/types";
 import { appendDurable, jsonlLines, parseJsonl } from "./jsonl";
+import { isFreeModel } from "./pricing";
 import { redactSecrets } from "./sanitize-external";
 
 export { processAlive };
+export { isFreeModel };
 
 /** Versão do formato do ledger (ADR-0002): inteiro monotônico desde 1. */
 export const LEDGER_SCHEMA_VERSION = 3;
@@ -209,12 +211,6 @@ export function estimateCost(
 ): number | null {
   if (price === undefined) return null;
   return (tokensIn / 1_000_000) * price.inputPerM + (tokensOut / 1_000_000) * price.outputPerM;
-}
-
-/** Modelo marcado como gratuito (ADR-0025): slug `:free` no id ou preço curado 0/0. */
-export function isFreeModel(model: string, price?: PriceConfig): boolean {
-  return model.endsWith(":free")
-    || (price !== undefined && price.inputPerM === 0 && price.outputPerM === 0);
 }
 
 function isMissingFile(error: unknown): boolean {

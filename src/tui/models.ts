@@ -1,4 +1,6 @@
 /** Helpers puros do seletor de modelos (#227): filtro, ordem, favoritos e detalhe. */
+import { priceLabel } from "../pricing";
+
 export interface ModelOption {
   ref: string;
   provider: string;
@@ -49,9 +51,8 @@ export function toggleFavorite(ref: string, favorites: readonly string[]): strin
 }
 
 export function modelDetail(model: ModelOption): string {
-  const price = model.price === undefined
-    ? "preço: n/d"
-    : `preço: in ${model.price.inputPerM}/M out ${model.price.outputPerM}/M (${model.price.fonte}${model.price.verificado ? "" : ", não verificado"})`;
+  // #511: FREE aparece como `preço: grátis`; `n/d` só quando o preço é desconhecido
+  const price = `preço: ${priceLabel(model.ref, model.price)}`;
   const tags = model.tags.length === 0 ? "tags: -" : `tags: ${model.tags.join(", ")}`;
   return `${model.ref} · ${model.status} · contexto ${model.context ?? "n/d"} · ${tags} · ${price}`;
 }
