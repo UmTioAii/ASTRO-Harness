@@ -334,3 +334,130 @@ test("config aceita provider.timeoutMs e rejeita valor não positivo", () => {
     providers: { p: { ...base.providers.p, timeoutMs: 0 } },
   })).toThrow(ConfigError);
 });
+
+test("config aceita provider.streamTimeoutMs e rejeita valor não positivo (#519)", () => {
+  const base = {
+    providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
+    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+    agent: { model: "p/m1", maxSteps: 2, tools: ["read_file"] },
+    paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+  };
+
+  const config = validateConfig({
+    ...structuredClone(base),
+    providers: { p: { ...base.providers.p, streamTimeoutMs: 60_000 } },
+  });
+  expect(config.providers.p.streamTimeoutMs).toBe(60_000);
+
+  expect(() => validateConfig({
+    ...structuredClone(base),
+    providers: { p: { ...base.providers.p, streamTimeoutMs: 0 } },
+  })).toThrow(ConfigError);
+});
+
+test("networkCall: teto total dispara mesmo com reset constante (#519)", async () => {
+  const net = networkCall(undefined, 30, 60);
+  const interval = setInterval(() => net.reset(), 10);
+  await new Promise((resolve) => setTimeout(resolve, 110));
+  clearInterval(interval);
+  expect(net.totalTimedOut()).toBe(true);
+  expect(net.ownTimeout(net.signal.reason)).toBe("total");
+  net.dispose();
+});
+
+test("networkCall: ownTimeout identifica o timer próprio mesmo com o caller abortado (#519)", async () => {
+  const controller = new AbortController();
+  const net = networkCall(controller.signal, 20);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  controller.abort(new DOMException("cancelado", "AbortError"));
+  expect(net.timedOut()).toBe(true);
+  expect(controller.signal.aborted).toBe(true);
+  expect(net.ownTimeout(net.signal.reason)).toBe("idle");
+  expect(net.ownTimeout(new DOMException("cancelado", "AbortError"))).toBeUndefined();
+  net.dispose();
+});
+
+test("openai-compat: streamTimeoutMs é teto total do stream mesmo com chunks constantes (#519)", async () => {
+  // chunk a cada 30ms (nunca estoura a inatividade de 500ms), mas o stream passa de 120ms.
+  const p = new OpenAICompatProvider({
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "k",
+    timeoutMs: 500,
+    streamTimeoutMs: 120,
+    retry: { maxAttempts: 1 },
+    fetchFn: slowSse({ gapMs: 30, chunks: 20 }),
+  });
+
+  const error = (await p.complete({ ...req, onToken: () => {} }).catch((e) => e)) as ProviderError;
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.errClass).toBe("network_timeout");
+  expect(error.message).toContain("120ms");
+  expect(error.message).toContain("timeout total do stream");
+  expect(error.message).toContain("providers.<name>.streamTimeoutMs");
+});
+
+test("openai-compat: timeout antes do primeiro chunk é timeout total, não inatividade (#519)", async () => {
+  const p = new OpenAICompatProvider({
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "k",
+    timeoutMs: 120,
+    retry: { maxAttempts: 1 },
+    fetchFn: slowSse({ gapMs: 20, chunks: 3, hangAfter: 0 }),
+  });
+
+  const error = (await p.complete({ ...req, onToken: () => {} }).catch((e) => e)) as ProviderError;
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.errClass).toBe("network_timeout");
+  expect(error.message).toContain("timeout total");
+  expect(error.message).not.toContain("inatividade");
+});
+
+test("openai-compat: timeout próprio vence sobre abort do caller na mesma janela (#519)", async () => {
+  const controller = new AbortController();
+  const p = new OpenAICompatProvider({
+    baseUrl: "http://127.0.0.1:9/v1",
+    apiKey: "k",
+    timeoutMs: 10,
+    retry: { maxAttempts: 1 },
+    fetchFn: async (_url, init) => {
+      await new Promise((resolve) => setTimeout(resolve, 30)); // timer próprio dispara aos 10ms
+      throw init?.signal?.reason; // aos 30ms o erro é o TimeoutError do timer próprio
+    },
+  });
+  setTimeout(() => controller.abort(new DOMException("cancelado", "AbortError")), 20);
+
+  const error = (await p.complete(req, controller.signal).catch((e) => e)) as ProviderError;
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.errClass).toBe("network_timeout");
+});
+
+test("codex-oauth: streamTimeoutMs é teto total do stream mesmo com chunks constantes (#519)", async () => {
+  const p = new CodexOAuthProvider({
+    credentialsPath: authPath(4102444800),
+    timeoutMs: 500,
+    streamTimeoutMs: 120,
+    providerName: "codex",
+    fetchFn: slowCodexSse({ gapMs: 30, chunks: 20 }),
+  });
+
+  const error = (await p.complete(req).catch((e) => e)) as ProviderError;
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.errClass).toBe("network_timeout");
+  expect(error.message).toContain("120ms");
+  expect(error.message).toContain("streamTimeoutMs");
+});
+
+test("codex-oauth: timeout antes do primeiro chunk é timeout total, não inatividade (#519)", async () => {
+  const p = new CodexOAuthProvider({
+    credentialsPath: authPath(4102444800),
+    timeoutMs: 120,
+    providerName: "codex",
+    fetchFn: slowCodexSse({ gapMs: 20, chunks: 3, hangAfter: 0 }),
+  });
+
+  const error = (await p.complete(req).catch((e) => e)) as ProviderError;
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.errClass).toBe("network_timeout");
+  expect(error.message).toContain("timeout total");
+  expect(error.message).not.toContain("inatividade");
+});

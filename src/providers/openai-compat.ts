@@ -27,6 +27,8 @@ interface OpenAICompatProviderOptions {
   fetchFn?: FetchLike;
   /** Timeout de rede por tentativa; default `DEFAULT_PROVIDER_TIMEOUT_MS`. */
   timeoutMs?: number;
+  /** Teto total opcional de uma chamada com streaming; sem default = sem teto (#519). */
+  streamTimeoutMs?: number;
   /** Nome do provider na config, usado só na mensagem do timeout (#475). */
   providerName?: string;
   /** Call profile do modelo (E1-E8). */
@@ -229,6 +231,7 @@ export class OpenAICompatProvider implements Provider {
   private readonly fetchFn: FetchLike;
   private readonly call: CallConfig | undefined;
   private readonly timeoutMs: number;
+  private readonly streamTimeoutMs: number | undefined;
   private readonly providerName: string | undefined;
 
   constructor(opts: OpenAICompatProviderOptions) {
@@ -237,6 +240,7 @@ export class OpenAICompatProvider implements Provider {
     this.fetchFn = opts.fetchFn ?? fetch;
     this.call = opts.call;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
+    this.streamTimeoutMs = opts.streamTimeoutMs;
     this.providerName = opts.providerName;
 
     const headers = new Headers();
@@ -283,8 +287,9 @@ export class OpenAICompatProvider implements Provider {
     const { body, call } = this.bodyFor(req);
     // Timeout próprio por tentativa: um servidor pendurado não segura o run (I-09).
     // Sem streaming ele limita a chamada inteira; com streaming limita só a
-    // inatividade, porque cada chunk reinicia o prazo (#475).
-    const net = networkCall(signal, this.timeoutMs);
+    // inatividade, porque cada chunk reinicia o prazo (#475) — e o teto total
+    // opcional `streamTimeoutMs` nunca é reiniciado (#519).
+    const net = networkCall(signal, this.timeoutMs, req.onToken !== undefined ? this.streamTimeoutMs : undefined);
     try {
       let response: Response;
       try {
@@ -311,14 +316,19 @@ export class OpenAICompatProvider implements Provider {
 
       const sse = (response.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream");
       if (req.onToken !== undefined && sse) {
+        const activity = { chunks: 0 };
         try {
-          const streamed = await this.streamResponse(req, response, req.onToken, net);
+          const streamed = await this.streamResponse(req, response, req.onToken, net, activity);
           return { ...streamed, call };
         } catch (error) {
           // Erros já classificados do stream (ex.: corpo vazio) seguem como estão.
-          if (isAbortError(error, signal)) throw error;
-          if (net.timedOut()) {
-            throw this.networkError(error, signal, net, "falha ao ler o stream do provider", "idle");
+          // O timeout próprio vence sobre o abort do caller na mesma janela (#519).
+          const own = net.ownTimeout(error);
+          if (own === undefined && isAbortError(error, signal)) throw error;
+          if (own !== undefined || net.timedOut() || net.totalTimedOut()) {
+            // Sem chunk recebido, o prazo que estorou é de fato o total da chamada (#519).
+            const fallback = activity.chunks > 0 ? "idle" : "total";
+            throw this.networkError(error, signal, net, "falha ao ler o stream do provider", fallback);
           }
           throw error;
         }
@@ -339,29 +349,44 @@ export class OpenAICompatProvider implements Provider {
 
   /**
    * Classifica falha de rede: cancelamento do run, timeout próprio ou outage (I-09).
-   * `timeout` diz qual prazo estourou: o total da chamada ou a inatividade do stream (#475).
+   * `fallback` diz qual prazo rotula o timer de inatividade quando o erro não é
+   * identificável: o total da chamada ou a inatividade do stream (#475, #519).
    */
   private networkError(
     error: unknown,
     caller: AbortSignal | undefined,
     net: NetworkCall,
     label: string,
-    timeout: "idle" | "total",
+    fallback: "idle" | "total",
     status?: number,
   ): unknown {
-    if (isAbortError(error, caller)) return error;
-    if (isRedirectRefusal(error)) {
+    const own = net.ownTimeout(error);
+    // O timer próprio disparou com esse erro: é network_timeout mesmo se o caller
+    // também tiver abortado na mesma janela (#519).
+    if (own === undefined && isAbortError(error, caller)) return error;
+    if (own === undefined && isRedirectRefusal(error)) {
       return new ProviderError(
         "invalid_request",
         `${label}: redirect recusado; configure uma URL final (sem redirect) em baseUrl`,
         status,
       );
     }
-    if (net.timedOut()) {
-      const limit = timeout === "idle"
-        ? `parado por ${this.timeoutMs}ms (timeout de inatividade)`
-        : `sem resposta em ${this.timeoutMs}ms (timeout total da chamada)`;
-      const hint = `aumente providers.${this.providerName ?? "<name>"}.timeoutMs ou reduza o request`;
+    const kind: "idle" | "total" | "streamTotal" | undefined =
+      own === "total" || (own === undefined && net.totalTimedOut())
+        ? "streamTotal"
+        : own === "idle" || net.timedOut()
+          ? fallback
+          : undefined;
+    if (kind !== undefined) {
+      const name = this.providerName ?? "<name>";
+      const limit = kind === "streamTotal"
+        ? `stream durou mais de ${this.streamTimeoutMs}ms (timeout total do stream)`
+        : kind === "idle"
+          ? `parado por ${this.timeoutMs}ms (timeout de inatividade)`
+          : `sem resposta em ${this.timeoutMs}ms (timeout total da chamada)`;
+      const hint = kind === "streamTotal"
+        ? `ajuste providers.${name}.streamTimeoutMs`
+        : `aumente providers.${name}.timeoutMs ou reduza o request`;
       return new ProviderError("network_timeout", `${label}: ${limit}; ${hint}`, status);
     }
     return new ProviderError("outage", `${label}: ${this.describe(error)}`, status);
@@ -370,13 +395,15 @@ export class OpenAICompatProvider implements Provider {
   /**
    * Lê SSE (`data: {...}`) e entrega cada delta; devolve a resposta consolidada.
    * Cada chunk recebido reinicia o prazo do `net`: o timeout do stream mede
-   * inatividade, não a duração total (#475).
+   * inatividade, não a duração total (#475). `activity.chunks` conta os chunks
+   * para rotular o timeout antes do primeiro chunk como total (#519).
    */
   private async streamResponse(
     req: CompletionRequest,
     response: Response,
     onToken: (text: string) => void,
     net: NetworkCall,
+    activity: { chunks: number },
   ): Promise<CompletionResponse> {
     if (response.body === null) {
       throw new ProviderError("outage", "resposta sem corpo para streaming", response.status);
@@ -463,6 +490,7 @@ export class OpenAICompatProvider implements Provider {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      activity.chunks++;
       net.reset();
       buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
       for (;;) {

@@ -32,6 +32,8 @@ interface ProviderConfigBase {
   retryBackoffMs?: number;
   /** Timeout de rede por tentativa em ms; default 120000 (I-09). */
   timeoutMs?: number;
+  /** Teto total opcional de uma chamada com streaming em ms; ausente = sem teto (#519). */
+  streamTimeoutMs?: number;
 }
 
 /** Provider OpenAI-compatible (NVIDIA NIM, OpenRouter). */
@@ -571,6 +573,7 @@ function validateProvider(name: string, value: unknown): ProviderConfig {
     ...(raw.maxRetries === undefined ? {} : { maxRetries: expectNonNegativeInteger(raw.maxRetries, `${field}.maxRetries`) }),
     ...(raw.retryBackoffMs === undefined ? {} : { retryBackoffMs: expectPositiveInteger(raw.retryBackoffMs, `${field}.retryBackoffMs`) }),
     ...(raw.timeoutMs === undefined ? {} : { timeoutMs: expectPositiveInteger(raw.timeoutMs, `${field}.timeoutMs`) }),
+    ...(raw.streamTimeoutMs === undefined ? {} : { streamTimeoutMs: expectPositiveInteger(raw.streamTimeoutMs, `${field}.streamTimeoutMs`) }),
   };
 
   if (kind === "openai-compat") {
