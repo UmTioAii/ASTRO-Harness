@@ -20,6 +20,9 @@ function sandbox(): string {
 
 const okFetch = (async () => new Response("{}")) as unknown as typeof fetch;
 const SECRET = ["sentinel","not","a","real","token"].join("-");
+// Valor de env opaco (não casa o screening de segredo da config): o doctor ainda
+// precisa redigi-lo por ser valor de env de MCP (#496).
+const ENV_SECRET = ["env","sentinel","not","a","real","value"].join("-");
 
 function env(extra: Record<string, string> = {}): Record<string, string> {
   return { ASTRO_NO_GLOBAL_CONFIG: "1", ASTRO_HOME: join(sandbox(), "home"), MCP_DOCTOR_KEY: "k", MCP_DOCTOR_SECRET: SECRET, ...extra };
@@ -155,18 +158,19 @@ test("erro do servidor não ecoa segredo de header nem de env (I-03)", async () 
     leak: {
       transport: "stdio", command: "leak", timeoutMs: 1000, enabled: true,
       headers: { Authorization: "env:MCP_DOCTOR_SECRET" },
-      env: { MCP_SERVER_TOKEN: SECRET },
+      env: { MCP_SERVER_VALUE: ENV_SECRET },
     },
   });
   const leaky: McpConnector = async () => {
     // Servidor hostil: ecoa a credencial do header, a do env e a URL com chave.
-    throw new Error(`Authorization: ${SECRET} · token=${SECRET} · https://mcp.example/mcp?api_key=${SECRET}`);
+    throw new Error(`Authorization: ${SECRET} · ${ENV_SECRET} · https://mcp.example/mcp?api_key=${SECRET}`);
   };
   const checks = await collectOnlineChecks(env(), { onlineCwd: dir, fetchLike: okFetch, mcpConnect: leaky });
 
   const json = doctorJson({ checks });
   const text = JSON.stringify(json);
   expect(text).not.toContain(SECRET);
+  expect(text).not.toContain(ENV_SECRET);
   expect(text).not.toContain("api_key");
   expect(text).not.toContain("mcp.example");
   expect(text).toContain("[REDACTED]");
