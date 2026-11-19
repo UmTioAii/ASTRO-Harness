@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createApprovalBridge } from "../src/tui/approvals";
+import { toolPrompt } from "../src/chat/approvers";
 import type { SwapRequest } from "../src/approval";
 import type { BudgetStatus } from "../src/budget";
 
@@ -91,6 +92,30 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     bridge.answer("s");
     expect(await decision).toBe(true);
     expect(bridge.current()).toBeUndefined();
+  });
+
+  test("approveTool publica o mesmo texto do REPL, com o argumento material (#536)", async () => {
+    const req = {
+      name: "run_command", action: "shell" as const, mode: "ask" as const,
+      detail: { kind: "command" as const, value: "npm test" },
+    };
+    const bridge = createApprovalBridge();
+    const decision = bridge.approveTool(req);
+    expect(bridge.current()?.text).toBe(toolPrompt(req));
+    expect(bridge.current()?.text).toContain("npm test");
+    bridge.answer("s");
+    expect(await decision).toBe(true);
+
+    const pathReq = {
+      name: "move_path", action: "delete" as const, mode: "ask" as const,
+      detail: { kind: "path" as const, value: "a.ts -> dir/b.ts" },
+    };
+    const moving = createApprovalBridge();
+    const moveDecision = moving.approveTool(pathReq);
+    expect(moving.current()?.text).toBe(toolPrompt(pathReq));
+    expect(moving.current()?.text).toContain("a.ts -> dir/b.ts");
+    moving.answer("n");
+    expect(await moveDecision).toBe(false); // 'n' continua negando
   });
 
   test("askText publica a pergunta crua na TUI e resolve com a resposta (#267)", async () => {

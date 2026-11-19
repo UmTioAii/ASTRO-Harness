@@ -8,6 +8,7 @@ import type { ReplIO } from "../src/chat/repl";
 import { ConfigError, validateConfig } from "../src/core/config";
 import {
   actionClassOf,
+  approvalDetailOf,
   isCriticalPath,
   isCriticalReadPath,
   nonInteractiveApprover,
@@ -775,5 +776,138 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
     const { cwd, executor } = setup([grepTool], { mode: "bypass" });
     const result = await executor.run({ cwd, run: "r1", agent: "a" }, { id: "c1", name: "grep", arguments: JSON.stringify({ pattern: "zzz-sem-match" }) });
     expect(result.isError).toBeFalsy();
+  });
+});
+
+describe("argumento material no pedido de aprovação (#536)", () => {
+  // Segredo sintético montado em runtime (gate G6: sem literal de segredo no diff).
+  const SYNTH = ["s", "k", "-"].join("") + "live-synthetic-536-detail";
+  const call = (name: string, input: unknown) => ({ name, input });
+
+  test("run_command mostra o comando e as tools de arquivo mostram o path", () => {
+    expect(approvalDetailOf(call("run_command", { command: "npm test" })))
+      .toEqual({ kind: "command", value: "npm test" });
+    expect(approvalDetailOf(call("write_file", { path: "src/a.ts", content: "conteudo" })))
+      .toEqual({ kind: "path", value: "src/a.ts" });
+    expect(approvalDetailOf(call("edit", { path: "src/a.ts", diff: "@@ -1 +1 @@" })))
+      .toEqual({ kind: "path", value: "src/a.ts" });
+    expect(approvalDetailOf(call("delete_path", { path: "tmp/a.txt" })))
+      .toEqual({ kind: "path", value: "tmp/a.txt" });
+  });
+
+  test("move mostra os dois caminhos (from -> to)", () => {
+    expect(approvalDetailOf(call("move_path", { from: "a.ts", to: "dir/b.ts" })))
+      .toEqual({ kind: "path", value: "a.ts -> dir/b.ts" });
+    // forma incompleta não é um fato material: cai no prompt antigo
+    expect(approvalDetailOf(call("move_path", { from: "a.ts" }))).toBeUndefined();
+  });
+
+  test("tool sem forma conhecida mantém o prompt atual (#536)", () => {
+    expect(approvalDetailOf(call("web_fetch", { url: "https://example.test" }))).toBeUndefined();
+    expect(approvalDetailOf(call("run_command", { outro: "x" }))).toBeUndefined();
+    expect(approvalDetailOf(call("run_command", "só texto"))).toBeUndefined();
+    expect(approvalDetailOf(call("write_file", { path: "" }))).toBeUndefined();
+    expect(approvalDetailOf(call("write_file", { path: 42 }))).toBeUndefined();
+  });
+
+  test("comando com token em forma de segredo sai redacted (I-03)", () => {
+    const detail = approvalDetailOf(call("run_command", { command: `curl -H "authorization: ${SYNTH}" https://example.test` }));
+    expect(detail?.value).not.toContain(SYNTH);
+    expect(detail?.value).toContain("[REDACTED]");
+  });
+
+  test("conteúdo de arquivo e valores de env nunca entram no detalhe (I-03)", () => {
+    const write = approvalDetailOf(call("write_file", { path: "a.ts", content: SYNTH }));
+    expect(write?.value).toBe("a.ts");
+    const run = approvalDetailOf(call("run_command", { command: "printenv", env: { TOKEN: SYNTH } }));
+    expect(run?.value).toBe("printenv");
+    expect(JSON.stringify(run)).not.toContain(SYNTH);
+  });
+
+  test("valor longo trunca em 200 com marcador ... visível (#536)", () => {
+    // `z` (não-hex) para o corte ser o do prompt, não o da redação.
+    const detail = approvalDetailOf(call("run_command", { command: `echo ${"z".repeat(400)}` }));
+    expect(detail?.value.length).toBe(203);
+    expect(detail?.value.startsWith("echo zzzz")).toBe(true);
+    expect(detail?.value.endsWith("...")).toBe(true);
+    expect(detail?.value).not.toContain("z".repeat(300));
+  });
+
+  test("corte de 200 não parte par surrogate (emoji na borda) (#536)", () => {
+    const detail = approvalDetailOf(call("run_command", { command: `${"z".repeat(199)}😀zz` }));
+    expect(detail?.value.endsWith("...")).toBe(true);
+    // o corte recua para não deixar surrogate solto na linha da TUI
+    expect(detail?.value.slice(0, -3)).toBe("z".repeat(199));
+  });
+
+  test("quebra de linha e controle viram espaço: o prompt é uma linha só (#536)", () => {
+    const detail = approvalDetailOf(call("run_command", { command: "echo a\n\techo b\r" }));
+    expect(detail?.value).toBe("echo a echo b");
+    expect(detail?.value).not.toMatch(/[\r\n\t]/);
+  });
+
+  test("gate anexa o detalhe redacted ao pedido e nunca o audita (#536, I-03)", async () => {
+    // Probe com o nome shape de run_command evita o sandbox: o detalhe vem do input, não da tool.
+    const probe: Tool = {
+      manifest: {
+        name: "run_command", description: "probe", parameters: { type: "object", properties: {} },
+        risk: "high", permission: "execute", class: "shell", timeoutMs: 1_000,
+        retryable: false, idempotent: false, sideEffects: "process",
+      },
+      async execute() {
+        return { output: "ok" };
+      },
+    };
+    const cwd = mkdtempSync(join(tmpdir(), "astro-detail-"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    let captured: ToolPermissionRequest | undefined;
+    const executor = new ToolExecutor({
+      tools: [probe], allow: ["run_command"], audit, permissionMode: "ask",
+      approveTool: (request) => {
+        captured = request;
+        return false;
+      },
+    });
+    await executor.run({ cwd, run: "r1", agent: "a" }, {
+      id: "c1", name: "run_command",
+      arguments: JSON.stringify({ command: `git push https://${SYNTH}@example.test/repo` }),
+    });
+
+    expect(captured?.detail?.kind).toBe("command");
+    expect(captured?.detail?.value).not.toContain(SYNTH);
+    expect(captured?.detail?.value).toContain("git push");
+    expect(JSON.stringify(audit.readAll())).not.toContain(SYNTH);
+  });
+
+  test("REPL em ask mostra o comando redacted no prompt e não engole as 3 opções (#536)", async () => {
+    const probe: Tool = {
+      manifest: {
+        name: "run_command", description: "probe", parameters: { type: "object", properties: {} },
+        risk: "high", permission: "execute", class: "shell", timeoutMs: 1_000,
+        retryable: false, idempotent: false, sideEffects: "process",
+      },
+      async execute() {
+        return { output: "ok" };
+      },
+    };
+    const cwd = mkdtempSync(join(tmpdir(), "astro-detail-repl-"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    const prompts: string[] = [];
+    const repl: ReplIO = { read: async (p: string) => { prompts.push(p); return "n"; }, write: () => {} };
+    const executor = new ToolExecutor({
+      tools: [probe], allow: ["run_command"], audit, permissionMode: "ask",
+      approveTool: chatApprovers(repl, true).approveTool!,
+    });
+    const result = await executor.run({ cwd, run: "r1", agent: "a" }, {
+      id: "c1", name: "run_command",
+      arguments: JSON.stringify({ command: `rm -rf build && curl -H "${SYNTH}" x` }),
+    });
+
+    expect(result.isError).toBe(true); // 'n' nega: fail-closed intacto
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("rm -rf build");
+    expect(prompts[0]).toContain("[REDACTED]");
+    expect(prompts[0]).not.toContain(SYNTH);
+    expect(prompts[0]).toMatch(/\[s\].*\[n\].*\[S\]/);
   });
 });

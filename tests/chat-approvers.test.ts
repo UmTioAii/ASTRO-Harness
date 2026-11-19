@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chatApprovers } from "../src/chat/approvers";
+import { chatApprovers, toolPrompt } from "../src/chat/approvers";
 import type { SwapRequest } from "../src/approval";
 import type { BudgetStatus } from "../src/budget";
 import type { ReplIO } from "../src/chat/repl";
@@ -134,6 +134,52 @@ describe("approveTool no REPL (PERM-04, #265)", () => {
     const printed = writes.join("");
     expect(printed).toContain("cancelada sem resposta");
     expect(printed).not.toContain("expirada");
+  });
+});
+
+describe("prompt de tool com o argumento material (#536)", () => {
+  test("run_command mostra o comando entre as opções", () => {
+    const prompt = toolPrompt({
+      name: "run_command", action: "shell", mode: "ask",
+      detail: { kind: "command", value: "npm test -- --watch=false" },
+    });
+    expect(prompt).toContain("run_command");
+    expect(prompt).toContain("comando");
+    expect(prompt).toContain("npm test -- --watch=false");
+    expect(prompt).toMatch(/\[s\].*\[n\].*\[S\]/);
+  });
+
+  test("write_file/delete_path mostram o caminho; move mostra from -> to", () => {
+    const write = toolPrompt({
+      name: "write_file", action: "edit", mode: "ask",
+      detail: { kind: "path", value: "src/a.ts" },
+    });
+    expect(write).toContain("caminho");
+    expect(write).toContain("src/a.ts");
+
+    const move = toolPrompt({
+      name: "move_path", action: "delete", mode: "ask",
+      detail: { kind: "path", value: "a.ts -> dir/b.ts" },
+    });
+    expect(move).toContain("a.ts -> dir/b.ts");
+  });
+
+  test("sem detalhe o prompt é exatamente o antigo (fallback intacto)", () => {
+    const request = { name: "write_file", action: "edit" as const, mode: "ask" as const };
+    const prompt = toolPrompt(request);
+    expect(prompt).toBe(
+      'tool "write_file" (ação edit, modo ask). [s] aprovar, [n] negar, [S] aprovar nesta sessão: ',
+    );
+  });
+
+  test("detalhe longo já chega truncado pelo gate, mas o prompt não quebra a linha", () => {
+    const value = `${"a".repeat(200)}...`;
+    const prompt = toolPrompt({
+      name: "run_command", action: "shell", mode: "ask",
+      detail: { kind: "command", value },
+    });
+    expect(prompt).toContain(value);
+    expect(prompt).not.toContain("\n");
   });
 });
 
