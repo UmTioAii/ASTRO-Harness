@@ -28,12 +28,13 @@ describe("release usa o snapshot observado (#527)", () => {
     });
     const observed = summarizeLocks(ledger, () => false)[0]!;
 
-    // Outro processo: libera o lock morto e readquire a conta com pid vivo.
+    // Outro processo: libera o lock morto e readquire a conta com o MESMO pid
+    // e seq novo — quem recusa é a guarda de seq, não a de pid.
     releaseAgentLock(ledger, audit, {
       run: "r1", agent_id: "default", reason: "crash_recovered", pid: deadPid, seq: observed.seq,
     });
     acquireAgentLock(ledger, audit, {
-      run: "r1", agent_id: "default", session_id: "r1", ...identity, pid: process.pid,
+      run: "r1", agent_id: "default", session_id: "r1", ...identity, pid: deadPid,
     });
 
     const outcome = releaseObservedLock(ledger, audit, observed);
@@ -42,6 +43,33 @@ describe("release usa o snapshot observado (#527)", () => {
     expect(outcome.message).toContain("mudou desde a leitura");
     // O lock novo continua preso: a exclusividade não foi quebrada (A4).
     expect(activeLocks(ledger)).toHaveLength(1);
+    const denied = audit.readAll().filter((entry) => entry.tipo === "agent.lock.release_denied");
+    expect(denied.at(-1)!.payload).toMatchObject({ agent_id: "default", reason: "lock_changed", pid: deadPid });
+  });
+
+  test("ledger legado sem seq recusa liberar (falha fechada)", () => {
+    const { ledger, audit, ledgerPath } = setup();
+    appendFileSync(ledgerPath, `${JSON.stringify({
+      schemaVersion: 3,
+      ts: new Date().toISOString(),
+      run: "r1",
+      kind: "agent",
+      event: "created",
+      agent_id: "default",
+      session_id: "r1",
+      credentialRef: "CRED_KEY",
+      pid: 999_999,
+    })}\n`);
+    const observed = summarizeLocks(ledger, () => false)[0]!;
+
+    expect(observed.seq).toBeUndefined();
+    const outcome = releaseObservedLock(ledger, audit, observed);
+
+    expect(outcome.released).toBe(false);
+    expect(outcome.message).toContain("seq");
+    expect(activeLocks(ledger)).toHaveLength(1);
+    const denied = audit.readAll().filter((entry) => entry.tipo === "agent.lock.release_denied");
+    expect(denied.at(-1)!.payload).toMatchObject({ agent_id: "default", reason: "missing_seq" });
   });
 
   test("--force com dono vivo audita manual_release_forced", () => {

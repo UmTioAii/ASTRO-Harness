@@ -18,8 +18,8 @@ export interface LockSummary {
   profile?: string;
   pid?: number;
   alive: boolean;
-  /** `seq` do `agent.created` observado: guarda de concorrência do release (#527). */
-  seq: number;
+  /** `seq` do `agent.created` observado: guarda de concorrência do release (#527). Ausente em ledger legado. */
+  seq?: number;
   created_at?: string;
   ageMs?: number;
 }
@@ -60,7 +60,8 @@ export function summarizeLocks(
       ...(lock.pid === undefined ? {} : { pid: lock.pid }),
       // Ledger legado sem pid não prova dono vivo: trata como não vivo.
       alive: lock.pid !== undefined && probe(lock.pid),
-      seq: lock.seq,
+      // `seq` ausente só existe em ledger anterior ao campo: o release recusa.
+      ...(typeof lock.seq === "number" ? { seq: lock.seq } : {}),
       ...(lock.created_at === undefined ? {} : { created_at: lock.created_at }),
       ...(ageMs === undefined ? {} : { ageMs }),
     };
@@ -110,10 +111,25 @@ function describe(lock: LockSummary): string {
   return `run "${lock.run}", agente "${lock.agent_id}"${pid}`;
 }
 
+/** Recusa de liberação também deixa rastro (I-04), sem valor de segredo. */
+function auditDeniedRelease(audit: Auditor, lock: LockSummary, reason: string): void {
+  audit.append({
+    run: lock.run,
+    agent: lock.agent_id,
+    tipo: "agent.lock.release_denied",
+    payload: {
+      agent_id: lock.agent_id,
+      reason,
+      ...(lock.pid === undefined ? {} : { pid: lock.pid }),
+    },
+  });
+}
+
 /**
- * Libera uma conta presa gravando `agent.destroyed` com `reason: manual_release`
- * (a mesma guarda pid/seq do recovery impede derrubar um lock readquirido).
- * Sem `--force` recusa quando o dono está vivo: o caso normal é outro run rodando.
+ * Libera uma conta presa gravando `agent.destroyed` (`manual_release`, ou
+ * `manual_release_forced` quando `--force` encontra o dono vivo). A guarda
+ * `pid`/`seq` do snapshot impede derrubar um lock readquirido; sem `--force`,
+ * dono vivo é recusado — o caso normal é outro run rodando.
  */
 export function releaseLocks(
   ledger: Ledger,
@@ -161,9 +177,18 @@ export function releaseObservedLock(
   opts: ReleaseObservedOptions = {},
 ): { released: boolean; message: string } {
   if (lock.alive && opts.force !== true) {
+    auditDeniedRelease(audit, lock, "holder_alive");
     return {
       released: false,
       message: `recusado: ${describe(lock)} ainda está vivo; use --force para liberar mesmo assim`,
+    };
+  }
+  // Sem `seq` observado não há como provar que o lock é o mesmo: falha fechada.
+  if (typeof lock.seq !== "number") {
+    auditDeniedRelease(audit, lock, "missing_seq");
+    return {
+      released: false,
+      message: `nada foi liberado: o lock de ${describe(lock)} não tem seq no ledger; um novo run libera pelo recovery`,
     };
   }
   const forced = opts.force === true && lock.alive;
@@ -175,6 +200,7 @@ export function releaseObservedLock(
     seq: lock.seq,
   });
   if (!released) {
+    auditDeniedRelease(audit, lock, "lock_changed");
     return {
       released: false,
       message: `nada foi liberado: a conta de ${describe(lock)} mudou desde a leitura; rode "astro locks" de novo`,

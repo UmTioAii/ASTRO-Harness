@@ -128,6 +128,17 @@ describe("astro locks (#527)", () => {
     expect(err).toContain("--json");
   });
 
+  test("--force só vale em locks release", async () => {
+    const { dir, cfgPath } = setup([
+      { run: "run-a", agent: "default", pid: 999_999, credentialRef: "SENTINEL_KEY" },
+    ]);
+
+    const { err, code } = await cli(dir, cfgPath, ["locks", "--force"]);
+
+    expect(code).not.toBe(0);
+    expect(err).toContain("--force");
+  });
+
   test("release sem --force recusa quando o pid dono está vivo", async () => {
     const { dir, cfgPath, ledgerPath } = setup([
       { run: "run-a", agent: "default", pid: process.pid, provider: "proj", model: "p1", credentialRef: "SENTINEL_KEY" },
@@ -152,7 +163,7 @@ describe("astro locks (#527)", () => {
     expect(code).toBe(0);
     expect(out).toContain("conta liberada");
     expect(readFileSync(ledgerPath, "utf8")).toContain('"event":"destroyed"');
-    expect(readFileSync(ledgerPath, "utf8")).toContain("manual_release");
+    expect(readFileSync(ledgerPath, "utf8")).toContain('"reason":"manual_release_forced"');
     expect(readFileSync(auditPath, "utf8")).toContain("agent.lock.released");
   });
 

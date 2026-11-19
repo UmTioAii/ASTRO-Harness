@@ -829,6 +829,9 @@ function parseArgs(argv: string[]): ParsedCommand {
     if (action === "release" && json) {
       throw new UsageError("--json só vale em locks list");
     }
+    if (action === "list" && force) {
+      throw new UsageError("--force só vale em locks release");
+    }
     return {
       kind: "locks",
       options: {
