@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, isPlainObject, validateAttachments, type AttachmentsConfig } from "./core/config";
+import { BASELINE_MAX_STEPS, ConfigError, isPlainObject } from "./core/config";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./permissions";
 import { isVaultRef } from "./secrets";
 
@@ -47,20 +47,6 @@ export function mergeModelLayers(base: readonly unknown[], overlay: readonly unk
     index += 1;
   }
   return [...merged.values()];
-}
-
-/**
- * Limites efetivos de anexos (defaults < global < projeto, ADR-0029),
- * validados com o mesmo schema do runtime e **sem** resolver provider: o
- * doctor precisa mostrar os limites mesmo quando não há provider configurado.
- * Uma camada presente e inválida reprova; camadas ausentes usam os defaults.
- */
-export function resolveEffectiveAttachments(
-  global: Record<string, unknown> | undefined,
-  project: Record<string, unknown> | undefined,
-): AttachmentsConfig {
-  const merged = mergeConfigLayers(global ?? {}, project ?? {});
-  return validateAttachments(merged.attachments);
 }
 
 /**

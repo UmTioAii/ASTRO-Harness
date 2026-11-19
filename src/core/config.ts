@@ -1260,7 +1260,7 @@ export const DEFAULT_ATTACHMENTS: AttachmentsConfig = Object.freeze({
 });
 
 /** Valida a seção `attachments` (ADR-0026, #392) com vocabulário fechado e defaults. */
-export function validateAttachments(value: unknown): AttachmentsConfig {
+function validateAttachments(value: unknown): AttachmentsConfig {
   const raw = value === undefined ? {} : expectObject(value, "attachments");
   for (const key of Object.keys(raw)) {
     if (key !== "image" && key !== "directory" && key !== "artifactTtlDays" && key !== "artifactMaxBytes") {

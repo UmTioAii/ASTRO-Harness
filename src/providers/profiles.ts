@@ -633,6 +633,19 @@ export class NoProviderError extends Error {
 export const NO_PROVIDER_MESSAGE =
   "nenhum provider configurado: rode /provider add ou defina OPENAI_API_KEY e OPENAI_MODEL";
 
+/**
+ * Provider sintético do diagnóstico (#523): quando não há provider, ele permite
+ * validar a config efetiva por inteiro em vez de mascarar uma camada inválida
+ * com `NoProviderError`. Nunca entra no store nem na saída do doctor.
+ */
+const DIAGNOSTIC_FALLBACK_PROFILE: ProviderProfile = {
+  id: "astro-doctor-probe",
+  name: "Astro doctor probe",
+  kind: "openai-compat",
+  baseUrl: "https://doctor-probe.invalid/v1",
+  models: [{ id: "probe", tags: [], context: 1024 }],
+};
+
 /** Mescla a camada global com o projeto e resolve o provider ativo. */
 export function resolveEffectiveConfig(input: {
   /** Camada de projeto: JSON cru do arquivo ou config já validada. */
@@ -645,6 +658,11 @@ export function resolveEffectiveConfig(input: {
   env?: NodeJS.ProcessEnv;
   /** Resume/replay: não trocar provider por store/env sem pedido explícito. */
   ignoreStoredSelection?: boolean;
+  /**
+   * Perfil sintético de diagnóstico: quando nenhum provider existe, a config
+   * efetiva é validada com ele em vez de mascarar camadas inválidas (#523).
+   */
+  diagnosticFallback?: ProviderProfile;
 }): EffectiveConfig {
   const env = input.env ?? process.env;
   const warnings: string[] = [];
@@ -737,7 +755,17 @@ export function resolveEffectiveConfig(input: {
       // `origin/main`), senão a mensagem aponta para a correção errada
       // ("/provider add") em vez de apontar o campo inválido.
       if (project !== undefined) validateConfig(declared);
-      throw new NoProviderError(NO_PROVIDER_MESSAGE);
+      const fallback = input.diagnosticFallback;
+      if (fallback === undefined) throw new NoProviderError(NO_PROVIDER_MESSAGE);
+      // Diagnóstico: o provider sintético entra só na validação da config
+      // efetiva; assim uma camada inválida não fica mascarada por
+      // `NoProviderError` (#523). Ele não é gravado nem exibido.
+      activeProvider = fallback.id;
+      selection = "store";
+      providers[fallback.id] = profileToProvider(fallback);
+      for (const model of fallback.models) {
+        models.push({ provider: fallback.id, id: model.id, tags: model.tags, context: model.context });
+      }
     }
   }
 
@@ -809,6 +837,11 @@ export function loadEffectiveConfig(
     ignoreStoredSelection?: boolean;
     /** Ignora a camada global (`--no-global-config`). */
     noGlobalConfig?: boolean;
+    /**
+     * Diagnóstico: sem provider, valida a config efetiva com um provider
+     * sintético em vez de mascarar camadas inválidas (#523).
+     */
+    diagnosticFallbackProvider?: boolean;
   } = {},
 ): EffectiveConfig {
   const env = opts.env ?? process.env;
@@ -856,6 +889,7 @@ export function loadEffectiveConfig(
     ...(envProfile === undefined ? {} : { envProfile }),
     ...(opts.provider === undefined ? {} : { providerFlag: opts.provider }),
     ...(opts.ignoreStoredSelection === true ? { ignoreStoredSelection: true } : {}),
+    ...(opts.diagnosticFallbackProvider === true ? { diagnosticFallback: DIAGNOSTIC_FALLBACK_PROFILE } : {}),
     env,
   });
 }

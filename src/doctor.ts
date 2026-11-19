@@ -8,7 +8,6 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { loadConfig, loadConfigRaw, type AstroConfig, type MCPServerConfig } from "./core/config";
-import { resolveEffectiveAttachments } from "./config-overlay";
 import { credentialMissingMessage } from "./credential-ref";
 import { loadEffectiveConfig, loadGlobalConfig, NoProviderError } from "./providers/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "./attachments/store";
@@ -594,47 +593,24 @@ type EffectiveConfigFacts =
   | { status: "ok"; ttlDays: number; maxBytes: number; error?: undefined }
   | { status: "invalid"; ttlDays?: undefined; maxBytes?: undefined; error: string };
 
-/** Camadas cruas (global + projeto) da config efetiva; ausente = sem camada. */
-function readConfigLayers(
-  configPath: string,
-  env: NodeJS.ProcessEnv,
-): { global?: Record<string, unknown>; project?: Record<string, unknown> } {
-  const global = env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(env);
-  const project = existsSync(configPath) ? loadConfigRaw(configPath) : undefined;
-  return {
-    ...(global === undefined ? {} : { global }),
-    ...(project === undefined ? {} : { project }),
-  };
-}
-
 /**
- * Config efetiva e limites de anexos. `NoProviderError` só diz que não há
- * provider: a ausência de config é determinada pelas camadas, não pelo erro.
- * Uma camada presente e inválida reprova com o motivo redigido e sem
- * apresentar defaults como valores efetivos (#523).
+ * Config efetiva e limites de anexos. A ausência de config é determinada
+ * pelas camadas, não pela resolução de provider: o diagnóstico valida a
+ * config efetiva com um provider sintético, então uma camada presente e
+ * inválida reprova com o motivo redigido em vez de virar default
+ * apresentado como valor efetivo (#523).
  */
 function readEffectiveConfig(configPath: string, env: NodeJS.ProcessEnv): EffectiveConfigFacts {
-  let failure: string | undefined;
   try {
-    const effective = loadEffectiveConfig(configPath, { env, allowMissing: true });
+    const effective = loadEffectiveConfig(configPath, {
+      env,
+      allowMissing: true,
+      diagnosticFallbackProvider: true,
+    });
     return {
       status: "ok",
       ttlDays: effective.config.attachments.artifactTtlDays,
       maxBytes: effective.config.attachments.artifactMaxBytes,
-    };
-  } catch (error) {
-    if (!(error instanceof NoProviderError)) {
-      failure = redactSecrets(error instanceof Error ? error.message : String(error));
-    }
-  }
-  try {
-    const layers = readConfigLayers(configPath, env);
-    const attachments = resolveEffectiveAttachments(layers.global, layers.project);
-    if (failure !== undefined) return { status: "invalid", error: failure };
-    return {
-      status: "ok",
-      ttlDays: attachments.artifactTtlDays,
-      maxBytes: attachments.artifactMaxBytes,
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
