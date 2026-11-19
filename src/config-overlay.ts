@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, isPlainObject } from "./core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, isPlainObject } from "./core/config";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./permissions";
 import { isVaultRef } from "./secrets";
 
@@ -116,17 +116,17 @@ export function assertNarrowed(
   if (main !== undefined && mainAfter !== undefined) assertAgentNarrowed(main, mainAfter, "do agent principal");
   const named = isPlainObject(global.agents) ? global.agents : {};
   const namedAfter = isPlainObject(merged.agents) ? merged.agents : {};
-  for (const [name, agent] of Object.entries(named)) {
-    const after = namedAfter[name];
-    if (isPlainObject(agent) && isPlainObject(after)) assertAgentNarrowed(agent, after, `do agent "${name}"`);
-  }
-  // Teto de passos dos nomeados cobre também os declarados só no projeto: sem
-  // valor global do nomeado, vale o teto do agent principal (mainCeiling).
+  // Um nomeado declarado só no projeto não escapa do teto (#548): tools e
+  // perfil vêm do global do próprio nomeado; sem ele, do agent principal; sem
+  // tools no principal, do default de D-07. Teto de passos idem.
   for (const [name, after] of Object.entries(namedAfter)) {
     if (!isPlainObject(after)) continue;
     const globalAgent = isPlainObject(named[name]) ? named[name] : undefined;
-    const ceiling = globalAgent !== undefined && typeof globalAgent.maxSteps === "number" ? globalAgent.maxSteps : mainCeiling;
-    assertStepsCeiling(after.maxSteps, `agents.${name}.maxSteps`, ceiling);
+    assertAgentNarrowed(namedAgentCeiling(globalAgent, main, mainAfter), after, `do agent "${name}"`);
+    const stepsCeiling = globalAgent !== undefined && typeof globalAgent.maxSteps === "number"
+      ? globalAgent.maxSteps
+      : mainCeiling;
+    assertStepsCeiling(after.maxSteps, `agents.${name}.maxSteps`, stepsCeiling);
   }
   // Modo de permissão do gate: o projeto só pode ser mais restrito.
   const globalMode = isPlainObject(global.permissions) ? global.permissions.mode : undefined;
@@ -233,6 +233,26 @@ export function assertNarrowed(
 interface GlobalSource {
   id: string;
   provider: Record<string, unknown>;
+}
+
+/**
+ * Teto de um agent nomeado (#548): o global do próprio nomeado; sem ele, a
+ * allowlist efetiva do agent principal (que o projeto não pode ampliar); sem
+ * tools declaradas em nenhum dos dois, o default de D-07. O perfil de permissão
+ * segue a política global (nomeado, senão principal) — o projeto nunca amplia.
+ */
+function namedAgentCeiling(
+  globalAgent: Record<string, unknown> | undefined,
+  mainGlobal: Record<string, unknown> | undefined,
+  mainAfter: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const tools = Array.isArray(globalAgent?.tools)
+    ? globalAgent.tools
+    : Array.isArray(mainAfter?.tools)
+      ? mainAfter.tools
+      : Array.isArray(mainGlobal?.tools) ? mainGlobal.tools : [...DEFAULT_AGENT_TOOLS];
+  const permission = globalAgent?.permission ?? mainGlobal?.permission;
+  return { tools, ...(permission === undefined ? {} : { permission }) };
 }
 
 /** Tools e perfil de permissão de um agent: só o que o global permite. */
