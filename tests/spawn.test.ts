@@ -64,6 +64,21 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     expect(snapshotId).toMatch(/^[0-9a-f]{64}$/); // I-06: snapshot correlacionável
   });
 
+  test("maxTurns limita o filho e maxSteps segue como alias obsoleto", async () => {
+    const { spawns, tool, ctx } = setup();
+    const modern = await tool.execute({ need: "writing-code", task: "a", maxTurns: 2 }, ctx);
+    expect(modern.isError).toBe(false);
+    expect(spawns.get("sub-1")?.maxSteps).toBe(2);
+
+    const legacy = await tool.execute({ need: "writing-code", task: "b", maxSteps: 1 }, ctx);
+    expect(legacy.isError).toBe(false);
+    expect(spawns.get("sub-2")?.maxSteps).toBe(1);
+
+    const both = await tool.execute({ need: "writing-code", task: "c", maxTurns: 1, maxSteps: 1 }, ctx);
+    expect(both.isError).toBe(true);
+    expect(JSON.parse(both.output)).toMatchObject({ error: "invalid_request" });
+  });
+
   test("sem conta livre o snapshot fica vazio; snapshot velho falha no lock", async () => {
     const { cfg, ledger, registry, tool, ctx } = setup();
     // Snapshot emitido antes de as contas serem presas.

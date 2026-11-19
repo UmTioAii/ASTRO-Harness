@@ -78,7 +78,8 @@ describe("approveTool no REPL (PERM-04, #265)", () => {
     expect(await chatApprovers(io(["n"]), true).approveTool!(req)).toBe(false);
     expect(await chatApprovers(io([null]), true).approveTool!(req)).toBe(false);
     expect(await chatApprovers(io(["S"]), true).approveTool!(req)).toBe("session");
-    expect(await chatApprovers(io(["sessao"]), true).approveTool!(req)).toBe("session");
+    expect(await chatApprovers(io(["sessao"]), true).approveTool!(req)).toBe(false);
+    expect(await chatApprovers(io(["session"]), true).approveTool!(req)).toBe(false);
   });
 
   test("[o] deixou de existir: resposta desconhecida nega", async () => {

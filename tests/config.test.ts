@@ -562,6 +562,45 @@ describe("config mínima: allowlist e paths têm default", () => {
     const cfg = validateConfig(raw);
     expect(cfg.paths).toEqual({ ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" });
   });
+
+  test("agent.tools vazio continua negando tudo", () => {
+    const raw = structuredClone(valid) as Record<string, unknown>;
+    (raw.agent as { tools?: string[] }).tools = [];
+    expect(validateConfig(raw).agent.tools).toEqual([]);
+  });
+
+  test("agent.tools explícito não é ampliado", () => {
+    const raw = structuredClone(valid) as Record<string, unknown>;
+    (raw.agent as { tools?: string[] }).tools = ["read_file"];
+    expect(validateConfig(raw).agent.tools).toEqual(["read_file"]);
+  });
+
+  test("agents.<nome> sem tools herda a allowlist do agente principal", () => {
+    const raw = structuredClone(validWithAgents) as Record<string, unknown>;
+    (raw.agent as { tools?: string[] }).tools = ["read_file"];
+    delete (raw.agents as Record<string, { tools?: string[] }>).coder.tools;
+    const cfg = validateConfig(raw);
+    expect(cfg.agents?.coder.tools).toEqual(["read_file"]);
+  });
+
+  test("agent com profile e sem tools herda o mesmo default", () => {
+    const raw = structuredClone(valid) as Record<string, unknown>;
+    const agent = raw.agent as { tools?: string[]; model?: string; profile?: string };
+    delete agent.tools;
+    delete agent.model;
+    agent.profile = "fast";
+    (raw as Record<string, unknown>).modelPool = { fast: { model: "openai/gpt-4o-mini" } };
+    const cfg = validateConfig(raw);
+    expect(cfg.agent.profile).toBe("fast");
+    expect(cfg.agent.tools).toEqual([
+      "read_file",
+      "write_file",
+      "edit",
+      "grep",
+      "list_dir",
+      "run_command",
+    ]);
+  });
 });
 
 describe("limite único de trabalho (P4)", () => {

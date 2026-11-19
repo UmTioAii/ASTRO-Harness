@@ -11,7 +11,7 @@ A T2 pede painéis, markdown, editor multi-linha, autocomplete e redimensionamen
 
 ## Decisão
 
-Adotar **Ink 8 + React 19** como única dependência de runtime, carregada por `import()` dinâmico apenas quando a TUI abre (`astro` sem argumento). `run`, `eval`, `bench`, `chat`, `health` e o restante do CLI continuam sem carregar Ink.
+Adotar **Ink 8 + React 19** como única dependência de runtime, carregada por `import()` dinâmico apenas quando a TUI abre (sem comando). `run`, `eval`, `bench`, `chat`, `health` e o restante do CLI continuam sem carregar Ink.
 
 ## Consequências
 

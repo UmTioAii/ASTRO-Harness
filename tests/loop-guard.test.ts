@@ -11,7 +11,7 @@ import {
   loadCheckpoint,
   ProgressTracker,
   saveCheckpoint,
-  turnCheckpointDue,
+  stepCheckpointDue,
   type CheckpointV1,
 } from "../src/loop-guard";
 
@@ -29,15 +29,15 @@ function canCreateLink(): boolean {
 
 const LINK_SUPPORTED = canCreateLink();
 
-describe("turnCheckpointDue (L5, #135)", () => {
+describe("stepCheckpointDue (L5, #135)", () => {
   test("80% de 100 turnos: due no turno 80, não no 79", () => {
-    expect(turnCheckpointDue(80, 100, 0.8)).toBe(true);
-    expect(turnCheckpointDue(79, 100, 0.8)).toBe(false);
+    expect(stepCheckpointDue(80, 100, 0.8)).toBe(true);
+    expect(stepCheckpointDue(79, 100, 0.8)).toBe(false);
   });
 
   test("limite fracionário arredonda para cima (9 turnos × 0.8 = 7.2 → due no 8)", () => {
-    expect(turnCheckpointDue(8, 9, 0.8)).toBe(true);
-    expect(turnCheckpointDue(7, 9, 0.8)).toBe(false);
+    expect(stepCheckpointDue(8, 9, 0.8)).toBe(true);
+    expect(stepCheckpointDue(7, 9, 0.8)).toBe(false);
   });
 });
 

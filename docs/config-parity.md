@@ -48,7 +48,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | tema, `lastModel`, favoritos, recentes | estado de UI (`.astro/tui.json` hoje; #468 define a raiz) | não lê | lê/grava | não lê | TUI-only: preferência de terminal |
 | sessões | `.astro/sessions.db` (SQLite; `.astro/sessions/` é legado migrado; #468 move para `$ASTRO_HOME`) | sem comando | picker: lista/renomeia/exclui/retoma | lista/retoma/exclui (TTY) | compartilhado; renomear TUI-only |
 | `--allow-critical`/`--allow-sensitive`/`--i-understand` | invocação | entrada | herda | herda | CLI-only: allowlist é ato explícito (ADR-0027) |
-| `--artifact-root` | invocação de `chat`/`tui` | entrada | herda | herda | CLI-only na entrada, compartilhado na sessão |
+| `--artifact-root` | invocação de `chat`/TUI | entrada | herda | herda | CLI-only na entrada, compartilhado na sessão |
 | `config push/pull`, `providers vault-import`, `doctor --fix`, `config migrate` (alvo) | camada 3/2, `$ASTRO_HOME` | executa | não expõe | não expõe | CLI-only: operação administrativa |
 | primeiro run / setup de provider | nenhum arquivo por default | `run` exige config | abre setup automático | erro com instrução | TUI-only hoje; alvo: contrato comum quando S3 (#469) definir a criação |
 

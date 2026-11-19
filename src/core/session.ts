@@ -49,7 +49,7 @@ import {
   saveCheckpoint,
   segmentHash,
   toolCallPath,
-  turnCheckpointDue,
+  stepCheckpointDue,
   type NoProgressDecider,
 } from "../loop-guard";
 
@@ -607,7 +607,7 @@ export async function runSession(
         // um run que começa com o escopo já acima da fração precisa do checkpoint
         const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
         const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
-        const turnDue = turnCheckpointDue(step, effectiveMaxSteps, opts.checkpointAt);
+        const turnDue = stepCheckpointDue(step, effectiveMaxSteps, opts.checkpointAt);
         const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
           && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
         if (turnDue || budgetDue) {
@@ -1145,7 +1145,7 @@ export async function runMultiAgentSession(
     if (opts.checkpointAt === undefined || checkpointedAgents.has(agent)) return;
     const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
     const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
-    const turnDue = turnCheckpointDue(turn, limit, opts.checkpointAt);
+    const turnDue = stepCheckpointDue(turn, limit, opts.checkpointAt);
     const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
       && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
     if (!turnDue && !budgetDue) return;

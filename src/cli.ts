@@ -217,9 +217,9 @@ Opções:
   --provider <name> provider ativo (default: store/env/agent.model)
   --cwd <dir>      diretório de trabalho do agente (default: diretório atual)
   --permission-mode <bypass|allow-edits|ask>  modo do gate de tool (vence permissions.mode)
-  --artifact-root <dir>     raiz do artifact store de imagens (só em chat/tui)
-  --allow-critical <path>   libera path do hard-block configurável (repete, máx 64; exige --i-understand; só em run/chat/tui)
-  --allow-sensitive <glob>  declara glob como sensitive (repete, máx 64; só em run/chat/tui)
+  --artifact-root <dir>     raiz do artifact store de imagens (só em chat/TUI)
+  --allow-critical <path>   libera path do hard-block configurável (repete, máx 64; exige --i-understand; só em run/chat/TUI)
+  --allow-sensitive <glob>  declara glob como sensitive (repete, máx 64; só em run/chat/TUI)
   --i-understand            confirma a leitura de --allow-critical (obrigatório na mesma invocação)
   --no-global-config        ignora a camada global ($ASTRO_HOME/config.json)
   --help           mostra este texto

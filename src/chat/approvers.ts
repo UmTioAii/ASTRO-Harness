@@ -46,8 +46,7 @@ export function toolPrompt(request: ToolPermissionRequest): string {
  */
 export function toolChoice(answer: string | null): PermissionApproval {
   const raw = (answer ?? "").trim();
-  const lower = raw.toLowerCase();
-  if (raw === "S" || lower === "sessao" || lower === "session") return "session";
+  if (raw === "S") return "session";
   if (raw === "s") return true;
   return false;
 }

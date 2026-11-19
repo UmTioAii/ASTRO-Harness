@@ -1228,7 +1228,8 @@ function validateRun(value: unknown): RunConfig {
   if (raw.maxTurns !== undefined) {
     fail(
       'config inválida: "run.maxTurns" foi removido; o limite de trabalho é contado em passos - ' +
-        'use "agent.maxSteps" (tarefa/agente) e "budget" para teto de custo',
+        'use "agent.maxSteps" (tarefa/agente) e "budget" para teto de custo. O bloco "run" continua dono de ' +
+        '"checkpointAt", "noProgressSegments" e "judge": mantenha-o (ex.: "run": {}) em vez de apagar a seção',
     );
   }
   const checkpointAt = raw.checkpointAt === undefined ? 0.8 : expectNonNegativeNumber(raw.checkpointAt, "run.checkpointAt");

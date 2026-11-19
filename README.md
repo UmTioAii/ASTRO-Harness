@@ -107,7 +107,7 @@ Everything else has a safe default:
 | Field | Default | Meaning |
 |---|---|---|
 | `agent.maxSteps` | `500` | The single work limit, counted in steps per task and per agent. |
-| `agent.tools` | `read_file`, `write_file`, `edit`, `grep`, `list_dir`, `run_command` | The allowlist. Omitting it does not widen access; it inherits exactly the zero-config set. |
+| `agent.tools` | `read_file`, `write_file`, `edit`, `grep`, `list_dir`, `run_command` | The allowlist. Omitting it does not widen access: `agent.tools` inherits exactly the zero-config set, and `agents.<name>.tools` inherits the main agent's list. |
 | `paths.ledger` / `paths.audit` | `.astro/ledger.jsonl` / `.astro/audit.jsonl` | Where the append-only records live, relative to the working directory. |
 | `permissions.mode` | `ask` | Whether a tool call asks, is allowed, or is denied before running. |
 | `preset` | `control` | `simple` caps work at 500 steps and rejects higher values; `control` exposes the knobs. |

@@ -54,6 +54,8 @@ describe("budget config (F-05, #132 parte 1)", () => {
     expect(() => withBudget(undefined, { run: { maxTurns: 3 } })).toThrow(/run\.maxTurns.*removido/);
     expect(() => withBudget({ scope: "project", limitUsd: 5 }, { run: { maxTurns: "unlimited" } }))
       .toThrow(/agent\.maxSteps/);
+    // o bloco `run` continua dono das guardas do loop: apagar a seção as desliga
+    expect(() => withBudget(undefined, { run: { maxTurns: 3 } })).toThrow(/checkpointAt/);
   });
 
   test("run aplica defaults checkpointAt 0.8, noProgressSegments 3, judge off (L1/L4/L6, #135)", () => {

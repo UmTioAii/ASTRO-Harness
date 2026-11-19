@@ -155,3 +155,11 @@ test("P4: agente nomeado nomeia agents.<nome>.maxSteps", () => {
   expect(maxStepsMessage(config, { maxSteps: 4, agentName: "coder" }))
     .toContain('limite "agents.coder.maxSteps" = 4');
 });
+
+test("P4: mensagem cita o limite efetivo quando o budget corta os passos", () => {
+  const config = { preset: "control" as const, agent: { model: "p/m", maxSteps: 4, tools: [] as string[] } };
+  const message = maxStepsMessage(config, { maxSteps: 3 });
+  expect(message).toContain('limite "agent.maxSteps" = 3');
+  expect(message).toContain("baixar esforço");
+  expect(message).not.toContain("= 4");
+});
