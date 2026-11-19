@@ -70,6 +70,23 @@ function setup(
 }
 
 describe("espera de aprovação tem limite e é cancelável (#526)", () => {
+  test("o gate marca a espera como expirada e informa o limite ao aprovador", async () => {
+    let captured: { timedOut?: boolean; timeoutMs?: number } | undefined;
+    const slow = async (
+      _request: unknown,
+      wait?: { timedOut?: boolean; timeoutMs?: number },
+    ): Promise<PermissionApproval> => {
+      captured = wait;
+      await sleep(200);
+      return true;
+    };
+    const { cwd, executor } = setup(slow as never, 20);
+    const result = await executor.run({ cwd, run: "r-wait", agent: "a" }, call);
+    expect(result.isError).toBe(true);
+    // O aprovador recebe o mesmo objeto: depois do abort ele já vê motivo e limite.
+    expect(captured?.timedOut).toBe(true);
+    expect(captured?.timeoutMs).toBe(20);
+  });
   test("expira a espera e recusa a tool sem esperar o aprovador", async () => {
     const { cwd, audit, executor, ran } = setup(lateApprover(1_500), 20);
 
