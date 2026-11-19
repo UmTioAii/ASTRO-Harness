@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_LIMITS, RETRYABLE_CLASSES, errorPolicy, maxRetriesFor, type ErrorAction } from "../src/providers/policy";
 import { FallbackProvider } from "../src/providers/fallback-provider";
-import { OpenAICompatProvider, parseRetryAfter, retryDelayMs } from "../src/providers/openai-compat";
+import {
+  BACKOFF_JITTER,
+  BASE_BACKOFF_MS,
+  OpenAICompatProvider,
+  parseRetryAfter,
+  retryDelayMs,
+} from "../src/providers/openai-compat";
 import {
   ProviderError,
   type CompletionRequest,
@@ -121,6 +127,50 @@ describe("openai-compat retry delay (#556)", () => {
     const late = retryDelayMs(10, undefined, 60_000);
     expect(late).toBeGreaterThanOrEqual(7_500);
     expect(late).toBeLessThanOrEqual(12_500);
+  });
+
+  test("jitter is applied: samples spread around the base instead of a fixed delay", () => {
+    expect(BACKOFF_JITTER).toBeGreaterThan(0);
+    const samples = Array.from({ length: 50 }, () => retryDelayMs(1, undefined, 60_000) as number);
+    for (const sample of samples) {
+      expect(sample).toBeGreaterThanOrEqual(BASE_BACKOFF_MS * (1 - BACKOFF_JITTER));
+      expect(sample).toBeLessThanOrEqual(BASE_BACKOFF_MS * (1 + BACKOFF_JITTER));
+    }
+    // Jitter 0 (or a dropped random term) would return the base for every sample.
+    expect(new Set(samples).size).toBeGreaterThan(1);
+  });
+
+  test("adapter waits for Retry-After from the response header, end to end", async () => {
+    const delays: number[] = [];
+    let calls = 0;
+    const p = new OpenAICompatProvider({
+      baseUrl: "http://x/v1",
+      apiKey: "k",
+      fetchFn: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Response(JSON.stringify({ error: { message: "rate" } }), {
+            status: 429,
+            headers: { "content-type": "application/json", "retry-after": "30" },
+          });
+        }
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+      retry: { maxAttempts: 2, windowMs: 120_000 },
+      sleepFn: async (ms) => {
+        delays.push(ms);
+      },
+    });
+
+    const response = await p.complete(req);
+
+    expect(response.content).toBe("ok");
+    expect(calls).toBe(2);
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBeGreaterThanOrEqual(30_000);
   });
 
   test("no delay when the window is exhausted or the header exceeds it", () => {
