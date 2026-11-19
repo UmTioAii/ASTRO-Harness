@@ -6,7 +6,7 @@ import { Auditor } from "../src/audit";
 import { createApprovalBridge } from "../src/tui/approvals";
 import { ConfigError, validateConfig } from "../src/core/config";
 import type { PermissionApproval, PermissionMode } from "../src/permissions";
-import { ToolExecutor } from "../src/tools/executor";
+import { ToolExecutor, type ToolApprover } from "../src/tools/executor";
 import type { Tool } from "../src/tools/types";
 
 function sleep(ms: number): Promise<void> {
@@ -50,7 +50,7 @@ function lateApprover(delayMs: number, answer: PermissionApproval = true): () =>
 }
 
 function setup(
-  approve: () => PermissionApproval | Promise<PermissionApproval>,
+  approve: ToolApprover,
   approvalTimeoutMs: number,
 ): { cwd: string; audit: Auditor; executor: ToolExecutor; ran: () => boolean } {
   const cwd = mkdtempSync(join(tmpdir(), "astro-approval-timeout-"));
@@ -80,7 +80,7 @@ describe("espera de aprovação tem limite e é cancelável (#526)", () => {
       await sleep(200);
       return true;
     };
-    const { cwd, executor } = setup(slow as never, 20);
+    const { cwd, executor } = setup(slow, 20);
     const result = await executor.run({ cwd, run: "r-wait", agent: "a" }, call);
     expect(result.isError).toBe(true);
     // O aprovador recebe o mesmo objeto: depois do abort ele já vê motivo e limite.
