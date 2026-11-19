@@ -118,6 +118,12 @@ test("nome de exibição faz round-trip e um manager novo edita/remove (#492)", 
   expect(edited.name).toBe("Casa 2");
   const c = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
   expect(c.list().find((item) => item.id === "casa")?.name).toBe("Casa 2");
+  // Voltar o rótulo ao id remove o `name` antigo em vez de mantê-lo (revisão #492).
+  c.edit("casa", draft({ name: "casa" }));
+  const reset = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as {
+    providers: Record<string, { name?: string }>;
+  };
+  expect(reset.providers.casa?.name).toBeUndefined();
   expect(() => c.remove("casa")).not.toThrow(); // novo manager pode remover o que o CRUD criou
 });
 
