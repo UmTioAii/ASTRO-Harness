@@ -118,8 +118,21 @@ export interface AgentConfig {
 export const BASELINE_MAX_STEPS = 500;
 
 /**
- * Preset de configuração (#515): `simple` fixa passos e turnos em 500 e não
- * aceita esses knobs; `control` expõe `agent.maxSteps` e `run.maxTurns`.
+ * Allowlist herdada quando `agent.tools` é omitido (P3): é exatamente o
+ * conjunto que o modo zero-config expõe, então omitir não muda o contrato.
+ */
+export const DEFAULT_AGENT_TOOLS: readonly string[] = [
+  "read_file",
+  "write_file",
+  "edit",
+  "grep",
+  "list_dir",
+  "run_command",
+];
+
+/**
+ * Preset de configuração (#515): `simple` fixa os passos em 500 por tarefa e
+ * não aceita esse knob; `control` expõe `agent.maxSteps`.
  */
 export type Preset = "simple" | "control";
 
@@ -128,18 +141,8 @@ export const PRESETS: readonly Preset[] = ["simple", "control"];
 /** Preset quando a config não declara nada: compatível com configs anteriores. */
 export const DEFAULT_PRESET: Preset = "control";
 
-/** Limites do preset `simple` e default de `run.maxTurns` (#515). */
+/** Limite do preset `simple` (#515). */
 export const SIMPLE_MAX_STEPS = 500;
-export const DEFAULT_MAX_TURNS = 500;
-
-/**
- * Teto efetivo de turnos (#515): `run.maxTurns` declarado vence; ausente vale
- * 500. Não injeta a seção `run`, porque a presença dela liga as guardas do loop
- * (checkpoint e não-progresso) para toda config.
- */
-export function effectiveMaxTurns(config: Pick<AstroConfig, "run">): number | "unlimited" {
-  return config.run?.maxTurns ?? DEFAULT_MAX_TURNS;
-}
 
 /** Valida `preset`; desconhecido falha em vez de cair no default. */
 function validatePreset(value: unknown): Preset {
@@ -174,11 +177,6 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
     if (entry === null || typeof entry !== "object") continue;
     check(`agents.${name}.maxSteps`, (entry as Record<string, unknown>).maxSteps);
   }
-
-  const run = root.run !== null && typeof root.run === "object"
-    ? (root.run as Record<string, unknown>)
-    : undefined;
-  check("run.maxTurns", run?.maxTurns);
 
   // Só injeta quando `agent` é objeto: entrada de tipo errado segue para o
   // validador normal, que reporta a causa certa (nunca mascara o erro).
@@ -254,10 +252,9 @@ export interface BudgetConfig {
   hardCeilingUsd?: number;
 }
 
-/** Seção `run` (Q-01/L1/L4/L5/L6, ADR-0014): teto de turnos e guardas do loop. */
+/** Seção `run` (Q-01/L1/L4/L5/L6, ADR-0014): guardas do loop. */
 export interface RunConfig {
-  maxTurns?: number | "unlimited";
-  /** Fração do limite de turnos/orçamento em que o checkpoint é gravado (L5); default 0.8. */
+  /** Fração do limite de passos em que o checkpoint é gravado (L5); default 0.8. */
   checkpointAt: number;
   /** Segmentos consecutivos sem mudança que disparam a pausa (L6); default 3. */
   noProgressSegments: number;
@@ -374,6 +371,12 @@ export interface PathsConfig {
   audit: string;
 }
 
+/** `paths` omitido herda onde o modo zero-config grava; mesma semântica de `DEFAULT_AGENT_TOOLS`. */
+export const DEFAULT_PATHS: Readonly<PathsConfig> = {
+  ledger: ".astro/ledger.jsonl",
+  audit: ".astro/audit.jsonl",
+};
+
 export interface AstroConfig {
   /** Preset (#515): `simple` fixa 500 passos/turnos; `control` expõe os knobs. */
   preset: Preset;
@@ -391,7 +394,7 @@ export interface AstroConfig {
   quota?: Record<string, QuotaLimitConfig>;
   /** Budget (B1–B10, I-17); ausente = sem camada de budget. */
   budget?: BudgetConfig;
-  /** Seção `run` (Q-01): `maxTurns` numérico ou "unlimited". */
+  /** Seção `run` (Q-01): guardas do loop; o limite de trabalho vive em `agent.maxSteps`. */
   run?: RunConfig;
   /** Seção `attachments` (ADR-0026, #392): limites e comportamento de anexos. */
   attachments: AttachmentsConfig;
@@ -941,7 +944,7 @@ function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>
       model,
       profile,
       maxSteps: raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"),
-      tools: expectStringArray(raw.tools, "agent.tools"),
+      tools: raw.tools === undefined ? [...DEFAULT_AGENT_TOOLS] : expectStringArray(raw.tools, "agent.tools"),
       entryAgent,
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
     };
@@ -950,13 +953,14 @@ function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>
   return {
     model: expectString(raw.model, "agent.model"),
     maxSteps: raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"),
-    tools: expectStringArray(raw.tools, "agent.tools"),
+    tools: raw.tools === undefined ? [...DEFAULT_AGENT_TOOLS] : expectStringArray(raw.tools, "agent.tools"),
     entryAgent,
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
   };
 }
 
 function validatePaths(value: unknown): PathsConfig {
+  if (value === undefined) return { ...DEFAULT_PATHS };
   const raw = expectObject(value, "paths");
   return {
     ledger: expectString(raw.ledger, "paths.ledger"),
@@ -1218,9 +1222,16 @@ function validateEffort(value: unknown): EffortEscalationConfig {
   return { auto, autoJumpMax, maxCumulativeJump };
 }
 
-/** Valida a seção opcional `run` (Q-01/L1, ADR-0014): maxTurns, checkpointAt, noProgressSegments e judge. */
+/** Valida a seção opcional `run` (Q-01/L1, ADR-0014): guardas do loop. `maxTurns` foi removido (P4). */
 function validateRun(value: unknown): RunConfig {
   const raw = expectObject(value, "run");
+  if (raw.maxTurns !== undefined) {
+    fail(
+      'config inválida: "run.maxTurns" foi removido; o limite de trabalho é contado em passos - ' +
+        'use "agent.maxSteps" (tarefa/agente) e "budget" para teto de custo. O bloco "run" continua dono de ' +
+        '"checkpointAt", "noProgressSegments" e "judge": mantenha-o (ex.: "run": {}) em vez de apagar a seção',
+    );
+  }
   const checkpointAt = raw.checkpointAt === undefined ? 0.8 : expectNonNegativeNumber(raw.checkpointAt, "run.checkpointAt");
   if (checkpointAt <= 0 || checkpointAt >= 1) {
     fail('config inválida: "run.checkpointAt" deve estar entre 0 e 1 (exclusivo)');
@@ -1231,14 +1242,7 @@ function validateRun(value: unknown): RunConfig {
   if (!isJudgeMode(judge)) {
     fail('config inválida: "run.judge" deve ser "off", "on" ou "auto"');
   }
-  return {
-    ...(raw.maxTurns === undefined
-      ? {}
-      : { maxTurns: raw.maxTurns === "unlimited" ? "unlimited" : expectPositiveInteger(raw.maxTurns, "run.maxTurns") }),
-    checkpointAt,
-    noProgressSegments,
-    judge,
-  };
+  return { checkpointAt, noProgressSegments, judge };
 }
 
 /** Defaults da seção `attachments` (ADR-0026, #392). */
@@ -1689,16 +1693,9 @@ export function validateConfig(raw: unknown): AstroConfig {
   // Handoff (F-24): timeout do ack com default seguro (D-15)
   const handoff = validateHandoff(root.handoff);
 
-  // Budget (B1–B10) e run.maxTurns (Q-01/L2)
+  // Budget (B1–B10) e guardas do loop (Q-01/L2)
   const budget = root.budget === undefined ? undefined : validateBudget(root.budget);
   const run = root.run === undefined ? undefined : validateRun(root.run);
-  if (
-    run?.maxTurns === "unlimited" &&
-    budget?.hardCeilingUsd === undefined &&
-    (budget === undefined || budget.limitUsd === null)
-  ) {
-    fail('config inválida: run.maxTurns "unlimited" exige budget.hardCeilingUsd ou budget.limitUsd (unlimited_without_ceiling)');
-  }
 
   // Servidores MCP (C2, #56): ausente = nenhum servidor
   const mcpServers = root.mcpServers === undefined ? undefined : validateMcpServers(root.mcpServers);

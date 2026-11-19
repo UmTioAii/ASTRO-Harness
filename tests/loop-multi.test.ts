@@ -130,7 +130,7 @@ describe("runMultiAgentSession: checkpoint e não-progresso (#135)", () => {
     const event = s.audit.readAll().filter((e) => e.tipo === "loop.checkpoint");
     expect(event).toHaveLength(1); // uma gravação por agente, não uma por step/tool
     expect(event[0]?.agent).toBe("coder");
-    expect(event[0]?.payload).toMatchObject({ step: 3, trigger: "turns" });
+    expect(event[0]?.payload).toMatchObject({ step: 3, trigger: "steps" });
   });
 
   test("não-progresso no multi-agent sem decider → NoProgressError e estado interrupted", { timeout: 30_000 }, async () => {

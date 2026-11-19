@@ -50,35 +50,17 @@ describe("budget config (F-05, #132 parte 1)", () => {
     expect(() => withBudget({ scope: "day", limitUsd: 1 })).not.toThrow();
   });
 
-  test("run.maxTurns aceita inteiro positivo ou unlimited", () => {
-    expect(withBudget(undefined, { run: { maxTurns: 3 } }).run?.maxTurns).toBe(3);
-    expect(withBudget({ scope: "project", limitUsd: 5 }, { run: { maxTurns: "unlimited" } }).run?.maxTurns)
-      .toBe("unlimited");
-  });
-
-  test("run.maxTurns inválido → ConfigError", () => {
-    for (const maxTurns of [0, -1, 1.5, "infinito"]) {
-      expect(() => withBudget(undefined, { run: { maxTurns } })).toThrow(/run\.maxTurns/);
-    }
-  });
-
-  test("unlimited sem limitUsd nem hardCeilingUsd → unlimited_without_ceiling", () => {
-    expect(() => withBudget(undefined, { run: { maxTurns: "unlimited" } })).toThrow(ConfigError);
-    expect(() => withBudget(undefined, { run: { maxTurns: "unlimited" } })).toThrow(/unlimited_without_ceiling/);
-    expect(() => withBudget({ scope: "use-as-you-go", limitUsd: null }, { run: { maxTurns: "unlimited" } }))
-      .toThrow(/unlimited_without_ceiling/);
-  });
-
-  test("unlimited é aceito com limitUsd ou hardCeilingUsd", () => {
-    expect(() => withBudget({ scope: "day", limitUsd: 1 }, { run: { maxTurns: "unlimited" } })).not.toThrow();
-    expect(() => withBudget({ scope: "day", limitUsd: 0 }, { run: { maxTurns: "unlimited" } })).not.toThrow();
-    expect(() => withBudget({ scope: "use-as-you-go", limitUsd: null, hardCeilingUsd: 2 }, { run: { maxTurns: "unlimited" } }))
-      .not.toThrow();
+  test("run.maxTurns foi removido: erro de migração aponta agent.maxSteps", () => {
+    expect(() => withBudget(undefined, { run: { maxTurns: 3 } })).toThrow(/run\.maxTurns.*removido/);
+    expect(() => withBudget({ scope: "project", limitUsd: 5 }, { run: { maxTurns: "unlimited" } }))
+      .toThrow(/agent\.maxSteps/);
+    // o bloco `run` continua dono das guardas do loop: apagar a seção as desliga
+    expect(() => withBudget(undefined, { run: { maxTurns: 3 } })).toThrow(/checkpointAt/);
   });
 
   test("run aplica defaults checkpointAt 0.8, noProgressSegments 3, judge off (L1/L4/L6, #135)", () => {
-    expect(withBudget(undefined, { run: { maxTurns: 5 } }).run)
-      .toEqual({ maxTurns: 5, checkpointAt: 0.8, noProgressSegments: 3, judge: "off" });
+    expect(withBudget(undefined, { run: {} }).run)
+      .toEqual({ checkpointAt: 0.8, noProgressSegments: 3, judge: "off" });
   });
 
   test("run.checkpointAt exige 0 < x < 1 (#135)", () => {
@@ -106,7 +88,7 @@ describe("budget config (F-05, #132 parte 1)", () => {
   });
 });
 
-describe("run.maxTurns no runtime (F-05, #132 parte 1)", () => {
+describe("limite único de passos no runtime (P4, F-05/#132 parte 1)", () => {
   /** Sobe um provider que sempre pede tool call e devolve quantas chamadas houve. */
   async function callsFor(extra: Record<string, unknown>, agentMaxSteps = 5): Promise<{ calls: number; message: string }> {
     const cwd = mkdtempSync(join(tmpdir(), "astro-maxturns-"));
@@ -132,28 +114,23 @@ describe("run.maxTurns no runtime (F-05, #132 parte 1)", () => {
     }
   }
 
-  test("limita a sessão e conta 1 chamada (agent.maxSteps maior)", async () => {
-    const { calls, message } = await callsFor({ run: { maxTurns: 1 } });
+  test("limita a sessão e conta 1 chamada", async () => {
+    const { calls, message } = await callsFor({}, 1);
     expect(calls).toBe(1);
     expect(message).toMatch(/excedeu 1 passos/);
+    expect(message).toContain('limite "agent.maxSteps"');
   });
 
-  test("maxTurns maior que agent.maxSteps não eleva o limite", async () => {
-    const { calls, message } = await callsFor({ run: { maxTurns: 50 } }, 2);
-    expect(calls).toBe(2);
-    expect(message).toMatch(/excedeu 2 passos/);
-  });
-
-  test("unlimited fica limitado ao agent.maxSteps até o corte físico (B10)", async () => {
+  test("budget alto não eleva o limite de passos", async () => {
     const priced = [{ provider: "openai", id: "m1", tags: ["writing-code"], context: 8192,
       price: { inputPerM: 1, outputPerM: 1, fonte: "t", verificado: false } }];
-    const { calls } = await callsFor({ run: { maxTurns: "unlimited" },
+    const { calls } = await callsFor({
       budget: { scope: "use-as-you-go", limitUsd: null, hardCeilingUsd: 1000 }, models: priced }, 3);
     expect(calls).toBe(3);
   });
 
-  test("limita o total no multi-agent (menor que a soma dos agentes)", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "astro-maxturns-multi-"));
+  test("limita o total no multi-agent ao teto do agente principal", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-steps-multi-"));
     let calls = 0;
     const server = Bun.serve({ port: 0, async fetch() {
       calls++;
@@ -173,10 +150,9 @@ describe("run.maxTurns no runtime (F-05, #132 parte 1)", () => {
           backup: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "BACKUP_KEY" },
         },
         agents,
-        run: { maxTurns: 2 },
       }));
-      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })).rejects.toThrow(/excedeu 2 passos/);
-      expect(calls).toBe(2);
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })).rejects.toThrow(/excedeu 5 passos/);
+      expect(calls).toBe(5);
     } finally {
       server.stop(true);
     }

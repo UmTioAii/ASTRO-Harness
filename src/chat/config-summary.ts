@@ -1,5 +1,5 @@
 /** Resumo da config do harness para `/config` (#273): puro, sem I/O. */
-import { DEFAULT_MAX_TURNS, type AstroConfig, type BudgetConfig } from "../core/config";
+import type { AstroConfig, BudgetConfig } from "../core/config";
 import type { PermissionMode } from "../permissions";
 
 export interface CostLine {
@@ -11,8 +11,8 @@ export interface CostLine {
 
 export interface ConfigSummary {
   configPath: string;
-  /** `run.maxTurns` como texto; ausente = "500 (default)" (#515). */
-  maxTurns: string;
+  /** Limite único de trabalho em passos por tarefa (`agent.maxSteps`). */
+  maxSteps: number;
   permissionMode: PermissionMode;
   /** Um linha por modelo com preço declarado (`pricing` sobrescreve `model.price`). */
   costs: CostLine[];
@@ -39,14 +39,9 @@ export function configSummaryOf(config: AstroConfig, configPath: string, mode: P
     if (price === undefined) continue;
     costs.push({ ref, inputPerM: price.inputPerM, outputPerM: price.outputPerM });
   }
-  const declaredTurns = config.run?.maxTurns;
   return {
     configPath,
-    maxTurns: declaredTurns === "unlimited"
-      ? "unlimited"
-      : declaredTurns === undefined
-        ? `${DEFAULT_MAX_TURNS} (default)`
-        : String(declaredTurns),
+    maxSteps: config.agent.maxSteps,
     permissionMode: mode,
     costs,
     budget: budgetText(config.budget),
@@ -58,7 +53,7 @@ export function configLines(summary: ConfigSummary, trustedFolders: readonly str
   const money = (value: number): string => `US$ ${value.toFixed(2)}/M`;
   return [
     `config: ${summary.configPath}`,
-    `run.maxTurns: ${summary.maxTurns}`,
+    `agent.maxSteps: ${summary.maxSteps}`,
     `permissions.mode: ${summary.permissionMode}`,
     `budget: ${summary.budget}`,
     ...(summary.costs.length === 0

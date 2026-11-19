@@ -73,22 +73,35 @@ describe("decisores interativos do chat", () => {
 describe("approveTool no REPL (PERM-04, #265)", () => {
   const req = { name: "write_file", action: "edit" as const, mode: "ask" as const };
 
-  test("quatro opções: s=aprova (once), n/EOF=nega, S=sessão, o=só esta vez", async () => {
+  test("três opções: s=aprova uma vez, n/EOF=nega, S=aprova na sessão", async () => {
     expect(await chatApprovers(io(["s"]), true).approveTool!(req)).toBe(true);
     expect(await chatApprovers(io(["n"]), true).approveTool!(req)).toBe(false);
     expect(await chatApprovers(io([null]), true).approveTool!(req)).toBe(false);
     expect(await chatApprovers(io(["S"]), true).approveTool!(req)).toBe("session");
-    expect(await chatApprovers(io(["o"]), true).approveTool!(req)).toBe("once");
+    expect(await chatApprovers(io(["sessao"]), true).approveTool!(req)).toBe(false);
+    expect(await chatApprovers(io(["session"]), true).approveTool!(req)).toBe(false);
   });
 
-  test("prompt cita a tool, a ação e as 4 opções", async () => {
+  test("[o] deixou de existir: resposta desconhecida nega", async () => {
+    expect(await chatApprovers(io(["o"]), true).approveTool!(req)).toBe(false);
+    expect(await chatApprovers(io(["once"]), true).approveTool!(req)).toBe(false);
+  });
+
+  test("só o vocabulário do prompt aprova: y/yes/sim/vazio negam (#546)", async () => {
+    for (const answer of ["y", "Y", "yes", "Yes", "sim", "SIM", "", "x", "aprovar"]) {
+      expect(await chatApprovers(io([answer]), true).approveTool!(req)).toBe(false);
+    }
+  });
+
+  test("prompt cita a tool, a ação e exatamente 3 opções", async () => {
     const prompts: string[] = [];
     const capturing: ReplIO = { read: async (p: string) => { prompts.push(p); return "s"; }, write: () => {} };
     expect(await chatApprovers(capturing, true).approveTool!(req)).toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("write_file");
     expect(prompts[0]).toContain("edit");
-    expect(prompts[0]).toMatch(/\[s\].*\[n\].*\[S\].*\[o\]/);
+    expect(prompts[0]).toMatch(/\[s\].*\[n\].*\[S\]/);
+    expect(prompts[0]).not.toContain("[o]");
   });
 
   test("sem TTY não injeta approveTool", () => {

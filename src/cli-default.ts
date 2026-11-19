@@ -4,7 +4,8 @@
  */
 export function defaultArgs(argv: readonly string[], interactive: boolean): string[] {
   if (argv.length > 0) return [...argv];
-  return interactive ? ["tui"] : ["--help"];
+  // Sem argumentos e com TTY o CLI decide a TUI; em pipe imprime o help.
+  return interactive ? [] : ["--help"];
 }
 
 /** TUI só quando stdin e stdout são TTY; meio-TTY (pipe) vira help. */

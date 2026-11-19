@@ -76,4 +76,10 @@ if (bare.code !== 0 || !bare.out.includes("Uso:")) {
   fail(`astro sem args em pipe não imprimiu o help (exit ${bare.code})\n${bare.err}${bare.out}`);
 }
 
+const version = run(["--version"]);
+const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
+if (version.code !== 0 || version.out.trim() !== `astro ${pkg.version}`) {
+  fail(`astro --version divergiu do package.json (exit ${version.code})\n${version.err}${version.out}`);
+}
+
 console.log("smoke ok: launcher Node resolve o Bun empacotado sem Bun no PATH");

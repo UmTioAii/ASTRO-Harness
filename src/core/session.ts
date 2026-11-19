@@ -49,7 +49,7 @@ import {
   saveCheckpoint,
   segmentHash,
   toolCallPath,
-  turnCheckpointDue,
+  stepCheckpointDue,
   type NoProgressDecider,
 } from "../loop-guard";
 
@@ -170,7 +170,7 @@ export interface SessionOptions {
   attachments?: AttachmentMeta[];
   /** Imagens do turno (ADR-0026), só runtime; vai na mensagem `user`. */
   images?: ImagePart[];
-  /** Fração do limite de turnos/orçamento em que o checkpoint é gravado (L5, #135); ausente = sem checkpoint. */
+  /** Fração do limite de passos/orçamento em que o checkpoint é gravado (L5, #135); ausente = sem checkpoint. */
   checkpointAt?: number;
   /** Segmentos consecutivos sem mudança que disparam a pausa (L6, #135); ausente = sem guarda. */
   noProgressSegments?: number;
@@ -601,16 +601,16 @@ export async function runSession(
       maybeWarnBudget(opts.agent);
       checkCeiling(opts.agent);
 
-      // L5 (#135): checkpoint uma única vez ao atingir a fração do limite de turnos ou de budget
+      // L5 (#135): checkpoint uma única vez ao atingir a fração do limite de passos ou de budget
       if (opts.checkpointAt !== undefined && !checkpointWritten) {
         // Gasto do escopo (day/month/project/use-as-you-go), não só deste run:
         // um run que começa com o escopo já acima da fração precisa do checkpoint
         const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
         const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
-        const turnDue = turnCheckpointDue(step, effectiveMaxSteps, opts.checkpointAt);
+        const stepDue = stepCheckpointDue(step, effectiveMaxSteps, opts.checkpointAt);
         const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
           && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
-        if (turnDue || budgetDue) {
+        if (stepDue || budgetDue) {
           checkpointWritten = true;
           const checkpoint = buildCheckpoint({
             // nunca o prompt cru: só taskHash (o prompt do usuário não é persistido)
@@ -618,11 +618,11 @@ export async function runSession(
               ? (opts.taskHash === undefined ? "[tarefa não registrada]" : `tarefa #${opts.taskHash}`)
               : response.content,
             changedFiles: touchedFiles,
-            nextStep: `continuar a partir do turno ${step + 1}`,
+            nextStep: `continuar a partir do passo ${step + 1}`,
           }, opts.cwd);
           saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, opts.agent));
           opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "loop.checkpoint",
-            payload: { step, trigger: turnDue ? "turns" : "budget" } });
+            payload: { step, trigger: stepDue ? "steps" : "budget" } });
           judgeSignal = true; // sinal do `auto` (L4)
         }
       }
@@ -646,7 +646,7 @@ export async function runSession(
           messages.push(assistantMessage, nudge);
           appended.push(assistantMessage, nudge);
           tracer?.end(stepSpan, { "tool.calls": 0, judge: "continue" });
-          continue; // limitado por maxSteps/run.maxTurns e pelo teto físico (B10)
+          continue; // limitado por maxSteps e pelo teto físico (B10)
         }
         opts.ledger.recordState(opts.run, "completed", { agent: opts.agent });
         if (opts.inheritAgentLock !== true) {
@@ -1145,10 +1145,10 @@ export async function runMultiAgentSession(
     if (opts.checkpointAt === undefined || checkpointedAgents.has(agent)) return;
     const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
     const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
-    const turnDue = turnCheckpointDue(turn, limit, opts.checkpointAt);
+    const stepDue = stepCheckpointDue(turn, limit, opts.checkpointAt);
     const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
       && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
-    if (!turnDue && !budgetDue) return;
+    if (!stepDue && !budgetDue) return;
     checkpointedAgents.add(agent);
     try {
       const checkpoint = buildCheckpoint({
@@ -1157,11 +1157,11 @@ export async function runMultiAgentSession(
           ? (opts.taskHash === undefined ? "[tarefa não registrada]" : `tarefa #${opts.taskHash}`)
           : response.content,
         changedFiles: touchedFiles,
-        nextStep: `continuar a partir do turno ${step + 1}`,
+        nextStep: `continuar a partir do passo ${step + 1}`,
       }, opts.cwd);
       saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, agent));
       opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint",
-        payload: { step, trigger: turnDue ? "turns" : "budget" } });
+        payload: { step, trigger: stepDue ? "steps" : "budget" } });
     } catch (error) {
       opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint_error",
         payload: { step, code: checkpointErrorCode(error) } });

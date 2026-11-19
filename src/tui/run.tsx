@@ -166,7 +166,7 @@ export async function setupProvider(
 
 export async function runTui(opts: RunTuiOptions): Promise<number> {
   if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
-    console.error("erro: tui precisa de um terminal interativo; use `chat` para stdin em pipe");
+    console.error("erro: astro precisa de um terminal interativo; use `astro chat` para stdin em pipe");
     return 1;
   }
   try {

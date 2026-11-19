@@ -13,7 +13,7 @@ const colors = getThemeColors("dark");
 
 const summary: ConfigSummary = {
   configPath: "/tmp/proj/astro.config.json",
-  maxTurns: "12",
+  maxSteps: 12,
   permissionMode: "ask",
   costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
   budget: "day · limite US$ 5.00 · aviso em 80% · ao exceder: ask",
@@ -27,7 +27,7 @@ async function waitFor(check: () => boolean): Promise<void> {
   throw new Error("timeout esperando o frame");
 }
 
-test("mostra config, maxTurns, modo, custos, budget e pastas confiáveis (#273)", async () => {
+test("mostra config, maxSteps, modo, custos, budget e pastas confiáveis (#273)", async () => {
   const saved: PermissionMode[] = [];
   const instance = render(
     <ConfigScreen
@@ -42,7 +42,7 @@ test("mostra config, maxTurns, modo, custos, budget e pastas confiáveis (#273)"
     await waitFor(() => instance.lastFrame()?.includes("Configuração") === true);
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("config: /tmp/proj/astro.config.json");
-    expect(frame).toContain("run.maxTurns: 12");
+    expect(frame).toContain("agent.maxSteps: 12");
     expect(frame).toContain("permissions.mode: ask");
     expect(frame).toContain("p/m1: in US$ 1.00/M · out US$ 2.00/M");
     expect(frame).toContain("day · limite US$ 5.00");

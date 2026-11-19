@@ -45,23 +45,24 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     expect(await cancelled).toBe("stop");
   });
 
-  test("approveTool publica a pergunta na TUI e mapeia as 4 opções (#265)", async () => {
+  test("approveTool publica a pergunta na TUI e mapeia as 3 opções (#265)", async () => {
     const req = { name: "write_file", action: "edit" as const, mode: "ask" as const };
     const bridge = createApprovalBridge();
     const seen: Array<string | undefined> = [];
     bridge.subscribe((question) => seen.push(question?.text));
     const decision = bridge.approveTool(req);
     expect(seen.at(-1)).toContain("write_file");
-    expect(seen.at(-1)).toMatch(/\[s\].*\[n\].*\[S\].*\[o\]/);
+    expect(seen.at(-1)).toMatch(/\[s\].*\[n\].*\[S\]/);
+    expect(seen.at(-1)).not.toContain("[o]");
     expect(bridge.current()?.text).toBe(seen.at(-1));
     bridge.answer("S");
     expect(await decision).toBe("session");
     expect(bridge.current()).toBeUndefined();
 
-    const once = createApprovalBridge();
-    const dOnce = once.approveTool(req);
-    once.answer("o");
-    expect(await dOnce).toBe("once");
+    const odd = createApprovalBridge();
+    const dOdd = odd.approveTool(req);
+    odd.answer("o");
+    expect(await dOdd).toBe(false);
 
     const yes = createApprovalBridge();
     const dYes = yes.approveTool(req);
@@ -72,6 +73,13 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     const dNo = no.approveTool(req);
     no.answer("n");
     expect(await dNo).toBe(false);
+
+    for (const answer of ["y", "yes", "sim", "", "x"]) {
+      const outside = createApprovalBridge();
+      const decisionOutside = outside.approveTool(req);
+      outside.answer(answer);
+      expect(await decisionOutside).toBe(false);
+    }
   });
 
   test("approveTool com diff publica a pergunta com o anexo para o overlay (#64 D2)", async () => {

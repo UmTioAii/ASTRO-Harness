@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { ConfigError, effectiveMaxTurns, validateConfig } from "../src/core/config";
+import { ConfigError, validateConfig } from "../src/core/config";
 
-/** Config mínima sem `maxSteps`/`maxTurns`: o preset decide (ou o default) os limites. */
+/** Config mínima sem `maxSteps`: o preset decide (ou o default) o limite. */
 function base() {
   return {
     providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
@@ -15,35 +15,29 @@ describe("preset simple/control (#515)", () => {
   test("preset ausente é control e não muda os limites declarados", () => {
     const raw = base() as unknown as Record<string, unknown>;
     (raw.agent as Record<string, unknown>).maxSteps = 3;
-    raw.run = { maxTurns: 2 };
     const cfg = validateConfig(raw);
     expect(cfg.preset).toBe("control");
     expect(cfg.agent.maxSteps).toBe(3);
-    expect(cfg.run?.maxTurns).toBe(2);
   });
 
   test("sem limites declarados, os dois presets começam em 500", () => {
     for (const preset of ["simple", "control"] as const) {
       const cfg = validateConfig({ ...base(), preset });
       expect(cfg.agent.maxSteps).toBe(500);
-      expect(effectiveMaxTurns(cfg)).toBe(500);
     }
   });
 
-  test("simple fixa 500/500 sem declarar limites", () => {
+  test("simple fixa 500 sem declarar limite", () => {
     const cfg = validateConfig({ ...base(), preset: "simple" });
     expect(cfg.preset).toBe("simple");
     expect(cfg.agent.maxSteps).toBe(500);
-    expect(effectiveMaxTurns(cfg)).toBe(500);
   });
 
   test("simple aceita um teto mais restrito vindo de outra camada", () => {
     const raw = base() as unknown as Record<string, unknown>;
     (raw.agent as Record<string, unknown>).maxSteps = 30;
-    raw.run = { maxTurns: 10 };
     const cfg = validateConfig({ ...raw, preset: "simple" });
     expect(cfg.agent.maxSteps).toBe(30);
-    expect(effectiveMaxTurns(cfg)).toBe(10);
   });
 
   test("simple recusa agent.maxSteps acima de 500 citando preset control", () => {
@@ -72,20 +66,15 @@ describe("preset simple/control (#515)", () => {
     expect(() => validateConfig({ ...raised, preset: "simple" })).toThrow(/preset.*control/);
   });
 
-  test("simple recusa run.maxTurns não numérico ou acima de 500", () => {
+  test("simple recusa run.maxTurns como campo removido", () => {
     const withTurns = base() as unknown as Record<string, unknown>;
-    withTurns.run = { maxTurns: "unlimited" };
-    expect(() => validateConfig({ ...withTurns, preset: "simple" })).toThrow(/preset.*control/);
-
-    const raised = base() as unknown as Record<string, unknown>;
-    raised.run = { maxTurns: 600 };
-    expect(() => validateConfig({ ...raised, preset: "simple" })).toThrow(/preset.*control/);
+    withTurns.run = { maxTurns: 600 };
+    expect(() => validateConfig({ ...withTurns, preset: "simple" })).toThrow(/run\.maxTurns.*removido/);
   });
 
   test("simple aceita 500 explícito, que é o próprio teto", () => {
     const raw = base() as unknown as Record<string, unknown>;
     (raw.agent as Record<string, unknown>).maxSteps = 500;
-    raw.run = { maxTurns: 500 };
     expect(validateConfig({ ...raw, preset: "simple" }).agent.maxSteps).toBe(500);
   });
 

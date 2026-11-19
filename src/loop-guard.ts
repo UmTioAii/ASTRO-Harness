@@ -27,8 +27,8 @@ export interface CheckpointDraft {
 }
 
 /** Checkpoint de turnos é devido quando o turno atual atinge a fração do limite (arredondada para cima). */
-export function turnCheckpointDue(turn: number, maxTurns: number, checkpointAt: number): boolean {
-  return turn >= Math.ceil(maxTurns * checkpointAt);
+export function stepCheckpointDue(step: number, maxSteps: number, checkpointAt: number): boolean {
+  return step >= Math.ceil(maxSteps * checkpointAt);
 }
 
 /** Checkpoint de budget é devido quando o gasto atinge a fração do limite. */

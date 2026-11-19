@@ -9,7 +9,8 @@ test("--help mostra os comandos com o binário astro", async () => {
   const code = await proc.exited;
   expect(code).toBe(0);
   expect(out).toContain("astro run");
-  expect(out).toContain("astro tui");
+  expect(out).toContain("astro chat");
+  expect(out).not.toContain("astro tui");
   expect(out).toContain("astro models");
   expect(out).toContain("providers <health|list|test|vault-import>");
   expect(out).not.toContain("bun src/cli.ts");

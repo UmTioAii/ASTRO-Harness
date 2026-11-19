@@ -5,6 +5,7 @@ import { validateAllowlistFlags, type AllowlistFlags, type CliAllowlists } from 
 import { AllowlistInvalidError } from "./path-class";
 import { denyDisplayPath, isPermissionMode, nonInteractiveApprover, type PermissionMode } from "./permissions";
 import { defaultArgs, isInteractive } from "./cli-default";
+import { versionLine } from "./version";
 import { validateConfig, writeConfigFileAtomic } from "./core/config";
 import { loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "./providers/profiles";
 import { ProfileManager } from "./providers/profile-manager";
@@ -187,13 +188,13 @@ function resolveContinueAgent(cwd: string, run: string): string {
 }
 
 const USAGE = `Uso:
+  astro  (abre a TUI em terminal interativo; sem TTY imprime este help)
   astro run "<pedido>" [--config <path>] [--cwd <dir>] [--provider <name>] [--permission-mode <modo>]
   astro eval [--threshold <0..1>] [--golden <dir>] [--report <path>] [--baseline <path>] [--write-baseline]
   astro bench [--config <path>] [--models <filtro>] [--runs <n>] [--out <dir>] [--require-filter]
   astro serve [--port <n>]
   astro replay <run-id> --task "<pedido>" [--config <path>] [--cwd <dir>]
   astro chat [--config <path>] [--cwd <dir>] [--provider <name>] [--permission-mode <modo>] [--artifact-root <dir>]
-  astro tui [--config <path>] [--cwd <dir>] [--provider <name>] [--permission-mode <modo>] [--artifact-root <dir>]
   astro resume <run-id> --task "<pedido>" [--config <path>] [--cwd <dir>]
   astro continue <run-id> [--task "<pedido>"] [--agent <name>] [--config <path>] [--cwd <dir>]
   astro health [--config <path>]
@@ -208,16 +209,17 @@ const USAGE = `Uso:
   astro config <push|pull> <org/projeto> [--registry <owner/repo>] [--config <path>] [--token <t>] [--allow-plugins]
   astro skills <list|show|validate|install|remove|verify> [--user] [--force]
   astro mcp <list|test <server> <tool>> [--args <json>] [--config <path>]
-  astro --help
+  astro --help | help
+  astro --version
 
 Opções:
   --config <path>  configuração do Astro (default: astro.config.json)
   --provider <name> provider ativo (default: store/env/agent.model)
   --cwd <dir>      diretório de trabalho do agente (default: diretório atual)
   --permission-mode <bypass|allow-edits|ask>  modo do gate de tool (vence permissions.mode)
-  --artifact-root <dir>     raiz do artifact store de imagens (só em chat/tui)
-  --allow-critical <path>   libera path do hard-block configurável (repete, máx 64; exige --i-understand; só em run/chat/tui)
-  --allow-sensitive <glob>  declara glob como sensitive (repete, máx 64; só em run/chat/tui)
+  --artifact-root <dir>     raiz do artifact store de imagens (só em chat/TUI)
+  --allow-critical <path>   libera path do hard-block configurável (repete, máx 64; exige --i-understand; só em run/chat/TUI)
+  --allow-sensitive <glob>  declara glob como sensitive (repete, máx 64; só em run/chat/TUI)
   --i-understand            confirma a leitura de --allow-critical (obrigatório na mesma invocação)
   --no-global-config        ignora a camada global ($ASTRO_HOME/config.json)
   --help           mostra este texto
@@ -380,6 +382,7 @@ interface ConfigShareCommand {
 
 type ParsedCommand =
   | { kind: "help" }
+  | { kind: "version" }
   | { kind: "run"; options: RunCommand }
   | { kind: "eval"; options: EvalCommand }
   | { kind: "bench"; options: BenchCommand }
@@ -500,16 +503,77 @@ function checkAllowlistPairing(flags: AllowlistFlags): void {
   }
 }
 
+/**
+ * Parser comum de `chat` e da TUI (`astro`/`astro --config ...`): as duas
+ * sessões aceitam exatamente as mesmas flags.
+ */
+function parseInteractive(rest: string[]): ChatCommand {
+  let configPath = "astro.config.json";
+  let cwd: string | undefined;
+  let provider: string | undefined;
+  let permissionMode: PermissionMode | undefined;
+  let configExplicit = false;
+  let artifactRoot: string | undefined;
+  const allowlistFlags: AllowlistFlags = { allowCriticalRaw: [], allowSensitiveRaw: [], iUnderstand: false };
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i] as string;
+    if (arg === "--artifact-root") {
+      const value = rest.at(i + 1);
+      if (value === undefined || value.startsWith("-") || value.trim() === "") {
+        throw new UsageError(`falta o valor de ${arg}`);
+      }
+      i++;
+      artifactRoot = value;
+      continue;
+    }
+    if (arg === "--config" || arg === "--cwd" || arg === "--provider" || arg === "--permission-mode") {
+      const value = rest.at(i + 1);
+      if (value === undefined || value.startsWith("-")) throw new UsageError(`falta o valor de ${arg}`);
+      i++;
+      if (arg === "--config") { configPath = value; configExplicit = true; }
+      else if (arg === "--cwd") cwd = value;
+      else if (arg === "--permission-mode") permissionMode = permissionModeValue(arg, value);
+      else provider = value;
+      continue;
+    }
+    const next = collectAllowlistArg(arg, rest, i, allowlistFlags);
+    if (next !== undefined) { i = next; continue; }
+    throw new UsageError(`opção desconhecida: "${arg}"`);
+  }
+  checkAllowlistPairing(allowlistFlags);
+  return {
+    configPath,
+    configExplicit,
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(provider === undefined ? {} : { provider }),
+    ...(permissionMode === undefined ? {} : { permissionMode }),
+    ...(artifactRoot === undefined ? {} : { artifactRoot }),
+    ...(allowlistFlags.allowCriticalRaw.length > 0 || allowlistFlags.allowSensitiveRaw.length > 0 || allowlistFlags.iUnderstand ? { allowlistFlags } : {}),
+  };
+}
+
 function parseArgs(argv: string[]): ParsedCommand {
+  // Sem argumentos, a TUI é o comando padrão. Sem TTY, `defaultArgs` troca por
+  // `--help` antes de chegar aqui; `tui` não existe mais como comando.
   if (argv.length === 0) {
-    throw new UsageError("nenhum argumento informado");
+    return { kind: "tui", options: { configPath: "astro.config.json", configExplicit: false } };
   }
   if (argv.includes("--help") || argv.includes("-h")) {
     return { kind: "help" };
   }
 
   const [command, ...rest] = argv;
-  const commands = ["run", "eval", "bench", "serve", "replay", "resume", "continue", "chat", "tui", "health", "doctor", "providers", "handoff", "cost", "pool", "agents", "locks", "models", "config", "skills", "mcp"];
+  // Primeiro contato depois do `npm i -g`: `help` e `--version` existem como
+  // comando, não só como flag — sem eles o usuário recebe "comando desconhecido".
+  if (command === "help") return { kind: "help" };
+  if (command === "--version" || command === "-v" || command === "version") {
+    return { kind: "version" };
+  }
+  // Só flags (`astro --config x`): é a TUI com opções, não um comando.
+  if (command !== undefined && command.startsWith("-")) {
+    return { kind: "tui", options: parseInteractive(argv) };
+  }
+  const commands = ["run", "eval", "bench", "serve", "replay", "resume", "continue", "chat", "health", "doctor", "providers", "handoff", "cost", "pool", "agents", "locks", "models", "config", "skills", "mcp"];
   if (command !== undefined && !commands.includes(command)) {
     throw new UsageError(`comando desconhecido: "${command}"`);
   }
@@ -899,50 +963,8 @@ function parseArgs(argv: string[]): ParsedCommand {
     return { kind: "continue", options: parseContinue(rest) };
   }
 
-  if (command === "chat" || command === "tui") {
-    let configPath = "astro.config.json";
-    let cwd: string | undefined;
-    let provider: string | undefined;
-    let permissionMode: PermissionMode | undefined;
-    let configExplicit = false;
-    let artifactRoot: string | undefined;
-    const allowlistFlags: AllowlistFlags = { allowCriticalRaw: [], allowSensitiveRaw: [], iUnderstand: false };
-    for (let i = 0; i < rest.length; i++) {
-      const arg = rest[i] as string;
-      if (arg === "--artifact-root") {
-        const value = rest.at(i + 1);
-        if (value === undefined || value.startsWith("-") || value.trim() === "") {
-          throw new UsageError(`falta o valor de ${arg}`);
-        }
-        i++;
-        artifactRoot = value;
-        continue;
-      }
-      if (arg === "--config" || arg === "--cwd" || arg === "--provider" || arg === "--permission-mode") {
-        const value = rest.at(i + 1);
-        if (value === undefined || value.startsWith("-")) throw new UsageError(`falta o valor de ${arg}`);
-        i++;
-        if (arg === "--config") { configPath = value; configExplicit = true; }
-        else if (arg === "--cwd") cwd = value;
-        else if (arg === "--permission-mode") permissionMode = permissionModeValue(arg, value);
-        else provider = value;
-        continue;
-      }
-      const next = collectAllowlistArg(arg, rest, i, allowlistFlags);
-      if (next !== undefined) { i = next; continue; }
-      throw new UsageError(`opção desconhecida: "${arg}"`);
-    }
-    checkAllowlistPairing(allowlistFlags);
-    const options = {
-      configPath,
-      configExplicit,
-      ...(cwd === undefined ? {} : { cwd }),
-      ...(provider === undefined ? {} : { provider }),
-      ...(permissionMode === undefined ? {} : { permissionMode }),
-      ...(artifactRoot === undefined ? {} : { artifactRoot }),
-      ...(allowlistFlags.allowCriticalRaw.length > 0 || allowlistFlags.allowSensitiveRaw.length > 0 || allowlistFlags.iUnderstand ? { allowlistFlags } : {}),
-    };
-    return command === "chat" ? { kind: "chat", options } : { kind: "tui", options };
+  if (command === "chat") {
+    return { kind: "chat", options: parseInteractive(rest) };
   }
 
   if (command === "serve") {
@@ -1178,6 +1200,11 @@ async function main(argv: string[]): Promise<number> {
 
   if (parsed.kind === "help") {
     console.log(USAGE);
+    return 0;
+  }
+
+  if (parsed.kind === "version") {
+    console.log(versionLine());
     return 0;
   }
 

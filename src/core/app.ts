@@ -5,7 +5,7 @@ import { Auditor } from "../audit";
 import { isAbortError } from "../abort";
 import { SwapDeniedError, swapDelta, type SwapApprover, type SwapRequest } from "../approval";
 import type { AstroConfig, CodexOAuthProviderConfig, OpenAICompatProviderConfig, PriceConfig, ProviderConfig } from "./config";
-import { ConfigError, effectiveMaxTurns, providerAccountRefFor, providerCredentialRefFor } from "./config";
+import { ConfigError, providerAccountRefFor, providerCredentialRefFor } from "./config";
 import { loadEffectiveConfig, providerIdentityFor } from "../providers/profiles";
 import { estimateCost, Ledger } from "../ledger";
 import { CodexOAuthProvider } from "../providers/codex-oauth";
@@ -63,30 +63,25 @@ import { ensureTrustedCwd, type TrustAsk } from "../trust";
 import type { NoProgressDecider } from "../loop-guard";
 
 /**
- * Mensagem do limite de passos (#473, #515): nomeia o limite efetivo que
- * disparou. Turnos ausentes valem 500, então o texto cita o default e o preset
- * control, nunca um `agent.maxSteps` declarado que não era o teto real.
+ * Mensagem do limite de passos (#473, #515): nomeia o limite que disparou e o
+ * campo que o controla. O limite é único e contado em passos (P4).
  */
 export function maxStepsMessage(
-  config: Pick<AstroConfig, "agent" | "run" | "preset">,
+  config: Pick<AstroConfig, "agent">,
   error: { maxSteps: number; agentName?: string },
 ): string {
   if (error.agentName !== undefined) {
-    const field = `agents.${error.agentName}.maxSteps`;
-    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "${field}" = ${error.maxSteps}; ajuste "${field}" na configuração`;
+    const field = `agents.${redactSecrets(error.agentName)}.maxSteps`;
+    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "${field}" = ${error.maxSteps}; ajuste "${field}" na configuração`;
   }
-
-  const turnCap = effectiveMaxTurns(config);
-  if (turnCap !== "unlimited" && turnCap < config.agent.maxSteps) {
-    const limit = config.run?.maxTurns === undefined
-      ? config.preset === "simple"
-        ? `limite de turnos padrão "run.maxTurns" = ${turnCap} (ausente; use "preset": "control" e declare "run.maxTurns" para alterar)`
-        : `limite de turnos padrão "run.maxTurns" = ${turnCap} (ausente; declare "run.maxTurns" para alterar)`
-      : `limite de turnos "run.maxTurns" = ${turnCap}`;
-    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final — ${limit}; ajuste "run.maxTurns" na configuração`;
+  // O teto efetivo pode ser menor que o declarado quando a decisão de budget
+  // "baixar esforço" corta os passos restantes (L5/B4): a mensagem cita o valor
+  // declarado (o campo que o usuário controla) e o teto efetivo no parêntese.
+  const declared = config.agent.maxSteps;
+  if (error.maxSteps < declared) {
+    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "agent.maxSteps" = ${declared}, mas o teto efetivo caiu para ${error.maxSteps} pela decisão de budget "baixar esforço"; aumente o budget ou revise "agent.maxSteps" na configuração`;
   }
-
-  return `a tarefa excedeu ${error.maxSteps} passos sem resposta final — limite "agent.maxSteps" = ${config.agent.maxSteps}; ajuste "agent.maxSteps" na configuração`;
+  return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "agent.maxSteps" = ${declared}; ajuste "agent.maxSteps" na configuração`;
 }
 
 export interface RunOptions {
@@ -602,12 +597,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       ...(identity.credentialRef === undefined ? {} : { credentialRef: identity.credentialRef }),
     };
   };
-  /** Teto global de turnos (Q-01/L2, #515): `run.maxTurns` declarado vence; ausente
-   * vale 500 e só **capa** `agent.maxSteps`; "unlimited" fica limitado ao agente. */
-  const turnCap = effectiveMaxTurns(config);
-  const sessionMaxSteps = turnCap !== "unlimited"
-    ? Math.min(config.agent.maxSteps, turnCap)
-    : config.agent.maxSteps;
+  /** Limite único de trabalho (P4): passos por tarefa/agente, sem cap de turnos. */
+  const sessionMaxSteps = config.agent.maxSteps;
 
   // Sandbox do run_command (F4-6): configurado antes de qualquer execução
   const sandboxEnabled = resolveSandboxSetting(config.tools?.run_command?.sandbox);
@@ -1280,7 +1271,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       });
       // #473: a mensagem nomeia o limite que disparou, o valor e a setting.
       // Multi-agent: o teto do agent nomeado (`agents.<nome>.maxSteps`) vem no erro.
-      // `run.maxTurns` capa `agent.maxSteps` (Q-01/L2); ausente vale 500 (#515).
+      // Limite único: passos por tarefa/agente (P4); turnos são unidade de UI.
       throw new Error(maxStepsMessage(config, error), { cause: error });
     }
 

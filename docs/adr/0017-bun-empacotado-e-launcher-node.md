@@ -22,7 +22,7 @@ Bun manualmente, o que quebra a promessa de instalação em um comando.
 - O launcher resolve, nesta ordem: `ASTRO_BUN_PATH` → Bun que está executando (`bun add -g`) →
   binário da dependência de plataforma → `bun` no `PATH`.
 - O launcher executa `bun dist/cli.js <args>` com `stdio` herdado e propaga código de saída/sinal.
-- Sem argumentos em TTY, o CLI roda `tui`; sem TTY, imprime o help.
+- Sem argumentos em TTY, o CLI abre a TUI; sem TTY, imprime o help.
 
 ## Consequências
 

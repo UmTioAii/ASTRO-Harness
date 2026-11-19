@@ -15,13 +15,13 @@ I-17 exige corte físico de custo; quota (`src/quota.ts`, por `quotaDomain`) e o
 
 **Escopos sem segundo contador.** O gasto é sempre derivado do ledger. `day`/`month`/`project` usam janelas UTC (`project` = mês corrente, alinhado ao `team.projectBudgetUsd`); quota (`quotaDomain`) e team seguem como enforcement próprio. `project` cruza `team.projectBudgetUsd` e o menor vence; quota por domínio não entra no budget global (gasto global ≠ gasto do domínio) e `day` não tem limite USD em quota (quota diária é em tokens). Use-as-you-go (`limitUsd: null`) registra e exibe, nunca bloqueia (B2); preço ausente exibe "n/d", nunca zero (B6); leitura de assinatura vem com health/C6 (B7).
 
-**Aviso e esgotamento (B3, B4).** Aviso em `warnAt` e no esgotamento; na CLI o prompt oferece quatro opções — continuar no mesmo esforço, baixar esforço (metade dos turnos restantes, ao menos um), aumentar o limite absoluto (D-30, com confirmação extra para o teto) e parar — e a escolha vira `budget.exceeded_choice`; chat/TUI seguem com três (continua, baixa esforço, para). `onExceed: "stop"` para sem perguntar. Sem TTY, `ask` nunca bloqueia: grava checkpoint (L5, ADR-0014), para e registra `budget_exceeded_non_interactive`.
+**Aviso e esgotamento (B3, B4).** Aviso em `warnAt` e no esgotamento; na CLI o prompt oferece quatro opções — continuar no mesmo esforço, baixar esforço (metade dos passos restantes, ao menos um), aumentar o limite absoluto (D-30, com confirmação extra para o teto) e parar — e a escolha vira `budget.exceeded_choice`; chat/TUI seguem com três (continua, baixa esforço, para). `onExceed: "stop"` para sem perguntar. Sem TTY, `ask` nunca bloqueia: grava checkpoint (L5, ADR-0014), para e registra `budget_exceeded_non_interactive`.
 
 **Corte físico (B10, I-17).** `hardCeilingUsd` atingido → para independente de `onExceed` e registra `budget.ceiling_hit`. Com preço desconhecido e ceiling configurado, o run para com `unknown_price` (não dá para provar que está abaixo do teto).
 
 **Reserva da cadeia (B9).** Antes de cada chamada, `budget.reserved` = Σ custo máximo do primário + fallbacks declarados; após, `budget.released` com `actual_cost`. A reserva casa por run (FIFO) e inclui fallbacks de profile; reserva maior que o limite/teto para antes da chamada. No `--resume`, `reserved` sem `released` conta como custo real (crash recovery). Sem preço na cadeia a reserva é 0 e o teto decide via `unknown_price`.
 
-**Q-01 (L2).** `run.maxTurns: "unlimited"` exige `hardCeilingUsd` OU `limitUsd`; senão `loadConfig` falha com `unlimited_without_ceiling`.
+**Q-01 (L2).** Revisão P4: `run.maxTurns` foi removido e com ele a exigência `unlimited_without_ceiling`; o teto de trabalho é `agent.maxSteps` e o de custo é `budget` (`hardCeilingUsd` ou `limitUsd`).
 
 **Ledger.** Este ADR é dono do kind `budget`: `reserved`, `released`, `exceeded_choice`, `ceiling_hit`, `budget_exceeded_non_interactive` (schema em #122).
 

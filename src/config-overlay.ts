@@ -127,16 +127,6 @@ export function assertNarrowed(
     const ceiling = globalAgent !== undefined && typeof globalAgent.maxSteps === "number" ? globalAgent.maxSteps : mainCeiling;
     assertStepsCeiling(after.maxSteps, `agents.${name}.maxSteps`, ceiling);
   }
-  // Teto de turnos (#473): `run.maxTurns` só capa `agent.maxSteps`, mas não pode
-  // passar de um teto numérico declarado na camada global ("unlimited" alarga).
-  const globalTurns = isPlainObject(global.run) ? global.run.maxTurns : undefined;
-  const mergedTurns = isPlainObject(merged.run) ? merged.run.maxTurns : undefined;
-  if (typeof globalTurns === "number"
-    && (mergedTurns === "unlimited" || (typeof mergedTurns === "number" && mergedTurns > globalTurns))) {
-    throw new ConfigError(
-      `config inválida: o projeto amplia o teto global de turnos (run.maxTurns acima do teto ${globalTurns})`,
-    );
-  }
   // Modo de permissão do gate: o projeto só pode ser mais restrito.
   const globalMode = isPlainObject(global.permissions) ? global.permissions.mode : undefined;
   const mergedMode = isPlainObject(merged.permissions) ? merged.permissions.mode : undefined;

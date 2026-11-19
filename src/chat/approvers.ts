@@ -31,21 +31,23 @@ export function budgetPrompt(status: BudgetStatus): string {
   return `budget esgotado (${status.estimate} / ${limit}). [c] continuar, [l] baixar, [p] parar: `;
 }
 
-/** Prompt de aprovação de tool/file (PERM-04, #265): 4 opções na mesma linha. */
+/**
+ * Prompt de aprovação de tool/file (PERM-04, #265): três opções na mesma linha.
+ * `s` vale para esta chamada; `S` grava um grant em memória até o fim da sessão.
+ */
 export function toolPrompt(request: ToolPermissionRequest): string {
-  return `tool "${request.name}" (ação ${request.action}, modo ${request.mode}). [s] aprovar, [n] negar, [S] aprovar nesta sessão, [o] só esta vez: `;
+  return `tool "${request.name}" (ação ${request.action}, modo ${request.mode}). [s] aprovar, [n] negar, [S] aprovar nesta sessão: `;
 }
 
 /**
  * Mapeia a resposta do prompt de tool (PERM-04, #265). `S` maiúsculo é sessão;
- * `s` minúsculo é aprovação única (once → true no gate).
+ * `s` minúsculo é aprovação única (true no gate). O vocabulário é exatamente o
+ * do prompt: qualquer outra resposta nega (fail-closed, #546).
  */
 export function toolChoice(answer: string | null): PermissionApproval {
   const raw = (answer ?? "").trim();
-  const lower = raw.toLowerCase();
-  if (raw === "S" || lower === "sessao" || lower === "session") return "session";
-  if (lower === "o" || lower === "once" || lower === "vez" || lower === "uma vez") return "once";
-  if (isYes(raw)) return true;
+  if (raw === "S") return "session";
+  if (raw === "s") return true;
   return false;
 }
 

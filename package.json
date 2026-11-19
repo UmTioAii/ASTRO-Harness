@@ -26,8 +26,8 @@
   "scripts": {
     "build": "bun build src/cli.ts --target=bun --external ink --external react --outfile dist/cli.js && bun build src/launcher.ts --target=node --outfile dist/launcher.js",
     "cli": "bun src/cli.ts",
-    "tui": "bun src/cli.ts tui",
-    "dev": "bun src/cli.ts tui",
+    "tui": "bun src/cli.ts",
+    "dev": "bun src/cli.ts",
     "dev:launcher": "bun run build && node dist/launcher.js",
     "smoke": "bun run build && bun scripts/smoke.ts",
     "doctor": "bun src/doctor.ts",

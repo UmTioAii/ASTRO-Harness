@@ -13,7 +13,7 @@ test("package.json expõe os quatro comandos principais", () => {
 });
 
 test("dev abre a TUI a partir da fonte, sem build", () => {
-  expect(pkg.scripts.dev).toBe("bun src/cli.ts tui");
+  expect(pkg.scripts.dev).toBe("bun src/cli.ts");
   expect(existsSync(join(root, "src", "cli.ts"))).toBe(true);
 });
 

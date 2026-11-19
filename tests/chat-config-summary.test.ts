@@ -18,16 +18,15 @@ const base = {
 };
 
 describe("configSummaryOf / configLines (#273)", () => {
-  test("resume maxTurns, modo, custos (pricing sobrescreve model.price) e budget", () => {
+  test("resume maxSteps, modo, custos (pricing sobrescreve model.price) e budget", () => {
     const config = validateConfig({
       ...base,
-      run: { maxTurns: 5, checkpointAt: 0.8, noProgressSegments: 3, judge: "off" },
       budget: { scope: "day", limitUsd: 5, warnAt: 0.8, onExceed: "ask" },
       pricing: { "p/m2": { inputPerM: 2, outputPerM: 3, fonte: "t", verificado: true } },
     });
     const summary = configSummaryOf(config, "/cfg/astro.config.json", "ask");
     expect(summary.configPath).toBe("/cfg/astro.config.json");
-    expect(summary.maxTurns).toBe("5");
+    expect(summary.maxSteps).toBe(3);
     expect(summary.permissionMode).toBe("ask");
     // p/m1 vem do model.price; p/m2 é sobrescrito pelo pricing global; q/m2 não tem preço
     expect(summary.costs).toEqual([
@@ -37,9 +36,9 @@ describe("configSummaryOf / configLines (#273)", () => {
     expect(summary.budget).toBe("day · limite US$ 5.00 · aviso em 80% · ao exceder: ask");
   });
 
-  test("sem run.maxTurns exibe 500 (default); sem budget exibe 'sem budget'", () => {
+  test("maxSteps declarado aparece no resumo; sem budget exibe 'sem budget'", () => {
     const summary = configSummaryOf(validateConfig(base), "/cfg/astro.config.json", "bypass");
-    expect(summary.maxTurns).toBe("500 (default)");
+    expect(summary.maxSteps).toBe(3);
     expect(summary.budget).toBe("sem budget");
     expect(summary.costs).toEqual([{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }]);
     expect(summary.permissionMode).toBe("bypass");
@@ -48,14 +47,14 @@ describe("configSummaryOf / configLines (#273)", () => {
   test("configLines monta o texto exibido no REPL e na tela", () => {
     const summary: ConfigSummary = {
       configPath: "/cfg/astro.config.json",
-      maxTurns: "5",
+      maxSteps: 5,
       permissionMode: "ask",
       costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
       budget: "sem budget",
     };
     expect(configLines(summary, []).join("\n")).toBe(
       "config: /cfg/astro.config.json\n"
-      + "run.maxTurns: 5\n"
+      + "agent.maxSteps: 5\n"
       + "permissions.mode: ask\n"
       + "budget: sem budget\n"
       + "custos por modelo:\n"
