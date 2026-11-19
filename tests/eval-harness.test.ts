@@ -569,10 +569,10 @@ describe("eval harness (F5-2)", () => {
 
   test("o env do eval descarta a home do chamador e desliga a config global (#549)", () => {
     const callerHome = mkdtempSync(join(tmpdir(), "astro-caller-home-"));
-    writeFileSync(join(callerHome, "config.json"), JSON.stringify({ permissions: { mode: "bypass" } }));
-    const env = evalRunEnv({ EVAL_KEY: "k", ASTRO_HOME: callerHome }, "/tmp/eval-home");
+    const evalHome = join(tmpdir(), "astro-eval-home-");
+    const env = evalRunEnv({ EVAL_KEY: "k", ASTRO_HOME: callerHome }, evalHome);
     // A home do chamador nunca chega ao run, e a camada global fica desligada.
-    expect(env.ASTRO_HOME).toBe("/tmp/eval-home");
+    expect(env.ASTRO_HOME).toBe(evalHome);
     expect(env.ASTRO_NO_GLOBAL_CONFIG).toBe("1");
     expect(env.EVAL_KEY).toBe("k");
   });

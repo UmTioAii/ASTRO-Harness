@@ -572,7 +572,6 @@ function assertSeedTree(path: string, field: string): void {
   for (const entry of readdirSync(path)) assertSeedTree(join(path, entry), `${field}/${entry}`);
 }
 
-/** Executa um `scenario.json`; o harness compara os arquivos esperados depois. */
 /**
  * Env do run de eval: `ASTRO_HOME` próprio do caso e camada global desligada.
  * A home do chamador é sempre descartada, então nenhuma config global vaza para
@@ -585,6 +584,7 @@ export function evalRunEnv(
   return { ...scenarioEnv, ASTRO_HOME: evalHome, ASTRO_NO_GLOBAL_CONFIG: "1" };
 }
 
+/** Executa um `scenario.json`; o harness compara os arquivos esperados depois. */
 export async function runScenario(
   spec: ScenarioSpec,
   opts: { cwd: string; caseDir: string; task: string },
@@ -607,9 +607,11 @@ export async function runScenario(
   const previousPrivate = process.env.ASTRO_ALLOW_PRIVATE_URLS;
   const previousHome = process.env.ASTRO_HOME;
   const previousNoGlobal = process.env.ASTRO_NO_GLOBAL_CONFIG;
+  // Leitores que caem em `process.env` (trust, path-class) veem a mesma home do
+  // env acima: uma fonte só, para o contrato não divergir entre os dois canais.
   process.env.ASTRO_ALLOW_PRIVATE_URLS = "1";
-  process.env.ASTRO_HOME = evalHome;
-  process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
+  process.env.ASTRO_HOME = env.ASTRO_HOME ?? evalHome;
+  process.env.ASTRO_NO_GLOBAL_CONFIG = env.ASTRO_NO_GLOBAL_CONFIG ?? "1";
   try {
     for (const entry of spec.seed ?? []) {
       // Fonte: só dentro do caseDir e sem link em nenhum nível da árvore.
