@@ -36,6 +36,18 @@ test("só flags chegam à TUI: sem TTY o erro é do terminal, não do argv (#543
   expect(stderr).not.toContain("Uso:");
 });
 
+test("flag única removida deixa argv vazio e ainda abre a TUI (#543)", async () => {
+  const proc = Bun.spawn(["bun", "src/cli.ts", "--no-global-config"], {
+    cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  proc.stdin.end();
+  expect(await proc.exited).toBe(1);
+  const stderr = await new Response(proc.stderr).text();
+  // `main` tira a flag e chama o parser com argv vazio: é o ramo sem flags da TUI.
+  expect(stderr).toContain("precisa de um terminal interativo");
+  expect(stderr).not.toContain("Uso:");
+});
+
 test("as flags da TUI são interpretadas, não descartadas (#543)", async () => {
   const proc = Bun.spawn(["bun", "src/cli.ts", "--permission-mode", "bogus", "--cwd", root], {
     cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
