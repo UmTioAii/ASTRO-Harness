@@ -161,7 +161,7 @@ export class JudgeStopError extends Error {
 export class JudgeContinueError extends Error {
   readonly code = "judge_continue_exhausted";
   constructor() {
-    super("o juiz pediu continuar, mas o limite de turnos acabou; run parado em ponto seguro");
+    super("o juiz pediu continuar, mas o limite de passos acabou; run parado em ponto seguro");
     this.name = "JudgeContinueError";
   }
 }

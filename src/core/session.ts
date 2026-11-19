@@ -622,7 +622,7 @@ export async function runSession(
           }, opts.cwd);
           saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, opts.agent));
           opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "loop.checkpoint",
-            payload: { step, trigger: stepDue ? "turns" : "budget" } });
+            payload: { step, trigger: stepDue ? "steps" : "budget" } });
           judgeSignal = true; // sinal do `auto` (L4)
         }
       }
@@ -1161,7 +1161,7 @@ export async function runMultiAgentSession(
       }, opts.cwd);
       saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, agent));
       opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint",
-        payload: { step, trigger: stepDue ? "turns" : "budget" } });
+        payload: { step, trigger: stepDue ? "steps" : "budget" } });
     } catch (error) {
       opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint_error",
         payload: { step, code: checkpointErrorCode(error) } });

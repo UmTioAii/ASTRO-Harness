@@ -142,7 +142,7 @@ describe("wiring no runSession (#135 fatia B)", () => {
     expect(cp.changedFiles).toEqual([join("src", "a.ts"), "b.txt"]); // fora do cwd descartado
     const events = s.audit.readAll().filter((e) => e.tipo === "loop.checkpoint");
     expect(events).toHaveLength(1);
-    expect(events[0].payload).toMatchObject({ step: 3, trigger: "turns" });
+    expect(events[0].payload).toMatchObject({ step: 3, trigger: "steps" });
   });
 
   test("checkpoint de budget: dispara pela fração do gasto", async () => {
@@ -239,7 +239,7 @@ describe("wiring no runSession (#135 fatia B)", () => {
     expect(existsSync(checkpointPath(s.cwd, "r1", "default"))).toBe(true);
     const events = s.audit.readAll().filter((e) => e.tipo === "loop.checkpoint");
     expect(events).toHaveLength(1);
-    expect(events[0]?.payload).toMatchObject({ step: 3, trigger: "turns" });
+    expect(events[0]?.payload).toMatchObject({ step: 3, trigger: "steps" });
     const state = s.ledger.lastState("r1");
     expect(state?.state).toBe("interrupted");
     expect(state?.reason).toBe("MaxStepsError"); // razão estável do interruptReason
