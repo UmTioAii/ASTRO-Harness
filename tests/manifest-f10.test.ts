@@ -8,6 +8,7 @@ import { ToolExecutor } from "../src/tools/executor";
 import { validateManifest } from "../src/sdk/tool";
 import { editTool } from "../src/tools/edit";
 import { grepTool } from "../src/tools/grep";
+import { gitDiffTool, gitStatusTool } from "../src/tools/git";
 import { handoffTool } from "../src/tools/handoff";
 import { listDirTool } from "../src/tools/list-dir";
 import { lspTool } from "../src/tools/lsp";
@@ -59,9 +60,9 @@ describe("validateManifest com idempotent e sideEffects (F-10)", () => {
   });
 });
 
-describe("declarações das 9 tools builtin (F-10, I-12)", () => {
+describe("declarações das 11 tools builtin (F-10, I-12)", () => {
   const tools: Tool[] = [
-    readFileTool, writeFileTool, editTool, grepTool, listDirTool,
+    readFileTool, writeFileTool, editTool, grepTool, listDirTool, gitStatusTool, gitDiffTool,
     lspTool, runCommandTool, pipelineTool, handoffTool,
   ];
 
@@ -77,6 +78,8 @@ describe("declarações das 9 tools builtin (F-10, I-12)", () => {
     expect(readFileTool.manifest.sideEffects).toBe("none");
     expect(grepTool.manifest.sideEffects).toBe("none");
     expect(listDirTool.manifest.sideEffects).toBe("none");
+    expect(gitStatusTool.manifest.sideEffects).toBe("none");
+    expect(gitDiffTool.manifest.sideEffects).toBe("none");
     expect(lspTool.manifest.idempotent).toBe(true);
     expect(lspTool.manifest.sideEffects).toBe("none");
     expect(writeFileTool.manifest.idempotent).toBe(true);
