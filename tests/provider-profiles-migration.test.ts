@@ -62,8 +62,9 @@ test("importa providers.json para config.json uma vez e preserva o legado", () =
   expect(store.activeProfileId).toBe("b");
   const config = jsonAt(home, "config.json");
   expect(config.providers).toEqual({
-    a: { kind: "openai-compat", baseUrl: "https://a.example/v1", credentialRef: "A_KEY" },
-    b: { kind: "openai-compat", baseUrl: "https://b.example/v1" },
+    // `name` é o rótulo de exibição do store legado, preservado no import (#492).
+    a: { kind: "openai-compat", baseUrl: "https://a.example/v1", credentialRef: "A_KEY", name: "Provider A" },
+    b: { kind: "openai-compat", baseUrl: "https://b.example/v1", name: "Provider B" },
   });
   expect(config.models).toEqual([
     { provider: "a", id: "m1", tags: ["writing-code"], context: 8192 },
@@ -113,6 +114,7 @@ test("conflito por chave: config.json vence e models não duplicam", () => {
   expect((config.providers as Record<string, unknown>).b).toEqual({
     kind: "openai-compat",
     baseUrl: "https://b.example/v1",
+    name: "Provider B",
   });
   expect(config.models).toEqual([
     { provider: "a", id: "m1", tags: ["writing-code"], context: 1 },

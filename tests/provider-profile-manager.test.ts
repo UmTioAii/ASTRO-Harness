@@ -101,6 +101,42 @@ test("remove rejeita provider do projeto", () => {
   expect(() => m.remove("p")).toThrow(/astro\.config\.json/);
 });
 
+test("nome de exibição faz round-trip e um manager novo edita/remove (#492)", () => {
+  const home = mkdtempSync(join(tmpdir(), "astro-mgr-name-"));
+  const a = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  const added = a.add(draft({ name: "Casa" }));
+  expect(added.id).toBe("casa");
+  const raw = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as {
+    providers: Record<string, { name?: string }>;
+  };
+  expect(raw.providers.casa?.name).toBe("Casa"); // rótulo persistido no config.json
+
+  const b = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  expect(b.list().find((item) => item.id === "casa")?.name).toBe("Casa");
+  b.use("casa");
+  const edited = b.edit("casa", draft({ name: "Casa 2" }));
+  expect(edited.name).toBe("Casa 2");
+  const c = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  expect(c.list().find((item) => item.id === "casa")?.name).toBe("Casa 2");
+  expect(() => c.remove("casa")).not.toThrow(); // novo manager pode remover o que o CRUD criou
+});
+
+test("provider com modelo editado à mão sem tags não é apagado pelo CRUD (#492)", () => {
+  const home = mkdtempSync(join(tmpdir(), "astro-mgr-hand-"));
+  writeFileSync(join(home, "config.json"), JSON.stringify({
+    providers: { hand: { kind: "openai-compat", baseUrl: "https://hand.example/v1" } },
+    models: [{ provider: "hand", id: "h1" }], // sem tags/context: fora do store
+  }));
+  const m = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  m.add(draft());
+  const raw = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as {
+    providers: Record<string, unknown>;
+    models: Array<{ provider: string; id: string }>;
+  };
+  expect(raw.providers.hand).toBeDefined(); // não foi tratado como removido pelo CRUD
+  expect(raw.models.some((model) => model.provider === "hand" && model.id === "h1")).toBe(true);
+});
+
 test("add, use e remove gravam em config.json e preservam chaves alheias (#492)", () => {
   const home = mkdtempSync(join(tmpdir(), "astro-mgr-global-"));
   writeFileSync(join(home, "config.json"), JSON.stringify({

@@ -60,8 +60,8 @@ test("/provider add grava, ativa e aparece na lista", async () => {
 
   const list = await chat(cwd, cfg, home, "/provider\n/exit\n");
   expect(list.exit).toBe(0);
-  // Depois da migração o perfil vem de `config.json`, sem nome de exibição.
-  expect(list.stdout).toContain("local (local)");
+  // O rótulo de exibição gravado no config.json sobrevive à recarga (#492).
+  expect(list.stdout).toContain("Local (local)");
 });
 
 test("/provider remove de perfil global remove do config.json e não escreve o legado (#492)", async () => {
