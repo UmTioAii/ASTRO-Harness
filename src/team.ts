@@ -48,7 +48,7 @@ function dayOf(ts: string): string {
 }
 
 /** Semana ISO-8601 (yyyy-Www) em UTC; a semana começa na segunda e a semana 1 contém a primeira quinta. */
-function isoWeekOf(ts: string): string {
+export function isoWeekOf(ts: string): string {
   const d = new Date(ts);
   const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   const dayNum = (date.getUTCDay() + 6) % 7; // 0=seg..6=dom
@@ -56,7 +56,8 @@ function isoWeekOf(ts: string): string {
   const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
   const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
   firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
-  const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 604_800_000));
+  // 604_800_000 ms = 1 semana: a diferença entre quintas é em semanas
+  const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / 604_800_000);
   return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
