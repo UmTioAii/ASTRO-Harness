@@ -200,27 +200,38 @@ test("entrada obsoleta no legado não amplia o allow-set de endpoint da credenci
     .toThrow(/redireciona a credencial global/);
 });
 
-test("/provider recusa escrita pós-migração e preserva o legado", () => {
+test("/provider escreve no config.json pós-migração e preserva o legado intacto (#492)", () => {
   const home = homeDir();
   const legacy = join(home, "providers.json");
   const bytes = legacyWith([profileA]);
   writeFileSync(legacy, bytes);
   loadGlobalProfileStore({ ASTRO_HOME: home });
+  // Provider declarado à mão no config.json (sem modelo = fora do store) segue protegido.
+  const config = jsonAt(home, "config.json") as { providers: Record<string, unknown> };
+  config.providers.manual = { kind: "openai-compat", baseUrl: "https://manual.example/v1", credentialRef: "MANUAL_KEY" };
+  writeFileSync(join(home, "config.json"), JSON.stringify(config));
   const manager = new ProfileManager({ env: { ASTRO_HOME: home } });
 
-  // Provider só da config não é removível/ativável pelo store legado.
-  expect(() => manager.remove("a")).toThrow(/config\.json/);
-  expect(() => manager.use("a")).toThrow(/config\.json/);
-  expect(() => manager.add({
+  expect(() => manager.remove("manual")).toThrow(/config\.json/);
+  expect(() => manager.use("manual")).toThrow(/config\.json/);
+  // Perfil importado do legado agora é editável pelo CRUD (#492).
+  const added = manager.add({
     name: "Novo",
     kind: "openai-compat",
     baseUrl: "https://novo.example/v1",
     credentialRef: "NOVO_KEY",
     models: [{ id: "m", tags: ["writing-code"], context: 8192 }],
-  })).toThrow(ProfileStoreMigratedError);
+  });
+  expect(added.id).toBe("novo");
 
-  expect(readFileSync(legacy, "utf8")).toBe(bytes);
-  expect((jsonAt(home, "config.json").providers as Record<string, unknown>).a).toBeDefined();
+  expect(readFileSync(legacy, "utf8")).toBe(bytes); // legado nunca é escrito
+  const after = jsonAt(home, "config.json") as {
+    providers: Record<string, unknown>;
+    models: Array<{ provider: string; id: string }>;
+  };
+  expect(after.providers.a).toBeDefined();
+  expect(after.providers.novo).toBeDefined();
+  expect(after.models.some((model) => model.provider === "novo" && model.id === "m")).toBe(true);
 });
 
 test("legado com zero perfis não cria config.json", () => {

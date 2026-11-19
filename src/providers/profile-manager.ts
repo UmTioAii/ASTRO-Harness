@@ -90,7 +90,8 @@ export class ProfileManager {
   readonly #storeInjected: boolean;
   readonly #project: AstroConfig | undefined;
   readonly #projectRefs: { providers: string[]; modelProviders: string[] };
-  readonly #globalProviders: string[];
+  /** Providers declarados à mão na camada global (fora do store) e por isso não editáveis. */
+  #globalProviders: string[];
   readonly #env: NodeJS.ProcessEnv;
   readonly #provider: string | undefined;
   #store: ProviderStore;
@@ -102,14 +103,14 @@ export class ProfileManager {
       providers: Object.keys(opts.project?.providers ?? {}),
       modelProviders: (opts.project?.models ?? []).map((model) => model.provider),
     };
-    const global = this.#env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(this.#env);
-    this.#globalProviders = global !== undefined && isPlainObject(global.providers)
-      ? Object.keys(global.providers)
-      : [];
+    this.#globalProviders = [];
     this.#provider = opts.provider;
     this.#storePath = opts.storePath ?? profilesPath(this.#env);
     this.#storeInjected = opts.storePath !== undefined;
     this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : loadGlobalProfileStore(this.#env);
+    // #492: provider do store também mora no `config.json`; o guarda vale só para
+    // os declarados à mão (sem modelo/perfil), que o CRUD não gerencia.
+    this.#refreshGlobalProviders();
   }
 
   list(): ProfileView[] {
@@ -229,6 +230,15 @@ export class ProfileManager {
   #reload(): void {
     // #492: a mesma fonte da escrita (`config.json` depois do import de #459).
     this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : loadGlobalProfileStore(this.#env);
+    this.#refreshGlobalProviders();
+  }
+
+  /** Lista providers da camada global que não pertencem ao store (declarados à mão). */
+  #refreshGlobalProviders(): void {
+    const global = this.#env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(this.#env);
+    const declared = global !== undefined && isPlainObject(global.providers) ? Object.keys(global.providers) : [];
+    const storeIds = new Set(this.#store.profiles.map((profile) => profile.id));
+    this.#globalProviders = declared.filter((id) => !storeIds.has(id));
   }
 
   /** Variável de credencial presente no env desta execução. */

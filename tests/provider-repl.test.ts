@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadProfileStore } from "../src/providers/profiles";
+import { profileStoreFromConfig } from "../src/providers/profiles";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -53,9 +53,10 @@ test("/provider add grava, ativa e aparece na lista", async () => {
   expect(add.exit).toBe(0);
   expect(add.stdout).toContain("salvo: local");
   expect(add.stdout).toContain("provider ativo: local");
-  const store = loadProfileStore(join(home, "providers.json"));
+  const store = profileStoreFromConfig(join(home, "config.json")); // #492: camada global
   expect(store.profiles.map((item) => item.id)).toEqual(["local"]);
   expect(store.activeProfileId).toBe("local");
+  expect(existsSync(join(home, "providers.json"))).toBe(false); // legado nunca é escrito
 
   const list = await chat(cwd, cfg, home, "/provider\n/exit\n");
   expect(list.exit).toBe(0);
@@ -63,19 +64,17 @@ test("/provider add grava, ativa e aparece na lista", async () => {
   expect(list.stdout).toContain("local (local)");
 });
 
-test("/provider remove de perfil migrado é recusado e preserva o legado", async () => {
+test("/provider remove de perfil global remove do config.json e não escreve o legado (#492)", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-provider-rm-"));
   const home = mkdtempSync(join(tmpdir(), "astro-provider-rm-home-"));
   const cfg = projectConfig(cwd);
   await chat(cwd, cfg, home, "/provider add\ncustom\nLocal\nhttp://localhost:1/v1\n\nm1\nS\nn\n/exit\n");
-  const legacy = join(home, "providers.json");
-  const bytes = readFileSync(legacy, "utf8");
+  expect(existsSync(join(home, "config.json"))).toBe(true);
   const removed = await chat(cwd, cfg, home, "/provider remove local\n/exit\n");
   expect(removed.exit).toBe(0);
-  expect(removed.stdout).toContain('erro: provider "local"');
-  expect(removed.stdout).toMatch(/config\.json/);
-  expect(removed.stdout).not.toContain("removido: local");
-  expect(readFileSync(legacy, "utf8")).toBe(bytes);
+  expect(removed.stdout).toContain("removido: local");
+  expect(profileStoreFromConfig(join(home, "config.json")).profiles).toEqual([]);
+  expect(existsSync(join(home, "providers.json"))).toBe(false);
 });
 
 test("/provider <nome> troca para provider do projeto sem persistir", async () => {
@@ -106,7 +105,7 @@ test("ativar um add em projeto com agent.profile avisa e não derruba o REPL", a
   expect(result.exit).toBe(0);
   expect(result.stdout).toContain("salvo: local");
   expect(result.stdout).toContain("agent.profile tem precedência");
-  expect(loadProfileStore(join(home, "providers.json")).profiles.map((item) => item.id)).toEqual(["local"]);
+  expect(profileStoreFromConfig(join(home, "config.json")).profiles.map((item) => item.id)).toEqual(["local"]);
 });
 
 test("add sem ativar não troca o modelo da sessão", async () => {

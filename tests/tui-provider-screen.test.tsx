@@ -385,7 +385,7 @@ test("edit preserva headers e remove confirma", async () => {
       onActivate={() => undefined}
     />,
   );
-  await waitFor(() => remove.lastFrame()?.includes("Remover Casa?") === true);
+  await waitFor(() => remove.lastFrame()?.includes("Remover casa?") === true);
   remove.stdin.write("s");
   await waitFor(() => remove.lastFrame()?.includes("removido: casa") === true);
   expect(m.list().some((item) => item.id === "casa")).toBe(false);
