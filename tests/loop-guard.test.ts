@@ -9,6 +9,7 @@ import {
   continueTask,
   findCheckpointAgents,
   loadCheckpoint,
+  NoProgressError,
   ProgressTracker,
   saveCheckpoint,
   stepCheckpointDue,
@@ -297,6 +298,12 @@ describe("findCheckpointAgents (L5, #135)", () => {
 });
 
 describe("ProgressTracker (L6, #135)", () => {
+  test("a parada por não-progresso conta em passos, não em turnos (#545)", () => {
+    const err = new NoProgressError(3, 7);
+    expect(err.message).toContain("(passo 7)");
+    expect(err.message).not.toContain("turno");
+  });
+
   test("3 segmentos seguidos com o mesmo hash → sem progresso (pausa)", () => {
     const tracker = new ProgressTracker(3);
     expect(tracker.record("aaa")).toBe(false);

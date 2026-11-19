@@ -13,7 +13,7 @@ import {
   type CaseResult,
   type EvalReport,
 } from "../src/eval/harness";
-import { runScenario, type ScenarioSpec } from "../src/eval/scenario";
+import { evalRunEnv, runScenario, type ScenarioSpec } from "../src/eval/scenario";
 
 const GOLDEN_ROOT = join(import.meta.dir, "..", "eval", "golden");
 
@@ -567,9 +567,19 @@ describe("eval harness (F5-2)", () => {
     expect(existsSync(join(cwd, ".astro", "skills", "verify", ".sha256"))).toBe(true);
   });
 
+  test("o env do eval descarta a home do chamador e desliga a config global (#549)", () => {
+    const callerHome = mkdtempSync(join(tmpdir(), "astro-caller-home-"));
+    writeFileSync(join(callerHome, "config.json"), JSON.stringify({ permissions: { mode: "bypass" } }));
+    const env = evalRunEnv({ EVAL_KEY: "k", ASTRO_HOME: callerHome }, "/tmp/eval-home");
+    // A home do chamador nunca chega ao run, e a camada global fica desligada.
+    expect(env.ASTRO_HOME).toBe("/tmp/eval-home");
+    expect(env.ASTRO_NO_GLOBAL_CONFIG).toBe("1");
+    expect(env.EVAL_KEY).toBe("k");
+  });
+
   test("runCase isola a config global do ASTRO_HOME", async () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
-    // Teto de 1 passo: se a camada global vazar, a validação recusa o projeto por ampliar o teto global.
+    // Teto de 1 passo: cenário que só passa se a camada global do chamador for ignorada.
     writeFileSync(join(home, "config.json"), JSON.stringify({ agent: { maxSteps: 1 } }));
     const root = mkdtempSync(join(tmpdir(), "astro-global-case-"));
     writeScenarioCase(root, "01-global", {

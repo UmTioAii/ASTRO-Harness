@@ -77,7 +77,7 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     const both = await tool.execute({ need: "writing-code", task: "c", maxTurns: 1, maxSteps: 1 }, ctx);
     expect(both.isError).toBe(true);
     expect(JSON.parse(both.output)).toMatchObject({ error: "invalid_request" });
-    expect(JSON.parse(both.output).message).toContain("'maxSteps'");
+    expect(JSON.parse(both.output).message).toContain("use só 'maxSteps'");
 
     const invalid = await tool.execute({ need: "writing-code", task: "d", maxTurns: "2" }, ctx);
     expect(invalid.isError).toBe(true);
