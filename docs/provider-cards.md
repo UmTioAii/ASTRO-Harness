@@ -25,7 +25,7 @@ O adapter de fio continua compartilhado por `kind` (`openai-compat.ts`, `codex-o
 | `price` | `PriceConfig \| null` | `null` = sem curadoria (`n/d`, D-10); `verificado: false` até conferir na fonte |
 | `free` | boolean | Gratuito declarado; se `true`, preço 0/0 ou `null` |
 
-`profileModelsFor(cards)` projeta `{id, tags, context}` — o formato que `profiles.ts`/wizard consomem. `CatalogEntry.cards` mantém a ficha completa para a UI de `/provider` (#555).
+`profileModelsFor(cards)` projeta `{id, tags, context}` — o formato que `profiles.ts`/wizard consomem. `CatalogEntry.cards` mantém a ficha completa para a UI de `/provider` (#555) e `astro models list --seeds --json` a expõe (extensão do JSON, #553).
 
 ## Invariantes
 

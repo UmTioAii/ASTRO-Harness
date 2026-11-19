@@ -37,7 +37,8 @@ function toEntry(seed: ProviderAdapterSeed): CatalogEntry {
     ...(seed.credentialsPath === undefined ? {} : { credentialsPath: seed.credentialsPath }),
     ...(seed.quotaDomain === undefined ? {} : { quotaDomain: seed.quotaDomain }),
     models: profileModelsFor(seed.models),
-    cards: seed.models,
+    // Cópia: a UI pode ordenar/editar sem alterar o módulo de seed.
+    cards: seed.models.map((card) => ({ ...card, tags: [...card.tags] })),
   };
 }
 
