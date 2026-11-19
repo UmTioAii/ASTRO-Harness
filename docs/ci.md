@@ -50,7 +50,7 @@ O bench noturno/ manual fica em `.github/workflows/bench.yml`; métricas, filtro
 - **`npm install <tarball>`**: o pacote sob teste é local, mas `ink`, `react` e `bun` ainda vêm do registry. Não usamos `--ignore-scripts` porque o pacote `bun` precisa do postinstall para materializar o runtime; o ambiente do npm é sanitizado, mas isolamento total de HOME/`.npmrc` é residual.
 - **Sinais**: `SIGINT`/`SIGTERM` limpam em melhor esforço; `kill -9`/hard kill pode deixar `astro-release-check-*` no temp.
 - **Argumento desconhecido**: com `--json`, o erro de uso ainda vai para stderr humano e sai 2; nenhum resumo JSON é emitido.
-- TUI e setup de provider continuam manuais (`astro tui`).
+- TUI e setup de provider continuam manuais (`astro`).
 
 ## Referências
 

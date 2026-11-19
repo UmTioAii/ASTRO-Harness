@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { defaultArgs, isInteractive } from "../src/cli-default";
 
-test("sem argumentos em terminal interativo abre a TUI", () => {
-  expect(defaultArgs([], true)).toEqual(["tui"]);
+test("sem argumentos em terminal interativo abre a TUI sem injetar comando", () => {
+  expect(defaultArgs([], true)).toEqual([]);
 });
 
 test("sem argumentos em pipe imprime o help", () => {
