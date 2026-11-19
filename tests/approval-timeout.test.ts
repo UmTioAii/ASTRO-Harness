@@ -6,7 +6,7 @@ import { Auditor } from "../src/audit";
 import { createApprovalBridge } from "../src/tui/approvals";
 import { ConfigError, validateConfig } from "../src/core/config";
 import type { PermissionApproval, PermissionMode } from "../src/permissions";
-import { ToolExecutor } from "../src/tools/executor";
+import { ToolExecutor, DEFAULT_APPROVAL_TIMEOUT_MS } from "../src/tools/executor";
 import type { Tool } from "../src/tools/types";
 
 function sleep(ms: number): Promise<void> {
@@ -91,6 +91,32 @@ describe("espera de aprovação tem limite e é cancelável (#526)", () => {
       mode: "ask",
       timeoutMs: 20,
     });
+    // A expiração também é um deny no fluxo canônico (D-24), não só um evento próprio.
+    const decisions = audit.readAll().filter((entry) => entry.tipo === "permission.decision");
+    expect(decisions.at(-1)!.payload).toMatchObject({ decision: "deny", action: "edit", mode: "ask" });
+  });
+
+  test("aprovador que responde antes do teto não vira deny", async () => {
+    const { cwd, executor, ran } = setup(lateApprover(5), 1_000);
+
+    const result = await executor.run({ cwd, run: "r1", agent: "a" }, call);
+
+    expect(result.isError).toBeFalsy();
+    expect(ran()).toBe(true);
+  });
+
+  test("sem approvalTimeoutMs o executor usa o default de 300000", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-approval-default-"));
+    const executor = new ToolExecutor({
+      tools: [probeTool(() => {})],
+      allow: ["write_probe"],
+      audit: new Auditor(join(cwd, "audit.jsonl")),
+      permissionMode: "ask" as PermissionMode,
+      approveTool: () => true,
+    });
+
+    expect(DEFAULT_APPROVAL_TIMEOUT_MS).toBe(300_000);
+    expect(executor.approvalTimeoutMs).toBe(DEFAULT_APPROVAL_TIMEOUT_MS);
   });
 
   test("cancelar o run interrompe a aprovação pendente na hora", async () => {

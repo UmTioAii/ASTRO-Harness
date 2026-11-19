@@ -438,6 +438,20 @@ export class ToolExecutor {
             tipo: "permission.timed_out",
             payload: { name: call.name, action, mode: this.mode, timeoutMs: this.approvalWaitTimeoutMs },
           });
+          // Mesmo par de eventos de um deny comum (#526): quem conta negações por
+          // `permission.decision` não subconta a expiração.
+          this.auditRef.append({
+            run: ctx.run,
+            agent: ctx.agent,
+            tipo: "permission.decision",
+            payload: { name: call.name, action, mode: this.mode, decision: "deny" },
+          });
+          this.auditRef.append({
+            run: ctx.run,
+            agent: ctx.agent,
+            tipo: "tool.denied",
+            payload: { name: call.name, reason: "aprovação expirada" },
+          });
           return failure(
             `aprovação expirada: a tool "${call.name}" não foi aprovada em ${this.approvalWaitTimeoutMs}ms (permissions.approvalTimeoutMs)`,
           );

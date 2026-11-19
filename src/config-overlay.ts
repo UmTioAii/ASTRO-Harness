@@ -131,6 +131,17 @@ export function assertNarrowed(
   const globalMode = isPlainObject(global.permissions) ? global.permissions.mode : undefined;
   const mergedMode = isPlainObject(merged.permissions) ? merged.permissions.mode : undefined;
   assertNotWider(globalMode, mergedMode, MODE_RANK, "o modo de permissão global");
+  // Teto da espera por aprovação (#526): `0` desliga o limite, então é
+  // alargamento; valor maior que o global também. Global `0` já é o mais frouxo.
+  const globalTimeout = isPlainObject(global.permissions) ? global.permissions.approvalTimeoutMs : undefined;
+  const mergedTimeout = isPlainObject(merged.permissions) ? merged.permissions.approvalTimeoutMs : undefined;
+  if (typeof globalTimeout === "number" && globalTimeout > 0 && typeof mergedTimeout === "number") {
+    if (mergedTimeout === 0 || mergedTimeout > globalTimeout) {
+      throw new ConfigError(
+        `config inválida: o projeto amplia o teto global de aprovação (permissions.approvalTimeoutMs acima de ${globalTimeout})`,
+      );
+    }
+  }
   // Escalada de effort é política do usuário: o projeto não liga o auto nem
   // sobe caps (nem para desligar, para não abrir caminho de widening).
   if (isPlainObject(projectLayer?.effort)) {

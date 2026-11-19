@@ -1,5 +1,6 @@
 /** Resumo da config do harness para `/config` (#273): puro, sem I/O. */
 import type { AstroConfig, BudgetConfig } from "../core/config";
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../tools/executor";
 import type { PermissionMode } from "../permissions";
 
 export interface CostLine {
@@ -14,6 +15,8 @@ export interface ConfigSummary {
   /** Limite único de trabalho em passos por tarefa (`agent.maxSteps`). */
   maxSteps: number;
   permissionMode: PermissionMode;
+  /** `permissions.approvalTimeoutMs` como texto; `0` = desligado (#526). */
+  approvalTimeoutMs: string;
   /** Um linha por modelo com preço declarado (`pricing` sobrescreve `model.price`). */
   costs: CostLine[];
   budget: string;
@@ -30,6 +33,12 @@ function budgetText(budget: BudgetConfig | undefined): string {
   return `${budget.scope} · limite ${limit} · aviso em ${Math.round(budget.warnAt * 100)}% · ao exceder: ${budget.onExceed}${ceiling}`;
 }
 
+/** Texto do teto de aprovação (#526): ausente usa o default do executor; `0` desliga. */
+function approvalTimeoutText(value: number | undefined): string {
+  if (value === undefined) return `${DEFAULT_APPROVAL_TIMEOUT_MS} (default)`;
+  return value === 0 ? "desligado" : String(value);
+}
+
 /** Monta o resumo a partir da config carregada; `mode` é o modo ativo da sessão. */
 export function configSummaryOf(config: AstroConfig, configPath: string, mode: PermissionMode): ConfigSummary {
   const costs: CostLine[] = [];
@@ -43,6 +52,7 @@ export function configSummaryOf(config: AstroConfig, configPath: string, mode: P
     configPath,
     maxSteps: config.agent.maxSteps,
     permissionMode: mode,
+    approvalTimeoutMs: approvalTimeoutText(config.permissions.approvalTimeoutMs),
     costs,
     budget: budgetText(config.budget),
   };
@@ -55,6 +65,7 @@ export function configLines(summary: ConfigSummary, trustedFolders: readonly str
     `config: ${summary.configPath}`,
     `agent.maxSteps: ${summary.maxSteps}`,
     `permissions.mode: ${summary.permissionMode}`,
+    `permissions.approvalTimeoutMs: ${summary.approvalTimeoutMs}`,
     `budget: ${summary.budget}`,
     ...(summary.costs.length === 0
       ? ["custos: nenhum preço declarado"]

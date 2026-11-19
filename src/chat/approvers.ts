@@ -60,7 +60,14 @@ export function chatApprovers(
   return {
     approveSwap: async (request) => isYes(await ask(swapPrompt(request))),
     onBudgetExceeded: async (status) => budgetChoice(await ask(budgetPrompt(status))),
-    approveTool: async (request) => toolChoice(await ask(toolPrompt(request))),
+    // #526: a aprovação de tool é a única espera cancelável (timeout/abort do gate).
+    approveTool: async (request, wait) => {
+      const prompt = toolPrompt(request);
+      const answer = io.readCancelable !== undefined
+        ? await io.readCancelable(prompt, wait?.signal)
+        : await ask(prompt);
+      return toolChoice(answer);
+    },
     trustAsk: async (cwd) => trustChoice(await ask(trustPrompt(cwd))),
   };
 }

@@ -5,6 +5,7 @@ import type { ReplIO } from "./repl";
 export interface NodeReplIO extends ReplIO {
   close(): void;
   signal: AbortSignal;
+  readCancelable(prompt: string, signal?: AbortSignal): Promise<string | null>;
 }
 
 /** Opções do readline: histórico (setas) só faz sentido em terminal. */
@@ -20,12 +21,15 @@ export function nodeReplOptions(terminal: boolean): {
   };
 }
 
-export function nodeReplIO(): NodeReplIO {
-  const terminal = process.stdin.isTTY === true;
+export function nodeReplIO(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): NodeReplIO {
+  const terminal = input === process.stdin && process.stdin.isTTY === true;
   const rl = createInterface({
     ...nodeReplOptions(terminal),
-    input: process.stdin,
-    output: process.stdout,
+    input,
+    output,
   });
   const controller = new AbortController();
   const pending: string[] = [];
@@ -44,10 +48,13 @@ export function nodeReplIO(): NodeReplIO {
     controller.abort(new Error("cancelado"));
     rl.close();
   });
+  const write = (text: string): void => {
+    output.write(text);
+  };
   return {
     signal: controller.signal,
     read: async (prompt) => {
-      process.stdout.write(prompt);
+      write(prompt);
       const line = pending.shift();
       if (line !== undefined) return line;
       if (closed) return null;
@@ -55,11 +62,31 @@ export function nodeReplIO(): NodeReplIO {
     },
     /** Ignora linhas já enfileiradas: decisor no meio do turno espera resposta nova. */
     readFresh: async (prompt) => {
-      process.stdout.write(prompt);
+      write(prompt);
       if (closed) return null;
       return await new Promise<string | null>((resolve) => waiters.push(resolve));
     },
-    write: (text) => console.log(text),
+    /** #526: sair da fila no abort — sem isso a próxima linha cai num waiter morto. */
+    readCancelable: async (prompt, signal) => {
+      write(prompt);
+      if (signal?.aborted === true) return null;
+      if (closed) return null;
+      return await new Promise<string | null>((resolve) => {
+        let settled = false;
+        const finish = (line: string | null): void => {
+          if (settled) return;
+          settled = true;
+          const index = waiters.indexOf(finish);
+          if (index >= 0) waiters.splice(index, 1);
+          signal?.removeEventListener("abort", onAbort);
+          resolve(line);
+        };
+        const onAbort = (): void => finish(null);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        waiters.push(finish);
+      });
+    },
+    write: (text) => write(`${text}\n`),
     close: () => {
       if (!closed) rl.close();
       closed = true;
