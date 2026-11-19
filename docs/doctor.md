@@ -29,6 +29,12 @@ Diagnóstico local do ASTRO: versões, dependências, config, credenciais por no
 
 Segredo nunca entra na saída: `name`, label e detalhe passam por `redactSecrets` (I-03). `name` é slug estável; `label` é só exibição.
 
+## Config efetiva e isolamento
+
+O check offline `config` valida a camada de projeto e a config efetiva (global + projeto). A camada de projeto só pode estreitar a política global (ADR-0029, I-01). Se o merge for recusado, `config` vira `fail` com o motivo redigido e o check `anexos` não apresenta TTL ou teto como valores efetivos; a ausência de config usa os defaults documentados.
+
+A coleta aceita `projectCwd`, `configPath`, `projectSkillsRoot` e `userSkillsRoot` para testes isolarem o projeto e as skills. Na CLI, os defaults permanecem o cwd do processo, `<cwd>/astro.config.json`, `<cwd>/.astro/skills` e `~/.astro/skills` (#523).
+
 ## `--online`
 
 O health usa o mesmo caminho de `astro health`: `GET {baseUrl}/models` com a credencial do ambiente, `redirect: "error"` e timeout de 5s por provider. Cada `HealthCheck` vira um check, mais o agregado:

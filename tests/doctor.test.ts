@@ -420,11 +420,16 @@ test("skills usam raízes injetadas e skill quebrada vira warn", () => {
 });
 
 test("skills válidas na raiz do usuário são contadas", () => {
+  const projectCwd = sandbox();
+  const projectRoot = join(projectCwd, ".astro", "skills");
   const userRoot = join(sandbox(), "skills");
+  mkdirSync(projectRoot, { recursive: true });
   mkdirSync(userRoot, { recursive: true });
   writeSkill(userRoot, "ok", VALID_SKILL);
 
   const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    projectSkillsRoot: projectRoot,
     env: { ...process.env, ASTRO_HOME: join(sandbox(), "other-home") },
     checkPrivate: () => true,
     userSkillsRoot: userRoot,
@@ -437,9 +442,12 @@ test("skills válidas na raiz do usuário são contadas", () => {
 
 test("config global malformada falha mesmo com config de projeto válida", () => {
   const home = sandbox();
+  const projectCwd = sandbox();
   writeFileSync(join(home, "config.json"), "{not json", "utf8");
+  writeFileSync(join(projectCwd, "astro.config.json"), onlineConfig("https://proj.example/v1"), "utf8");
 
   const collected = collectFacts(process.cwd(), {
+    projectCwd,
     env: { ...process.env, ASTRO_HOME: home },
     checkPrivate: () => true,
   });

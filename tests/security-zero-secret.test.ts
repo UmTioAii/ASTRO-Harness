@@ -1,13 +1,14 @@
 /**
  * I-03: varredura determinística por segredos em artefatos.
  *
- * Cobre o repo versionado (fontes, docs, config de exemplo, fixtures) e os
- * artefatos que o harness grava (audit, ledger e log). Fixtures de redação só
- * passam quando o valor tem marca óbvia de teste; um segredo real não tem.
+ * Cobre o repo versionado, candidatos não ignorados (fontes, docs, config de
+ * exemplo, fixtures) e os artefatos que o harness grava (audit, ledger e log).
+ * Fixtures de redação só passam quando o valor tem marca óbvia de teste; um
+ * segredo real não tem.
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { Auditor } from "../src/audit";
@@ -15,10 +16,6 @@ import { Ledger } from "../src/ledger";
 import { redactSecrets } from "../src/sanitize-external";
 
 const ROOT = resolve(import.meta.dir, "..");
-const SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "coverage", ".astro", ".sdd", "logs",
-  ".worktrees", ".worktrees-astro", ".serena", // worktrees/estado local não versionado
-]);
 const TEXT_FILE = /\.(?:ts|tsx|js|mjs|cjs|json|jsonl|md|txt|log|ya?ml|toml|lock|example|cfg|ini|sh|ps1|pem|key|crt)$/i;
 const MAX_BYTES = 2 * 1024 * 1024;
 
@@ -86,18 +83,27 @@ export function scanText(text: string, file = ""): Hit[] {
   return hits.sort((a, b) => a.index - b.index || a.rule.localeCompare(b.rule));
 }
 
-/** Arquivos de texto do repo, ordenados para a varredura ser determinística. */
-function repoFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) continue; // não segue para fora do repo
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) repoFiles(path, out);
-      continue;
+/** Arquivos de texto Git-aware: versionados e candidatos não ignorados. */
+function repoFiles(dir: string): string[] {
+  const output = execFileSync(
+    "git",
+    ["-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    { encoding: "utf8", windowsHide: true },
+  );
+  const files: string[] = [];
+  for (const relativePath of output.split("\0")) {
+    if (relativePath === "") continue;
+    const path = join(dir, ...relativePath.split("/"));
+    let stats;
+    try {
+      stats = lstatSync(path);
+    } catch {
+      continue; // arquivo versionado removido do working tree
     }
-    if (TEXT_FILE.test(entry.name) && statSync(path).size <= MAX_BYTES) out.push(path);
+    if (!stats.isFile() || stats.isSymbolicLink()) continue;
+    if (TEXT_FILE.test(relativePath) && stats.size <= MAX_BYTES) files.push(path);
   }
-  return out;
+  return files;
 }
 
 /** Varre o repo inteiro; a mensagem cita arquivo:linha e regra, nunca o valor. */
@@ -139,7 +145,7 @@ describe("I-03 zero segredos", () => {
     expect(scanText(fakeLooking, "tests/leak.test.ts")).toEqual([]);
   });
 
-  // A varredura percorre o repo inteiro: no Windows ela passa de 5s sob carga.
+  // A varredura Git-aware percorre o repo inteiro: no Windows ela passa de 5s sob carga.
   test("repo versionado não tem chave real em fonte, doc, config ou fixture", () => {
     const findings = scanRepo();
     expect(findings.map((finding) => `${finding.file}:${finding.line} (${finding.rule})`)).toEqual([]);
