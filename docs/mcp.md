@@ -16,7 +16,7 @@ Cliente MCP (Model Context Protocol) no ASTRO (C2, #56): config `mcpServers`, tr
 | `enabled` | booleano; `false` fica fora do registry | `true` |
 | nome (`mcpServers.<nome>`) | `[A-Za-z0-9][A-Za-z0-9_-]*`, sem `__` (separador do namespace) nem `/` | — |
 
-`env:NOME` usa nome de variável em maiúsculas (`[A-Z_][A-Z0-9_]*`). O prefixo `env:` é reservado: um valor literal que comece com ele é tratado como referência e rejeitado se o nome não for válido. `headers` só têm efeito em `sse`/`http`; em `stdio` são ignorados.
+`env:NOME` usa nome de variável em maiúsculas (`[A-Z_][A-Z0-9_]*`) e **só vale em `headers`**: em `env` e `args` o valor é literal, então um segredo ali é recusado por nome (`*_TOKEN`, `*_KEY`, `*_PASSWORD`…) ou por valor (prefixos, `--flag=valor`, `chave=valor`, PEM, JWT, hex longo). O prefixo `env:` é reservado em headers: um valor literal que comece com ele é tratado como referência e rejeitado se o nome não for válido. `headers` só têm efeito em `sse`/`http`; em `stdio` são ignorados.
 
 ## Transports (`src/mcp/transport/`)
 

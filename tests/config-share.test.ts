@@ -181,6 +181,23 @@ describe("plugin provenance (I-13, #255)", () => {
     }
   });
 
+  test("push recusa segredo embutido em args de MCP (#496)", () => {
+    const secret = "sk-live-abcdefghijklmnop";
+    const result = prepareConfigForPush(
+      {
+        ...validConfig,
+        mcpServers: { api: { transport: "stdio", command: "x", args: ["-y", `--api-key=${secret}`] } },
+      },
+      "org/repo",
+      false,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("mcpServers.api.args[1]");
+      expect(result.error).not.toContain(secret);
+    }
+  });
+
   test("pull sem aprovação quarentena os plugins e mantém a config válida", () => {
     const result = preparePulledConfig(withPlugins, "org/repo", false);
     expect(result.removedPlugins).toEqual(["evil-pkg"]);

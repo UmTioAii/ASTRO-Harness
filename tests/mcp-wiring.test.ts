@@ -48,6 +48,41 @@ test("config recusa arg de MCP com valor em forma de segredo (#496)", () => {
   expect(message).not.toContain(secret);
 });
 
+test("config recusa env de MCP com nome de credencial mesmo sem prefixo no valor (#496)", () => {
+  let message = "";
+  try {
+    configWith({ db: { transport: "stdio", command: "x", env: { DB_PASSWORD: "hunter2" } } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.db.env.DB_PASSWORD"');
+  expect(message).not.toContain("hunter2");
+});
+
+test("config recusa segredo embutido em arg com flag (#496)", () => {
+  const secret = "sk-live-abcdefghijklmnop";
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", args: ["-y", "@acme/mcp", `--api-key=${secret}`] } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.args[2]"');
+  expect(message).not.toContain(secret);
+});
+
+test("config recusa chave=valor secreto em arg (#496)", () => {
+  const secret = "ghp_abcdefghijklmnop";
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", args: ["-e", `GITHUB_TOKEN=${secret}`] } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.args[1]"');
+  expect(message).not.toContain(secret);
+});
+
 test("config aceita env e args de MCP sem forma de segredo (#496)", () => {
   const config = configWith({
     api: {

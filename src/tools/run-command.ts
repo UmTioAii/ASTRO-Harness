@@ -5,29 +5,16 @@ import { join, resolve } from "node:path";
 import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
 import { resolveArtifactRoot, resolveAstroHome } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
+import { isSecretEnvName } from "../secrets";
 import { realpathPreservingDots } from "./paths";
 import { ToolError, type Tool, type ToolResult } from "./types";
 
 const MAX_OUTPUT = 10_000;
 
 /**
- * Nomes de variáveis que podem carregar segredos. O `run_command` recebe uma
- * cópia sanitizada do ambiente: o filho mantém PATH/HOME/etc., mas nunca vê
- * chaves de API, tokens, senhas ou credenciais.
+ * Nomes de variáveis que podem carregar segredos vivem em `secrets.ts`
+ * (`isSecretEnvName`) e são compartilhados com o screening de MCP (#496).
  */
-const SECRET_ENV =
-  /(^|_)[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|PASSPHRASE|PEM|AUTH|CREDENTIAL|PRIVATE|COOKIE|SESSION)[A-Z0-9_]*$/i;
-
-/**
- * Nomes que casam com `SECRET_ENV` (contêm AUTH) mas não são segredo:
- * identidade git. Exceção explícita para não regredir I-03 em AUTHORIZATION.
- */
-const NON_SECRET_ENV = new Set([
-  "GIT_AUTHOR_NAME",
-  "GIT_COMMITTER_NAME",
-  "GIT_AUTHOR_EMAIL",
-  "GIT_COMMITTER_EMAIL",
-]);
 
 function secretKey(name: string): string {
   return process.platform === "win32" ? name.toLowerCase() : name;
@@ -43,7 +30,7 @@ export function sanitizedEnv(
     if (
       value === undefined ||
       exactSecrets.has(secretKey(name)) ||
-      (SECRET_ENV.test(name) && !NON_SECRET_ENV.has(name.toUpperCase()))
+      isSecretEnvName(name)
     ) continue;
     env[name] = value;
   }

@@ -1,4 +1,5 @@
 /** Predicados de header/credencial compartilhados por config, store e plugins (I-03). */
+import { redactSecrets } from "./sanitize-external";
 
 const AUTH_HEADER = /(^|-)authorization$|(^|-)api[-_]?key$|(^|-)key$|(^|-)secret$|^cookie$|^set-cookie$|^x-auth(-|$)|token$/;
 /** Headers que terminam em `-key` mas são metadado, não credencial. */
@@ -21,7 +22,39 @@ export function looksLikeSecret(value: string): boolean {
 }
 
 /**
- * Campo de `mcpServers` com valor em forma de segredo (#496): `env.CHAVE` ou
+ * Nome de variável que carrega segredo (mesma vocabulário da sanitização do
+ * `run_command`): KEY, TOKEN, SECRET, PASSWORD, PEM, AUTH, CREDENTIAL…
+ * Identidade git é exceção explícita.
+ */
+const SECRET_ENV_NAME =
+  /(^|_)[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|PASSPHRASE|PEM|AUTH|CREDENTIAL|PRIVATE|COOKIE|SESSION)[A-Z0-9_]*$/i;
+const NON_SECRET_ENV = new Set([
+  "GIT_AUTHOR_NAME",
+  "GIT_COMMITTER_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_EMAIL",
+]);
+
+export function isSecretEnvName(name: string): boolean {
+  return !NON_SECRET_ENV.has(name.toUpperCase()) && SECRET_ENV_NAME.test(name);
+}
+
+/** Valor com segredo em qualquer posição (prefixo, `chave=valor`, PEM, JWT, hex longo). */
+function containsSecret(value: string): boolean {
+  return looksLikeSecret(value) || redactSecrets(value) !== value;
+}
+
+/** Arg com segredo: valor prefixado ou embutido em `--flag=valor` / `CHAVE=valor`. */
+function argHasSecret(arg: string): boolean {
+  if (containsSecret(arg)) return true;
+  const eq = arg.indexOf("=");
+  if (eq <= 0) return false;
+  const flag = arg.slice(0, eq).trim().replace(/^-+/, "");
+  return isSecretEnvName(flag) || containsSecret(arg.slice(eq + 1));
+}
+
+/**
+ * Campo de `mcpServers` com segredo (#496): `env.CHAVE` (nome ou valor) ou
  * `args[i]`. Devolve só o caminho do campo, nunca o valor (I-03).
  */
 export function mcpSecretProblem(mcpServers: unknown): string | undefined {
@@ -30,12 +63,13 @@ export function mcpSecretProblem(mcpServers: unknown): string | undefined {
     if (typeof server !== "object" || server === null) continue;
     const record = server as Record<string, unknown>;
     if (Array.isArray(record.args)) {
-      const index = record.args.findIndex((arg) => typeof arg === "string" && looksLikeSecret(arg));
+      const index = record.args.findIndex((arg) => typeof arg === "string" && argHasSecret(arg));
       if (index >= 0) return `mcpServers.${name}.args[${index}]`;
     }
     if (typeof record.env === "object" && record.env !== null && !Array.isArray(record.env)) {
       for (const [key, value] of Object.entries(record.env as Record<string, unknown>)) {
-        if (typeof value === "string" && looksLikeSecret(value)) return `mcpServers.${name}.env.${key}`;
+        if (isSecretEnvName(key)) return `mcpServers.${name}.env.${key}`;
+        if (typeof value === "string" && containsSecret(value)) return `mcpServers.${name}.env.${key}`;
       }
     }
   }
