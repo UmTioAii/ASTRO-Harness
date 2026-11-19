@@ -4,7 +4,7 @@
  * domínios) no mês/dia corrente; o webhook repassa cada AuditEvent em
  * fire-and-forget com retry.
  */
-import type { Ledger } from "./ledger";
+import type { Ledger, LedgerEntry } from "./ledger";
 import type { AuditEvent } from "./audit";
 import { ProviderError } from "./providers/types";
 import { redactSecrets } from "./sanitize-external";
@@ -21,10 +21,22 @@ export class TeamQuotaError extends ProviderError {
 export interface TeamConfig {
   /** Orçamento mensal do projeto em USD (soma todos os domínios). */
   projectBudgetUsd?: number;
+  /** Orçamento da sessão (run) corrente em USD (#552). */
+  sessionBudgetUsd?: number;
+  /** Orçamento da semana ISO corrente em USD (#552). */
+  weekBudgetUsd?: number;
   /** Quota por agent (tokens/dia e custo/mês do agent, todos os domínios). */
   agentQuotas?: Record<string, { dailyTokens?: number; monthlyCostUsd?: number }>;
   /** Webhook que recebe cada AuditEvent (POST JSON, retry 3x). */
   auditWebhook?: string;
+}
+
+/** Limites de budget por janela (#552): sessão (run), semana ISO e mês/projeto. */
+export interface BudgetWindowLimits {
+  sessionBudgetUsd?: number;
+  weekBudgetUsd?: number;
+  /** Month window sobre o ledger inteiro (escopo de projeto). */
+  projectBudgetUsd?: number;
 }
 
 /** Mês corrente em ISO (yyyy-mm) para janelas do ledger. */
@@ -35,6 +47,34 @@ function dayOf(ts: string): string {
   return ts.slice(0, 10);
 }
 
+/** Semana ISO-8601 (yyyy-Www) em UTC; a semana começa na segunda e a semana 1 contém a primeira quinta. */
+function isoWeekOf(ts: string): string {
+  const d = new Date(ts);
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const dayNum = (date.getUTCDay() + 6) % 7; // 0=seg..6=dom
+  date.setUTCDate(date.getUTCDate() - dayNum + 3); // quinta-feira desta semana
+  const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+  const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 604_800_000));
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/** Soma o custo conhecido de um conjunto de entradas; #476: preço ausente vira piso, nunca zero. */
+function sumKnownCost(entries: LedgerEntry[]): { cost: number; known: boolean } {
+  let cost = 0;
+  let known = true;
+  for (const entry of entries) {
+    if (typeof entry.costUsd === "number") cost += entry.costUsd;
+    else known = false;
+  }
+  return { cost, known };
+}
+
+function spentLabel(cost: number, known: boolean): string {
+  return known ? `US$ ${cost.toFixed(4)}` : `pelo menos US$ ${cost.toFixed(4)}`;
+}
+
 /** Verifica o orçamento mensal do projeto contra o ledger inteiro. */
 export function assertProjectBudget(
   ledger: Ledger,
@@ -42,21 +82,53 @@ export function assertProjectBudget(
   now: Date = new Date(),
 ): void {
   const month = now.toISOString().slice(0, 7);
-  let monthCost = 0;
-  let costKnown = true;
-  for (const entry of ledger.readAll()) {
-    if (monthOf(entry.ts) !== month) continue;
-    // #476: entrada sem preço não é zero; a soma conhecida vira piso
-    if (typeof entry.costUsd === "number") monthCost += entry.costUsd;
-    else costKnown = false;
-  }
+  const { cost: monthCost, known: costKnown } = sumKnownCost(ledger.readAll().filter((e) => monthOf(e.ts) === month));
   if (monthCost >= projectBudgetUsd) {
-    const spent = costKnown ? `US$ ${monthCost.toFixed(4)}` : `pelo menos US$ ${monthCost.toFixed(4)}`;
+    const spent = spentLabel(monthCost, costKnown);
     throw new TeamQuotaError(
       `orçamento mensal do projeto atingido: ${spent} de ` +
         `US$ ${projectBudgetUsd}; renove o orçamento no registry ` +
         `(astro config pull) ou aumente team.projectBudgetUsd`,
     );
+  }
+}
+
+/**
+ * Verifica os orçamentos por janela (#552): sessão (só o run), semana ISO
+ * corrente e mês/projeto (delega a assertProjectBudget). Todas as somas vêm
+ * do ledger; preço ausente conta como piso (#476).
+ */
+export function assertBudgetWindows(
+  ledger: Ledger,
+  limits: BudgetWindowLimits,
+  run: string,
+  now: Date = new Date(),
+): void {
+  const safeRun = redactSecrets(run);
+
+  if (limits.sessionBudgetUsd !== undefined) {
+    const { cost, known } = sumKnownCost(ledger.readAll().filter((e) => e.run === safeRun));
+    if (cost >= limits.sessionBudgetUsd) {
+      throw new TeamQuotaError(
+        `orçamento da sessão "${safeRun}" atingido: ${spentLabel(cost, known)} de ` +
+          `US$ ${limits.sessionBudgetUsd}; aumente team.sessionBudgetUsd`,
+      );
+    }
+  }
+
+  if (limits.weekBudgetUsd !== undefined) {
+    const week = isoWeekOf(now.toISOString());
+    const { cost, known } = sumKnownCost(ledger.readAll().filter((e) => isoWeekOf(e.ts) === week));
+    if (cost >= limits.weekBudgetUsd) {
+      throw new TeamQuotaError(
+        `orçamento semanal (${week}) atingido: ${spentLabel(cost, known)} de ` +
+          `US$ ${limits.weekBudgetUsd}; aumente team.weekBudgetUsd`,
+      );
+    }
+  }
+
+  if (limits.projectBudgetUsd !== undefined) {
+    assertProjectBudget(ledger, limits.projectBudgetUsd, now);
   }
 }
 

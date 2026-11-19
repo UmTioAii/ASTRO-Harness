@@ -27,6 +27,14 @@ import type { Tool, ToolContext, ToolResult } from "./tools/types";
 
 /** Teto de spawns por run (A2). */
 export const DEFAULT_MAX_SPAWNS_PER_RUN = 8;
+
+/**
+ * Teto efetivo de spawns por run (#552): `spawn.maxActive` declarado, clampado
+ * no teto default; sem config, o default.
+ */
+export function spawnLimitFromConfig(config: AstroConfig): number {
+  return Math.min(DEFAULT_MAX_SPAWNS_PER_RUN, config.spawn?.maxActive ?? DEFAULT_MAX_SPAWNS_PER_RUN);
+}
 const MAX_AGENTS_MD = 16_000;
 
 /** Limite de spawns do run excedido (golden §11.3). */
@@ -96,6 +104,9 @@ export class SpawnRegistry {
   }
 
   add(agent: SpawnedAgent): void {
+    // Fail-closed no próprio registro (#552): o teto vale mesmo se um chamador
+    // novo esquecer de checar `size >= limit` antes.
+    if (this.#agents.size >= this.#limit) throw new SpawnLimitError(this.#limit);
     this.#agents.set(agent.agent_id, agent);
   }
 
