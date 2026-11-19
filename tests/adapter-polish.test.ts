@@ -57,6 +57,8 @@ describe("adapter polish: classification (#554)", () => {
     const error = await errClassOf(p);
     expect(error.errClass).toBe("outage");
     expect(error.message).toContain("model overloaded");
+    // A extração pina o valor, não o JSON cru: a chave "detail" não pode vazar.
+    expect(error.message).not.toContain('"detail"');
   });
 
   test("HTTP error detail is redacted for secret-looking values (I-03)", async () => {
@@ -89,6 +91,24 @@ describe("adapter polish: classification (#554)", () => {
     const error = await p.complete({ ...req, onToken: () => {} }).catch((e) => e);
     expect(error).toBeInstanceOf(ProviderError);
     expect((error as ProviderError).errClass).toBe("hard_quota");
+  });
+
+  test("SSE error frame with a prototype-chain code (Constructor) still yields a valid ErrorClass", async () => {
+    const sse = (frames: string[]) =>
+      new Response(frames.map((f) => `data: ${f}\n\n`).join("") + "data: [DONE]\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    // `"constructor" in byCode` seria true com operador `in` sobre objeto plano:
+    // o teste falha se a classe devolvida não for um ErrorClass válido.
+    const p = provider(async () =>
+      sse([JSON.stringify({ error: { code: "Constructor", message: "x" } })]),
+    );
+    const error = await p.complete({ ...req, onToken: () => {} }).catch((e) => e);
+    expect(error).toBeInstanceOf(ProviderError);
+    const valid: readonly string[] = ["transient_rate_limit", "hard_quota", "auth", "outage", "network_timeout", "invalid_request"];
+    expect(valid).toContain((error as ProviderError).errClass);
+    expect((error as ProviderError).errClass).toBe("outage");
   });
 });
 
