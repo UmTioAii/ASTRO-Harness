@@ -1340,6 +1340,7 @@ export async function runMultiAgentSession(
         ceiling: [...currentCeiling],
         audit: opts.audit,
         permissionMode: opts.baseExecutor.permissionMode,
+        approvalTimeoutMs: opts.baseExecutor.approvalTimeoutMs,
         grants: opts.baseExecutor.permissionGrants,
         permission: mostRestrictive(opts.baseExecutor.permission, currentAgent.permission ?? "full"),
         ...(opts.baseExecutor.toolApprover === undefined ? {} : { approveTool: opts.baseExecutor.toolApprover }),

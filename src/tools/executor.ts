@@ -39,8 +39,19 @@ function abortError(reason: unknown): Error {
   return new DOMException("cancelado", "AbortError");
 }
 
+/** Teto default da espera por aprovação humana em ms (#526); `permissions.approvalTimeoutMs` sobrescreve. */
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
+
+/** Cancelamento da espera de aprovação: timeout do gate ou cancelamento do run (#526). */
+export interface ApprovalWait {
+  signal?: AbortSignal;
+}
+
 /** Aprovador humano de uma chamada de tool no modo `ask` (PERM-01); `"session"` grava grant na sessão (#266). */
-export type ToolApprover = (request: ToolPermissionRequest) => PermissionApproval | Promise<PermissionApproval>;
+export type ToolApprover = (
+  request: ToolPermissionRequest,
+  wait?: ApprovalWait,
+) => PermissionApproval | Promise<PermissionApproval>;
 
 /** Nome de diretório seguro para o run id (nunca escapa do cwd). */
 function safeRunDir(run: string): string {
@@ -93,6 +104,8 @@ export class ToolExecutor {
   readonly permissionGrants: PermissionGrants;
   /** Perfil do agent (#58); a mais restritiva entre ele e a allowlist vence. */
   private readonly agentPermission: AgentPermission;
+  /** Teto da espera por aprovação em ms (#526); `0` desliga. */
+  private readonly approvalWaitTimeoutMs: number;
 
   constructor(opts: {
     tools: readonly Tool[];
@@ -101,6 +114,8 @@ export class ToolExecutor {
     ceiling?: string[];
     permissionMode?: PermissionMode;
     approveTool?: ToolApprover;
+    /** Teto da espera por aprovação em ms (#526); default 300000, `0` desliga. */
+    approvalTimeoutMs?: number;
     /** Grants da sessão; subagente recebe os mesmos grants do executor pai. */
     grants?: PermissionGrants;
     /** Perfil de permissão do agent (#58); default `full` (compat). */
@@ -116,11 +131,17 @@ export class ToolExecutor {
     this.approveTool = opts.approveTool;
     this.permissionGrants = opts.grants ?? new PermissionGrants();
     this.agentPermission = opts.permission ?? "full";
+    this.approvalWaitTimeoutMs = opts.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   }
 
   /** Perfil de permissão do agent (filho herda do seu próprio perfil, não do pai). */
   get permission(): AgentPermission {
     return this.agentPermission;
+  }
+
+  /** Teto da espera por aprovação em ms (subagente herda do executor pai). */
+  get approvalTimeoutMs(): number {
+    return this.approvalWaitTimeoutMs;
   }
 
   /** Modo de permissão corrente (subagente herda do executor pai). */
@@ -335,6 +356,42 @@ export class ToolExecutor {
   }
 
   /**
+   * Espera a resposta humana com teto (#526): o timeout do gate e o
+   * `AbortSignal` do run encerram a espera, em vez de prender o run — e a conta
+   * exclusiva que ele segura — para sempre. `0` desliga o teto; o
+   * `PermissionPendingError` do aprovador sem TTY continua subindo (I-19).
+   */
+  private async awaitApproval(
+    ctx: ToolContext,
+    request: ToolPermissionRequest,
+  ): Promise<PermissionApproval | undefined | typeof TIMEOUT | typeof ABORTED> {
+    const controller = new AbortController();
+    const onAbort = (): void => controller.abort();
+    if (ctx.signal?.aborted === true) controller.abort();
+    else ctx.signal?.addEventListener("abort", onAbort, { once: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // Já cancelado: não abre prompt nenhum.
+      if (controller.signal.aborted) return ABORTED;
+      const answer = Promise.resolve(this.approveTool?.(request, { signal: controller.signal }));
+      const aborted = new Promise<typeof ABORTED>((resolve) => {
+        controller.signal.addEventListener("abort", () => resolve(ABORTED), { once: true });
+      });
+      const timeout = new Promise<typeof TIMEOUT>((resolve) => {
+        if (this.approvalWaitTimeoutMs <= 0) return;
+        timer = setTimeout(() => resolve(TIMEOUT), this.approvalWaitTimeoutMs);
+      });
+      const outcome = await Promise.race([answer, timeout, aborted]);
+      // Expirou: aborta o controller para a TUI/REPL descartar a pergunta pendente.
+      if (outcome === TIMEOUT) controller.abort();
+      return outcome;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      ctx.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
    * Gate por chamada depois do allowlist e do ceiling (PERM-01, I-01). `deny`
    * bloqueia; `ask` consulta o aprovador injetado pela TUI/REPL/CLI.
    * **Fail-closed**: sem aprovador, `ask` vira `deny` — a chamada nunca segue
@@ -367,18 +424,33 @@ export class ToolExecutor {
     } else if (decision === "ask") {
       try {
         const annex = editDiffAnnex(call, input);
-        const approved = await this.approveTool?.({
+        const outcome = await this.awaitApproval(ctx, {
           name: call.name,
           action,
           mode: this.mode,
           ...(annex === undefined ? {} : { diff: annex }),
         });
+        // Espera sem resposta morre no teto (#526): recusa como deny, audita e o run segue.
+        if (outcome === TIMEOUT) {
+          this.auditRef.append({
+            run: ctx.run,
+            agent: ctx.agent,
+            tipo: "permission.timed_out",
+            payload: { name: call.name, action, mode: this.mode, timeoutMs: this.approvalWaitTimeoutMs },
+          });
+          return failure(
+            `aprovação expirada: a tool "${call.name}" não foi aprovada em ${this.approvalWaitTimeoutMs}ms (permissions.approvalTimeoutMs)`,
+          );
+        }
+        if (outcome === ABORTED) {
+          return failure(`cancelado: a tool "${call.name}" foi interrompida`);
+        }
         // Fail-closed: sem aprovador, `ask` vira deny (#262).
-        if (approved === "session") {
+        if (outcome === "session") {
           this.permissionGrants.grant(grantKey);
           effective = "allow";
         } else {
-          effective = approved === undefined || approved === false ? "deny" : "allow"; // true | "once"
+          effective = outcome === undefined || outcome === false ? "deny" : "allow"; // true | "once"
         }
       } catch (error) {
         // Sem TTY o aprovador não pode perguntar: pending, auditado e run para (I-08/I-19).
