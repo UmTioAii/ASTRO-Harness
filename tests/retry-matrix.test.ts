@@ -94,6 +94,12 @@ describe("retry matrix (D-18, #556)", () => {
     }
   });
 
+  test("unknown error class is denied by default: no retry", () => {
+    const unknown = "hypothetical_new_class" as ErrorClass;
+    expect(maxRetriesFor(unknown)).toBe(0);
+    expect(errorPolicy(unknown, 1)).toBe("abort");
+  });
+
   test("custom limits change the retry cap per class", () => {
     expect(maxRetriesFor("transient_rate_limit", { maxRateLimitRetries: 2 })).toBe(2);
     expect(maxRetriesFor("network_timeout", { maxOutageRetries: 1 })).toBe(1);
