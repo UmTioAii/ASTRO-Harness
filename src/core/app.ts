@@ -49,7 +49,7 @@ import { createListModelCandidatesTool } from "../tools/list-model-candidates";
 import { createTaskTool } from "../tools/task";
 import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-search";
 import { createWebFetchTool } from "../tools/web-fetch";
-import { createSpawnAgentTool, readAgentsMd, SpawnRegistry } from "../spawn";
+import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, SpawnRegistry } from "../spawn";
 import { grepTool } from "../tools/grep";
 import { listDirTool } from "../tools/list-dir";
 import { editTool } from "../tools/edit";
@@ -969,7 +969,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   }
   // web_fetch (#57): sem config; allowlist e permissão continuam valendo (I-01).
   toolsByName.set("web_fetch", createWebFetchTool({ audit }));
-  const spawns = new SpawnRegistry();
+  // #552: teto de spawns por run vem de spawn.maxActive (clamp em DEFAULT_MAX_SPAWNS_PER_RUN).
+  const spawns = new SpawnRegistry({ limit: spawnLimitFromConfig(config) });
   // Preenchidos depois de resolver a allowlist/modo; a closure da task lê no call.
   let childTools: readonly Tool[] = [];
   let taskPermissionMode: PermissionMode = "ask";
@@ -1185,6 +1186,12 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
                 ...(config.team.projectBudgetUsd === undefined
                   ? {}
                   : { projectBudgetUsd: config.team.projectBudgetUsd }),
+                ...(config.team.sessionBudgetUsd === undefined
+                  ? {}
+                  : { sessionBudgetUsd: config.team.sessionBudgetUsd }),
+                ...(config.team.weekBudgetUsd === undefined
+                  ? {}
+                  : { weekBudgetUsd: config.team.weekBudgetUsd }),
                 ...(config.team.agentQuotas === undefined
                   ? {}
                   : { agentQuotas: config.team.agentQuotas }),

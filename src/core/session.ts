@@ -19,7 +19,7 @@ import type { AgentEntry } from "./registry";
 import { redactSecrets } from "../sanitize-external";
 import type { SpanHandle, TracerLike } from "../tracing";
 import { assertWithinQuota, type QuotaLimit } from "../quota";
-import { assertAgentQuota, assertProjectBudget } from "../team";
+import { assertAgentQuota, assertBudgetWindows } from "../team";
 import { acquireAgentLock, findAgentLock, releaseAgentLock } from "../agent-lock";
 import { initialEffortJumpState, MAX_EFFORT_LEVEL, planAutoJump, type AppliedCallProfile, type CallSelection, type EffortEscalationConfig, type EffortJumpState } from "../call-profile";
 import type { ModelRouting } from "../providers/model-routing";
@@ -137,8 +137,10 @@ export interface SessionOptions {
   tracer?: TracerLike;
   /** Limites de quota por domínio (F6-3); ausente = sem enforcement. */
   quotaLimits?: Record<string, QuotaLimit>;
-  /** Limites de time (F7-5): budget do projeto e quotas por agent. */
+  /** Limites de time (F7-5): orçamentos por janela (#552) e quotas por agent. */
   teamLimits?: {
+    sessionBudgetUsd?: number;
+    weekBudgetUsd?: number;
     projectBudgetUsd?: number;
     agentQuotas?: Record<string, { dailyTokens?: number; monthlyCostUsd?: number }>;
   };
@@ -438,7 +440,7 @@ export async function runSession(
     if (!judgeWithinBudget()) return "budget_exhausted";
     try {
       assertWithinQuota(opts.ledger, opts.quotaLimits ?? {}, opts.quotaDomain);
-      if (opts.teamLimits?.projectBudgetUsd !== undefined) assertProjectBudget(opts.ledger, opts.teamLimits.projectBudgetUsd);
+      if (opts.teamLimits !== undefined) assertBudgetWindows(opts.ledger, opts.teamLimits, opts.run);
       if (opts.teamLimits?.agentQuotas !== undefined) assertAgentQuota(opts.ledger, opts.teamLimits.agentQuotas, opts.agent);
     } catch {
       return "quota_exhausted";
@@ -504,10 +506,10 @@ export async function runSession(
       maybeWarnBudget(opts.agent);
       // Budget (B4/B9): reserva a cadeia e checa o teto antes da chamada
       const reserveUsd = opts.budget === undefined ? 0 : (opts.budgetReserve?.(opts.model, opts.agentProfile) ?? 0);
-      // Team (F7-5): budget do projeto e quota do agent, somando o ledger inteiro
-      // (antes da reserva para não deixar reserva órfã em erro de time).
-      if (opts.teamLimits?.projectBudgetUsd !== undefined) {
-        assertProjectBudget(opts.ledger, opts.teamLimits.projectBudgetUsd);
+      // Team (F7-5): orçamentos por janela (#552) e quota do agent, somando o
+      // ledger inteiro (antes da reserva para não deixar reserva órfã em erro de time).
+      if (opts.teamLimits !== undefined) {
+        assertBudgetWindows(opts.ledger, opts.teamLimits, opts.run);
       }
       if (opts.teamLimits?.agentQuotas !== undefined) {
         assertAgentQuota(opts.ledger, opts.teamLimits.agentQuotas, opts.agent);
@@ -936,8 +938,10 @@ export interface MultiAgentSessionOptions {
   onToken?: (text: string) => void;
   /** Limites de quota por domínio (F6-3); ausente = sem enforcement. */
   quotaLimits?: Record<string, QuotaLimit>;
-  /** Limites de time (F7-5): budget do projeto e quotas por agent. */
+  /** Limites de time (F7-5): orçamentos por janela (#552) e quotas por agent. */
   teamLimits?: {
+    sessionBudgetUsd?: number;
+    weekBudgetUsd?: number;
     projectBudgetUsd?: number;
     agentQuotas?: Record<string, { dailyTokens?: number; monthlyCostUsd?: number }>;
   };
@@ -1309,10 +1313,10 @@ export async function runMultiAgentSession(
       maybeWarnBudget(currentAgentName);
       // Budget (B4/B9): reserva a cadeia e checa o teto antes da chamada
       const reserveUsd = opts.budget === undefined ? 0 : (opts.budgetReserve?.(currentModel, currentAgent.profile) ?? 0);
-      // Team (F7-5): budget do projeto e quota do agent corrente (antes da
+      // Team (F7-5): orçamentos por janela (#552) e quota do agent corrente (antes da
       // reserva para não deixar reserva órfã em erro de time).
-      if (opts.teamLimits?.projectBudgetUsd !== undefined) {
-        assertProjectBudget(opts.ledger, opts.teamLimits.projectBudgetUsd);
+      if (opts.teamLimits !== undefined) {
+        assertBudgetWindows(opts.ledger, opts.teamLimits, opts.run);
       }
       if (opts.teamLimits?.agentQuotas !== undefined) {
         assertAgentQuota(opts.ledger, opts.teamLimits.agentQuotas, currentAgentName);

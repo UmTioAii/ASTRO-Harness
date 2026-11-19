@@ -165,6 +165,12 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
     );
   };
 
+  // Limites novos do #552 são exclusivos do preset `control` (simple fica read-only).
+  const controlOnly = (field: string, value: unknown): void => {
+    if (value === undefined) return;
+    fail(`config inválida: "${field}" só pode ser alterado com "preset": "control"`);
+  };
+
   const agent = root.agent !== null && typeof root.agent === "object"
     ? (root.agent as Record<string, unknown>)
     : undefined;
@@ -177,6 +183,18 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
     if (entry === null || typeof entry !== "object") continue;
     check(`agents.${name}.maxSteps`, (entry as Record<string, unknown>).maxSteps);
   }
+  controlOnly("agents.maxActive", agents?.maxActive);
+
+  const spawn = root.spawn !== null && typeof root.spawn === "object"
+    ? (root.spawn as Record<string, unknown>)
+    : undefined;
+  controlOnly("spawn.maxActive", spawn?.maxActive);
+
+  const team = root.team !== null && typeof root.team === "object"
+    ? (root.team as Record<string, unknown>)
+    : undefined;
+  controlOnly("team.sessionBudgetUsd", team?.sessionBudgetUsd);
+  controlOnly("team.weekBudgetUsd", team?.weekBudgetUsd);
 
   // Só injeta quando `agent` é objeto: entrada de tipo errado segue para o
   // validador normal, que reporta a causa certa (nunca mascara o erro).
@@ -272,9 +290,13 @@ export interface AttachmentsConfig {
   artifactMaxBytes: number;
 }
 
-/** Team features (F7-5): budget do projeto, quotas por agent, webhook de auditoria. */
+/** Team features (F7-5): budget do projeto, orçamentos por sessão/semana (#552), quotas por agent, webhook de auditoria. */
 export interface TeamSectionConfig {
   projectBudgetUsd?: number;
+  /** Orçamento da sessão (run) corrente em USD (#552); só no preset `control`. */
+  sessionBudgetUsd?: number;
+  /** Orçamento da semana ISO corrente em USD (#552); só no preset `control`. */
+  weekBudgetUsd?: number;
   agentQuotas?: Record<string, { dailyTokens?: number; monthlyCostUsd?: number }>;
   auditWebhook?: string;
 }
@@ -290,6 +312,8 @@ export const DEFAULT_ACK_TIMEOUT_MS = 30_000;
 /** Seção `spawn` (A11, ADR-0008): paralelismo é opt-in; serial é o default. */
 export interface SpawnConfig {
   parallel?: boolean;
+  /** Teto de spawns por run (#552); ausente = DEFAULT_MAX_SPAWNS_PER_RUN; só no preset `control`. */
+  maxActive?: number;
 }
 
 /** Permissões por chamada de tool (PERM-01): modo global do harness. */
@@ -1126,13 +1150,24 @@ function validateQuota(value: unknown): Record<string, QuotaLimitConfig> {
   return result;
 }
 
-/** Valida a seção opcional `team` (F7-5). */
+/** Valida a seção opcional `team` (F7-5); chaves desconhecidas falham. */
+const TEAM_KEYS: readonly string[] = ["projectBudgetUsd", "sessionBudgetUsd", "weekBudgetUsd", "agentQuotas", "auditWebhook"];
+
 function validateTeam(value: unknown): TeamSectionConfig {
   const raw = expectObject(value, "team");
+  for (const key of Object.keys(raw)) {
+    if (!TEAM_KEYS.includes(key)) fail(`config inválida: "team.${key}" desconhecido`);
+  }
   const result: TeamSectionConfig = Object.create(null);
 
   if (raw.projectBudgetUsd !== undefined) {
     result.projectBudgetUsd = expectNonNegativeNumber(raw.projectBudgetUsd, "team.projectBudgetUsd");
+  }
+  if (raw.sessionBudgetUsd !== undefined) {
+    result.sessionBudgetUsd = expectNonNegativeNumber(raw.sessionBudgetUsd, "team.sessionBudgetUsd");
+  }
+  if (raw.weekBudgetUsd !== undefined) {
+    result.weekBudgetUsd = expectNonNegativeNumber(raw.weekBudgetUsd, "team.weekBudgetUsd");
   }
   if (raw.auditWebhook !== undefined) {
     const webhook = expectString(raw.auditWebhook, "team.auditWebhook");
@@ -1314,11 +1349,15 @@ function validateHandoff(value: unknown): HandoffConfig {
   };
 }
 
-/** Valida a seção `spawn` (A11): só `parallel`, booleano; ausente = serial. */
+/** Valida a seção `spawn` (A11): `parallel` booleano e `maxActive` inteiro positivo (#552); ausente = serial e teto default. */
 function validateSpawn(value: unknown): SpawnConfig {
   const raw = expectObject(value, "spawn");
+  for (const key of Object.keys(raw)) {
+    if (key !== "parallel" && key !== "maxActive") fail(`config inválida: "spawn.${key}" desconhecido`);
+  }
   return {
     ...(raw.parallel === undefined ? {} : { parallel: expectBoolean(raw.parallel, "spawn.parallel") }),
+    ...(raw.maxActive === undefined ? {} : { maxActive: expectPositiveInteger(raw.maxActive, "spawn.maxActive") }),
   };
 }
 

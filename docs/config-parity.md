@@ -100,5 +100,5 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 | `astro config migrate` e `CONFIG_SCHEMA_VERSION` (ADR-0028) | não há migração de major nem rejeição de chave desconhecida | #493 |
 | `/config` em projeto sem arquivo | modo não persiste; S3 não cria config | #469 |
 
-- `preset` (`simple`/`control`, default `control`) é escalar: a camada de projeto vence. Em `simple`, `agent.maxSteps` e `agents.*.maxSteps` têm teto 500: um valor menor vindo de outra camada é mantido e acima de 500 é erro com `preset: "control"` como próximo passo; sem `agent.maxSteps`, o teto efetivo é 500 (#515).
+- `preset` (`simple`/`control`, default `control`) é escalar: a camada de projeto vence. Em `simple`, `agent.maxSteps` e `agents.*.maxSteps` têm teto 500: um valor menor vindo de outra camada é mantido e acima de 500 é erro com `preset: "control"` como próximo passo; sem `agent.maxSteps`, o teto efetivo é 500 (#515). Também só no `control` (#552): `agents.maxActive`, `spawn.maxActive`, `team.sessionBudgetUsd` e `team.weekBudgetUsd` — em `simple`, declarar qualquer um é erro de config.
 
