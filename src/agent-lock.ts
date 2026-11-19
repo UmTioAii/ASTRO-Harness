@@ -19,7 +19,10 @@ export interface AgentLock {
   profile?: string;
   /** PID dono do lock; ausente em ledger legado. */
   pid?: number;
-  seq: number;
+  /** ISO do `agent.created` (#527): idade da conta presa no `astro locks`. */
+  created_at?: string;
+  /** Ausente em ledger anterior ao campo; `astro locks` recusa liberar sem ele (#527). */
+  seq?: number;
 }
 
 /** Sonda de vida de um PID (injetável nos testes). */
@@ -118,7 +121,7 @@ export function activeLocks(ledger: Ledger): AgentLock[] {
     }
     locks.delete(key);
   }
-  return [...locks.values()].sort((a, b) => a.seq - b.seq);
+  return [...locks.values()].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
 }
 
 function lockFrom(entry: LedgerAgentEntry): AgentLock {
@@ -131,7 +134,8 @@ function lockFrom(entry: LedgerAgentEntry): AgentLock {
     ...(entry.model === undefined ? {} : { model: entry.model }),
     ...(entry.profile === undefined ? {} : { profile: entry.profile }),
     ...(entry.pid === undefined ? {} : { pid: entry.pid }),
-    seq: entry.seq,
+    created_at: entry.ts,
+    ...(typeof entry.seq === "number" ? { seq: entry.seq } : {}),
   };
 }
 
