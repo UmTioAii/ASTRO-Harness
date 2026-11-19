@@ -191,8 +191,8 @@ const SPAWN_PARAMETERS = {
     model: { type: "string", description: "Modelo do snapshot (provider/id); omitido = rank 1" },
     reason: { type: "string", maxLength: 200, description: "Justificativa da escolha" },
     tools: { type: "array", items: { type: "string" }, description: "Subconjunto das tools do pai" },
-    maxTurns: { type: "integer", minimum: 1, description: "Teto de turnos do subagente (≤ pai)" },
-    maxSteps: { type: "integer", minimum: 1, description: "Obsoleto: alias de maxTurns" },
+    maxSteps: { type: "integer", minimum: 1, description: "Teto de passos do subagente (≤ pai)" },
+    maxTurns: { type: "integer", minimum: 1, description: "Obsoleto: alias de maxSteps" },
     snapshot_id: { type: "string", description: "Snapshot de list_model_candidates" },
   },
   required: ["need", "task"],
@@ -249,20 +249,20 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         if (raw.tools !== undefined && !isStringArray(raw.tools)) {
           return { output: JSON.stringify({ error: "invalid_request", message: "campo 'tools' deve ser lista de strings" }), isError: true };
         }
-        const requestedMaxTurns = raw.maxTurns;
-        const legacyMaxSteps = raw.maxSteps;
-        if (requestedMaxTurns !== undefined && legacyMaxSteps !== undefined) {
+        const requestedMaxSteps = raw.maxSteps;
+        const legacyMaxTurns = raw.maxTurns;
+        if (requestedMaxSteps !== undefined && legacyMaxTurns !== undefined) {
           return {
             output: JSON.stringify({
               error: "invalid_request",
-              message: "use só 'maxTurns'; 'maxSteps' é um alias obsoleto",
+              message: "use só 'maxSteps'; 'maxTurns' é um alias obsoleto",
             }),
             isError: true,
           };
         }
-        const maxTurns = requestedMaxTurns ?? legacyMaxSteps;
-        if (maxTurns !== undefined && (typeof maxTurns !== "number" || !Number.isInteger(maxTurns) || maxTurns < 1)) {
-          return { output: JSON.stringify({ error: "invalid_request", message: `campo '${requestedMaxTurns !== undefined ? "maxTurns" : "maxSteps"}' deve ser inteiro >= 1` }), isError: true };
+        const stepCap = requestedMaxSteps ?? legacyMaxTurns;
+        if (stepCap !== undefined && (typeof stepCap !== "number" || !Number.isInteger(stepCap) || stepCap < 1)) {
+          return { output: JSON.stringify({ error: "invalid_request", message: `campo '${requestedMaxSteps !== undefined ? "maxSteps" : "maxTurns"}' deve ser inteiro >= 1` }), isError: true };
         }
 
         // v1 é serial: filho não spawna neto (sem canal p2p e sem histórico do pai).
@@ -294,12 +294,12 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         }
 
         const parentMax = ctx.maxSteps ?? deps.config.agent.maxSteps;
-        const childMax = maxTurns ?? parentMax;
+        const childMax = stepCap ?? parentMax;
         if (childMax > parentMax) {
           return {
             output: JSON.stringify({
               error: "invalid_request",
-              message: `maxTurns ${childMax} excede o teto do pai (${parentMax})`,
+              message: `maxSteps ${childMax} excede o teto do pai (${parentMax})`,
             }),
             isError: true,
           };

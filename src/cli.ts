@@ -4,7 +4,7 @@ import { installCancellation } from "./signal";
 import { validateAllowlistFlags, type AllowlistFlags, type CliAllowlists } from "./allowlists";
 import { AllowlistInvalidError } from "./path-class";
 import { denyDisplayPath, isPermissionMode, nonInteractiveApprover, type PermissionMode } from "./permissions";
-import { defaultArgs, isInteractive } from "./cli-default";
+import { defaultArgs, isInteractive, routeArgv } from "./cli-default";
 import { versionLine } from "./version";
 import { validateConfig, writeConfigFileAtomic } from "./core/config";
 import { loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "./providers/profiles";
@@ -168,7 +168,7 @@ function ttyNoProgressDecider(): NoProgressDecider | undefined {
       // EOF (Ctrl-D) = não continuar
       const answer = await new Promise<string>((resolve) => {
         rl.once("close", () => resolve(""));
-        rl.question(`sem progresso por ${info.segments} segmentos (turno ${info.step}). continuar? [s/N] `, resolve);
+        rl.question(`sem progresso por ${info.segments} segmentos (passo ${info.step}). continuar? [s/N] `, resolve);
       });
       return /^(s|sim|y|yes)$/i.test(answer.trim());
     } finally {
@@ -553,26 +553,21 @@ function parseInteractive(rest: string[]): ChatCommand {
 }
 
 function parseArgs(argv: string[]): ParsedCommand {
-  // Sem argumentos, a TUI é o comando padrão. Sem TTY, `defaultArgs` troca por
-  // `--help` antes de chegar aqui; `tui` não existe mais como comando.
-  if (argv.length === 0) {
-    return { kind: "tui", options: { configPath: "astro.config.json", configExplicit: false } };
+  // Rota decidida sem efeito colateral (`routeArgv`, #543): argv vazio e argv só
+  // de flags abrem a TUI; sem TTY, `defaultArgs` troca por `--help` antes de
+  // chegar aqui; `tui` não existe mais como comando.
+  const route = routeArgv(argv);
+  if (route.kind === "help") return { kind: "help" };
+  if (route.kind === "version") return { kind: "version" };
+  if (route.kind === "tui") {
+    return {
+      kind: "tui",
+      options: route.options.length === 0
+        ? { configPath: "astro.config.json", configExplicit: false }
+        : parseInteractive(route.options),
+    };
   }
-  if (argv.includes("--help") || argv.includes("-h")) {
-    return { kind: "help" };
-  }
-
-  const [command, ...rest] = argv;
-  // Primeiro contato depois do `npm i -g`: `help` e `--version` existem como
-  // comando, não só como flag — sem eles o usuário recebe "comando desconhecido".
-  if (command === "help") return { kind: "help" };
-  if (command === "--version" || command === "-v" || command === "version") {
-    return { kind: "version" };
-  }
-  // Só flags (`astro --config x`): é a TUI com opções, não um comando.
-  if (command !== undefined && command.startsWith("-")) {
-    return { kind: "tui", options: parseInteractive(argv) };
-  }
+  const { command, rest } = route;
   const commands = ["run", "eval", "bench", "serve", "replay", "resume", "continue", "chat", "health", "doctor", "providers", "handoff", "cost", "pool", "agents", "locks", "models", "config", "skills", "mcp"];
   if (command !== undefined && !commands.includes(command)) {
     throw new UsageError(`comando desconhecido: "${command}"`);

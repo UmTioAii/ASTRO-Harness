@@ -26,7 +26,7 @@ export interface CheckpointDraft {
   nextStep: string;
 }
 
-/** Checkpoint de turnos é devido quando o turno atual atinge a fração do limite (arredondada para cima). */
+/** Checkpoint de passos é devido quando o passo atual atinge a fração do limite (arredondada para cima). */
 export function stepCheckpointDue(step: number, maxSteps: number, checkpointAt: number): boolean {
   return step >= Math.ceil(maxSteps * checkpointAt);
 }
@@ -324,7 +324,7 @@ export function toolCallPath(argumentsJson: string): string | undefined {
 export class NoProgressError extends Error {
   readonly code = "no_progress";
   constructor(readonly segments: number, readonly step: number) {
-    super(`sem progresso por ${segments} segmentos consecutivos (turno ${step}); parado em ponto seguro`);
+    super(`sem progresso por ${segments} segmentos consecutivos (passo ${step}); parado em ponto seguro`);
     this.name = "NoProgressError";
   }
 }
