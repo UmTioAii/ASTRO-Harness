@@ -145,9 +145,16 @@ export function releaseLocks(
   );
   const alvo = agent === undefined ? `run "${run}"` : `run "${run}", agente "${agent}"`;
   if (candidates.length === 0) {
+    audit.append({
+      run,
+      agent: agent ?? "default",
+      tipo: "agent.lock.release_denied",
+      payload: { agent_id: agent ?? "default", reason: "not_found" },
+    });
     return { released: false, locks: [], message: `nada para liberar: ${alvo} não tem conta presa` };
   }
   if (candidates.length > 1) {
+    for (const lock of candidates) auditDeniedRelease(audit, lock, "ambiguous");
     const ids = candidates.map((lock) => `"${lock.agent_id}"`).join(", ");
     return {
       released: false,
@@ -188,7 +195,7 @@ export function releaseObservedLock(
     auditDeniedRelease(audit, lock, "missing_seq");
     return {
       released: false,
-      message: `nada foi liberado: o lock de ${describe(lock)} não tem seq no ledger; um novo run libera pelo recovery`,
+      message: `nada foi liberado: o lock de ${describe(lock)} não tem seq no ledger; um "astro resume <run>" libera pelo recovery`,
     };
   }
   const forced = opts.force === true && lock.alive;

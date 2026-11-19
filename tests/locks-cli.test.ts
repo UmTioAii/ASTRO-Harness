@@ -153,7 +153,7 @@ describe("astro locks (#527)", () => {
     expect(readFileSync(ledgerPath, "utf8")).not.toContain("destroyed");
   });
 
-  test("release --force libera a conta e audita manual_release", async () => {
+  test("release --force libera a conta e audita manual_release_forced", async () => {
     const { dir, cfgPath, ledgerPath, auditPath } = setup([
       { run: "run-a", agent: "default", pid: process.pid, provider: "proj", model: "p1", credentialRef: "SENTINEL_KEY" },
     ]);
@@ -192,7 +192,7 @@ describe("astro locks (#527)", () => {
   });
 
   test("release com duas contas no mesmo run exige --agent", async () => {
-    const { dir, cfgPath } = setup([
+    const { dir, cfgPath, auditPath } = setup([
       { run: "run-a", agent: "default", pid: process.pid, credentialRef: "SENTINEL_KEY" },
       { run: "run-a", agent: "worker", pid: process.pid, credentialRef: "OUTRA_KEY" },
     ]);
@@ -202,5 +202,7 @@ describe("astro locks (#527)", () => {
     expect(code).not.toBe(0);
     expect(err).toContain("--agent");
     expect(existsSync(join(dir, ".astro", "ledger.jsonl"))).toBe(true);
+    // Recusa também deixa rastro (I-04).
+    expect(readFileSync(auditPath, "utf8")).toContain("agent.lock.release_denied");
   });
 });

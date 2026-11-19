@@ -70,6 +70,11 @@ describe("release usa o snapshot observado (#527)", () => {
     expect(activeLocks(ledger)).toHaveLength(1);
     const denied = audit.readAll().filter((entry) => entry.tipo === "agent.lock.release_denied");
     expect(denied.at(-1)!.payload).toMatchObject({ agent_id: "default", reason: "missing_seq" });
+
+    // `--force` não reabre a falha fechada: sem seq não há como provar o lock.
+    const forced = releaseObservedLock(ledger, audit, observed, { force: true });
+    expect(forced.released).toBe(false);
+    expect(forced.message).toContain("seq");
   });
 
   test("--force com dono vivo audita manual_release_forced", () => {
