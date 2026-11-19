@@ -82,7 +82,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 - `.astro/tui.json` é estado de UI, não config: ausente ou inválido cai nos defaults, o CLI/REPL nunca leem e ele não vence config explícita. A exceção é `lastModel` no boot da TUI, e só sem `--provider`: ele é passado como `opts.model` e vence `agent.model`, então o modelo do projeto é trocado sem aprovação — gap de I-08.
 - #468 move a raiz desse estado para `$ASTRO_HOME` (tema global com override por projeto); a autoridade continua TUI-only.
 - `activeProfileId` mora junto dos providers (store legado; `config.json` após #459/#492); `lastModel` é dica de UI. Depois de `/model`, `●` (ativo salvo) e `em uso` (sessão) podem divergir — é esperado.
-- O rótulo de exibição do provider vive em `providers.<id>.name` no `config.json` e faz round-trip pelo CRUD/dump (#492). Escrita em `config.json`/`astro.config.json` que seja symlink é recusada com `config_write_denied` (#495).
+- O rótulo de exibição do provider vive em `providers.<id>.name` no `config.json` e faz round-trip pelo CRUD/dump (#492); no projeto, o mesmo campo vence o id na lista. Escrita em `config.json`/`astro.config.json` que seja symlink é recusada com `config_write_denied` (#495). `config.json` inválido faz o CRUD falhar fechado (nada é gravado) até a camada ser corrigida.
 - Na lista de perfis (`/provider list` no REPL, tela da TUI), projeto e `env` aparecem com `[source]`, mas são somente leitura; ativar é runtime-only. Só perfil global grava `activeProfileId`.
 
 ## Migração e retrocompatibilidade

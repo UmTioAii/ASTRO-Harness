@@ -261,6 +261,7 @@ export class ProfileManager {
 
   #projectProfile(name: string, provider: ProviderConfig): ProviderProfile {
     const config = provider as {
+      name?: string;
       baseUrl?: string;
       credentialRef?: string;
       credentialsPath?: string;
@@ -272,7 +273,8 @@ export class ProfileManager {
       .map((model) => ({ id: model.id, tags: model.tags, context: model.context }));
     return {
       id: name,
-      name,
+      // Rótulo opcional da camada (#492); sem ele, o id é o nome.
+      name: typeof config.name === "string" && config.name !== "" ? config.name : name,
       kind: provider.kind,
       ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
       ...(config.credentialRef === undefined ? {} : { credentialRef: config.credentialRef }),
