@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_ATTACHMENTS, isPlainObject, loadConfigRaw, validateConfig, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_ATTACHMENTS, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
 import { globalConfigPath, statePath } from "../astro-home";
 import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
@@ -261,17 +261,13 @@ function siblingPath(storePath: string, name: string): string {
   return join(dirname(storePath), name);
 }
 
-/** Escrita atômica da camada crua (0600 no POSIX); a camada global é parcial, não valida o schema inteiro. */
+/**
+ * Escrita atômica da camada crua: usa o mesmo escritor da CLI (#495) —
+ * tmp + fsync + rename, 0600 no POSIX, recusa symlink/destino não-regular.
+ * A camada global é parcial: não valida o schema inteiro.
+ */
 function writeConfigRaw(raw: Record<string, unknown>, path: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    renameSync(tmp, path);
-  } catch (error) {
-    try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
-    throw error;
-  }
+  writeConfigFileAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
 }
 
 /**
@@ -283,6 +279,9 @@ function writeConfigRaw(raw: Record<string, unknown>, path: string): void {
 export function saveProfileStoreToConfig(store: ProviderStore, configPath: string): void {
   const valid = validateProfileStore(store);
   const raw = existsSync(configPath) ? loadConfigRaw(configPath) : {};
+  // Camada atual inválida não é "consertada" por silêncio (ex.: modelo duplicado
+  // faria a deleção abaixo apagar um provider editado à mão): falha sem gravar.
+  assertLayerSchema(raw);
   const providers: Record<string, unknown> = isPlainObject(raw.providers) ? { ...raw.providers } : {};
   const models: unknown[] = Array.isArray(raw.models) ? [...raw.models] : [];
   const storeIds = new Set(valid.profiles.map((profile) => profile.id));
@@ -323,12 +322,14 @@ export function saveProfileStoreToConfig(store: ProviderStore, configPath: strin
     }
   }
   const { activeProfileId: _previousActive, ...rest } = raw;
-  writeConfigRaw({
+  const output = {
     ...rest,
     providers,
     models: nextModels,
     ...(valid.activeProfileId === undefined ? {} : { activeProfileId: valid.activeProfileId }),
-  }, configPath);
+  };
+  assertLayerSchema(output); // a camada resultante tem de carregar no próximo open
+  writeConfigRaw(output, configPath);
 }
 
 /**
@@ -336,15 +337,19 @@ export function saveProfileStoreToConfig(store: ProviderStore, configPath: strin
  * a escrita é atômica e valida a forma da camada.
  */
 export function updateGlobalProviderCredentialRef(env: NodeJS.ProcessEnv, provider: string, ref: string): void {
+  // Mesma regra do gêmeo de projeto: nunca um valor cru no arquivo (I-03).
+  if (!isVaultCredentialRef(ref) && !isEnvName(ref)) {
+    throw new ConfigError('credentialRef inválido: use "vault:<credentialId>" ou um nome de variável de ambiente', "config_invalid_schema");
+  }
   const path = globalConfigPath(env);
   const raw = existsSync(path) ? loadConfigRaw(path) : {};
   const providers = isPlainObject(raw.providers) ? raw.providers : undefined;
   const entry = providers?.[provider];
   if (!isPlainObject(entry)) {
-    throw new ConfigError(`provider "${provider}" não está no "${path}"`);
+    throw new ConfigError(`provider "${provider}" não está no "${path}"`, "config_invalid_schema");
   }
   if (entry.kind !== "openai-compat") {
-    throw new ConfigError(`provider "${provider}" usa kind "${String(entry.kind)}" e não lê o cofre`);
+    throw new ConfigError(`provider "${provider}" usa kind "${String(entry.kind)}" e não lê o cofre`, "config_invalid_schema");
   }
   entry.credentialRef = ref;
   assertLayerSchema(raw);

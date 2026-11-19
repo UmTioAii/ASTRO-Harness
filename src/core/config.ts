@@ -1848,7 +1848,8 @@ export function writeConfigFileAtomic(path: string, contents: string): void {
     if (error instanceof ConfigError) throw error;
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw writeConfigFailure(path, error);
   }
-  mkdirSync(dirname(path), { recursive: true });
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = `${path}.${randomUUID()}.tmp`;
   try {
     const fd = openSync(tmp, "wx", 0o600);
@@ -1859,6 +1860,18 @@ export function writeConfigFileAtomic(path: string, contents: string): void {
       closeSync(fd);
     }
     renameSync(tmp, path);
+    // Durabilidade do rename no POSIX: fsync do diretório (no Windows não se abre dir).
+    if (process.platform !== "win32") {
+      let dirFd: number | undefined;
+      try {
+        dirFd = openSync(dir, "r");
+        fsyncSync(dirFd);
+      } catch {
+        // diretório não fsync-ável: o rename já garantiu a troca atômica
+      } finally {
+        if (dirFd !== undefined) closeSync(dirFd);
+      }
+    }
   } catch (error) {
     try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
     throw writeConfigFailure(path, error);

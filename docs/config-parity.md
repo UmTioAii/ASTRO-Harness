@@ -71,7 +71,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 
 | Arquivo | Guarda | Lido por | Gravado por |
 |---|---|---|---|
-| `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` passam pelo screening de segredo (#496) | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492); `vault-import --apply` (#491) |
+| `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` não têm screening — lacuna (#496) | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492); `vault-import --apply` (#491) |
 | `astro.config.json`/`--config` | política do projeto | CLI/TUI/REPL | usuário; `/config` da TUI (`permissions.mode`); `config pull`; `vault-import` de provider do projeto |
 | `$ASTRO_HOME/state.json` | trust e `migrations.*` | todas | prompt de trust (TTY), revogação da TUI, migrações |
 | `$ASTRO_HOME/vault.json` | segredo de API key (OAuth Codex: `~/.codex/auth.json`) | runtime | wizard da TUI; `vault-import --apply` |

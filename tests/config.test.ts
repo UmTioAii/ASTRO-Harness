@@ -504,8 +504,8 @@ describe("writeConfigFileAtomic (#495)", () => {
     noTmp(dir);
   });
 
-  test("recusa destino symlink sem tocar no alvo e sem tmp (#495)", () => {
-    if (process.platform === "win32") return; // symlink de arquivo exige privilégio no Windows
+  // Symlink de arquivo exige privilégio no Windows; a recusa é coberta no POSIX.
+  test.skipIf(process.platform === "win32")("recusa destino symlink sem tocar no alvo e sem tmp (#495)", () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-config-495-"));
     const target = join(dir, "real.json");
     writeFileSync(target, "original");
