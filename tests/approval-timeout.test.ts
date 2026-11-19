@@ -127,13 +127,14 @@ describe("espera de aprovação tem limite e é cancelável (#526)", () => {
 
     const result = await settledWithin(
       executor.run({ cwd, run: "r1", agent: "a", signal: controller.signal }, call),
-      5_000,
+      15_000,
     );
 
     expect(result).not.toBe("ainda-pendente");
     if (result === "ainda-pendente") return;
     expect(result.isError).toBe(true);
     expect(result.output).toBe('cancelado: a tool "write_probe" foi interrompida');
+    // Bem abaixo dos 10 s do aprovador e do guard: abort venceu, não esperou.
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(audit.readAll().filter((entry) => entry.tipo === "permission.timed_out")).toHaveLength(0);
   });

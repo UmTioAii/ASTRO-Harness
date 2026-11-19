@@ -40,9 +40,6 @@ function abortError(reason: unknown): Error {
   return new DOMException("cancelado", "AbortError");
 }
 
-/** Teto default da espera por aprovação humana em ms (#526); `permissions.approvalTimeoutMs` sobrescreve. */
-export { DEFAULT_APPROVAL_TIMEOUT_MS };
-
 /** Cancelamento da espera de aprovação: timeout do gate ou cancelamento do run (#526). */
 export interface ApprovalWait {
   signal?: AbortSignal;
