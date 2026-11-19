@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { ConfigError } from "../core/config";
 import { ProfileManager } from "../providers/profile-manager";
-import { NoProviderError, NO_PROVIDER_MESSAGE, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
+import { NoProviderError, NO_PROVIDER_MESSAGE, loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
@@ -32,18 +32,34 @@ export const TUI_RENDER_OPTIONS = { exitOnCtrlC: false } as const;
 /**
  * Abre a sessão já com o último modelo salvo — mas só quando a config não
  * declara `agent.model` (#497, I-08): o modelo do projeto nunca é trocado em
- * silêncio. Modelo salvo removido/ inválido cai no default.
+ * silêncio. Modelo salvo removido/inválido cai no default.
  */
 export function openSession<T>(create: (model?: string) => T, cwd: string, declaredModel?: string): T {
+  // Modelo declarado em qualquer camada vence o estado de UI (I-08); checa antes de ler o disco.
+  if (declaredModel !== undefined) return create();
   const saved = loadTuiConfig(cwd).lastModel;
   if (saved === undefined) return create();
-  // Modelo declarado na config vence o estado de UI: sem troca silenciosa (I-08).
-  if (declaredModel !== undefined) return create();
   try {
     return create(saved);
   } catch (error) {
     if (error instanceof ConfigError) return create();
     throw error;
+  }
+}
+
+/**
+ * `agent.model` efetivo (global + projeto, com profile resolvido) — a mesma
+ * resolução da sessão. Sem config legível, `undefined` e o boot segue o fluxo
+ * normal (setup de provider, se for o caso).
+ */
+export function declaredModelFor(
+  configPath: string,
+  opts: { env?: NodeJS.ProcessEnv } = {},
+): string | undefined {
+  try {
+    return loadEffectiveConfig(configPath, { env: opts.env, allowMissing: true }).config.agent.model;
+  } catch {
+    return undefined;
   }
 }
 
@@ -189,7 +205,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
     // `--provider` explícito e `agent.model` declarado vencem o último modelo salvo (#497).
     const boot = await bootstrapTui({
       createSession: () => bootSession(createSession, cwd, {
-        ...(project?.agent.model === undefined ? {} : { declaredModel: project.agent.model }),
+        declaredModel: declaredModelFor(configPath, { env: opts.env }),
         ...(opts.provider === undefined ? {} : { provider: opts.provider }),
       }),
       setup: () => setupProvider(manager, cwd, saveSecret, discardSecret),
