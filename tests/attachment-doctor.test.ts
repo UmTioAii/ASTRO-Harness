@@ -27,6 +27,18 @@ function envFor(astroHome: string, root: string): NodeJS.ProcessEnv {
   return { ...process.env, ASTRO_HOME: astroHome, ASTRO_ARTIFACT_ROOT: root };
 }
 
+/** Env sem provider: o diagnóstico não pode depender do ambiente do dev. */
+function envWithoutProvider(astroHome: string, root: string): NodeJS.ProcessEnv {
+  return {
+    ...envFor(astroHome, root),
+    OPENAI_API_KEY: "",
+    OPENAI_MODEL: "",
+    ASTRO_MODEL: "",
+    ASTRO_PROVIDER: "",
+    ASTRO_NO_GLOBAL_CONFIG: "0",
+  };
+}
+
 describe("doctor de anexos (#392)", () => {
   test("raiz ausente vira warn e não cria o diretório", () => {
     const { base, projectCwd, astroHome } = sandbox();
@@ -199,7 +211,7 @@ describe("doctor de anexos (#392)", () => {
 
     const facts = collectFacts(process.cwd(), {
       projectCwd,
-      env: envFor(astroHome, root),
+      env: envWithoutProvider(astroHome, root),
       checkPrivate: () => true,
     });
     const report = runChecks(facts);
@@ -211,6 +223,50 @@ describe("doctor de anexos (#392)", () => {
     expect(attachments?.detail ?? "").not.toContain("TTL");
     expect(attachments?.detail ?? "").not.toContain("1.0 GiB");
     expect(facts.attachments.ttlDays).toBeUndefined();
+    expect(exitCode(report)).toBe(1);
+  });
+
+  test("config global com seção inválida sem provider vira fail e não mostra defaults", () => {
+    const { projectCwd, astroHome, root } = sandbox();
+    writeFileSync(join(astroHome, "config.json"), JSON.stringify({
+      permissions: { mode: "invalid" },
+    }));
+
+    const facts = collectFacts(process.cwd(), {
+      projectCwd,
+      env: envWithoutProvider(astroHome, root),
+      checkPrivate: () => true,
+    });
+    const report = runChecks(facts);
+    const config = report.checks.find((item) => item.name === "config");
+    const attachments = report.checks.find((item) => item.name === "attachments");
+    expect(config?.level).toBe("fail");
+    expect(config?.detail ?? "").toContain("config efetiva inválida");
+    expect(attachments?.level).toBe("fail");
+    expect(attachments?.detail ?? "").not.toContain("TTL");
+    expect(attachments?.detail ?? "").not.toContain("1.0 GiB");
+    expect(facts.attachments.ttlDays).toBeUndefined();
+    expect(exitCode(report)).toBe(1);
+  });
+
+  test("config global com tool inválida sem provider vira fail e não mostra defaults", () => {
+    const { projectCwd, astroHome, root } = sandbox();
+    writeFileSync(join(astroHome, "config.json"), JSON.stringify({
+      agents: { auxiliar: { tools: ["not_a_tool"] } },
+    }));
+
+    const facts = collectFacts(process.cwd(), {
+      projectCwd,
+      env: envWithoutProvider(astroHome, root),
+      checkPrivate: () => true,
+    });
+    const report = runChecks(facts);
+    const config = report.checks.find((item) => item.name === "config");
+    const attachments = report.checks.find((item) => item.name === "attachments");
+    expect(config?.level).toBe("fail");
+    expect(attachments?.level).toBe("fail");
+    expect(attachments?.detail ?? "").not.toContain("TTL");
+    expect(attachments?.detail ?? "").not.toContain("1.0 GiB");
     expect(exitCode(report)).toBe(1);
   });
 
