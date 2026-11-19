@@ -160,7 +160,7 @@ Contrato completo (prompt, fail-safe, teto, audit) em `docs/adr/0014-loop-checkp
 
 ## Streaming (T3)
 
-Com `CompletionRequest.onToken`, o `openai-compat` pede `stream: true` + `stream_options.include_usage` e consome SSE (`data:`), agregando conteúdo, tool calls fatiadas e usage. Resposta 200 que não é `text/event-stream` cai no parser JSON normal (sem deltas), e frames de erro (`data: {"error":...}`) ou stream sem nenhum frame viram `ProviderError("outage")`. Depois do primeiro token não há retry nem troca de provider/profile (`streamStarted`), para não duplicar texto; o custo usa o usage do chunk final (sem chunk de usage, usage fica zero).
+Com `CompletionRequest.onToken`, o `openai-compat` pede `stream: true` + `stream_options.include_usage` e consome SSE (`data:`), agregando conteúdo, tool calls fatiadas e usage. Resposta 200 que não é `text/event-stream` cai no parser JSON normal (sem deltas); frames de erro (`data: {"error":...}`) são classificados por `code`/texto como no caminho HTTP (#554: `hard_quota`/`auth`/`invalid_request`/`outage`, nunca `hard_quota` de timeout), e um stream sem nenhum frame vira `ProviderError("outage")`. Depois do primeiro token não há retry nem troca de provider/profile (`streamStarted`), para não duplicar texto; o custo usa o usage do chunk final (sem chunk de usage, usage fica zero).
 
 ## SDK de provider (`src/sdk/provider.ts`)
 
