@@ -49,6 +49,7 @@ describe("configSummaryOf / configLines (#273)", () => {
       configPath: "/cfg/astro.config.json",
       maxSteps: 5,
       permissionMode: "ask",
+      approvalTimeoutMs: "300000 (default)",
       costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
       budget: "sem budget",
     };
@@ -56,6 +57,7 @@ describe("configSummaryOf / configLines (#273)", () => {
       "config: /cfg/astro.config.json\n"
       + "agent.maxSteps: 5\n"
       + "permissions.mode: ask\n"
+    + "permissions.approvalTimeoutMs: 300000 (default)\n"
       + "budget: sem budget\n"
       + "custos por modelo:\n"
       + "  p/m1: in US$ 1.00/M · out US$ 2.00/M\n"

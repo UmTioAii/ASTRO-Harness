@@ -295,6 +295,12 @@ export interface SpawnConfig {
 /** Permissões por chamada de tool (PERM-01): modo global do harness. */
 export interface PermissionsConfig {
   mode: PermissionMode;
+  /**
+   * Teto da espera por aprovação humana em ms (#526); `0` desliga e ausente
+   * usa o default do executor (300000). Sem teto, um prompt esquecido prende o
+   * run e a conta exclusiva que ele segura.
+   */
+  approvalTimeoutMs?: number;
 }
 
 /** Nome da env que sobrescreve `security.entropyThreshold` (ADR-0027, #391 slice 3b). */
@@ -1323,7 +1329,20 @@ function validatePermissions(value: unknown): PermissionsConfig {
   if (!isPermissionMode(mode)) {
     fail('config inválida: "permissions.mode" deve ser bypass, allow-edits ou ask');
   }
-  return { mode };
+  const rawApprovalTimeout = raw.approvalTimeoutMs;
+  let approvalTimeoutMs: number | undefined;
+  if (rawApprovalTimeout !== undefined) {
+    // `0` desliga o teto (#526); fração/negativo/não-número é erro de config.
+    if (
+      typeof rawApprovalTimeout !== "number" ||
+      !Number.isInteger(rawApprovalTimeout) ||
+      rawApprovalTimeout < 0
+    ) {
+      fail('config inválida: "permissions.approvalTimeoutMs" deve ser um inteiro >= 0 em ms (0 desliga)');
+    }
+    approvalTimeoutMs = rawApprovalTimeout;
+  }
+  return { mode, ...(approvalTimeoutMs === undefined ? {} : { approvalTimeoutMs }) };
 }
 
 /**

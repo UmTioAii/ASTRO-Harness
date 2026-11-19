@@ -681,6 +681,7 @@ test("/config abre a tela de configuração e trocar o modo atualiza o footer (#
         configPath: join(cwd, "astro.config.json"),
         maxSteps: 12,
         permissionMode: this.mode,
+        approvalTimeoutMs: "300000 (default)",
         costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
         budget: "sem budget",
       };
@@ -731,6 +732,7 @@ class TrustScreenSession extends FakeSession {
       configPath: "/tmp/astro.config.json",
       maxSteps: 12,
       permissionMode: "ask",
+      approvalTimeoutMs: "300000 (default)",
       costs: [],
       budget: "sem budget",
     };

@@ -93,6 +93,10 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         tools: [runCommandTool],
         allow: ["run_command"],
         audit,
+        // `!` segue o mesmo teto de aprovação da sessão (#526).
+        ...(config.permissions.approvalTimeoutMs === undefined
+          ? {}
+          : { approvalTimeoutMs: config.permissions.approvalTimeoutMs }),
         ...(opts.approveTool === undefined ? {} : { approveTool: opts.approveTool }),
       });
       try {

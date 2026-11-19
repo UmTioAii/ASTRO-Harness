@@ -1034,6 +1034,9 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         audit,
         permissionMode: taskPermissionMode,
         permission: mostRestrictive(callerPermission ?? "full", target.permission ?? "full"),
+        ...(config.permissions.approvalTimeoutMs === undefined
+          ? {}
+          : { approvalTimeoutMs: config.permissions.approvalTimeoutMs }),
         ...(opts.approveTool === undefined ? {} : { approveTool: opts.approveTool }),
       });
       // Run própria para o filho: não sobrescreve o estado do run pai no ledger.
@@ -1124,6 +1127,9 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     allow: config.agent.tools,
     audit,
     permissionMode,
+    ...(config.permissions.approvalTimeoutMs === undefined
+      ? {}
+      : { approvalTimeoutMs: config.permissions.approvalTimeoutMs }),
     ...(opts.approveTool === undefined ? {} : { approveTool: opts.approveTool }),
   });
 

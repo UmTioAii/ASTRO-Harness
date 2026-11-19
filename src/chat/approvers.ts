@@ -60,7 +60,26 @@ export function chatApprovers(
   return {
     approveSwap: async (request) => isYes(await ask(swapPrompt(request))),
     onBudgetExceeded: async (status) => budgetChoice(await ask(budgetPrompt(status))),
-    approveTool: async (request) => toolChoice(await ask(toolPrompt(request))),
+    // #526: a aprovação de tool é a única espera cancelável (timeout/abort do gate).
+    approveTool: async (request, wait) => {
+      const prompt = toolPrompt(request);
+      // Com `readCancelable` a espera sai da fila no abort/timeout. IOs antigos,
+      // sem o método, mantêm a leitura simples: não há como remover o waiter,
+      // então uma linha tardia pode ser perdida — só o node-io real cancela.
+      const answer = io.readCancelable !== undefined
+        ? await io.readCancelable(prompt, wait?.signal)
+        : await ask(prompt);
+      // #526: a pergunta saiu da fila sem resposta. Fecha a linha do prompt (o
+      // texto seguinte não cola nela) e nomeia o limite quando houve timeout.
+      if (answer === null && io.readCancelable !== undefined) {
+        const notice = wait?.timedOut === true && wait.timeoutMs !== undefined
+          ? `aprovação de "${request.name}" expirada após ${wait.timeoutMs}ms`
+          : `aprovação de "${request.name}" cancelada sem resposta`;
+        // `write` do node-io já fecha a linha: só o break inicial separa do prompt.
+        io.write(`\n${notice}`);
+      }
+      return toolChoice(answer);
+    },
     trustAsk: async (cwd) => trustChoice(await ask(trustPrompt(cwd))),
   };
 }

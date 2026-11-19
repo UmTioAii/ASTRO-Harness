@@ -456,6 +456,7 @@ describe("REPL do chat (T1, #62)", () => {
           configPath: "/tmp/proj/astro.config.json",
           maxSteps: 12,
           permissionMode: "ask",
+          approvalTimeoutMs: "300000 (default)",
           costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
           budget: "sem budget",
         };

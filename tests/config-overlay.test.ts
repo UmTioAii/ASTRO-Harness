@@ -68,6 +68,12 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     // As três linhas de rejeição da tabela do #401.
     [{ agent: { maxSteps: 4, tools: ["read_file", "grep"] } }, project({ agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "grep", "run_command"] } }), /amplia a allowlist global/],
     [{ permissions: { mode: "ask" } }, project({ permissions: { mode: "bypass" } }), /amplia o modo de permissão global/],
+    // Teto de aprovação (#526): desligar (0) ou afrouxar também é alargar.
+    [{ permissions: { mode: "ask", approvalTimeoutMs: 60_000 } }, project({ permissions: { approvalTimeoutMs: 0 } }), /amplia o teto global de aprovação/],
+    [{ permissions: { mode: "ask", approvalTimeoutMs: 60_000 } }, project({ permissions: { approvalTimeoutMs: 300_000 } }), /amplia o teto global de aprovação/],
+    // Global silencioso: o teto efetivo é o default do executor, não "sem teto".
+    [{ permissions: { mode: "ask" } }, project({ permissions: { approvalTimeoutMs: 0 } }), /amplia o teto global de aprovação/],
+    [{ permissions: { mode: "ask" } }, project({ permissions: { approvalTimeoutMs: 600_000 } }), /amplia o teto global de aprovação/],
     [{ budget: { scope: "day", limitUsd: 50, warnAt: 0.8, onExceed: "ask" } }, project({ budget: { limitUsd: 500 } }), /amplia o budget global/],
     // O teto do budget não pode virar "use-as-you-go" nem trocar a janela.
     [{ budget: { scope: "day", limitUsd: 50, warnAt: 0.8, onExceed: "ask" } }, project({ budget: { scope: "use-as-you-go", limitUsd: null } }), /amplia o budget global/],
@@ -85,6 +91,15 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);
   }
+});
+
+test("projeto pode estreitar o teto de aprovação (#526)", () => {
+  const merged = effective(
+    { permissions: { mode: "ask", approvalTimeoutMs: 60_000 } },
+    project({ permissions: { approvalTimeoutMs: 30_000 } }),
+  ).config;
+
+  expect(merged.permissions.approvalTimeoutMs).toBe(30_000);
 });
 
 test("rejeita: credencial do store e caminho de credencial reaproveitados pelo projeto", () => {

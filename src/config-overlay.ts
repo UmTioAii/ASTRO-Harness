@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BASELINE_MAX_STEPS, ConfigError, isPlainObject } from "./core/config";
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./permissions";
 import { isVaultRef } from "./secrets";
 
 /** Ranque de permissão: `ask` é o mais restrito, `bypass` o mais largo. */
@@ -131,6 +132,18 @@ export function assertNarrowed(
   const globalMode = isPlainObject(global.permissions) ? global.permissions.mode : undefined;
   const mergedMode = isPlainObject(merged.permissions) ? merged.permissions.mode : undefined;
   assertNotWider(globalMode, mergedMode, MODE_RANK, "o modo de permissão global");
+  // Teto da espera por aprovação (#526): `0` desliga o limite, então é
+  // alargamento; valor maior que o global também. Sem valor global o teto
+  // efetivo é o default do executor — a guarda não pode ficar em silêncio.
+  const globalTimeout = isPlainObject(global.permissions) ? global.permissions.approvalTimeoutMs : undefined;
+  const mergedTimeout = isPlainObject(merged.permissions) ? merged.permissions.approvalTimeoutMs : undefined;
+  const timeoutCeiling = typeof globalTimeout === "number" ? globalTimeout : DEFAULT_APPROVAL_TIMEOUT_MS;
+  if (typeof mergedTimeout === "number" && timeoutCeiling > 0
+    && (mergedTimeout === 0 || mergedTimeout > timeoutCeiling)) {
+    throw new ConfigError(
+      `config inválida: o projeto amplia o teto global de aprovação (permissions.approvalTimeoutMs acima de ${timeoutCeiling})`,
+    );
+  }
   // Escalada de effort é política do usuário: o projeto não liga o auto nem
   // sobe caps (nem para desligar, para não abrir caminho de widening).
   if (isPlainObject(projectLayer?.effort)) {

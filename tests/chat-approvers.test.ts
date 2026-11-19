@@ -107,6 +107,34 @@ describe("approveTool no REPL (PERM-04, #265)", () => {
   test("sem TTY não injeta approveTool", () => {
     expect(chatApprovers(io([]), false).approveTool).toBeUndefined();
   });
+
+  test("expiração fecha a linha do prompt e nomeia o limite (#526)", async () => {
+    const writes: string[] = [];
+    const expiring: ReplIO = {
+      read: async () => null,
+      readCancelable: async () => null,
+      write: (text: string) => { writes.push(text); },
+    };
+    const wait = { signal: new AbortController().signal, timeoutMs: 1234, timedOut: true };
+    expect(await chatApprovers(expiring, true).approveTool!(req, wait)).toBe(false);
+    const printed = writes.join("");
+    expect(printed).toContain('"write_file"');
+    expect(printed).toContain("expirada após 1234ms");
+    expect(printed.startsWith("\n")).toBe(true);
+  });
+
+  test("cancelamento do run não se anuncia como expiração (#526)", async () => {
+    const writes: string[] = [];
+    const cancelling: ReplIO = {
+      read: async () => null,
+      readCancelable: async () => null,
+      write: (text: string) => { writes.push(text); },
+    };
+    expect(await chatApprovers(cancelling, true).approveTool!(req, { signal: new AbortController().signal })).toBe(false);
+    const printed = writes.join("");
+    expect(printed).toContain("cancelada sem resposta");
+    expect(printed).not.toContain("expirada");
+  });
 });
 
 describe("trustAsk no REPL (#267)", () => {

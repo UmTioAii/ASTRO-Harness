@@ -29,15 +29,32 @@ export function createApprovalBridge(): ApprovalBridge {
   let pending: ApprovalQuestion | undefined;
   let listener: ((question: ApprovalQuestion | undefined) => void) | undefined;
 
-  const ask = (text: string, diff?: { path: string; content: string }): Promise<string> => new Promise((resolve) => {
+  const ask = (
+    text: string,
+    diff?: { path: string; content: string },
+    signal?: AbortSignal,
+  ): Promise<string> => new Promise((resolve) => {
+    let settled = false;
+    let onAbort: (() => void) | undefined;
+    const finish = (answer: string): void => {
+      if (settled) return;
+      settled = true;
+      if (onAbort !== undefined) signal?.removeEventListener("abort", onAbort);
+      pending = undefined;
+      listener?.(undefined);
+      resolve(answer);
+    };
+    // Espera do gate cancelada ou expirada (#526): descarta a pergunta e nega.
+    onAbort = (): void => finish("");
+    if (signal?.aborted === true) {
+      finish("");
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
     pending = {
       text,
       ...(diff === undefined ? {} : { diff }),
-      resolve: (answer: string) => {
-        pending = undefined;
-        listener?.(undefined);
-        resolve(answer);
-      },
+      resolve: finish,
     };
     listener?.(pending);
   });
@@ -45,7 +62,7 @@ export function createApprovalBridge(): ApprovalBridge {
   return {
     approveSwap: async (request: SwapRequest) => isYes(await ask(swapPrompt(request))),
     onBudgetExceeded: async (status: BudgetStatus) => budgetChoice(await ask(budgetPrompt(status))),
-    approveTool: async (request) => toolChoice(await ask(toolPrompt(request), request.diff)),
+    approveTool: async (request, wait) => toolChoice(await ask(toolPrompt(request), request.diff, wait?.signal)),
     askText: ask,
     subscribe: (fn) => {
       listener = fn;
