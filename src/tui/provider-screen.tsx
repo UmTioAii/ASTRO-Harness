@@ -1,4 +1,4 @@
-/** Tela cheia de providers (TUI): lista + formulário, sem tocar segredo. */
+/** Tela cheia de providers (TUI): lista + formulário + modelos por provider (#555), sem tocar segredo. */
 import { Box, Text, useInput } from "ink";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { PROVIDER_CATALOG } from "../providers/catalog";
@@ -6,9 +6,11 @@ import type { ProfileDraft, ProfileManager, ProfileView } from "../providers/pro
 import type { ProfileModel } from "../providers/profiles";
 import type { HealthCheck } from "../health";
 import type { CodexLoginStart } from "../providers/codex-login";
+import { priceLabel } from "../pricing";
 import { redactSecrets } from "../sanitize-external";
 import { isEnvName, isVaultCredentialRef, looksLikeSecret } from "../secrets";
 import { formatProviderCheck } from "./health";
+import type { ModelOption } from "./models";
 import type { ThemeColors } from "./theme";
 
 export interface ProviderScreenProps {
@@ -20,6 +22,10 @@ export interface ProviderScreenProps {
   onClose: () => void;
   onActivate: (id: string) => void;
   onChanged?: () => void;
+  /** Modelos com metadados (cards) para a troca inline de modelo por provider (#555). */
+  modelInfo?: readonly ModelOption[];
+  /** Troca o modelo da sessão a partir de `ref` (`provider/id`) dentro do provider (#555). */
+  onSelectModel?: (ref: string) => void;
   /** Teste real mínimo do provider (C6); ausente desabilita `t`. */
   onTest?: (id: string) => Promise<HealthCheck>;
   /** Login device flow do Codex; ausente desabilita `l`. */
@@ -83,7 +89,7 @@ export function listActions(opts: {
 }
 
 export function ProviderScreen({
-  manager, colors, currentModel, initial, onClose, onActivate, onChanged, onTest, onLogin, onSaveSecret, onDiscardSecret,
+  manager, colors, currentModel, initial, onClose, onActivate, onChanged, modelInfo, onSelectModel, onTest, onLogin, onSaveSecret, onDiscardSecret,
 }: ProviderScreenProps): ReactElement {
   const initialList = manager.list();
   const initialTarget = initial?.target === undefined
@@ -92,7 +98,7 @@ export function ProviderScreen({
       ?? initialList.find((item) => item.name.toLowerCase() === initial.target!.toLowerCase());
   const initialEdit = initial?.mode === "edit" && initialTarget?.source === "global" ? initialTarget : undefined;
   const initialRemove = initial?.mode === "remove" && initialTarget?.source === "global" ? initialTarget : undefined;
-  const [view, setView] = useState<"list" | "form" | "remove">(
+  const [view, setView] = useState<"list" | "form" | "remove" | "models">(
     initial?.mode === "add"
       ? "form"
       : initial?.mode === "edit"
@@ -137,6 +143,9 @@ export function ProviderScreen({
   const [loginStarting, setLoginStarting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuIndex, setMenuIndex] = useState(0);
+  /** Provider cuja view de modelos está aberta (#555) e índice do modelo selecionado nela. */
+  const [modelsProvider, setModelsProvider] = useState<ProfileView | undefined>(undefined);
+  const [modelIndex, setModelIndex] = useState(0);
   const probeToken = useRef(0);
   const loginAbort = useRef<AbortController | undefined>(undefined);
   const loginBusy = useRef(false);
@@ -146,6 +155,26 @@ export function ProviderScreen({
 
   const list = manager.list();
   const current = list[Math.min(selected, Math.max(list.length - 1, 0))];
+
+  /**
+   * Modelos de um provider para a troca inline (#555): vem de `modelInfo`
+   * (cards com status/preço); sem `modelInfo`, cai nos modelos declarados do
+   * perfil, todos como "active".
+   */
+  const modelsOf = (providerId: string): ModelOption[] => {
+    const fromInfo = (modelInfo ?? []).filter((model) => model.provider === providerId);
+    if (fromInfo.length > 0) return [...fromInfo];
+    const profile = list.find((item) => item.id === providerId);
+    return (profile?.models ?? []).map((model) => ({
+      ref: `${providerId}/${model.id}`,
+      provider: providerId,
+      id: model.id,
+      tags: model.tags,
+      context: model.context,
+      status: "active",
+    }));
+  };
+
   const entry = catalogIndex === 0 ? undefined : PROVIDER_CATALOG[catalogIndex - 1];
   const kind = editing?.kind ?? entry?.kind ?? "openai-compat";
 
@@ -446,12 +475,33 @@ export function ProviderScreen({
       if (key.upArrow) { setSelected((value) => Math.max(0, value - 1)); setMessage(undefined); return; }
       if (key.downArrow) { setSelected((value) => Math.min(list.length - 1, value + 1)); setMessage(undefined); return; }
       if (input === "m") { setMenuOpen(true); setMenuIndex(0); return; }
+      if (key.rightArrow && current !== undefined && onSelectModel !== undefined) {
+        // drill-down de modelos do provider selecionado (#555); enter continua = ativar
+        setModelsProvider(current);
+        setModelIndex(0);
+        setView("models");
+        return;
+      }
       if (input === "a") { startAdd(); return; }
       if (input === "t") { testCurrent(); return; }
       if (input === "l") { loginCurrent(); return; }
       if (input === "e") { editCurrent(); return; }
       if (input === "d") { removeCurrent(); return; }
       if (key.return) { activateCurrent(); return; }
+      return;
+    }
+
+    if (view === "models") {
+      const models = modelsProvider === undefined ? [] : modelsOf(modelsProvider.id);
+      if (key.escape) { setView("list"); setModelsProvider(undefined); return; }
+      if (key.upArrow) { setModelIndex((value) => Math.max(0, value - 1)); return; }
+      if (key.downArrow) { setModelIndex((value) => Math.min(models.length - 1, value + 1)); return; }
+      if (key.return && models.length > 0 && onSelectModel !== undefined) {
+        const model = models[Math.min(modelIndex, models.length - 1)]!;
+        setView("list");
+        setModelsProvider(undefined);
+        onSelectModel(model.ref);
+      }
       return;
     }
 
@@ -638,6 +688,24 @@ export function ProviderScreen({
     );
   }
 
+  if (view === "models" && modelsProvider !== undefined) {
+    const models = modelsOf(modelsProvider.id);
+    const cursor = Math.min(modelIndex, Math.max(models.length - 1, 0));
+    return (
+      <Box flexDirection="column" borderStyle="round" paddingX={1}>
+        <Text bold>Modelos de {modelsProvider.name} ({modelsProvider.id})</Text>
+        {models.length === 0 ? <Text dimColor>nenhum modelo declarado</Text> : null}
+        {models.map((model, index) => (
+          <Text key={model.ref} color={index === cursor ? colors.accent : undefined}>
+            {index === cursor ? "> " : "  "}
+            {model.ref} {model.status} contexto {model.context ?? "?"} · {priceLabel(model.ref, model.price)}
+          </Text>
+        ))}
+        <Text dimColor>↑↓ escolher · enter trocar modelo · esc voltar</Text>
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1}>
       <Text bold>Providers</Text>
@@ -664,6 +732,7 @@ export function ProviderScreen({
       ) : null}
       <Text dimColor>
         {["m menu", "a adicionar", "e editar", "d remover",
+          ...(onSelectModel === undefined ? [] : ["→ modelos"]),
           ...(onTest === undefined ? [] : ["t testar"]),
           ...(onLogin === undefined || current?.kind !== "codex-oauth" ? [] : ["l login"]),
           "enter ativar", "esc voltar"].join(" · ")}

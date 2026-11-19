@@ -7,7 +7,9 @@ import { TuiApp } from "../src/tui/app";
 import { SessionStore, type SessionRecord } from "../src/chat/store";
 import { SessionApi } from "../src/chat/session-api";
 import type { ChatSession } from "../src/chat/repl";
-import type { SessionSnapshot, TurnResult } from "../src/chat/agent-session";
+import type { ModelInfo, SessionSnapshot, TurnResult } from "../src/chat/agent-session";
+import { ProfileManager } from "../src/providers/profile-manager";
+import { validateConfig } from "../src/core/config";
 import type { ConfigSummary } from "../src/chat/config-summary";
 import { BudgetExceededError, type BudgetStatus } from "../src/budget";
 import type { QuotaStatus } from "../src/quota";
@@ -47,6 +49,15 @@ class FakeSession implements ChatSession {
   }
   listModels(): string[] {
     return ["p/m1"];
+  }
+  listModelInfo(): ModelInfo[] {
+    return [
+      {
+        ref: "p/m1", provider: "p", id: "m1", tags: ["writing-code"], context: 8192, status: "active",
+        price: { inputPerM: 1, outputPerM: 2, fonte: "test", verificado: true },
+      },
+      { ref: "p/m2", provider: "p", id: "m2", tags: [], context: 4096, status: "active" },
+    ];
   }
   listProviders() {
     return [{ name: "p", kind: "openai-compat", credentialRef: "KEY", quotaDomain: "default", models: ["m1"] }];
@@ -1481,6 +1492,43 @@ test("turno concluído e a linha por turno vão para o buffer; /log <n> mostra s
     frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
     expect(frame).toContain("[p/m1] 1 step(s)");
     expect(frame).not.toContain("turno conclu");
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("/provider abre a tela, seta direita lista modelos e enter troca o modelo da sessao (#555)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-555-"));
+  const home = mkdtempSync(join(tmpdir(), "astro-tui-555-home-"));
+  const mgr = new ProfileManager({
+    project: validateConfig({
+      providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "p/m1", tools: [] as string[] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    }),
+    env: { ASTRO_HOME: home },
+  });
+  const instance = render(<TuiApp session={session} cwd={cwd} manager={mgr} />);
+  try {
+    instance.stdin.write("/provider");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "enter ativar"));
+    // a tela monta após o comando; espera o useInput registrar antes de enviar teclas
+    await new Promise((r) => setTimeout(r, 150));
+    instance.stdin.write("\u001B[C");
+    await waitFor(() => frameHas(instance, "Modelos de"));
+    await waitFor(() => frameHas(instance, "p/m2 active contexto 4096"));
+    instance.stdin.write("\u001B[B");
+    await waitFor(() => frameHas(instance, "> p/m2"));
+    instance.stdin.write("\r");
+    await waitFor(() => session.model === "p/m2");
+    await waitFor(() => frameHas(instance, "enter ativar")); // voltou à lista de providers
+    instance.stdin.write("\u001b"); // esc fecha a tela
+    await waitFor(() => frameHas(instance, "modelo: p/m2"));
+    const config = JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")) as { lastModel?: string };
+    expect(config.lastModel).toBe("p/m2");
   } finally {
     instance.unmount();
   }

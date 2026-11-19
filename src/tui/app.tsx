@@ -761,6 +761,25 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     );
   }
 
+  /** Troca o modelo da sessão e persiste (picker e /provider compartilham, #555). */
+  const selectModel = (ref: string): void => {
+    try {
+      const model = session.setModel(ref);
+      const nextRecents = recordRecent(model, recents);
+      try {
+        saveTuiConfig(cwd, { lastModel: model, recentModels: nextRecents });
+      } catch (error) {
+        setEntries((current) => [...current, { kind: "error", text: errorLine(error, messageOf(error)) }]);
+      }
+      setRecents(nextRecents);
+      setStatus(statusOf(session.snapshot()));
+      setEntries((current) => [...current, { kind: "info", text: `modelo: ${model}` }]);
+      logSessionHeader(); // novo cabeçalho da sessão vai para o /log (#514)
+    } catch (error) {
+      setEntries((current) => [...current, { kind: "error", text: errorLine(error, messageOf(error)) }]);
+    }
+  };
+
   if (modelPicker) {
     return (
       <ModelPicker
@@ -771,21 +790,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         onClose={() => setModelPicker(false)}
         onExit={finish}
         onSelect={(ref) => {
-          try {
-            const model = session.setModel(ref);
-            const nextRecents = recordRecent(model, recents);
-            try {
-              saveTuiConfig(cwd, { lastModel: model, recentModels: nextRecents });
-            } catch (error) {
-              setEntries((current) => [...current, { kind: "error", text: errorLine(error, messageOf(error)) }]);
-            }
-            setRecents(nextRecents);
-            setStatus(statusOf(session.snapshot()));
-            setEntries((current) => [...current, { kind: "info", text: `modelo: ${model}` }]);
-            logSessionHeader(); // novo cabeçalho da sessão vai para o /log (#514)
-          } catch (error) {
-            setEntries((current) => [...current, { kind: "error", text: errorLine(error, messageOf(error)) }]);
-          }
+          selectModel(ref);
           setModelPicker(false);
         }}
         onFavorite={(next) => {
@@ -840,6 +845,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         colors={colors}
         currentModel={session.model}
         initial={screen}
+        modelInfo={pickerModels()}
+        onSelectModel={selectModel}
         onClose={() => setScreen(undefined)}
         onActivate={(id) => {
           activateProvider(session, cwd, id, (text) => {
