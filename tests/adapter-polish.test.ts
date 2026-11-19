@@ -59,6 +59,18 @@ describe("adapter polish: classification (#554)", () => {
     expect(error.message).toContain("model overloaded");
   });
 
+  test("HTTP error detail is redacted for secret-looking values (I-03)", async () => {
+    // gitleaks-ignore: test constant uses sk- pattern (must be redacted by the adapter)
+    const echoed = "sk-testsecretvalue123456";
+    const p = provider(async () => json({ detail: `upstream echoed ${echoed}` }, 503), {
+      retry: { maxAttempts: 1, windowMs: 1000 },
+      apiKey: "harness-test-key",
+    });
+    const error = await errClassOf(p);
+    expect(error.message).not.toContain(echoed);
+    expect(error.message).toContain("[REDACTED]");
+  });
+
   test("429 with quota code in `detail` is hard_quota, not transient", async () => {
     const p = provider(async () => json({ detail: "insufficient_quota" }, 429), { retry: { maxAttempts: 1, windowMs: 1000 } });
     const error = await errClassOf(p);
