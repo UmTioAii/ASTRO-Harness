@@ -133,6 +133,8 @@ export interface RunOptions {
   suppressRunEvents?: boolean;
   /** Recebe deltas de texto do provider (T3); ausente = resposta única. */
   onToken?: (text: string) => void;
+  /** Progresso do loop (#508): passo e teto efetivo, antes de cada chamada ao provider. */
+  onStep?: (step: number, maxSteps: number) => void;
   /** Escolha do call profile (E1–E5); ausente = defaults do modelo. */
   call?: CallSelection;
   /** `allow-critical` da CLI (ADR-0027, #391 slice 5a): realpaths que liberam o tier configurável. */
@@ -1175,6 +1177,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ...(config.effort === undefined ? {} : { effort: config.effort }),
         ...(tracer === undefined ? {} : { tracer }),
         ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
+        ...(opts.onStep === undefined ? {} : { onStep: opts.onStep }),
         resolveIdentity,
         ...(budget === undefined ? {} : { budget }),
         ...(budget === undefined ? {} : { budgetReserve: (m: ModelEntry, profile?: string) => reserveForCall(config, registry, m, profile) }),
@@ -1243,6 +1246,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           ...(opts.attachments === undefined ? {} : { attachments: opts.attachments }),
           ...(opts.images === undefined ? {} : { images: opts.images }),
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
+          ...(opts.onStep === undefined ? {} : { onStep: opts.onStep }),
           ...(baseProfile === undefined ? {} : { agentProfile: baseProfile }),
           ...(projectSystemPrompt(config, cwd) === undefined ? {} : { systemPrompt: projectSystemPrompt(config, cwd) }),
           ...(tracer === undefined ? {} : { tracer }),

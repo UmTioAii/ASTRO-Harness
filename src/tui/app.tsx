@@ -5,7 +5,7 @@ import { parseCommand, type ReplCommand } from "../chat/commands";
 import { statusLine, type ChatSession } from "../chat/repl";
 import { activeSessionRefusal, toSessionRecord } from "../chat/store";
 import type { SessionApi, SessionSummary } from "../chat/session-api";
-import type { SessionSnapshot } from "../chat/agent-session";
+import type { SendTurnOptions, SessionSnapshot } from "../chat/agent-session";
 import { isFatalSessionError } from "../chat/session-errors";
 import { DEFAULT_PERMISSION_MODE, resolveAstroHome } from "../permissions";
 import { isYes } from "../chat/approvers";
@@ -136,6 +136,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     setInputState(inputRef.current);
   };
   const [busy, setBusy] = useState(false);
+  /** Progresso do passo (#508): undefined = desconhecido (turno não iniciado ou sem evento). */
+  const [stepProgress, setStepProgress] = useState<{ step: number; maxSteps: number } | undefined>(undefined);
   const [partial, setPartial] = useState<string | undefined>(undefined);
   const [initialConfig] = useState(() => loadTuiConfig(cwd));
   const [theme, setTheme] = useState<Theme>(initialConfig.theme);
@@ -500,12 +502,17 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     try {
       const prompt = materializePrompt(command.text, pendingAttachments.current);
       const attachments = pendingAttachments.current;
+      setStepProgress(undefined); // até o 1º evento o total é desconhecido
+      const turnOptions: SendTurnOptions = {
+        ...(attachments.length === 0 ? {} : { attachments, approveAttachment }),
+        onStep: (step, maxSteps) => setStepProgress({ step, maxSteps }),
+      };
       const result = await session.send(
         prompt,
         controller.signal,
         (delta) => sink.add(delta),
         undefined,
-        attachments.length === 0 ? undefined : { attachments, approveAttachment },
+        turnOptions,
       );
       pendingAttachments.current = [];
       sink.flush();
@@ -531,6 +538,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     } finally {
       sink.flush(); // invalida timer pendente: nenhum delta emite depois do turno
       setPartial(undefined);
+      setStepProgress(undefined); // sucesso, erro ou abort: a linha de progresso não fica presa
       const saved = persist(true);
       if (saved.failed) commandState.current.lastFile = undefined;
       else if (saved.path !== undefined) commandState.current.lastFile = saved.path;
@@ -901,7 +909,11 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       <Static items={entries}>
         {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} />}
       </Static>
-      {busy ? <Text color={colors.warning}>pensando…</Text> : null}
+      {busy ? (
+        <Text color={colors.warning}>
+          {stepProgress === undefined ? "pensando…" : `pensando… passo ${stepProgress.step}/${stepProgress.maxSteps}`}
+        </Text>
+      ) : null}
       {partial === undefined ? null : <Text>{partial}</Text>}
       {question === undefined ? null : (
         <Text color={colors.warning}>
