@@ -8,6 +8,7 @@ import {
   permissionDecision,
   permissionAllows,
   requiredPermission,
+  DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_PERMISSION_MODE,
   PATH_HARD_BLOCKED,
   PathHardBlockedError,
@@ -40,7 +41,7 @@ function abortError(reason: unknown): Error {
 }
 
 /** Teto default da espera por aprovação humana em ms (#526); `permissions.approvalTimeoutMs` sobrescreve. */
-export const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
+export { DEFAULT_APPROVAL_TIMEOUT_MS };
 
 /** Cancelamento da espera de aprovação: timeout do gate ou cancelamento do run (#526). */
 export interface ApprovalWait {

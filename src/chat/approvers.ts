@@ -63,6 +63,9 @@ export function chatApprovers(
     // #526: a aprovação de tool é a única espera cancelável (timeout/abort do gate).
     approveTool: async (request, wait) => {
       const prompt = toolPrompt(request);
+      // Com `readCancelable` a espera sai da fila no abort/timeout. IOs antigos,
+      // sem o método, mantêm a leitura simples: não há como remover o waiter,
+      // então uma linha tardia pode ser perdida — só o node-io real cancela.
       const answer = io.readCancelable !== undefined
         ? await io.readCancelable(prompt, wait?.signal)
         : await ask(prompt);

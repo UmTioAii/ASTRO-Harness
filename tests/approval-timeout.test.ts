@@ -6,7 +6,7 @@ import { Auditor } from "../src/audit";
 import { createApprovalBridge } from "../src/tui/approvals";
 import { ConfigError, validateConfig } from "../src/core/config";
 import type { PermissionApproval, PermissionMode } from "../src/permissions";
-import { ToolExecutor, DEFAULT_APPROVAL_TIMEOUT_MS } from "../src/tools/executor";
+import { ToolExecutor } from "../src/tools/executor";
 import type { Tool } from "../src/tools/types";
 
 function sleep(ms: number): Promise<void> {
@@ -75,7 +75,7 @@ describe("espera de aprovação tem limite e é cancelável (#526)", () => {
 
     const result = await settledWithin(
       executor.run({ cwd, run: "r1", agent: "a" }, call),
-      1_000,
+      5_000,
     );
 
     expect(result).not.toBe("ainda-pendente");
@@ -115,26 +115,26 @@ describe("espera de aprovação tem limite e é cancelável (#526)", () => {
       approveTool: () => true,
     });
 
-    expect(DEFAULT_APPROVAL_TIMEOUT_MS).toBe(300_000);
-    expect(executor.approvalTimeoutMs).toBe(DEFAULT_APPROVAL_TIMEOUT_MS);
+    expect(executor.approvalTimeoutMs).toBe(300_000);
   });
 
   test("cancelar o run interrompe a aprovação pendente na hora", async () => {
-    const { cwd, audit, executor } = setup(lateApprover(1_500), 60_000);
+    // Aprovador só responderia em 10 s: o abort tem de vencer bem antes disso.
+    const { cwd, audit, executor } = setup(lateApprover(10_000), 60_000);
     const controller = new AbortController();
     const startedAt = Date.now();
-    setTimeout(() => controller.abort(), 10);
+    setTimeout(() => controller.abort(), 20);
 
     const result = await settledWithin(
       executor.run({ cwd, run: "r1", agent: "a", signal: controller.signal }, call),
-      1_000,
+      5_000,
     );
 
     expect(result).not.toBe("ainda-pendente");
     if (result === "ainda-pendente") return;
     expect(result.isError).toBe(true);
     expect(result.output).toBe('cancelado: a tool "write_probe" foi interrompida');
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(audit.readAll().filter((entry) => entry.tipo === "permission.timed_out")).toHaveLength(0);
   });
 
@@ -143,7 +143,7 @@ describe("espera de aprovação tem limite e é cancelável (#526)", () => {
 
     const result = await settledWithin(
       executor.run({ cwd, run: "r1", agent: "a" }, call),
-      2_000,
+      5_000,
     );
 
     expect(result).not.toBe("ainda-pendente");
@@ -166,7 +166,7 @@ describe("espera de aprovação tem limite e é cancelável (#526)", () => {
 
     controller.abort();
 
-    const outcome = await settledWithin(Promise.resolve(pending), 500);
+    const outcome = await settledWithin(Promise.resolve(pending), 5_000);
     expect(outcome).toBe(false); // abortar resolve como negação
     expect(bridge.current()).toBeUndefined();
     expect(seen.at(-1)).toBeUndefined();

@@ -68,9 +68,10 @@ export function nodeReplIO(
     },
     /** #526: sair da fila no abort — sem isso a próxima linha cai num waiter morto. */
     readCancelable: async (prompt, signal) => {
-      write(prompt);
+      // Uma espera que já expirou não imprime prompt nem entra na fila.
       if (signal?.aborted === true) return null;
       if (closed) return null;
+      write(prompt);
       return await new Promise<string | null>((resolve) => {
         let settled = false;
         const finish = (line: string | null): void => {

@@ -151,6 +151,9 @@ export class PermissionPendingError extends Error {
 
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "ask";
 
+/** Teto default da espera por aprovação humana em ms (#526); `permissions.approvalTimeoutMs` sobrescreve. */
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
+
 export const PERMISSION_MODES: readonly PermissionMode[] = ["bypass", "allow-edits", "ask"];
 
 export function isPermissionMode(value: unknown): value is PermissionMode {

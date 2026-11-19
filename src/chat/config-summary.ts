@@ -1,7 +1,6 @@
 /** Resumo da config do harness para `/config` (#273): puro, sem I/O. */
 import type { AstroConfig, BudgetConfig } from "../core/config";
-import { DEFAULT_APPROVAL_TIMEOUT_MS } from "../tools/executor";
-import type { PermissionMode } from "../permissions";
+import { DEFAULT_APPROVAL_TIMEOUT_MS, type PermissionMode } from "../permissions";
 
 export interface CostLine {
   /** Modelo `provider/id`. */
