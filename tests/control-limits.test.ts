@@ -84,12 +84,9 @@ describe("assertBudgetWindows (#552)", () => {
           price(e.cost),
         );
       } else {
-        // entrada com ts explícito (janela passada): written cru, como o ledger lería
-        appendFileSync(path, `${JSON.stringify({
-          schemaVersion: 3, kind: "usage", ts: e.ts, run: e.run, agent: "a",
-          provider: "p", model: "m", credentialRef: "K", quotaDomain: "d",
-          tokensIn: 1, tokensOut: 0, costUsd: e.cost,
-        })}\n`);
+        // entrada com ts explícito (janela passada), escrita cru como o ledger lê
+        const raw = { schemaVersion: 3, kind: "usage", ts: e.ts, run: e.run, agent: "a", provider: "p", model: "m", credentialRef: "K", quotaDomain: "d", tokensIn: 1, tokensOut: 0, costUsd: e.cost };
+        appendFileSync(path, `${JSON.stringify(raw)}\n`);
       }
     }
     return ledger;
