@@ -7,9 +7,9 @@ import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, 
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { DEFAULT_ATTACHMENTS, loadConfig, loadConfigRaw, type AstroConfig, type MCPServerConfig } from "./core/config";
+import { loadConfig, loadConfigRaw, type AstroConfig, type MCPServerConfig } from "./core/config";
 import { credentialMissingMessage } from "./credential-ref";
-import { loadEffectiveConfig, NoProviderError } from "./providers/profiles";
+import { loadEffectiveConfig, loadGlobalConfig, NoProviderError } from "./providers/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "./attachments/store";
 import type { HealthCheck } from "./health";
 import { ARTIFACT_KEY_PATTERN, SHA256_HEX } from "./internal-ids";
@@ -91,6 +91,20 @@ export interface DiskFact {
   freeBytes?: number;
 }
 
+/** Fatos de anexos: config efetiva inválida não tem limites utilizáveis (#523). */
+export type AttachmentFacts = {
+  root: string;
+  realpath?: string;
+  exists: boolean;
+  invalidReason?: string;
+  usageBytes?: number;
+  artifacts?: number;
+  lastGc?: string;
+} & (
+  | { configError: string; ttlDays?: undefined; maxBytes?: undefined }
+  | { configError?: undefined; ttlDays: number; maxBytes: number }
+);
+
 export interface DoctorFacts {
   bunVersion: string;
   nodeVersion: string | undefined;
@@ -101,6 +115,8 @@ export interface DoctorFacts {
     path: string;
     present: boolean;
     error?: string;
+    /** Erro no merge/validação da config global + projeto. */
+    effectiveError?: string;
     providers?: ProviderFact[];
     mcp?: McpFact;
     /** Camada global (`$ASTRO_HOME/config.json`), validada só como JSON objeto. */
@@ -117,17 +133,7 @@ export interface DoctorFacts {
     /** Observação informativa (link simbólico resolvido), sem mudar o nível. */
     note?: string;
   };
-  attachments: {
-    root: string;
-    realpath?: string;
-    exists: boolean;
-    invalidReason?: string;
-    ttlDays: number;
-    maxBytes: number;
-    usageBytes?: number;
-    artifacts?: number;
-    lastGc?: string;
-  };
+  attachments: AttachmentFacts;
   skills?: SkillsFact;
   disk?: DiskFact;
   env: Record<string, string | undefined>;
@@ -282,10 +288,12 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
     ? { name: "dist", level: "ok", label: "dist", detail: facts.artifacts.map((artifact) => artifact.path).join(", ") }
     : { name: "dist", level: "warn", label: "dist", detail: `${missingArtifacts.map((artifact) => artifact.path).join(", ")} ausente; rode bun run build` });
 
-  if (!facts.config.present) {
-    checks.push({ name: "config", level: "ok", label: "config", detail: `${facts.config.path} ausente; a TUI abre o setup de provider` });
-  } else if (facts.config.error !== undefined) {
+  if (facts.config.error !== undefined) {
     checks.push({ name: "config", level: "fail", label: "config", detail: redactSecrets(facts.config.error) });
+  } else if (facts.config.effectiveError !== undefined) {
+    checks.push({ name: "config", level: "fail", label: "config", detail: `config efetiva inválida: ${redactSecrets(facts.config.effectiveError)}` });
+  } else if (!facts.config.present) {
+    checks.push({ name: "config", level: "ok", label: "config", detail: `${facts.config.path} ausente; a TUI abre o setup de provider` });
   } else {
     const count = facts.config.providers?.length ?? 0;
     checks.push({
@@ -320,7 +328,9 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
   }
 
   const attachments = facts.attachments;
-  if (attachments.invalidReason !== undefined) {
+  if (attachments.configError !== undefined) {
+    checks.push({ name: "attachments", level: "fail", label: "anexos", detail: `config efetiva inválida: ${redactSecrets(attachments.configError)}` });
+  } else if (attachments.invalidReason !== undefined) {
     checks.push({ name: "attachments", level: "fail", label: "anexos", detail: redactSecrets(attachments.invalidReason) });
   } else if (!attachments.exists) {
     checks.push({ name: "attachments", level: "warn", label: "anexos", detail: `${attachments.root} ausente; criada no primeiro anexo de imagem` });
@@ -578,10 +588,47 @@ function readGlobalConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"]["global
   }
 }
 
-function readConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"] {
-  const path = join(process.cwd(), "astro.config.json");
+/** Config efetiva dos limites de anexos: ausente usa defaults; inválida não tem valor. */
+type EffectiveConfigFacts =
+  | { status: "ok"; ttlDays: number; maxBytes: number; error?: undefined }
+  | { status: "invalid"; ttlDays?: undefined; maxBytes?: undefined; error: string };
+
+/**
+ * Config efetiva e limites de anexos. A ausência de config é determinada
+ * pelas camadas, não pela resolução de provider: o diagnóstico valida a
+ * config efetiva com um provider sintético, então uma camada presente e
+ * inválida reprova com o motivo redigido em vez de virar default
+ * apresentado como valor efetivo (#523).
+ */
+function readEffectiveConfig(configPath: string, env: NodeJS.ProcessEnv): EffectiveConfigFacts {
+  try {
+    const effective = loadEffectiveConfig(configPath, {
+      env,
+      allowMissing: true,
+      diagnosticFallbackProvider: true,
+    });
+    return {
+      status: "ok",
+      ttlDays: effective.config.attachments.artifactTtlDays,
+      maxBytes: effective.config.attachments.artifactMaxBytes,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { status: "invalid", error: redactSecrets(detail) };
+  }
+}
+
+function readConfig(
+  env: NodeJS.ProcessEnv,
+  path: string,
+  effective: EffectiveConfigFacts,
+): DoctorFacts["config"] {
   const global = readGlobalConfig(env);
-  const base = { path, ...(global === undefined ? {} : { global }) };
+  const base = {
+    path,
+    ...(global === undefined ? {} : { global }),
+    ...(effective.error === undefined ? {} : { effectiveError: effective.error }),
+  };
   if (!existsSync(path)) return { ...base, present: false };
   try {
     const config = loadConfig(path);
@@ -639,15 +686,14 @@ function loadSkillRoot(
  * prompt, I-03). A raiz do usuário é a mesma do runtime (`~/.astro/skills`),
  * independente de `$ASTRO_HOME`; fica injetável para teste não tocar o home real.
  */
-function collectSkillFacts(userRoot: string): SkillsFact {
+function collectSkillFacts(projectRoot: string, userRoot: string): SkillsFact {
   const warnings: string[] = [];
-  const project = loadSkillRoot(join(process.cwd(), ".astro", "skills"), "project", warnings);
+  const project = loadSkillRoot(projectRoot, "project", warnings);
   const user = loadSkillRoot(userRoot, "user", warnings);
   return { project: project.length, user: user.length, warnings: warnings.slice(0, 5) };
 }
 
-function collectDiskFacts(env: NodeJS.ProcessEnv): DiskFact {
-  const cwd = process.cwd();
+function collectDiskFacts(env: NodeJS.ProcessEnv, cwd: string): DiskFact {
   let writable = false;
   try {
     accessSync(cwd, constants.W_OK);
@@ -665,18 +711,6 @@ function collectDiskFacts(env: NodeJS.ProcessEnv): DiskFact {
     // statfs indisponível na plataforma: check segue só com a permissão
   }
   return { cwd, writable, ...(freeBytes === undefined ? {} : { freeBytes }) };
-}
-
-function readAttachmentConfig(env: NodeJS.ProcessEnv): { ttlDays: number; maxBytes: number } {
-  try {
-    const effective = loadEffectiveConfig(join(process.cwd(), "astro.config.json"), { env, allowMissing: true });
-    return {
-      ttlDays: effective.config.attachments.artifactTtlDays,
-      maxBytes: effective.config.attachments.artifactMaxBytes,
-    };
-  } catch {
-    return { ttlDays: DEFAULT_ATTACHMENTS.artifactTtlDays, maxBytes: DEFAULT_ATTACHMENTS.artifactMaxBytes };
-  }
 }
 
 function readArtifactUsage(root: string): { usageBytes: number; artifacts: number } {
@@ -722,17 +756,21 @@ function writableDirectory(root: string): boolean {
 
 function collectAttachmentFacts(
   env: NodeJS.ProcessEnv,
+  effective: EffectiveConfigFacts,
+  projectCwd: string,
   checkPrivate?: (path: string) => boolean,
   probeWritable?: (path: string) => boolean,
   artifactRoot?: string,
 ): DoctorFacts["attachments"] {
-  const config = readAttachmentConfig(env);
   const astroHome = resolveAstroHome(env);
   const root = resolveArtifactRoot({ ...(artifactRoot === undefined ? {} : { flag: artifactRoot }), env, astroHome });
-  const base = { root, ttlDays: config.ttlDays, maxBytes: config.maxBytes };
+  // Config efetiva inválida: sem limites utilizáveis (nenhum default é exibido).
+  const base = effective.status === "invalid"
+    ? { root, configError: effective.error }
+    : { root, ttlDays: effective.ttlDays, maxBytes: effective.maxBytes };
   try {
     validateArtifactRoot(root, {
-      cwd: process.cwd(),
+      cwd: projectCwd,
       astroHome,
       ...(checkPrivate === undefined ? {} : { checkPrivate }),
     });
@@ -774,22 +812,35 @@ export function collectFacts(
     probeWritable?: (path: string) => boolean;
     /** `--artifact-root`: resolve a raiz efetiva com a mesma precedência do chat/tui (ADR-0026). */
     artifactRoot?: string;
+    /** Raiz do projeto para config e skills; default é o cwd do processo. */
+    projectCwd?: string;
+    /** Config de projeto explícita; default é `<projectCwd>/astro.config.json`. */
+    configPath?: string;
+    /** Raiz de skills do projeto; default é `<projectCwd>/.astro/skills`. */
+    projectSkillsRoot?: string;
     /** Raiz de skills do usuário; default é a do runtime (`~/.astro/skills`). */
     userSkillsRoot?: string;
   } = {},
 ): DoctorFacts {
   const env = options.env ?? process.env;
+  const projectCwd = resolve(options.projectCwd ?? process.cwd());
+  const configPath = resolve(projectCwd, options.configPath ?? "astro.config.json");
+  const projectSkillsRoot = resolve(projectCwd, options.projectSkillsRoot ?? join(".astro", "skills"));
+  // A raiz do usuário é global: caminho relativo resolve contra o cwd do processo
+  // (mesma base do loader de skills), nunca contra o projeto.
+  const userSkillsRoot = resolve(options.userSkillsRoot ?? join(homedir(), ".astro", "skills"));
+  const effective = readEffectiveConfig(configPath, env);
   return {
     bunVersion: Bun.version,
     nodeVersion: readNodeVersion(),
     engines: readEngines(root),
     missingModules: REQUIRED_MODULES.filter((name) => !resolvesModule(name)),
     artifacts: ARTIFACTS.map((path) => ({ path, exists: existsSync(join(root, path)) })),
-    config: readConfig(env),
+    config: readConfig(env, configPath, effective),
     astroHome: readAstroHome(env),
-    attachments: collectAttachmentFacts(env, options.checkPrivate, options.probeWritable, options.artifactRoot),
-    skills: collectSkillFacts(options.userSkillsRoot ?? join(homedir(), ".astro", "skills")),
-    disk: collectDiskFacts(env),
+    attachments: collectAttachmentFacts(env, effective, projectCwd, options.checkPrivate, options.probeWritable, options.artifactRoot),
+    skills: collectSkillFacts(projectSkillsRoot, userSkillsRoot),
+    disk: collectDiskFacts(env, projectCwd),
     env,
   };
 }

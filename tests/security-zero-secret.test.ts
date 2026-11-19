@@ -1,12 +1,14 @@
 /**
  * I-03: varredura determinística por segredos em artefatos.
  *
- * Cobre o repo versionado (fontes, docs, config de exemplo, fixtures) e os
- * artefatos que o harness grava (audit, ledger e log). Fixtures de redação só
- * passam quando o valor tem marca óbvia de teste; um segredo real não tem.
+ * Cobre o repo versionado, candidatos não ignorados (fontes, docs, config de
+ * exemplo, fixtures) e os artefatos que o harness grava (audit, ledger e log).
+ * Fixtures de redação só passam quando o valor tem marca óbvia de teste; um
+ * segredo real não tem.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { Auditor } from "../src/audit";
@@ -14,10 +16,6 @@ import { Ledger } from "../src/ledger";
 import { redactSecrets } from "../src/sanitize-external";
 
 const ROOT = resolve(import.meta.dir, "..");
-const SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "coverage", ".astro", ".sdd", "logs",
-  ".worktrees", ".worktrees-astro", ".serena", // worktrees/estado local não versionado
-]);
 const TEXT_FILE = /\.(?:ts|tsx|js|mjs|cjs|json|jsonl|md|txt|log|ya?ml|toml|lock|example|cfg|ini|sh|ps1|pem|key|crt)$/i;
 const MAX_BYTES = 2 * 1024 * 1024;
 
@@ -85,27 +83,36 @@ export function scanText(text: string, file = ""): Hit[] {
   return hits.sort((a, b) => a.index - b.index || a.rule.localeCompare(b.rule));
 }
 
-/** Arquivos de texto do repo, ordenados para a varredura ser determinística. */
-function repoFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) continue; // não segue para fora do repo
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) repoFiles(path, out);
-      continue;
+/** Arquivos de texto Git-aware: versionados e candidatos não ignorados. */
+function repoFiles(dir: string): string[] {
+  const output = execFileSync(
+    "git",
+    ["-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    { encoding: "utf8", windowsHide: true },
+  );
+  const files: string[] = [];
+  for (const relativePath of output.split("\0")) {
+    if (relativePath === "") continue;
+    const path = join(dir, ...relativePath.split("/"));
+    let stats;
+    try {
+      stats = lstatSync(path);
+    } catch {
+      continue; // arquivo versionado removido do working tree
     }
-    if (TEXT_FILE.test(entry.name) && statSync(path).size <= MAX_BYTES) out.push(path);
+    if (!stats.isFile() || stats.isSymbolicLink()) continue;
+    if (TEXT_FILE.test(relativePath) && stats.size <= MAX_BYTES) files.push(path);
   }
-  return out;
+  return files;
 }
 
 /** Varre o repo inteiro; a mensagem cita arquivo:linha e regra, nunca o valor. */
-function scanRepo(): Finding[] {
+function scanRepo(root: string = ROOT): Finding[] {
   const findings: Finding[] = [];
-  for (const path of repoFiles(ROOT).sort()) {
+  for (const path of repoFiles(root).sort()) {
     const text = readFileSync(path, "utf8");
     if (text.includes("\u0000")) continue; // binário disfarçado de texto
-    const file = relative(ROOT, path).replaceAll("\\", "/");
+    const file = relative(root, path).replaceAll("\\", "/");
     for (const hit of scanText(text, file)) {
       findings.push({
         file,
@@ -121,6 +128,21 @@ function scanRepo(): Finding[] {
 function syntheticKey(): string {
   return ["s", "k", "-", "proj", "7Qm4Zx9Lk2Vb8Rt5"].join("");
 }
+
+/** Link de arquivo: em Windows sem permissão o teste é pulado de forma explícita. */
+function canCreateFileSymlink(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "astro-symlink-probe-"));
+  try {
+    symlinkSync(join(dir, "alvo.txt"), join(dir, "link.txt"), "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const SYMLINK_SUPPORTED = canCreateFileSymlink();
 
 describe("I-03 zero segredos", () => {
   test("detector reconhece chave sintética e ignora redação/fixture", () => {
@@ -138,10 +160,63 @@ describe("I-03 zero segredos", () => {
     expect(scanText(fakeLooking, "tests/leak.test.ts")).toEqual([]);
   });
 
-  // A varredura percorre o repo inteiro: no Windows ela passa de 5s sob carga.
+  // A varredura Git-aware percorre o repo inteiro: no Windows ela passa de 5s sob carga.
   test("repo versionado não tem chave real em fonte, doc, config ou fixture", () => {
     const findings = scanRepo();
     expect(findings.map((finding) => `${finding.file}:${finding.line} (${finding.rule})`)).toEqual([]);
+  }, 30_000);
+
+  test("corpus Git-aware exclui ignorados e cobre versionados e candidatos", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-zero-secret-git-"));
+    try {
+      const key = syntheticKey();
+      writeFileSync(join(dir, ".gitignore"), "astro.config.json\n", "utf8");
+      writeFileSync(join(dir, "tracked.txt"), key, "utf8");
+      writeFileSync(join(dir, "candidate.txt"), key, "utf8");
+      writeFileSync(join(dir, "astro.config.json"), key, "utf8");
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["add", "--", ".gitignore", "tracked.txt"], { cwd: dir, stdio: "ignore" });
+
+      const findings = scanRepo(dir);
+      expect(findings.map((finding) => `${finding.file}:${finding.line} (${finding.rule})`)).toEqual([
+        "candidate.txt:1 (openai)",
+        "tracked.txt:1 (openai)",
+      ]);
+      expect(JSON.stringify(findings)).not.toContain(key);
+      expect(findings.map((finding) => finding.file)).not.toContain("astro.config.json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("arquivo versionado removido do working tree é ignorado", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-zero-secret-removed-"));
+    try {
+      writeFileSync(join(dir, "removido.txt"), syntheticKey(), "utf8");
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["add", "--", "removido.txt"], { cwd: dir, stdio: "ignore" });
+      rmSync(join(dir, "removido.txt"));
+
+      expect(scanRepo(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test.skipIf(!SYMLINK_SUPPORTED)("symlink versionado não é seguido", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-zero-secret-symlink-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-zero-secret-outside-"));
+    try {
+      writeFileSync(join(outside, "fora.txt"), syntheticKey(), "utf8");
+      symlinkSync(join(outside, "fora.txt"), join(dir, "link.txt"), "file");
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["add", "--", "link.txt"], { cwd: dir, stdio: "ignore" });
+
+      expect(scanRepo(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   }, 30_000);
 
   test("audit, ledger e log gerados não contêm o segredo", () => {

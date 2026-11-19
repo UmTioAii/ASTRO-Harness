@@ -29,6 +29,14 @@ Diagnóstico local do ASTRO: versões, dependências, config, credenciais por no
 
 Segredo nunca entra na saída: `name`, label e detalhe passam por `redactSecrets` (I-03). `name` é slug estável; `label` é só exibição.
 
+## Config efetiva e isolamento
+
+O check offline `config` valida a camada de projeto e a config efetiva (global + projeto). A camada de projeto só pode estreitar a política global (ADR-0029, I-01). Se o merge for recusado, `config` vira `fail` com o motivo redigido e o check `anexos` não apresenta TTL ou teto como valores efetivos; a ausência de config usa os defaults documentados.
+
+A ausência é determinada pelas camadas, não pela resolução de provider: `NoProviderError` não vale como config ausente. Quando não há provider, o doctor injeta um provider sintético de diagnóstico, sem persistência nem rede, para validar a config efetiva completa com o schema do runtime. Assim uma camada global presente e inválida (por exemplo, `permissions.mode`, `attachments.artifactTtlDays` ou uma tool desconhecida de agent nomeado) reprova com exit 1 em vez de virar `TTL 7d`/`1.0 GiB` (#523). O schema recusa tool desconhecida em agent nomeado; a allowlist nominal do agent principal depende do registry e continua validada no runtime.
+
+A coleta aceita `projectCwd`, `configPath`, `projectSkillsRoot` e `userSkillsRoot` para testes isolarem o projeto e as skills. Na CLI, os defaults permanecem o cwd do processo, `<cwd>/astro.config.json`, `<cwd>/.astro/skills` e `~/.astro/skills` (#523). Caminho relativo de `configPath` e `projectSkillsRoot` resolve contra `projectCwd`; `userSkillsRoot` resolve contra o cwd do processo (mesma base do loader de skills).
+
 ## `--online`
 
 O health usa o mesmo caminho de `astro health`: `GET {baseUrl}/models` com a credencial do ambiente, `redirect: "error"` e timeout de 5s por provider. Cada `HealthCheck` vira um check, mais o agregado:

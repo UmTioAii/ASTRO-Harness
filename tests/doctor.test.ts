@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
   applyFixes,
   collectFacts,
@@ -371,15 +371,19 @@ test("sanitizeCheck redige também o label do check", () => {
 
 test("leitura aceita ASTRO_HOME que é link simbólico e reporta o caminho real", () => {
   const base = sandbox();
+  const projectCwd = sandbox();
   const real = join(base, "real-home");
   mkdirSync(real, { recursive: true });
   const link = join(base, "linked-home");
   symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
 
   const collected = collectFacts(process.cwd(), {
+    projectCwd,
     env: { ...process.env, ASTRO_HOME: link },
     checkPrivate: () => true,
   });
+  expect(collected.config.path).toBe(join(projectCwd, "astro.config.json"));
+  expect(collected.config.present).toBe(false);
   expect(collected.astroHome.error).toBeUndefined();
   expect(collected.astroHome.exists).toBe(true);
   expect(collected.astroHome.path).toBe(realpathSync(real));
@@ -390,29 +394,65 @@ test("leitura aceita ASTRO_HOME que é link simbólico e reporta o caminho real"
   expect(exitCode(report)).toBe(0);
 });
 
-test("skills do usuário vêm da raiz injetada e skill quebrada vira warn", () => {
+test("skills usam raízes injetadas e skill quebrada de projeto vira warn", () => {
+  const projectCwd = sandbox();
+  const projectRoot = join(projectCwd, ".astro", "skills");
   const userRoot = join(sandbox(), "skills");
+  mkdirSync(projectRoot, { recursive: true });
   mkdirSync(userRoot, { recursive: true });
-  writeSkill(userRoot, "broken", "sem frontmatter");
+  writeSkill(projectRoot, "projeto-quebrado", "sem frontmatter");
+  writeSkill(userRoot, "user-ok", VALID_SKILL);
 
   const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    projectSkillsRoot: projectRoot,
     env: { ...process.env, ASTRO_HOME: join(sandbox(), "other-home") },
     checkPrivate: () => true,
     userSkillsRoot: userRoot,
   });
-  expect(collected.skills?.user).toBe(0);
-  expect(collected.skills?.warnings.length).toBeGreaterThan(0);
+  expect(collected.config.path).toBe(join(projectCwd, "astro.config.json"));
+  expect(collected.skills?.project).toBe(0);
+  expect(collected.skills?.user).toBe(1);
+  expect(collected.skills?.warnings.join(" ")).toContain("projeto-quebrado");
   const check = runChecks(collected).checks.find((item) => item.label === "skills");
   expect(check?.level).toBe("warn");
   expect(exitCode(runChecks(collected))).toBe(0);
 });
 
-test("skills válidas na raiz do usuário são contadas", () => {
+test("caminhos relativos de config e skills seguem a base declarada", () => {
+  const projectCwd = sandbox();
+  const configPath = join(projectCwd, "custom.json");
+  writeFileSync(configPath, onlineConfig("https://proj.example/v1"), "utf8");
+  const projectRoot = join(projectCwd, ".astro", "skills");
+  writeSkill(projectRoot, "project-ok", VALID_SKILL);
   const userRoot = join(sandbox(), "skills");
+  writeSkill(userRoot, "user-ok", VALID_SKILL);
+
+  const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    configPath: "custom.json",
+    projectSkillsRoot: join(".astro", "skills"),
+    userSkillsRoot: relative(process.cwd(), userRoot),
+    env: { ...process.env, ASTRO_HOME: join(sandbox(), "other-home") },
+    checkPrivate: () => true,
+  });
+  expect(collected.config.path).toBe(configPath);
+  expect(collected.config.present).toBe(true);
+  expect(collected.skills?.project).toBe(1);
+  expect(collected.skills?.user).toBe(1);
+});
+
+test("skills válidas na raiz do usuário são contadas", () => {
+  const projectCwd = sandbox();
+  const projectRoot = join(projectCwd, ".astro", "skills");
+  const userRoot = join(sandbox(), "skills");
+  mkdirSync(projectRoot, { recursive: true });
   mkdirSync(userRoot, { recursive: true });
   writeSkill(userRoot, "ok", VALID_SKILL);
 
   const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    projectSkillsRoot: projectRoot,
     env: { ...process.env, ASTRO_HOME: join(sandbox(), "other-home") },
     checkPrivate: () => true,
     userSkillsRoot: userRoot,
@@ -425,9 +465,12 @@ test("skills válidas na raiz do usuário são contadas", () => {
 
 test("config global malformada falha mesmo com config de projeto válida", () => {
   const home = sandbox();
+  const projectCwd = sandbox();
   writeFileSync(join(home, "config.json"), "{not json", "utf8");
+  writeFileSync(join(projectCwd, "astro.config.json"), onlineConfig("https://proj.example/v1"), "utf8");
 
   const collected = collectFacts(process.cwd(), {
+    projectCwd,
     env: { ...process.env, ASTRO_HOME: home },
     checkPrivate: () => true,
   });
