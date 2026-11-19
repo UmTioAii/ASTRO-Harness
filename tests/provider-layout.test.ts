@@ -108,9 +108,34 @@ describe("per-provider layout (#553)", () => {
       expect(typeof card.reasoning).toBe("boolean");
       expect(["chat-completions", "responses"]).toContain(card.callMethod);
       expect(Array.isArray(card.efforts)).toBe(true);
-      expect(card.price === null || card.price.verificado === false || card.price.verificado === true).toBe(true);
+      if (card.price !== null) {
+        expect(card.price.inputPerM).toBeGreaterThanOrEqual(0);
+        expect(card.price.outputPerM).toBeGreaterThanOrEqual(0);
+        expect(card.price.fonte).toMatch(/^https?:\/\//);
+        expect(typeof card.price.verificado).toBe("boolean");
+      }
       expect(typeof card.free).toBe("boolean");
     }
+  });
+
+  test("seeds only name credentials, never carry a value (I-03)", () => {
+    for (const { adapter, models } of SEEDS) {
+      if (adapter.credentialRef !== undefined) expect(adapter.credentialRef).toMatch(/^[A-Z_][A-Z0-9_]*$/);
+      expect(JSON.stringify(adapter) + JSON.stringify(models)).not.toMatch(/sk-|api[_-]?key\s*[:=]/i);
+    }
+  });
+
+  test("free cards never declare a paid price", () => {
+    for (const card of SEEDS.flatMap((seed) => [...seed.models])) {
+      if (!card.free) continue;
+      expect(card.price === null || (card.price.inputPerM === 0 && card.price.outputPerM === 0)).toBe(true);
+    }
+  });
+
+  test("cards exposed by the catalog do not share state with the seed modules", () => {
+    const entry = catalogEntry("nvidia")!;
+    (entry.cards[0]!.tags as string[]).push("leak");
+    expect(NVIDIA_MODELS[0]!.tags).not.toContain("leak");
   });
 
   test("a reasoning model declares reasoning and at least one effort", () => {
