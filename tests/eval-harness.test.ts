@@ -569,7 +569,7 @@ describe("eval harness (F5-2)", () => {
 
   test("runCase isola a config global do ASTRO_HOME", async () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
-    writeFileSync(join(home, "config.json"), JSON.stringify({ run: { maxTurns: 1 } }));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ run: { checkpointAt: 0.5 } }));
     const root = mkdtempSync(join(tmpdir(), "astro-global-case-"));
     writeScenarioCase(root, "01-global", {
       schema: 1,

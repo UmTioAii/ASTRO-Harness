@@ -397,13 +397,12 @@ test("limites (#473): sem projeto, o teto padrão de passos é alto o suficiente
   expect(effective(undefined, undefined, store()).config.agent.maxSteps).toBe(500);
 });
 
-test("limites (#473): o projeto pode reduzir passos e turnos abaixo do teto global", () => {
+test("limites (#473): o projeto pode reduzir passos abaixo do teto global", () => {
   const eff = effective(
-    { agent: { maxSteps: 20, tools: ["read_file"] }, run: { maxTurns: 10 } },
-    project({ agent: { model: "p/m", maxSteps: 8, tools: ["read_file"] }, run: { maxTurns: 5 } }),
+    { agent: { maxSteps: 20, tools: ["read_file"] } },
+    project({ agent: { model: "p/m", maxSteps: 8, tools: ["read_file"] } }),
   );
   expect(eff.config.agent.maxSteps).toBe(8);
-  expect(eff.config.run?.maxTurns).toBe(5);
   // Agent nomeado também pode reduzir.
   const named = effective(twoAccounts({ coder: { maxSteps: 5, tools: ["read_file"] } }),
     twoAccounts({ coder: { maxSteps: 3 } }));
@@ -436,14 +435,9 @@ test("rejeita: agent nomeado declarado só no projeto também respeita o teto (#
   )).toThrow(/amplia o teto global de passos \(agents\.coder\.maxSteps: 30 acima do teto 20/);
 });
 
-test("rejeita: projeto eleva run.maxTurns acima do teto global de turnos (#473)", () => {
-  expect(() => effective({ run: { maxTurns: 10 } }, project({ run: { maxTurns: 20 } })))
-    .toThrow(/amplia o teto global de turnos \(run\.maxTurns/);
-  // "unlimited" também alarga quando a camada global declara teto numérico.
-  expect(() => effective({ run: { maxTurns: 10 } },
-    project({ budget: { scope: "use-as-you-go", limitUsd: null }, run: { maxTurns: "unlimited" } })))
-    .toThrow(/amplia o teto global de turnos/);
-  // Sem teto numérico na camada global, o projeto pode declarar qualquer valor
-  // (acima de agent.maxSteps o run.maxTurns é inerte: só capa, nunca eleva).
-  expect(effective(undefined, project({ run: { maxTurns: 500 } })).config.run?.maxTurns).toBe(500);
+test("run.maxTurns é recusado em qualquer camada (#515 -> P4)", () => {
+  expect(() => effective({ run: { maxTurns: 10 } }, project({})))
+    .toThrow(/run\.maxTurns.*removido/);
+  expect(() => effective({}, project({ run: { maxTurns: 20 } })))
+    .toThrow(/run\.maxTurns.*removido/);
 });

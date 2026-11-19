@@ -454,7 +454,7 @@ describe("REPL do chat (T1, #62)", () => {
       configSummary(): ConfigSummary {
         return {
           configPath: "/tmp/proj/astro.config.json",
-          maxTurns: "12",
+          maxSteps: 12,
           permissionMode: "ask",
           costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
           budget: "sem budget",
@@ -471,7 +471,7 @@ describe("REPL do chat (T1, #62)", () => {
       await runRepl(session, io);
       const text = io.outputs.join("\n");
       expect(text).toContain("config: /tmp/proj/astro.config.json");
-      expect(text).toContain("run.maxTurns: 12");
+      expect(text).toContain("agent.maxSteps: 12");
       expect(text).toContain("permissions.mode: ask");
       expect(text).toContain("p/m1: in US$ 1.00/M · out US$ 2.00/M");
       expect(text).toContain("pastas confiáveis:\n  /tmp/proj");

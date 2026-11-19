@@ -563,3 +563,21 @@ describe("config mínima: allowlist e paths têm default", () => {
     expect(cfg.paths).toEqual({ ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" });
   });
 });
+
+describe("limite único de trabalho (P4)", () => {
+  test("run.maxTurns é recusado com migração para agent.maxSteps", () => {
+    const raw = structuredClone(valid) as Record<string, unknown>;
+    raw.run = { maxTurns: 12 };
+    let message = "";
+    try { validateConfig(raw); } catch (error) { message = (error as Error).message; }
+    expect(message).toContain("run.maxTurns");
+    expect(message).toContain("agent.maxSteps");
+    expect(message).toContain("removido");
+  });
+
+  test("run continua válido sem maxTurns (guardas do loop)", () => {
+    const raw = structuredClone(valid) as Record<string, unknown>;
+    raw.run = { checkpointAt: 0.8, noProgressSegments: 3, judge: "off" };
+    expect(validateConfig(raw).run?.checkpointAt).toBe(0.8);
+  });
+});

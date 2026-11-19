@@ -646,7 +646,7 @@ export async function runSession(
           messages.push(assistantMessage, nudge);
           appended.push(assistantMessage, nudge);
           tracer?.end(stepSpan, { "tool.calls": 0, judge: "continue" });
-          continue; // limitado por maxSteps/run.maxTurns e pelo teto físico (B10)
+          continue; // limitado por maxSteps e pelo teto físico (B10)
         }
         opts.ledger.recordState(opts.run, "completed", { agent: opts.agent });
         if (opts.inheritAgentLock !== true) {

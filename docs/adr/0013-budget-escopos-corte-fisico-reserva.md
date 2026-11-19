@@ -21,7 +21,7 @@ I-17 exige corte físico de custo; quota (`src/quota.ts`, por `quotaDomain`) e o
 
 **Reserva da cadeia (B9).** Antes de cada chamada, `budget.reserved` = Σ custo máximo do primário + fallbacks declarados; após, `budget.released` com `actual_cost`. A reserva casa por run (FIFO) e inclui fallbacks de profile; reserva maior que o limite/teto para antes da chamada. No `--resume`, `reserved` sem `released` conta como custo real (crash recovery). Sem preço na cadeia a reserva é 0 e o teto decide via `unknown_price`.
 
-**Q-01 (L2).** `run.maxTurns: "unlimited"` exige `hardCeilingUsd` OU `limitUsd`; senão `loadConfig` falha com `unlimited_without_ceiling`.
+**Q-01 (L2).** Revisão P4: `run.maxTurns` foi removido e com ele a exigência `unlimited_without_ceiling`; o teto de trabalho é `agent.maxSteps` e o de custo é `budget` (`hardCeilingUsd` ou `limitUsd`).
 
 **Ledger.** Este ADR é dono do kind `budget`: `reserved`, `released`, `exceeded_choice`, `ceiling_hit`, `budget_exceeded_non_interactive` (schema em #122).
 
