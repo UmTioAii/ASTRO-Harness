@@ -6,7 +6,7 @@ import { ConfigError, validateConfig } from "../src/core/config";
 import type { AstroConfig } from "../src/core/config";
 import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
-import { assertBudgetWindows, TeamQuotaError } from "../src/team";
+import { assertBudgetWindows, isoWeekOf, TeamQuotaError } from "../src/team";
 import {
   DEFAULT_MAX_SPAWNS_PER_RUN,
   SpawnLimitError,
@@ -123,6 +123,22 @@ describe("assertBudgetWindows (#552)", () => {
     expect(err.message).toContain("semana");
   });
 
+  test("fronteira de semana ISO: domingo (W46) não conta na quinta seguinte (W47)", () => {
+    const ledger = ledgerWith([
+      { run: "r1", cost: 100, ts: "2026-11-15T23:59:59.000Z" }, // domingo, ISO 2026-W46
+    ]);
+    // NOW = 2026-11-19 (quinta, ISO 2026-W47): a janela semanal já reiniciou na segunda
+    expect(() => assertBudgetWindows(ledger, { weekBudgetUsd: 10 }, "r1", NOW)).not.toThrow();
+  });
+
+  test("segunda-feira (W47) entra na semana corrente e o rótulo ISO aparece na mensagem", () => {
+    const ledger = ledgerWith([
+      { run: "r1", cost: 6, ts: "2026-11-16T00:00:00.000Z" }, // segunda, ISO 2026-W47
+    ]);
+    const err = capture(() => assertBudgetWindows(ledger, { weekBudgetUsd: 5 }, "r1", NOW));
+    expect(err.message).toContain("2026-W47");
+  });
+
   test("janela mensal (project) ignora mês anterior", () => {
     const ledger = ledgerWith([
       { run: "r1", cost: 6, ts: "2026-11-18T10:00:00.000Z" },
@@ -136,6 +152,18 @@ describe("assertBudgetWindows (#552)", () => {
   test("sem limites declarados não bloqueia", () => {
     const ledger = ledgerWith([{ run: "r1", cost: 999 }]);
     expect(() => assertBudgetWindows(ledger, {}, "r1", NOW)).not.toThrow();
+  });
+});
+
+describe("isoWeekOf (#552)", () => {
+  test("rótulos ISO-8601: fronteira de semana e virada de ano", () => {
+    expect(isoWeekOf("2026-11-19T12:00:00.000Z")).toBe("2026-W47"); // quinta
+    expect(isoWeekOf("2026-11-15T23:59:59.000Z")).toBe("2026-W46"); // domingo anterior
+    expect(isoWeekOf("2026-11-16T00:00:00.000Z")).toBe("2026-W47"); // segunda, virada de semana
+    expect(isoWeekOf("2026-01-01T12:00:00.000Z")).toBe("2026-W01"); // quinta, semana 1
+    expect(isoWeekOf("2025-12-29T12:00:00.000Z")).toBe("2026-W01"); // virada de ano
+    expect(isoWeekOf("2021-01-01T12:00:00.000Z")).toBe("2020-W53"); // ano com 53 semanas
+    expect(isoWeekOf("2027-01-01T12:00:00.000Z")).toBe("2026-W53"); // virada para 2027
   });
 });
 
