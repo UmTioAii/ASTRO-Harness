@@ -75,7 +75,8 @@ export function chatApprovers(
         const notice = wait?.timedOut === true && wait.timeoutMs !== undefined
           ? `aprovação de "${request.name}" expirada após ${wait.timeoutMs}ms`
           : `aprovação de "${request.name}" cancelada sem resposta`;
-        io.write(`\n${notice}\n`);
+        // `write` do node-io já fecha a linha: só o break inicial separa do prompt.
+        io.write(`\n${notice}`);
       }
       return toolChoice(answer);
     },
