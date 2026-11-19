@@ -75,14 +75,13 @@ export function maxStepsMessage(
     return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "${field}" = ${error.maxSteps}; ajuste "${field}" na configuração`;
   }
   // O teto efetivo pode ser menor que o declarado quando a decisão de budget
-  // "baixar esforço" corta os passos restantes (L5/B4): citar o declarado manda
-  // o usuário aumentar um número que não foi o que parou o run.
+  // "baixar esforço" corta os passos restantes (L5/B4): a mensagem cita o valor
+  // declarado (o campo que o usuário controla) e o teto efetivo no parêntese.
   const declared = config.agent.maxSteps;
-  const reduced =
-    error.maxSteps < declared
-      ? ` (o teto efetivo caiu de ${declared} para ${error.maxSteps} pela decisão de budget "baixar esforço")`
-      : "";
-  return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "agent.maxSteps" = ${error.maxSteps}${reduced}; ajuste "agent.maxSteps" na configuração`;
+  if (error.maxSteps < declared) {
+    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "agent.maxSteps" = ${declared}, mas o teto efetivo caiu para ${error.maxSteps} pela decisão de budget "baixar esforço"; aumente o budget ou revise "agent.maxSteps" na configuração`;
+  }
+  return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "agent.maxSteps" = ${declared}; ajuste "agent.maxSteps" na configuração`;
 }
 
 export interface RunOptions {

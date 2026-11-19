@@ -102,7 +102,7 @@ describe("checkpoint de budget considera o escopo, não só o run (#135)", () =>
     );
     s.opts.budget = { scope: "day", limitUsd: 1, warnAt: 0.95, onExceed: "stop" };
     s.opts.checkpointAt = 0.5;
-    s.opts.maxSteps = 10; // turnDue só no turno 5; o budget já está em 60%
+    s.opts.maxSteps = 10; // stepDue só no passo 5; o budget já está em 60%
     await runSession(s.opts, "t");
     expect(existsSync(checkpointPath(s.cwd, "r1", "default"))).toBe(true);
     const events = s.audit.readAll().filter((e) => e.tipo === "loop.checkpoint");

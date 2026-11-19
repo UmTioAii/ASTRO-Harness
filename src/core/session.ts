@@ -607,10 +607,10 @@ export async function runSession(
         // um run que começa com o escopo já acima da fração precisa do checkpoint
         const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
         const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
-        const turnDue = stepCheckpointDue(step, effectiveMaxSteps, opts.checkpointAt);
+        const stepDue = stepCheckpointDue(step, effectiveMaxSteps, opts.checkpointAt);
         const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
           && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
-        if (turnDue || budgetDue) {
+        if (stepDue || budgetDue) {
           checkpointWritten = true;
           const checkpoint = buildCheckpoint({
             // nunca o prompt cru: só taskHash (o prompt do usuário não é persistido)
@@ -622,7 +622,7 @@ export async function runSession(
           }, opts.cwd);
           saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, opts.agent));
           opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "loop.checkpoint",
-            payload: { step, trigger: turnDue ? "turns" : "budget" } });
+            payload: { step, trigger: stepDue ? "turns" : "budget" } });
           judgeSignal = true; // sinal do `auto` (L4)
         }
       }
@@ -1145,10 +1145,10 @@ export async function runMultiAgentSession(
     if (opts.checkpointAt === undefined || checkpointedAgents.has(agent)) return;
     const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
     const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
-    const turnDue = stepCheckpointDue(turn, limit, opts.checkpointAt);
+    const stepDue = stepCheckpointDue(turn, limit, opts.checkpointAt);
     const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
       && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
-    if (!turnDue && !budgetDue) return;
+    if (!stepDue && !budgetDue) return;
     checkpointedAgents.add(agent);
     try {
       const checkpoint = buildCheckpoint({
@@ -1161,7 +1161,7 @@ export async function runMultiAgentSession(
       }, opts.cwd);
       saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, agent));
       opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint",
-        payload: { step, trigger: turnDue ? "turns" : "budget" } });
+        payload: { step, trigger: stepDue ? "turns" : "budget" } });
     } catch (error) {
       opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint_error",
         payload: { step, code: checkpointErrorCode(error) } });
