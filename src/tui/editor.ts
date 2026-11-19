@@ -13,7 +13,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   { name: "/mode", description: "lista ou troca o modo de permissão (bypass pede confirm)" },
   { name: "/config", description: "abre a tela de configuração do harness" },
   { name: "/providers", description: "lista os providers configurados" },
-  { name: "/provider", description: "gerencia perfis (add/edit/remove/use)" },
+  { name: "/provider", description: "gerencia perfis (add/edit/remove/use); na tela, → lista modelos e enter troca o modelo" },
   { name: "/session", description: "resumo da sessão atual" },
   { name: "/details", description: "detalhes: provider, uptime, tokens, custo" },
   { name: "/sessions", description: "lista, renomeia e exclui as sessões gravadas" },
