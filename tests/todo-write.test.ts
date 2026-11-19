@@ -175,7 +175,7 @@ describe("todo_write saída redigida e audit sem conteúdo (I-03)", () => {
       .toEqual({ total: 1, pending: 0, in_progress: 0, done: 1 });
     const serialized = JSON.stringify(events);
     expect(serialized).not.toContain(MARKER);
-    expect(serialized).not.toContain("done\",\"items");
+    expect(serialized).not.toContain('"content"');
   });
 });
 

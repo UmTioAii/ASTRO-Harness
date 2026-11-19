@@ -37,7 +37,7 @@ Status possíveis: `concluído`, `em andamento`, `planejado`, `bloqueado`; o sta
 | F-14 | `git_status` e `git_diff` estruturadas | concluído | #537 | F-11 | C5, T3 |
 | F-15 | `run_tests` (fonte do gate de conclusão) | planejado | — | F-11 | C5 |
 | F-16 | `apply_patch` multi-arquivo atômico (alvo do I-16) | planejado | — | F-04, F-09 | ADR de deprecação do write_file |
-| F-17 | `todo_write` (checkpoint de handoff) | planejado | — | F-02 | C4, T2 |
+| F-17 | `todo_write` (checkpoint de handoff) | concluído | #539 | F-02 | C4, T2 |
 | F-18 | Gate de confirmação pelo approval bridge (sem `ask_user` model-facing) | concluído | #306 | — | — |
 | F-19 | Gate de aprovação de troca de credencial/provider/modelo (I-08, escada D-12) | planejado | — | F-02, F-06 | C6 |
 | F-20 | Microcompactação determinística de resultados de tool | planejado | — | F-02, F-03 | F-21 |

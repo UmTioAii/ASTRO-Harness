@@ -8,6 +8,7 @@ import type { SwapApprover } from "../approval";
 import { Auditor } from "../audit";
 import { budgetStatus, type BudgetDecider, type BudgetStatus } from "../budget";
 import type { ToolApprover } from "../tools/executor";
+import { TodoPlanStore } from "../tools/todo-write";
 import type { TrustAsk } from "../trust";
 import { canonicalFolder, TrustedFolders, trustStatePath } from "../trust";
 import { isPlainObject, updateConfigPermissionsMode } from "../core/config";
@@ -202,6 +203,8 @@ export class AgentSession {
   #costKnown = true;
   /** Modelos sem preço já avisados nesta sessão, entre turnos (#476). */
   #warnedNoPrice = new Set<string>();
+  /** Plano do `todo_write` da sessão (#539): um runTask por turno, o mesmo store. */
+  #todoPlans = new TodoPlanStore();
   #closed = false;
   #fatal = false;
   #busy = false;
@@ -790,6 +793,7 @@ export class AgentSession {
           runId: this.id,
           model: this.#modelRef,
           warnedNoPrice: this.#warnedNoPrice,
+          todoPlans: this.#todoPlans,
           permissionMode: this.#permissionMode, // /mode em runtime (#271) vale no próximo turno
           suppressRunEvents: true,
           ...(this.#allowMissing ? { allowMissingConfig: true } : {}),
