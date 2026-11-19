@@ -34,14 +34,17 @@ interface OpenAICompatProviderOptions {
   providerName?: string;
   /** Call profile do modelo (E1-E8). */
   call?: CallConfig;
+  /** Injeção de timer para testes; ausente = `setTimeout` real. */
+  sleepFn?: (ms: number) => Promise<void>;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 const MAX_ATTEMPTS_LIMIT = 3;
 const DEFAULT_WINDOW_MS = 60_000;
-const BASE_BACKOFF_MS = 250;
+export const BASE_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 10_000;
-const BACKOFF_JITTER = 0.25;
+/** Fração de jitter aplicada ao backoff (0 = desligado). */
+export const BACKOFF_JITTER = 0.25;
 const MAX_ERROR_DETAIL_LENGTH = 300;
 
 
@@ -234,6 +237,7 @@ export class OpenAICompatProvider implements Provider {
   private readonly timeoutMs: number;
   private readonly streamTimeoutMs: number | undefined;
   private readonly providerName: string | undefined;
+  private readonly sleepFn: (ms: number) => Promise<void>;
 
   constructor(opts: OpenAICompatProviderOptions) {
     this.url = `${opts.baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -243,6 +247,7 @@ export class OpenAICompatProvider implements Provider {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
     this.streamTimeoutMs = opts.streamTimeoutMs;
     this.providerName = opts.providerName;
+    this.sleepFn = opts.sleepFn ?? sleep;
 
     const headers = new Headers();
     for (const [name, value] of Object.entries(opts.headers ?? {})) {
@@ -279,7 +284,7 @@ export class OpenAICompatProvider implements Provider {
         const delayMs = retryDelayMs(attempt, retryAfterMsByError.get(error), remainingMs);
         if (delayMs === null) throw error;
 
-        await sleep(delayMs);
+        await this.sleepFn(delayMs);
       }
     }
   }
