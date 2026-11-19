@@ -170,7 +170,7 @@ export interface SessionOptions {
   attachments?: AttachmentMeta[];
   /** Imagens do turno (ADR-0026), só runtime; vai na mensagem `user`. */
   images?: ImagePart[];
-  /** Fração do limite de turnos/orçamento em que o checkpoint é gravado (L5, #135); ausente = sem checkpoint. */
+  /** Fração do limite de passos/orçamento em que o checkpoint é gravado (L5, #135); ausente = sem checkpoint. */
   checkpointAt?: number;
   /** Segmentos consecutivos sem mudança que disparam a pausa (L6, #135); ausente = sem guarda. */
   noProgressSegments?: number;
@@ -601,7 +601,7 @@ export async function runSession(
       maybeWarnBudget(opts.agent);
       checkCeiling(opts.agent);
 
-      // L5 (#135): checkpoint uma única vez ao atingir a fração do limite de turnos ou de budget
+      // L5 (#135): checkpoint uma única vez ao atingir a fração do limite de passos ou de budget
       if (opts.checkpointAt !== undefined && !checkpointWritten) {
         // Gasto do escopo (day/month/project/use-as-you-go), não só deste run:
         // um run que começa com o escopo já acima da fração precisa do checkpoint
@@ -618,7 +618,7 @@ export async function runSession(
               ? (opts.taskHash === undefined ? "[tarefa não registrada]" : `tarefa #${opts.taskHash}`)
               : response.content,
             changedFiles: touchedFiles,
-            nextStep: `continuar a partir do turno ${step + 1}`,
+            nextStep: `continuar a partir do passo ${step + 1}`,
           }, opts.cwd);
           saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, opts.agent));
           opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "loop.checkpoint",
@@ -1157,7 +1157,7 @@ export async function runMultiAgentSession(
           ? (opts.taskHash === undefined ? "[tarefa não registrada]" : `tarefa #${opts.taskHash}`)
           : response.content,
         changedFiles: touchedFiles,
-        nextStep: `continuar a partir do turno ${step + 1}`,
+        nextStep: `continuar a partir do passo ${step + 1}`,
       }, opts.cwd);
       saveCheckpoint(checkpoint, checkpointPath(opts.cwd, opts.run, agent));
       opts.audit.append({ run: opts.run, agent, tipo: "loop.checkpoint",
