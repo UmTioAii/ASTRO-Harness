@@ -41,13 +41,14 @@ export function toolPrompt(request: ToolPermissionRequest): string {
 
 /**
  * Mapeia a resposta do prompt de tool (PERM-04, #265). `S` maiúsculo é sessão;
- * `s` minúsculo é aprovação única (true no gate). Qualquer outra resposta nega.
+ * `s` minúsculo é aprovação única (true no gate). O vocabulário é exatamente o
+ * do prompt: qualquer outra resposta nega (fail-closed, #546).
  */
 export function toolChoice(answer: string | null): PermissionApproval {
   const raw = (answer ?? "").trim();
   const lower = raw.toLowerCase();
   if (raw === "S" || lower === "sessao" || lower === "session") return "session";
-  if (isYes(raw)) return true;
+  if (raw === "s") return true;
   return false;
 }
 
