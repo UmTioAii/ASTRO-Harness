@@ -34,9 +34,14 @@ export function budgetPrompt(status: BudgetStatus): string {
 /**
  * Prompt de aprovação de tool/file (PERM-04, #265): três opções na mesma linha.
  * `s` vale para esta chamada; `S` grava um grant em memória até o fim da sessão.
+ * O argumento material (`request.detail`, #536) entra entre parênteses: sem ele
+ * o prompt é exatamente o antigo.
  */
 export function toolPrompt(request: ToolPermissionRequest): string {
-  return `tool "${request.name}" (ação ${request.action}, modo ${request.mode}). [s] aprovar, [n] negar, [S] aprovar nesta sessão: `;
+  const detail = request.detail === undefined
+    ? ""
+    : `, ${request.detail.kind === "command" ? "comando" : "caminho"} \`${request.detail.value}\``;
+  return `tool "${request.name}" (ação ${request.action}, modo ${request.mode}${detail}). [s] aprovar, [n] negar, [S] aprovar nesta sessão: `;
 }
 
 /**

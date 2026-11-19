@@ -12,6 +12,7 @@
  */
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { redactSecrets } from "./sanitize-external";
 import { ToolError, isToolClass, type SideEffects, type Tool, type ToolClass, type ToolManifest } from "./tools/types";
 
 export type PermissionMode = "bypass" | "allow-edits" | "ask";
@@ -128,11 +129,89 @@ export class PermissionGrants {
   }
 }
 
+/**
+ * Argumento material de uma chamada para o pedido de aprovação (#536): o que a
+ * chamada vai de fato fazer — `run_command` executa um comando, as tools de
+ * arquivo tocam um path (ou `from -> to`). Sempre chega ao prompt já redacted
+ * e truncado (I-03/I-04).
+ */
+export interface ApprovalDetail {
+  /** `command` (comando de shell) ou `path` (caminho de arquivo); define o rótulo no prompt. */
+  kind: "command" | "path";
+  value: string;
+}
+
+/** Teto do valor exibido no prompt de aprovação (#536); acima disso entra o marcador `...`. */
+export const APPROVAL_DETAIL_MAX_CHARS = 200;
+const APPROVAL_DETAIL_ELLIPSIS = "...";
+
+/** Tools cujo argumento material é um path (#536). `move_path` soma dois paths. */
+const DETAIL_PATH_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit", "delete_path"]);
+/** Tools cujo argumento material é o comando (#536). */
+const DETAIL_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command"]);
+
+/**
+ * Normaliza o valor para uma linha do prompt: cada corrida de
+ * controle/quebra de linha vira um espaço (uma linha só na TUI/REPL), sem
+ * mexer no espaçamento interno do comando, e o segredo é redigido antes do
+ * corte — cortar primeiro poderia exibir um segredo pela metade (I-03).
+ */
+function detailValue(raw: string): string | undefined {
+  const flat = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  if (flat.length === 0) return undefined;
+  return redactSecrets(flat);
+}
+
+/** Corta o valor no teto com marcador explícito (#536); o corte fica visível. */
+function capDetailValue(value: string): string {
+  if (value.length <= APPROVAL_DETAIL_MAX_CHARS) return value;
+  let end = APPROVAL_DETAIL_MAX_CHARS;
+  // Não parte par surrogate (emoji na borda viraria caractere inválido na TUI).
+  const last = value.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${value.slice(0, end)}${APPROVAL_DETAIL_ELLIPSIS}`;
+}
+
+/**
+ * Detalhe do pedido de aprovação (#536): só o campo material de tools com
+ * forma conhecida. Tool fora do vocabulário — ou input sem o campo — devolve
+ * `undefined` e o prompt volta ao formato antigo. Nunca lê conteúdo de
+ * arquivo nem valores de ambiente (I-03).
+ */
+export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined {
+  if (typeof call.input !== "object" || call.input === null) return undefined;
+  const input = call.input as Record<string, unknown>;
+  if (DETAIL_COMMAND_TOOLS.has(call.name)) {
+    if (typeof input.command !== "string") return undefined;
+    const command = detailValue(input.command);
+    return command === undefined ? undefined : { kind: "command", value: capDetailValue(command) };
+  }
+  if (call.name === "move_path") {
+    if (typeof input.from !== "string" || typeof input.to !== "string") return undefined;
+    const from = detailValue(input.from);
+    const to = detailValue(input.to);
+    return from === undefined || to === undefined
+      ? undefined
+      : { kind: "path", value: capDetailValue(`${from} -> ${to}`) };
+  }
+  if (DETAIL_PATH_TOOLS.has(call.name)) {
+    if (typeof input.path !== "string") return undefined;
+    const path = detailValue(input.path);
+    return path === undefined ? undefined : { kind: "path", value: capDetailValue(path) };
+  }
+  return undefined;
+}
+
 /** Pedido de aprovação entregue ao prompt (PERM-04). */
 export interface ToolPermissionRequest {
   name: string;
   action: ActionClass;
   mode: PermissionMode;
+  /**
+   * Argumento material do pedido (#536): comando ou path, já redacted e
+   * truncado. REPL e TUI renderizam o mesmo detalhe via `toolPrompt`.
+   */
+  detail?: ApprovalDetail;
   /**
    * Anexo estruturado para a UI revisar antes de aprovar (ex.: diff da tool
    * `edit`, #64). Deve chegar aqui JÁ redacted (I-03) e nunca é auditado.
