@@ -62,7 +62,12 @@ async function run(args: string[], env: NodeJS.ProcessEnv) {
 }
 
 function cli(dir: string, cfgPath: string, args: string[]) {
-  return run([...args, "--config", cfgPath], { ASTRO_HOME: join(dir, "home"), ASTRO_CWD: dir });
+  return run([...args, "--config", cfgPath], {
+    ASTRO_HOME: join(dir, "home"),
+    ASTRO_CWD: dir,
+    // Valor de segredo semeado no ambiente: nome no ledger, nunca o valor (I-03).
+    SENTINEL_KEY: "sentinel-xyz",
+  });
 }
 
 describe("astro locks (#527)", () => {
@@ -79,6 +84,7 @@ describe("astro locks (#527)", () => {
     expect(out).toContain("SENTINEL_KEY");
     expect(out).toContain(String(process.pid));
     expect(out).toContain("vivo");
+    expect(out).toContain("há ");
   });
 
   test("sem conta presa sai 0 com mensagem clara", async () => {
@@ -100,8 +106,26 @@ describe("astro locks (#527)", () => {
 
     expect(code).toBe(0);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0]).toMatchObject({ run: "run-a", agent_id: "default", accountRef: "SENTINEL_KEY", alive: true });
+    expect(parsed[0]).toMatchObject({
+      run: "run-a",
+      agent_id: "default",
+      accountRef: "SENTINEL_KEY",
+      alive: true,
+    });
+    expect(parsed[0]!.created_at).toBeString();
+    expect(parsed[0]!.ageMs).toBeNumber();
     expect(out).not.toContain("sentinel-xyz");
+  });
+
+  test("--json só vale em locks list", async () => {
+    const { dir, cfgPath } = setup([
+      { run: "run-a", agent: "default", pid: 999_999, credentialRef: "SENTINEL_KEY" },
+    ]);
+
+    const { err, code } = await cli(dir, cfgPath, ["locks", "release", "run-a", "--json"]);
+
+    expect(code).not.toBe(0);
+    expect(err).toContain("--json");
   });
 
   test("release sem --force recusa quando o pid dono está vivo", async () => {

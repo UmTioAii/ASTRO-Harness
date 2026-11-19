@@ -823,6 +823,12 @@ function parseArgs(argv: string[]): ParsedCommand {
     if (action === "release" && run === undefined) {
       throw new UsageError("use: locks release <run> [--agent <id>] [--force] [--config <path>]");
     }
+    if (action === "list" && agent !== undefined) {
+      throw new UsageError("--agent só vale em locks release");
+    }
+    if (action === "release" && json) {
+      throw new UsageError("--json só vale em locks list");
+    }
     return {
       kind: "locks",
       options: {

@@ -6,6 +6,7 @@
 import { activeLocks, releaseAgentLock, type PidProbe } from "./agent-lock";
 import type { Auditor } from "./audit";
 import { processAlive, type Ledger } from "./ledger";
+import { redactSecrets } from "./sanitize-external";
 
 /** Conta presa como o operador precisa vê-la: quem, qual conta, e se o dono está vivo. */
 export interface LockSummary {
@@ -17,6 +18,8 @@ export interface LockSummary {
   profile?: string;
   pid?: number;
   alive: boolean;
+  /** `seq` do `agent.created` observado: guarda de concorrência do release (#527). */
+  seq: number;
   created_at?: string;
   ageMs?: number;
 }
@@ -57,6 +60,7 @@ export function summarizeLocks(
       ...(lock.pid === undefined ? {} : { pid: lock.pid }),
       // Ledger legado sem pid não prova dono vivo: trata como não vivo.
       alive: lock.pid !== undefined && probe(lock.pid),
+      seq: lock.seq,
       ...(lock.created_at === undefined ? {} : { created_at: lock.created_at }),
       ...(ageMs === undefined ? {} : { ageMs }),
     };
@@ -117,10 +121,13 @@ export function releaseLocks(
   opts: ReleaseLocksOptions,
 ): ReleaseLocksResult {
   const probe = opts.probe ?? processAlive;
+  // O ledger grava run/agent redigidos (I-03): compara do mesmo jeito (agent-lock `sameAgent`).
+  const run = redactSecrets(opts.run);
+  const agent = opts.agent === undefined ? undefined : redactSecrets(opts.agent);
   const candidates = summarizeLocks(ledger, probe, opts.now).filter(
-    (lock) => lock.run === opts.run && (opts.agent === undefined || lock.agent_id === opts.agent),
+    (lock) => lock.run === run && (agent === undefined || lock.agent_id === agent),
   );
-  const alvo = opts.agent === undefined ? `run "${opts.run}"` : `run "${opts.run}", agente "${opts.agent}"`;
+  const alvo = agent === undefined ? `run "${run}"` : `run "${run}", agente "${agent}"`;
   if (candidates.length === 0) {
     return { released: false, locks: [], message: `nada para liberar: ${alvo} não tem conta presa` };
   }
@@ -129,36 +136,49 @@ export function releaseLocks(
     return {
       released: false,
       locks: candidates,
-      message: `recusado: run "${opts.run}" tem ${candidates.length} contas presas; use --agent para escolher: ${ids}`,
+      message: `recusado: run "${run}" tem ${candidates.length} contas presas; use --agent para escolher: ${ids}`,
     };
   }
   const lock = candidates[0] as LockSummary;
+  const outcome = releaseObservedLock(ledger, audit, lock, { force: opts.force === true });
+  return { ...outcome, locks: candidates };
+}
+
+export interface ReleaseObservedOptions {
+  force?: boolean;
+}
+
+/**
+ * Libera exatamente o lock observado (#527). A guarda `pid`/`seq` usa o
+ * **snapshot** — reler o lock antes de escrever tornaria a guarda um no-op e
+ * derrubaria um lock readquirido por outro processo no intervalo (A4).
+ * `--force` com dono vivo audita `manual_release_forced`, distinto do caso morto.
+ */
+export function releaseObservedLock(
+  ledger: Ledger,
+  audit: Auditor,
+  lock: LockSummary,
+  opts: ReleaseObservedOptions = {},
+): { released: boolean; message: string } {
   if (lock.alive && opts.force !== true) {
     return {
       released: false,
-      locks: candidates,
       message: `recusado: ${describe(lock)} ainda está vivo; use --force para liberar mesmo assim`,
     };
   }
-  const current = activeLocks(ledger).find(
-    (entry) => entry.run === lock.run && entry.agent_id === lock.agent_id,
-  );
-  const released = current === undefined
-    ? false
-    : releaseAgentLock(ledger, audit, {
-      run: current.run,
-      agent_id: current.agent_id,
-      session_id: current.session_id,
-      reason: "manual_release",
-      ...(current.pid === undefined ? {} : { pid: current.pid }),
-      seq: current.seq,
-    });
+  const forced = opts.force === true && lock.alive;
+  const released = releaseAgentLock(ledger, audit, {
+    run: lock.run,
+    agent_id: lock.agent_id,
+    reason: forced ? "manual_release_forced" : "manual_release",
+    ...(lock.pid === undefined ? {} : { pid: lock.pid }),
+    seq: lock.seq,
+  });
   if (!released) {
     return {
       released: false,
-      locks: candidates,
       message: `nada foi liberado: a conta de ${describe(lock)} mudou desde a leitura; rode "astro locks" de novo`,
     };
   }
-  return { released: true, locks: candidates, message: `conta liberada: ${lock.accountRef} (${describe(lock)})` };
+  return { released: true, message: `conta liberada: ${lock.accountRef} (${describe(lock)})` };
 }
