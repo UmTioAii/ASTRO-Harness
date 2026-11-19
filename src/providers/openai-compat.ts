@@ -601,7 +601,7 @@ export class OpenAICompatProvider implements Provider {
       errClass = "outage";
     }
 
-    const detail = truncate(this.redact(extractErrorDetail(text)), MAX_ERROR_DETAIL_LENGTH);
+    const detail = truncate(redactSecrets(this.redact(extractErrorDetail(text))), MAX_ERROR_DETAIL_LENGTH);
     const message =
       `provider respondeu HTTP ${status} (${errClass})` + (detail.length > 0 ? `: ${detail}` : "");
     const error = new ProviderError(errClass, message, status);
