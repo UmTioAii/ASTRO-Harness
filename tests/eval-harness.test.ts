@@ -569,7 +569,7 @@ describe("eval harness (F5-2)", () => {
 
   test("runCase isola a config global do ASTRO_HOME", async () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
-    // Teto de 1 passo: se a camada global vazar para o caso de 2 requests, o run para no primeiro passo.
+    // Teto de 1 passo: se a camada global vazar, a validação recusa o projeto por ampliar o teto global.
     writeFileSync(join(home, "config.json"), JSON.stringify({ agent: { maxSteps: 1 } }));
     const root = mkdtempSync(join(tmpdir(), "astro-global-case-"));
     writeScenarioCase(root, "01-global", {

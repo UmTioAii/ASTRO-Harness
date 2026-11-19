@@ -23,6 +23,27 @@ test("tui recusa stdin em pipe sem carregar a interface", async () => {
   expect(lines.join("\n")).toContain("terminal interativo");
 });
 
+test("só flags chegam à TUI: sem TTY o erro é do terminal, não do argv (#543)", async () => {
+  const proc = Bun.spawn(["bun", "src/cli.ts", "--config", "astro.config.json", "--cwd", root], {
+    cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  proc.stdin.end();
+  expect(await proc.exited).toBe(1);
+  const stderr = await new Response(proc.stderr).text();
+  expect(stderr).toContain("terminal interativo");
+  expect(stderr).not.toContain("opção desconhecida");
+  expect(stderr).not.toContain("nenhum argumento");
+});
+
+test("argv vazio em pipe imprime o help e sai 0 (#543)", async () => {
+  const proc = Bun.spawn(["bun", "src/cli.ts"], {
+    cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  proc.stdin.end();
+  expect(await proc.exited).toBe(0);
+  expect(await new Response(proc.stdout).text()).toContain("Uso:");
+});
+
 test("`astro tui` deixou de existir: o comando padrão é `astro`", async () => {
   const proc = Bun.spawn(["bun", "src/cli.ts", "tui", "--cwd", root], {
     cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
