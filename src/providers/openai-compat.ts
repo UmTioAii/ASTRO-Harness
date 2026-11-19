@@ -1,6 +1,7 @@
 import { isAbortError } from "../abort";
 import { applyCallToBody, type AppliedCallProfile, type CallConfig } from "../call-profile";
 import { DEFAULT_PROVIDER_TIMEOUT_MS, networkCall, type NetworkCall } from "./network";
+import { RETRYABLE_CLASSES } from "./policy";
 import { redactSecrets } from "../sanitize-external";
 import { isRedirectRefusal } from "../url-safety";
 import type {
@@ -43,7 +44,7 @@ const MAX_BACKOFF_MS = 10_000;
 const BACKOFF_JITTER = 0.25;
 const MAX_ERROR_DETAIL_LENGTH = 300;
 
-const RETRYABLE: ReadonlySet<ErrorClass> = new Set(["transient_rate_limit", "outage", "network_timeout"]);
+
 
 /** Retry-After da resposta que originou o erro, quando presente. */
 const retryAfterMsByError = new WeakMap<ProviderError, number>();
@@ -270,7 +271,7 @@ export class OpenAICompatProvider implements Provider {
         if (!(error instanceof ProviderError)) throw error;
         // Já emitimos token: repetir duplicaria o texto no painel.
         if (streamStarted.has(req)) throw error;
-        if (!RETRYABLE.has(error.errClass) || attempt >= this.maxAttempts) {
+        if (!RETRYABLE_CLASSES.has(error.errClass) || attempt >= this.maxAttempts) {
           throw error;
         }
 

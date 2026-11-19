@@ -116,11 +116,12 @@ describe("FallbackProvider honors the matrix (#556)", () => {
     expect(response.provider).toBe("backup");
   });
 
-  test("auth aborts the chain without trying the backup", async () => {
+  test("auth is never retried on the same provider; the hard error skips to the next", async () => {
     const { provider, primary, backup } = chain("auth");
-    await expect(provider.complete(req)).rejects.toBeInstanceOf(ProviderError);
+    const response = await provider.complete(req);
     expect(primary.calls).toBe(1);
-    expect(backup.calls).toBe(0);
+    expect(backup.calls).toBe(1);
+    expect(response.provider).toBe("backup");
   });
 
   test("transient_rate_limit retries maxRetries times before falling back", async () => {

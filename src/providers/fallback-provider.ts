@@ -10,11 +10,11 @@ import { auditCostUsd, auditDurationMs, type Auditor } from "../audit";
 import { isAbortError } from "../abort";
 import { AccountLockedError } from "../agent-lock";
 import { markProviderFailure, markProviderSuccess } from "./health-state";
+import { maxRetriesFor } from "./policy";
 import { streamStarted } from "./types";
 import { SwapDeniedError, type SwapApprover, type SwapRequest } from "../approval";
 import { ProviderError, type CompletionRequest, type CompletionResponse, type ErrorClass, type Provider } from "./types";
 
-const RETRYABLE: ReadonlySet<string> = new Set(["transient_rate_limit", "outage", "network_timeout"]);
 /** Prioridade padrão quando o provider não declara (D-15). */
 export const DEFAULT_PRIORITY = 100;
 
@@ -196,7 +196,12 @@ export class FallbackProvider implements Provider {
           lastError = error;
           lastClass = errorClass;
           this.#log("provider.failure", { provider: entry.name, errorClass, attempt });
-          if (!RETRYABLE.has(errorClass) || attempt > this.#maxRetries) break; // próximo da cadeia
+          // Matriz D-18: classe dura (cota/erro fatal) nunca retenta, só cai para o próximo.
+          const cap = maxRetriesFor(errorClass, {
+            maxRateLimitRetries: this.#maxRetries,
+            maxOutageRetries: this.#maxRetries,
+          });
+          if (cap === 0 || attempt > cap) break; // próximo da cadeia
           await sleep(this.#retryBackoffMs * attempt);
         }
       }
