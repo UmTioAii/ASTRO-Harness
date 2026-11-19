@@ -15,6 +15,8 @@ import { formatCostByAgent } from "./team";
 import { Registry } from "./core/registry";
 import { formatPoolList } from "./pool";
 import { formatAgentsList } from "./agent-manager";
+import { formatLocksList, releaseLocks, summarizeLocks } from "./locks";
+import { Auditor } from "./audit";
 import { buildModelCatalog, formatModelCatalog, formatSeedList } from "./model-catalog";
 import { PROVIDER_CATALOG } from "./providers/catalog";
 import { evalFailsThreshold, runEval, writeBaseline, type EvalReport } from "./eval/harness";
@@ -201,6 +203,7 @@ const USAGE = `Uso:
   astro cost --by-agent [--config <path>]
   astro pool <list|health> [--config <path>]
   astro agents list [--config <path>]
+  astro locks [release <run>] [--agent <name>] [--force] [--json] [--config <path>]
   astro models list [--config <path>] [--seeds] [--json]
   astro config <push|pull> <org/projeto> [--registry <owner/repo>] [--config <path>] [--token <t>] [--allow-plugins]
   astro skills <list|show|validate|install|remove|verify> [--user] [--force]
@@ -341,6 +344,15 @@ interface AgentsCommand {
   configPath: string;
 }
 
+interface LocksCommand {
+  action: "list" | "release";
+  run?: string;
+  agent?: string;
+  force: boolean;
+  json: boolean;
+  configPath: string;
+}
+
 interface ModelsCommand {
   action: "list";
   configPath: string;
@@ -382,6 +394,7 @@ type ParsedCommand =
   | { kind: "providers"; options: ProvidersCommand }
   | { kind: "pool"; options: PoolCommand }
   | { kind: "agents"; options: AgentsCommand }
+  | { kind: "locks"; options: LocksCommand }
   | { kind: "models"; options: ModelsCommand }
   | { kind: "handoff"; options: HandoffShowCommand }
   | { kind: "cost"; options: CostCommand }
@@ -496,7 +509,7 @@ function parseArgs(argv: string[]): ParsedCommand {
   }
 
   const [command, ...rest] = argv;
-  const commands = ["run", "eval", "bench", "serve", "replay", "resume", "continue", "chat", "tui", "health", "doctor", "providers", "handoff", "cost", "pool", "agents", "models", "config", "skills", "mcp"];
+  const commands = ["run", "eval", "bench", "serve", "replay", "resume", "continue", "chat", "tui", "health", "doctor", "providers", "handoff", "cost", "pool", "agents", "locks", "models", "config", "skills", "mcp"];
   if (command !== undefined && !commands.includes(command)) {
     throw new UsageError(`comando desconhecido: "${command}"`);
   }
@@ -765,6 +778,62 @@ function parseArgs(argv: string[]): ParsedCommand {
       throw new UsageError("use: agents list [--config <path>]");
     }
     return { kind: "agents", options: { action: "list", configPath } };
+  }
+
+  if (command === "locks") {
+    let configPath = "astro.config.json";
+    let action: "list" | "release" = "list";
+    let run: string | undefined;
+    let agent: string | undefined;
+    let force = false;
+    let json = false;
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i] as string;
+      if (arg === "--config" || arg === "--agent") {
+        const value = rest.at(i + 1);
+        if (value === undefined || value.startsWith("-") || value.trim() === "") {
+          throw new UsageError(`falta o valor de ${arg}`);
+        }
+        i++;
+        if (arg === "--config") configPath = value;
+        else agent = value;
+        continue;
+      }
+      if (arg === "--force") {
+        force = true;
+        continue;
+      }
+      if (arg === "--json") {
+        json = true;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        throw new UsageError(`opção desconhecida: "${arg}"`);
+      }
+      if (arg === "release") {
+        action = "release";
+        continue;
+      }
+      if (action === "release" && run === undefined) {
+        run = arg;
+        continue;
+      }
+      throw new UsageError(`argumento inesperado: "${arg}"`);
+    }
+    if (action === "release" && run === undefined) {
+      throw new UsageError("use: locks release <run> [--agent <id>] [--force] [--config <path>]");
+    }
+    return {
+      kind: "locks",
+      options: {
+        action,
+        ...(run === undefined ? {} : { run }),
+        ...(agent === undefined ? {} : { agent }),
+        force,
+        json,
+        configPath,
+      },
+    };
   }
 
   if (command === "models") {
@@ -1409,6 +1478,39 @@ async function main(argv: string[]): Promise<number> {
         console.log(formatSeedList());
       }
       return 0;
+    } catch (error) {
+      console.error(cliErrorLine(error));
+      return 1;
+    }
+  }
+
+  if (parsed.kind === "locks") {
+    const o = parsed.options;
+    try {
+      const config = loadEffectiveConfig(resolve(o.configPath)).config;
+      const ledger = new Ledger(resolve(process.cwd(), config.paths.ledger));
+      if (o.action === "list") {
+        const locks = summarizeLocks(ledger);
+        console.log(o.json ? JSON.stringify(locks, null, 2) : formatLocksList(locks));
+        return 0;
+      }
+      const run = o.run;
+      if (run === undefined) {
+        console.error("erro: informe o run a liberar");
+        return 1;
+      }
+      const audit = new Auditor(resolve(process.cwd(), config.paths.audit));
+      const result = releaseLocks(ledger, audit, {
+        run,
+        ...(o.agent === undefined ? {} : { agent: o.agent }),
+        force: o.force,
+      });
+      if (result.released) {
+        console.log(result.message);
+        return 0;
+      }
+      console.error(result.message);
+      return 1;
     } catch (error) {
       console.error(cliErrorLine(error));
       return 1;

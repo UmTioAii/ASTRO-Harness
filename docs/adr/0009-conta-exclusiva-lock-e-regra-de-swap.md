@@ -25,6 +25,8 @@ A unidade de placement é `(provider, modelo, credencial)` e a quota agrega por 
 
 **Swap na cadeia de profile (S-13, #130).** O `ProfileFallbackProvider` aplica A7 antes de cada destino: `moveAgentLock` valida a conta de destino, grava `agent.identity` com o motivo e audita `agent.lock.moved`; destino ocupado é pulado com `profile.fallback_skipped` e não entra em `fallbacks[]`. A aprovação (gate S-12) vem antes da troca; a credencial do primário não viaja com a cadeia. O profile/provider que atendeu fica sticky no run enquanto o agente detém a conta; o C6 de cada profile segue a mesma regra de conta.
 
+**Operação da conta presa (#527).** `astro locks` lista o lock reconstruído do ledger (run, agente, conta, pid, vivo/morto, idade); `astro locks release <run>` grava `destroyed` com `reason: "manual_release"` usando a mesma guarda de `pid`/`seq` do recovery, e exige `--force` quando o `pid` dono está vivo. Liberar não mata o processo dono: é escape hatch para run travado, não para roubar conta em uso.
+
 ADR-0008 (S-02a, #119) referencia A4; a posse do assunto é deste ADR. Implementação: S-07 (#124) para lock, S-12 (#129) para o gate, S-13 (#130) para a cadeia.
 
 ## Consequências

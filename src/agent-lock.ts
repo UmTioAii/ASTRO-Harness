@@ -19,6 +19,8 @@ export interface AgentLock {
   profile?: string;
   /** PID dono do lock; ausente em ledger legado. */
   pid?: number;
+  /** ISO do `agent.created` (#527): idade da conta presa no `astro locks`. */
+  created_at?: string;
   seq: number;
 }
 
@@ -131,6 +133,7 @@ function lockFrom(entry: LedgerAgentEntry): AgentLock {
     ...(entry.model === undefined ? {} : { model: entry.model }),
     ...(entry.profile === undefined ? {} : { profile: entry.profile }),
     ...(entry.pid === undefined ? {} : { pid: entry.pid }),
+    created_at: entry.ts,
     seq: entry.seq,
   };
 }
