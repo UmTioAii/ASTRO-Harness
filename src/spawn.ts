@@ -49,10 +49,25 @@ export class SpawnLimitError extends Error {
 /** Teto de agentes ativos do run (A2 v1: orchestrator + 1). */
 export class SpawnConcurrencyError extends Error {
   readonly code = "spawn_limit_exceeded";
-  constructor(limit: number) {
-    super(`teto de ${limit} agentes ativos por run atingido`);
+  constructor(limit: number, accounts?: number) {
+    super(
+      accounts === undefined
+        ? `teto de ${limit} agentes ativos por run atingido`
+        : `teto de ${limit} agente(s) ativo(s) por run atingido; contas declaradas: ${accounts}`,
+    );
     this.name = "SpawnConcurrencyError";
   }
+}
+
+/**
+ * Contas distintas declaradas nos providers (A2/A4, ADR-0009): cada agente
+ * ativo consome uma conta exclusiva, então o teto nunca passa do número de
+ * contas (#551).
+ */
+export function declaredAccounts(config: AstroConfig): number {
+  return new Set(
+    Object.entries(config.providers).map(([name, provider]) => providerAccountRefFor(name, provider)),
+  ).size;
 }
 
 /** Subagente nascido em runtime, fixado no spawn (ADR-0007/0008). */
@@ -286,10 +301,15 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
 
         if (deps.spawns.size >= deps.spawns.limit) throw new SpawnLimitError(deps.spawns.limit);
 
+        // #551: teto aware de contas — com 1–2 providers (contas) os spawns
+        // extras são recusados aqui, antes da escolha de modelo (sem drenar
+        // quota/RPM no stall do lock de conta), com erro claro que cita contas.
+        const accounts = declaredAccounts(deps.config);
         const maxActive = deps.config.maxActive ?? 2;
+        const ceiling = Math.min(maxActive, accounts);
         const runKey = redactSecrets(ctx.run);
         const active = activeLocks(deps.ledger).filter((lock) => lock.run === runKey).length;
-        if (active >= maxActive) throw new SpawnConcurrencyError(maxActive);
+        if (active >= ceiling) throw new SpawnConcurrencyError(ceiling, accounts);
 
         const parentAllow = ctx.allow ?? [];
         const tools = raw.tools === undefined ? [...parentAllow] : raw.tools;

@@ -88,7 +88,10 @@ describe("handoff durável na sessão multi-agent (F-23)", () => {
     expect(result.final).toBe("done");
     expect(reads).toBe(0);
     const msgs = requests[1].messages;
-    expect(msgs.find((m) => m.toolCallId === "c2")?.content).toBe(JSON.stringify({ skipped: "handoff" }));
-    expect(msgs.findIndex((m) => m.toolCallId === "c2")).toBeLessThan(msgs.findIndex((m) => m.content?.includes("[Sistema: handoff")));
+    // #551: o receptor começa do zero — a call pulada fica no histórico do
+    // emissor e não vaza para o receptor junto com o resto do histórico.
+    expect(msgs.find((m) => m.toolCallId === "c2")).toBeUndefined();
+    expect(msgs.some((m) => m.role === "user")).toBe(false);
+    expect(msgs.some((m) => m.content?.includes("[Sistema: handoff"))).toBe(true);
   });
 });
