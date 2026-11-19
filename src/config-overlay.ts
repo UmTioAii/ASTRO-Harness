@@ -116,13 +116,23 @@ export function assertNarrowed(
   if (main !== undefined && mainAfter !== undefined) assertAgentNarrowed(main, mainAfter, "do agent principal");
   const named = isPlainObject(global.agents) ? global.agents : {};
   const namedAfter = isPlainObject(merged.agents) ? merged.agents : {};
-  // Um nomeado declarado só no projeto não escapa do teto (#548): tools e
-  // perfil vêm do global do próprio nomeado; sem ele, do agent principal; sem
-  // tools no principal, do default de D-07. Teto de passos idem.
+  // Um nomeado declarado só no projeto não escapa do teto (#548): as tools
+  // ficam dentro do global do próprio nomeado; sem ele, dentro da allowlist do
+  // agent principal (o schema já a aplica; aqui falhamos cedo com a regra de
+  // política); sem tools em nenhum dos dois, dentro do default de D-07. O
+  // `permission` só existe no nomeado (D-28), então só é comparado quando a
+  // camada global declara esse nomeado. Teto de passos idem.
   for (const [name, after] of Object.entries(namedAfter)) {
     if (!isPlainObject(after)) continue;
     const globalAgent = isPlainObject(named[name]) ? named[name] : undefined;
-    assertAgentNarrowed(namedAgentCeiling(globalAgent, main, mainAfter), after, `do agent "${name}"`);
+    if (globalAgent !== undefined) {
+      assertNotWider(globalAgent.permission, after.permission, PERMISSION_RANK, `a permissão global do agent "${name}"`);
+    }
+    const fromGlobal = Array.isArray(globalAgent?.tools);
+    const ceilingTools = fromGlobal
+      ? (globalAgent?.tools as unknown[])
+      : Array.isArray(mainAfter?.tools) ? mainAfter.tools : [...DEFAULT_AGENT_TOOLS];
+    assertToolsWithin(ceilingTools, after.tools, name, fromGlobal);
     const stepsCeiling = globalAgent !== undefined && typeof globalAgent.maxSteps === "number"
       ? globalAgent.maxSteps
       : mainCeiling;
@@ -235,24 +245,13 @@ interface GlobalSource {
   provider: Record<string, unknown>;
 }
 
-/**
- * Teto de um agent nomeado (#548): o global do próprio nomeado; sem ele, a
- * allowlist efetiva do agent principal (que o projeto não pode ampliar); sem
- * tools declaradas em nenhum dos dois, o default de D-07. O perfil de permissão
- * segue a política global (nomeado, senão principal) — o projeto nunca amplia.
- */
-function namedAgentCeiling(
-  globalAgent: Record<string, unknown> | undefined,
-  mainGlobal: Record<string, unknown> | undefined,
-  mainAfter: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  const tools = Array.isArray(globalAgent?.tools)
-    ? globalAgent.tools
-    : Array.isArray(mainAfter?.tools)
-      ? mainAfter.tools
-      : Array.isArray(mainGlobal?.tools) ? mainGlobal.tools : [...DEFAULT_AGENT_TOOLS];
-  const permission = globalAgent?.permission ?? mainGlobal?.permission;
-  return { tools, ...(permission === undefined ? {} : { permission }) };
+/** Tools de um agent nomeado: o valor declarado nunca sai da allowlist do teto. */
+function assertToolsWithin(allowed: readonly unknown[], declared: unknown, name: string, fromGlobal: boolean): void {
+  if (!Array.isArray(declared)) return;
+  const extra = declared.filter((tool) => !allowed.map(String).includes(String(tool)));
+  if (extra.length === 0) return;
+  const source = fromGlobal ? "global" : "do agent principal";
+  throw new ConfigError(`config inválida: o agent "${name}" usa tools fora da allowlist ${source} (${extra.join(", ")})`);
 }
 
 /** Tools e perfil de permissão de um agent: só o que o global permite. */
