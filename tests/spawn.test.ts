@@ -77,6 +77,10 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     const both = await tool.execute({ need: "writing-code", task: "c", maxTurns: 1, maxSteps: 1 }, ctx);
     expect(both.isError).toBe(true);
     expect(JSON.parse(both.output)).toMatchObject({ error: "invalid_request" });
+
+    const invalid = await tool.execute({ need: "writing-code", task: "d", maxSteps: "2" }, ctx);
+    expect(invalid.isError).toBe(true);
+    expect(JSON.parse(invalid.output).message).toContain("'maxSteps'");
   });
 
   test("sem conta livre o snapshot fica vazio; snapshot velho falha no lock", async () => {

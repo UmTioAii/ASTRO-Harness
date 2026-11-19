@@ -262,7 +262,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         }
         const maxTurns = requestedMaxTurns ?? legacyMaxSteps;
         if (maxTurns !== undefined && (typeof maxTurns !== "number" || !Number.isInteger(maxTurns) || maxTurns < 1)) {
-          return { output: JSON.stringify({ error: "invalid_request", message: "campo 'maxTurns' deve ser inteiro >= 1" }), isError: true };
+          return { output: JSON.stringify({ error: "invalid_request", message: `campo '${requestedMaxTurns !== undefined ? "maxTurns" : "maxSteps"}' deve ser inteiro >= 1` }), isError: true };
         }
 
         // v1 é serial: filho não spawna neto (sem canal p2p e sem histórico do pai).
