@@ -9,14 +9,14 @@ Cliente MCP (Model Context Protocol) no ASTRO (C2, #56): config `mcpServers`, tr
 | Campo | Regra | Default |
 |---|---|---|
 | `transport` | `stdio` \| `sse` \| `http` | obrigatório |
-| `command` + `args` + `env` | `command` obrigatório em stdio | `args: []` |
+| `command` + `args` + `env` | `command` obrigatório em stdio; valor de `env` e entrada de `args` em forma de credencial é recusado nomeando só o campo — é o mesmo screening de `config push` (#496) | `args: []` |
 | `url` + `headers` | `url` obrigatória em sse/http; nome de header segue o token grammar (RFC 7230); header de autenticação só como `env:NOME`; o prefixo `env:` é reservado e valor literal com cara de credencial é recusado | — |
 | `retryBackoffMs` | inteiro positivo, base do backoff exponencial entre reconexões; teto de 30s | `1000` |
 | `timeoutMs` | inteiro positivo, por requisição | `30000` |
 | `enabled` | booleano; `false` fica fora do registry | `true` |
 | nome (`mcpServers.<nome>`) | `[A-Za-z0-9][A-Za-z0-9_-]*`, sem `__` (separador do namespace) nem `/` | — |
 
-`env:NOME` usa nome de variável em maiúsculas (`[A-Z_][A-Z0-9_]*`). O prefixo `env:` é reservado: um valor literal que comece com ele é tratado como referência e rejeitado se o nome não for válido. `headers` só têm efeito em `sse`/`http`; em `stdio` são ignorados.
+`env:NOME` usa nome de variável em maiúsculas (`[A-Z_][A-Z0-9_]*`) e **só vale em `headers`**: em `env` e `args` o valor é literal, então um segredo ali é recusado por nome (último segmento `KEY`/`TOKEN`/`SECRET`/`PASSWORD`… ou nomes `AUTH`/`COOKIE`; `AUTH_MODE` e `TOKEN_ENDPOINT` passam) ou por valor (prefixos, `--flag=valor`, `chave=valor`, `--flag valor`, PEM, JWT, hex longo). É heurístico, não uma garantia — como em `headers`. O prefixo `env:` é reservado em headers: um valor literal que comece com ele é tratado como referência e rejeitado se o nome não for válido. `headers` só têm efeito em `sse`/`http`; em `stdio` são ignorados.
 
 ## Transports (`src/mcp/transport/`)
 

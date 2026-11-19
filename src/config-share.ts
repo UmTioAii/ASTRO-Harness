@@ -4,6 +4,7 @@
  * segredos (só credentialRef — D-03), e o push valida antes de publicar.
  * baseUrl e fetch são injetáveis: testes rodam contra um registry mock.
  */
+import { mcpSecretProblem } from "./secrets";
 import { isRedirectRefusal } from "./url-safety";
 
 /** Registry GitHub: owner/repo onde as configs vivem em configs/<nome>.json */
@@ -159,6 +160,11 @@ export function prepareConfigForPush(
   const plugins = pluginEntries(raw);
   if (plugins.length > 0 && !allowPlugins) {
     return { ok: false, error: `config com plugins (${plugins.join(", ")}) não é publicada sem --allow-plugins` };
+  }
+  // I-03 (#496): defesa em profundidade — o push nunca publica segredo em env/args de MCP.
+  const secretField = mcpSecretProblem((raw as { mcpServers?: unknown } | null)?.mcpServers);
+  if (secretField !== undefined) {
+    return { ok: false, error: `${secretField} parece conter credencial; push recusado (I-03)` };
   }
   const config = { ...(raw as Record<string, unknown>), provenance: { registry, plugins: plugins.length > 0 } };
   return { ok: true, json: JSON.stringify(config, null, 2) + "\n" };

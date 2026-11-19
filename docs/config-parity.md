@@ -71,7 +71,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 
 | Arquivo | Guarda | Lido por | Gravado por |
 |---|---|---|---|
-| `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` não têm screening — lacuna | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492) |
+| `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` passam pelo screening de segredo (#496) | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492) |
 | `astro.config.json`/`--config` | política do projeto | CLI/TUI/REPL | usuário; `/config` da TUI (`permissions.mode`); `config pull`; `vault-import` de provider do projeto |
 | `$ASTRO_HOME/state.json` | trust e `migrations.*` | todas | prompt de trust (TTY), revogação da TUI, migrações |
 | `$ASTRO_HOME/vault.json` | segredo de API key (OAuth Codex: `~/.codex/auth.json`) | runtime | wizard da TUI; `vault-import --apply` |
@@ -101,6 +101,5 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 | `config pull` usa `writeFileSync` simples | não é atômico/0600 como os demais escritores | #495 |
 | `/config` em projeto sem arquivo | modo não persiste; S3 não cria config | #469 |
 | `lastModel` da TUI vence `agent.model` no boot | troca de modelo sem aprovação explícita (I-08); `--provider` desliga | #497 |
-| `mcpServers.*.env`/`args` sem screening de segredo | `config push` publica valor colado; I-03 em risco | #496 |
 
 - `preset` (`simple`/`control`, default `control`) é escalar: a camada de projeto vence. Em `simple`, `agent.maxSteps`, `agents.*.maxSteps` e `run.maxTurns` têm teto 500: um valor menor vindo de outra camada é mantido e acima de 500 é erro com `preset: "control"` como próximo passo; sem `run.maxTurns`, o teto efetivo é 500 (#515).

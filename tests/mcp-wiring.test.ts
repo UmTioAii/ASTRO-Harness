@@ -24,6 +24,107 @@ test("config rejeita nome de servidor MCP com separador do namespace", () => {
   expect(configWith({ a_b: { transport: "stdio", command: "x" } }).mcpServers!.a_b).toBeDefined();
 });
 
+test("config recusa env de MCP com valor em forma de segredo (#496)", () => {
+  const secret = ["nvapi", "abcdefghijklmnopqrstuvwxyz"].join("-");
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", env: { API_KEY: secret } } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.env.API_KEY"');
+  expect(message).not.toContain(secret);
+});
+
+test("config recusa arg de MCP com valor em forma de segredo (#496)", () => {
+  const secret = ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("-");
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", args: ["--port", "8080", secret] } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.args[2]"');
+  expect(message).not.toContain(secret);
+});
+
+test("config recusa env de MCP com nome de credencial mesmo sem prefixo no valor (#496)", () => {
+  let message = "";
+  try {
+    configWith({ db: { transport: "stdio", command: "x", env: { DB_PASSWORD: "hunter2" } } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.db.env.DB_PASSWORD"');
+  expect(message).not.toContain("hunter2");
+});
+
+test("config recusa segredo embutido em arg com flag (#496)", () => {
+  const secret = ["sk", "live", "abcdefghijklmnop"].join("-");
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", args: ["-y", "@acme/mcp", `--api-key=${secret}`] } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.args[2]"');
+  expect(message).not.toContain(secret);
+});
+
+test("config recusa chave=valor secreto em arg (#496)", () => {
+  const secret = ["ghp", "abcdefghijklmnop"].join("_");
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", args: ["-e", `GITHUB_TOKEN=${secret}`] } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.args[1]"');
+  expect(message).not.toContain(secret);
+});
+
+test("config recusa flag de credencial com valor separado por espaço (#496)", () => {
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", args: ["-y", "@acme/mcp", "--api-key", "9f4c2b7e1a0d4c88"] } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.args[3]"');
+  expect(message).not.toContain("9f4c2b7e1a0d4c88");
+});
+
+test("config aceita nomes de env que mencionam auth/token sem serem credencial (#496)", () => {
+  const config = configWith({
+    api: {
+      transport: "stdio",
+      command: "x",
+      env: {
+        AUTH_MODE: "oauth",
+        TOKEN_ENDPOINT: "https://id.example/token",
+        SESSION_TIMEOUT: "30000",
+        COOKIE_PATH: "/tmp/cookies",
+        BYTES_PER_TOKEN: "4",
+        TOKEN_LIMIT: "4096",
+      },
+    },
+  });
+  expect(config.mcpServers!.api.env).toMatchObject({ AUTH_MODE: "oauth", BYTES_PER_TOKEN: "4" });
+});
+
+test("config aceita args de MCP sem forma de segredo (#496)", () => {
+  const config = configWith({
+    api: {
+      transport: "stdio",
+      command: "x",
+      args: ["--port", "8080"],
+      env: { NODE_ENV: "production", LOG_LEVEL: "debug" },
+    },
+  });
+  expect(config.mcpServers!.api.args).toEqual(["--port", "8080"]);
+  expect(config.mcpServers!.api.env).toEqual({ NODE_ENV: "production", LOG_LEVEL: "debug" });
+});
+
 const MOCK_SRC = `
 import { writeFileSync } from "node:fs";
 if (process.env.PID_FILE !== undefined) writeFileSync(process.env.PID_FILE, String(process.pid));
