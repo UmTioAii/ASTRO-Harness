@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { ConfigError } from "../core/config";
 import { ProfileManager } from "../providers/profile-manager";
-import { NoProviderError, NO_PROVIDER_MESSAGE, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
+import { NoProviderError, NO_PROVIDER_MESSAGE, loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
@@ -29,8 +29,14 @@ export interface RunTuiOptions {
 /** Ink desmontaria no ctrl+c antes do handler da app; a app decide a saída. */
 export const TUI_RENDER_OPTIONS = { exitOnCtrlC: false } as const;
 
-/** Abre a sessão já com o último modelo; modelo removido da config cai no default. */
-export function openSession<T>(create: (model?: string) => T, cwd: string): T {
+/**
+ * Abre a sessão já com o último modelo salvo — mas só quando a config não
+ * declara `agent.model` (#497, I-08): o modelo do projeto nunca é trocado em
+ * silêncio. Modelo salvo removido/inválido cai no default.
+ */
+export function openSession<T>(create: (model?: string) => T, cwd: string, declaredModel?: string): T {
+  // Modelo declarado em qualquer camada vence o estado de UI (I-08); checa antes de ler o disco.
+  if (declaredModel !== undefined) return create();
   const saved = loadTuiConfig(cwd).lastModel;
   if (saved === undefined) return create();
   try {
@@ -39,6 +45,32 @@ export function openSession<T>(create: (model?: string) => T, cwd: string): T {
     if (error instanceof ConfigError) return create();
     throw error;
   }
+}
+
+/**
+ * `agent.model` efetivo (global + projeto, com profile resolvido) — a mesma
+ * resolução da sessão. Sem config legível, `undefined` e o boot segue o fluxo
+ * normal (setup de provider, se for o caso).
+ */
+export function declaredModelFor(
+  configPath: string,
+  opts: { env?: NodeJS.ProcessEnv } = {},
+): string | undefined {
+  try {
+    return loadEffectiveConfig(configPath, { env: opts.env, allowMissing: true }).config.agent.model;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Decisão de boot da TUI (#497): `--provider` e `agent.model` declarado desligam o modelo salvo. */
+export function bootSession<T>(
+  create: (model?: string) => T,
+  cwd: string,
+  opts: { declaredModel?: string; provider?: string },
+): T {
+  if (opts.provider !== undefined) return create();
+  return openSession(create, cwd, opts.declaredModel);
 }
 
 /** Branch git do cwd; ausente fora de um repositório. */
@@ -170,9 +202,12 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       ...(opts.artifactRoot === undefined ? {} : { artifactRoot: opts.artifactRoot }),
       ...(model === undefined ? {} : { model }),
     });
-    // `--provider` explícito vence o último modelo salvo em .astro/tui.json.
+    // `--provider` explícito e `agent.model` declarado vencem o último modelo salvo (#497).
     const boot = await bootstrapTui({
-      createSession: () => (opts.provider === undefined ? openSession(createSession, cwd) : createSession()),
+      createSession: () => bootSession(createSession, cwd, {
+        declaredModel: declaredModelFor(configPath, { env: opts.env }),
+        ...(opts.provider === undefined ? {} : { provider: opts.provider }),
+      }),
       setup: () => setupProvider(manager, cwd, saveSecret, discardSecret),
       createShell: () => createShellRunner({
         configPath, cwd, env: opts.env ?? process.env,
