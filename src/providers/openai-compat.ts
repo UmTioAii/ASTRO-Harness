@@ -194,7 +194,8 @@ function classifyStreamError(error: unknown, raw: string): ErrorClass {
     bad_request: "invalid_request",
     model_not_found: "invalid_request",
   };
-  if (code in byCode) return byCode[code]!;
+  // hasOwn: `in` casaria chaves da cadeia de protótipos ("constructor").
+  if (Object.hasOwn(byCode, code)) return byCode[code]!;
   const hay = `${code} ${raw}`.toLowerCase();
   if (hay.includes("insufficient_quota") || hay.includes("quota exceeded")) return "hard_quota";
   if (hay.includes("unauthorized") || hay.includes("invalid api key")) return "auth";
