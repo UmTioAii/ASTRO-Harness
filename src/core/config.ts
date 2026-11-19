@@ -20,6 +20,8 @@ import { checkpointIdProblem } from "../loop-guard";
 
 /** Configuração comum a todos os providers. */
 interface ProviderConfigBase {
+  /** Rótulo de exibição (TUI/REPL); não muda o id/chave do provider (#492). */
+  name?: string;
   /** Domínio de quota compartilhado entre credenciais (default: "default"). */
   quotaDomain?: string;
   /** Headers extras enviados ao provider (ex.: HTTP-Referer, X-Title). */
@@ -570,6 +572,7 @@ function validateProvider(name: string, value: unknown): ProviderConfig {
   const headers = raw.headers === undefined ? undefined : validateHeaders(raw.headers, `${field}.headers`);
   // C6: campos de fallback — prioridade/retries validados; nomes cruzados depois
   const fallbackFields = {
+    ...(raw.name === undefined ? {} : { name: expectString(raw.name, `${field}.name`) }),
     ...(raw.priority === undefined ? {} : { priority: expectPositiveInteger(raw.priority, `${field}.priority`) }),
     ...(raw.fallback === undefined ? {} : { fallback: expectStringArray(raw.fallback, `${field}.fallback`) }),
     ...(raw.maxRetries === undefined ? {} : { maxRetries: expectNonNegativeInteger(raw.maxRetries, `${field}.maxRetries`) }),
@@ -1860,21 +1863,23 @@ export function writeConfigFileAtomic(path: string, contents: string): void {
       closeSync(fd);
     }
     renameSync(tmp, path);
-    // Durabilidade do rename no POSIX: fsync do diretório (no Windows não se abre dir).
-    if (process.platform !== "win32") {
-      let dirFd: number | undefined;
-      try {
-        dirFd = openSync(dir, "r");
-        fsyncSync(dirFd);
-      } catch {
-        // diretório não fsync-ável: o rename já garantiu a troca atômica
-      } finally {
-        if (dirFd !== undefined) closeSync(dirFd);
-      }
-    }
   } catch (error) {
     try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
     throw writeConfigFailure(path, error);
+  }
+  // Depois do rename o arquivo já é o novo: qualquer erro aqui é best-effort e
+  // não pode virar "falha de escrita" (o chamador desfaria algo já aplicado).
+  if (process.platform !== "win32") {
+    try {
+      const dirFd = openSync(dir, "r");
+      try {
+        fsyncSync(dirFd);
+      } finally {
+        closeSync(dirFd);
+      }
+    } catch {
+      // diretório não fsync-ável: o rename já garantiu a troca atômica
+    }
   }
 }
 

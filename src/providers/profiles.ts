@@ -285,11 +285,17 @@ export function saveProfileStoreToConfig(store: ProviderStore, configPath: strin
   const providers: Record<string, unknown> = isPlainObject(raw.providers) ? { ...raw.providers } : {};
   const models: unknown[] = Array.isArray(raw.models) ? [...raw.models] : [];
   const storeIds = new Set(valid.profiles.map((profile) => profile.id));
+  // Só modelo "visível para o store" (id/tags/context) conta como prova de que o
+  // provider era do CRUD: um modelo editado à mão sem tags/context não autoriza
+  // apagar o provider (#492, revisão).
   const modelProviders = new Set(
     models
-      .filter((model): model is Record<string, unknown> => isPlainObject(model))
-      .map((model) => model.provider)
-      .filter((provider): provider is string => typeof provider === "string"),
+      .filter((model): model is Record<string, unknown> => isPlainObject(model)
+        && typeof model.provider === "string"
+        && typeof model.id === "string"
+        && Array.isArray(model.tags)
+        && typeof model.context === "number")
+      .map((model) => model.provider as string),
   );
   // Provider que tinha modelos e não está mais no store foi removido pela TUI.
   for (const id of Object.keys(providers)) {
@@ -418,7 +424,7 @@ export function profileStoreFromConfig(configPath: string): ProviderStore {
     if (profileModels.length === 0) continue;
     profiles.push({
       id,
-      name: id,
+      name: typeof value.name === "string" && value.name !== "" ? value.name : id,
       kind,
       ...(typeof value.baseUrl === "string" ? { baseUrl: value.baseUrl } : {}),
       ...(credentialRef === undefined ? {} : { credentialRef }),
@@ -589,8 +595,11 @@ export function profileFromEnv(env: NodeJS.ProcessEnv): ProviderProfile | undefi
 }
 
 function profileToProvider(profile: ProviderProfile): ProviderConfig {
+  // `name` só entra quando difere do id (rótulo de exibição do CRUD, #492).
+  const label = profile.name === profile.id ? {} : { name: profile.name };
   if (profile.kind === "codex-oauth") {
     return {
+      ...label,
       kind: "codex-oauth",
       credentialsPath: profile.credentialsPath ?? "~/.codex/auth.json",
       ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
@@ -599,6 +608,7 @@ function profileToProvider(profile: ProviderProfile): ProviderConfig {
     };
   }
   return {
+    ...label,
     kind: profile.kind,
     baseUrl: profile.baseUrl ?? "",
     ...(profile.credentialRef === undefined ? {} : { credentialRef: profile.credentialRef }),
