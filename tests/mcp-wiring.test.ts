@@ -83,7 +83,36 @@ test("config recusa chave=valor secreto em arg (#496)", () => {
   expect(message).not.toContain(secret);
 });
 
-test("config aceita env e args de MCP sem forma de segredo (#496)", () => {
+test("config recusa flag de credencial com valor separado por espaço (#496)", () => {
+  let message = "";
+  try {
+    configWith({ api: { transport: "stdio", command: "x", args: ["-y", "@acme/mcp", "--api-key", "9f4c2b7e1a0d4c88"] } });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  expect(message).toContain('"mcpServers.api.args[3]"');
+  expect(message).not.toContain("9f4c2b7e1a0d4c88");
+});
+
+test("config aceita nomes de env que mencionam auth/token sem serem credencial (#496)", () => {
+  const config = configWith({
+    api: {
+      transport: "stdio",
+      command: "x",
+      env: {
+        AUTH_MODE: "oauth",
+        TOKEN_ENDPOINT: "https://id.example/token",
+        SESSION_TIMEOUT: "30000",
+        COOKIE_PATH: "/tmp/cookies",
+        BYTES_PER_TOKEN: "4",
+        TOKEN_LIMIT: "4096",
+      },
+    },
+  });
+  expect(config.mcpServers!.api.env).toMatchObject({ AUTH_MODE: "oauth", BYTES_PER_TOKEN: "4" });
+});
+
+test("config aceita args de MCP sem forma de segredo (#496)", () => {
   const config = configWith({
     api: {
       transport: "stdio",
