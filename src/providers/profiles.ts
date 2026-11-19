@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_ATTACHMENTS, isPlainObject, loadConfigRaw, validateConfig, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_ATTACHMENTS, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
 import { globalConfigPath, statePath } from "../astro-home";
 import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
@@ -261,17 +261,109 @@ function siblingPath(storePath: string, name: string): string {
   return join(dirname(storePath), name);
 }
 
-/** Escrita atômica da camada crua (0600 no POSIX); a camada global é parcial, não valida o schema inteiro. */
+/**
+ * Escrita atômica da camada crua: usa o mesmo escritor da CLI (#495) —
+ * tmp + fsync + rename, 0600 no POSIX, recusa symlink/destino não-regular.
+ * A camada global é parcial: não valida o schema inteiro.
+ */
 function writeConfigRaw(raw: Record<string, unknown>, path: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    renameSync(tmp, path);
-  } catch (error) {
-    try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
-    throw error;
+  writeConfigFileAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
+}
+
+/**
+ * Grava o store de perfis na camada global de `config.json` (#492): `providers`
+ * e `models` de cada perfil, `activeProfileId`; chaves alheias sobrevivem.
+ * Provider com modelos que saiu do store sai do arquivo; campos extras do
+ * provider/modelo (timeoutMs, price, status…) são preservados.
+ */
+export function saveProfileStoreToConfig(store: ProviderStore, configPath: string): void {
+  const valid = validateProfileStore(store);
+  const raw = existsSync(configPath) ? loadConfigRaw(configPath) : {};
+  // Camada atual inválida não é "consertada" por silêncio (ex.: modelo duplicado
+  // faria a deleção abaixo apagar um provider editado à mão): falha sem gravar.
+  assertLayerSchema(raw);
+  const providers: Record<string, unknown> = isPlainObject(raw.providers) ? { ...raw.providers } : {};
+  const models: unknown[] = Array.isArray(raw.models) ? [...raw.models] : [];
+  const storeIds = new Set(valid.profiles.map((profile) => profile.id));
+  // Só modelo "visível para o store" (id/tags/context) conta como prova de que o
+  // provider era do CRUD: um modelo editado à mão sem tags/context não autoriza
+  // apagar o provider (#492, revisão).
+  const modelProviders = new Set(
+    models
+      .filter((model): model is Record<string, unknown> => isPlainObject(model)
+        && typeof model.provider === "string"
+        && typeof model.id === "string"
+        && Array.isArray(model.tags)
+        && typeof model.context === "number")
+      .map((model) => model.provider as string),
+  );
+  // Provider que tinha modelos e não está mais no store foi removido pela TUI.
+  for (const id of Object.keys(providers)) {
+    if (!storeIds.has(id) && modelProviders.has(id)) delete providers[id];
   }
+  let nextModels = models.filter((model) => (
+    !isPlainObject(model) || typeof model.provider !== "string" || providers[model.provider] !== undefined
+  ));
+  for (const profile of valid.profiles) {
+    const existing = providers[profile.id];
+    providers[profile.id] = { ...(isPlainObject(existing) ? existing : {}), ...profileToProvider(profile) };
+    // Rótulo igual ao id volta a ser implícito: apaga o `name` antigo do merge.
+    if (profile.name === profile.id && isPlainObject(providers[profile.id])) {
+      delete (providers[profile.id] as Record<string, unknown>).name;
+    }
+    const wanted = new Set(profile.models.map((model) => model.id));
+    nextModels = nextModels.filter((model) => (
+      !isPlainObject(model) || model.provider !== profile.id || wanted.has(String(model.id))
+    ));
+    for (const model of profile.models) {
+      const index = nextModels.findIndex((item) => (
+        isPlainObject(item) && item.provider === profile.id && item.id === model.id
+      ));
+      const before = index >= 0 ? nextModels[index] : undefined;
+      const entry = {
+        ...(isPlainObject(before) ? before : {}),
+        provider: profile.id,
+        id: model.id,
+        tags: model.tags,
+        context: model.context,
+      };
+      if (index >= 0) nextModels[index] = entry;
+      else nextModels.push(entry);
+    }
+  }
+  const { activeProfileId: _previousActive, ...rest } = raw;
+  const output = {
+    ...rest,
+    providers,
+    models: nextModels,
+    ...(valid.activeProfileId === undefined ? {} : { activeProfileId: valid.activeProfileId }),
+  };
+  assertLayerSchema(output); // a camada resultante tem de carregar no próximo open
+  writeConfigRaw(output, configPath);
+}
+
+/**
+ * Troca só `credentialRef` do provider na camada global de `config.json` (#491);
+ * a escrita é atômica e valida a forma da camada.
+ */
+export function updateGlobalProviderCredentialRef(env: NodeJS.ProcessEnv, provider: string, ref: string): void {
+  // Mesma regra do gêmeo de projeto: nunca um valor cru no arquivo (I-03).
+  if (!isVaultCredentialRef(ref) && !isEnvName(ref)) {
+    throw new ConfigError('credentialRef inválido: use "vault:<credentialId>" ou um nome de variável de ambiente', "config_invalid_schema");
+  }
+  const path = globalConfigPath(env);
+  const raw = existsSync(path) ? loadConfigRaw(path) : {};
+  const providers = isPlainObject(raw.providers) ? raw.providers : undefined;
+  const entry = providers?.[provider];
+  if (!isPlainObject(entry)) {
+    throw new ConfigError(`provider "${provider}" não está no "${path}"`, "config_invalid_schema");
+  }
+  if (entry.kind !== "openai-compat") {
+    throw new ConfigError(`provider "${provider}" usa kind "${String(entry.kind)}" e não lê o cofre`, "config_invalid_schema");
+  }
+  entry.credentialRef = ref;
+  assertLayerSchema(raw);
+  writeConfigRaw(raw, path);
 }
 
 /** Importa o store legado no `config.json`: `config.json` vence por chave (ADR-0029, #459). */
@@ -336,7 +428,7 @@ export function profileStoreFromConfig(configPath: string): ProviderStore {
     if (profileModels.length === 0) continue;
     profiles.push({
       id,
-      name: id,
+      name: typeof value.name === "string" && value.name !== "" ? value.name : id,
       kind,
       ...(typeof value.baseUrl === "string" ? { baseUrl: value.baseUrl } : {}),
       ...(credentialRef === undefined ? {} : { credentialRef }),
@@ -507,8 +599,11 @@ export function profileFromEnv(env: NodeJS.ProcessEnv): ProviderProfile | undefi
 }
 
 function profileToProvider(profile: ProviderProfile): ProviderConfig {
+  // `name` só entra quando difere do id (rótulo de exibição do CRUD, #492).
+  const label = profile.name === profile.id ? {} : { name: profile.name };
   if (profile.kind === "codex-oauth") {
     return {
+      ...label,
       kind: "codex-oauth",
       credentialsPath: profile.credentialsPath ?? "~/.codex/auth.json",
       ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
@@ -517,6 +612,7 @@ function profileToProvider(profile: ProviderProfile): ProviderConfig {
     };
   }
   return {
+    ...label,
     kind: profile.kind,
     baseUrl: profile.baseUrl ?? "",
     ...(profile.credentialRef === undefined ? {} : { credentialRef: profile.credentialRef }),

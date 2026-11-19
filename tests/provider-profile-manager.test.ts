@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConfig, type AstroConfig } from "../src/core/config";
 import { ProfileManager, type ProfileDraft } from "../src/providers/profile-manager";
-import { loadProfileStore, saveProfileStore } from "../src/providers/profiles";
+import { loadProfileStore, profileStoreFromConfig, saveProfileStore } from "../src/providers/profiles";
 
 function project(): AstroConfig {
   return validateConfig({
@@ -33,7 +33,7 @@ function manager(home = mkdtempSync(join(tmpdir(), "astro-mgr-")), env: NodeJS.P
   };
 }
 
-const storeAt = (home: string) => loadProfileStore(join(home, "providers.json"));
+const storeAt = (home: string) => profileStoreFromConfig(join(home, "config.json"));
 
 test("add grava no store e não ativa", () => {
   const { home, m } = manager();
@@ -99,6 +99,78 @@ test("remove do ativo limpa activeProfileId", () => {
 test("remove rejeita provider do projeto", () => {
   const { m } = manager();
   expect(() => m.remove("p")).toThrow(/astro\.config\.json/);
+});
+
+test("nome de exibição faz round-trip e um manager novo edita/remove (#492)", () => {
+  const home = mkdtempSync(join(tmpdir(), "astro-mgr-name-"));
+  const a = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  const added = a.add(draft({ name: "Casa" }));
+  expect(added.id).toBe("casa");
+  const raw = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as {
+    providers: Record<string, { name?: string }>;
+  };
+  expect(raw.providers.casa?.name).toBe("Casa"); // rótulo persistido no config.json
+
+  const b = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  expect(b.list().find((item) => item.id === "casa")?.name).toBe("Casa");
+  b.use("casa");
+  const edited = b.edit("casa", draft({ name: "Casa 2" }));
+  expect(edited.name).toBe("Casa 2");
+  const c = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  expect(c.list().find((item) => item.id === "casa")?.name).toBe("Casa 2");
+  // Voltar o rótulo ao id remove o `name` antigo em vez de mantê-lo (revisão #492).
+  c.edit("casa", draft({ name: "casa" }));
+  const reset = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as {
+    providers: Record<string, { name?: string }>;
+  };
+  expect(reset.providers.casa?.name).toBeUndefined();
+  expect(() => c.remove("casa")).not.toThrow(); // novo manager pode remover o que o CRUD criou
+});
+
+test("provider com modelo editado à mão sem tags não é apagado pelo CRUD (#492)", () => {
+  const home = mkdtempSync(join(tmpdir(), "astro-mgr-hand-"));
+  writeFileSync(join(home, "config.json"), JSON.stringify({
+    providers: { hand: { kind: "openai-compat", baseUrl: "https://hand.example/v1" } },
+    models: [{ provider: "hand", id: "h1" }], // sem tags/context: fora do store
+  }));
+  const m = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  m.add(draft());
+  const raw = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as {
+    providers: Record<string, unknown>;
+    models: Array<{ provider: string; id: string }>;
+  };
+  expect(raw.providers.hand).toBeDefined(); // não foi tratado como removido pelo CRUD
+  expect(raw.models.some((model) => model.provider === "hand" && model.id === "h1")).toBe(true);
+});
+
+test("add, use e remove gravam em config.json e preservam chaves alheias (#492)", () => {
+  const home = mkdtempSync(join(tmpdir(), "astro-mgr-global-"));
+  writeFileSync(join(home, "config.json"), JSON.stringify({
+    permissions: { mode: "ask" },
+    budget: { limitUsd: 5 },
+    providers: { keep: { kind: "openai-compat", baseUrl: "https://keep.example/v1", timeoutMs: 5000 } },
+    models: [{ provider: "keep", id: "k1", tags: ["fast"], context: 4096, price: { inputPerM: 1, outputPerM: 1 } }],
+  }));
+  const m = new ProfileManager({ project: project(), env: { ASTRO_HOME: home } });
+  const added = m.add(draft());
+  m.use(added.id);
+  const afterAdd = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as Record<string, unknown>;
+  expect(afterAdd.permissions).toEqual({ mode: "ask" }); // chave alheia intacta
+  expect(afterAdd.budget).toEqual({ limitUsd: 5 });
+  expect((afterAdd.providers as Record<string, unknown>).keep).toEqual({
+    kind: "openai-compat", baseUrl: "https://keep.example/v1", timeoutMs: 5000,
+  }); // campo extra do provider preservado
+  expect(afterAdd.activeProfileId).toBe(added.id);
+  const models = afterAdd.models as Array<Record<string, unknown>>;
+  expect(models.find((model) => model.provider === "keep")).toMatchObject({ price: { inputPerM: 1, outputPerM: 1 } });
+
+  m.remove(added.id);
+  const afterRemove = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as Record<string, unknown>;
+  expect((afterRemove.providers as Record<string, unknown>)[added.id]).toBeUndefined();
+  expect((afterRemove.models as Array<Record<string, unknown>>).some((model) => model.provider === added.id)).toBe(false);
+  expect((afterRemove.providers as Record<string, unknown>).keep).toBeDefined();
+  expect(afterRemove.activeProfileId).toBeUndefined();
+  expect(existsSync(join(home, "providers.json"))).toBe(false); // legado nunca é escrito
 });
 
 test("use persiste o ativo e rejeita projeto", () => {
@@ -257,6 +329,7 @@ test("env não é gravado por add/edit", () => {
   });
   expect(m.list().some((item) => item.id === "env")).toBe(true);
   m.add(draft());
-  expect(existsSync(join(home, "providers.json"))).toBe(true);
+  expect(existsSync(join(home, "config.json"))).toBe(true); // #492: escrita na camada global
+  expect(existsSync(join(home, "providers.json"))).toBe(false); // legado nunca é escrito
   expect(storeAt(home).profiles.some((item) => item.id === "env")).toBe(false);
 });

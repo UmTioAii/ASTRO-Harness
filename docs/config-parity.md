@@ -67,11 +67,11 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 
 ## D-CFG2: um store, não dois
 
-A TUI e o REPL **não** criam store de configuração próprio. O contrato é escrever os mesmos arquivos da CLI, por um escritor validado e atômico (`updateConfigFile` para a camada de projeto; o mesmo contrato para a global após #459/#492), exceto `config pull`, que ainda usa `writeFileSync` (lacuna). Divergência é bug, não contrato.
+A TUI e o REPL **não** criam store de configuração próprio. O contrato é escrever os mesmos arquivos da CLI, por um escritor validado e atômico: `updateConfigFile` para a camada de projeto, `saveProfileStoreToConfig`/`updateGlobalProviderCredentialRef` para a global (#492/#491) e `writeConfigFileAtomic` no `config pull` (#495). Divergência é bug, não contrato.
 
 | Arquivo | Guarda | Lido por | Gravado por |
 |---|---|---|---|
-| `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` passam pelo screening de segredo (#496) | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492) |
+| `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` não têm screening — lacuna (#496) | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492); `vault-import --apply` (#491) |
 | `astro.config.json`/`--config` | política do projeto | CLI/TUI/REPL | usuário; `/config` da TUI (`permissions.mode`); `config pull`; `vault-import` de provider do projeto |
 | `$ASTRO_HOME/state.json` | trust e `migrations.*` | todas | prompt de trust (TTY), revogação da TUI, migrações |
 | `$ASTRO_HOME/vault.json` | segredo de API key (OAuth Codex: `~/.codex/auth.json`) | runtime | wizard da TUI; `vault-import --apply` |
@@ -82,6 +82,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 - `.astro/tui.json` é estado de UI, não config: ausente ou inválido cai nos defaults, o CLI/REPL nunca leem e ele não vence config explícita. A exceção é `lastModel` no boot da TUI, e só sem `--provider`: ele é passado como `opts.model` e vence `agent.model`, então o modelo do projeto é trocado sem aprovação — gap de I-08.
 - #468 move a raiz desse estado para `$ASTRO_HOME` (tema global com override por projeto); a autoridade continua TUI-only.
 - `activeProfileId` mora junto dos providers (store legado; `config.json` após #459/#492); `lastModel` é dica de UI. Depois de `/model`, `●` (ativo salvo) e `em uso` (sessão) podem divergir — é esperado.
+- O rótulo de exibição do provider vive em `providers.<id>.name` no `config.json` e faz round-trip pelo CRUD/dump (#492); no projeto, o mesmo campo vence o id na lista. Escrita em `config.json`/`astro.config.json` que seja symlink é recusada com `config_write_denied` (#495). `config.json` inválido faz o CRUD falhar fechado (nada é gravado) até a camada ser corrigida.
 - Na lista de perfis (`/provider list` no REPL, tela da TUI), projeto e `env` aparecem com `[source]`, mas são somente leitura; ativar é runtime-only. Só perfil global grava `activeProfileId`.
 
 ## Migração e retrocompatibilidade
@@ -95,11 +96,9 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 
 | Lacuna | Efeito hoje | Onde |
 |---|---|---|
-| CRUD de provider da TUI/REPL gravar `config.json` | quando #459 entrar, `saveProfileStore` recusa e o CRUD para; falta o escritor de config | #492 (próximo slice de #401) |
-| `providers vault-import` de perfil global gravar `config.json` | mesmo bloqueio após #459 | #491 |
 | `astro config migrate` e `CONFIG_SCHEMA_VERSION` (ADR-0028) | não há migração de major nem rejeição de chave desconhecida | #493 |
-| `config pull` usa `writeFileSync` simples | não é atômico/0600 como os demais escritores | #495 |
 | `/config` em projeto sem arquivo | modo não persiste; S3 não cria config | #469 |
 | `lastModel` da TUI vence `agent.model` no boot | troca de modelo sem aprovação explícita (I-08); `--provider` desliga | #497 |
 
 - `preset` (`simple`/`control`, default `control`) é escalar: a camada de projeto vence. Em `simple`, `agent.maxSteps`, `agents.*.maxSteps` e `run.maxTurns` têm teto 500: um valor menor vindo de outra camada é mantido e acima de 500 é erro com `preset: "control"` como próximo passo; sem `run.maxTurns`, o teto efetivo é 500 (#515).
+

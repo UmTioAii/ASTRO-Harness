@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { validateConfig } from "../src/core/config";
 import { runProviderWizard } from "../src/chat/provider-wizard";
 import { ProfileManager } from "../src/providers/profile-manager";
-import { loadProfileStore } from "../src/providers/profiles";
+import { profileStoreFromConfig } from "../src/providers/profiles";
 
 function project() {
   return validateConfig({
@@ -41,9 +41,10 @@ test("add pelo catálogo grava, ativa e chama onUse", async () => {
   const view = await runProviderWizard(io, manager, { mode: "add", onUse: (id) => used.push(id) });
   expect(view?.id).toBe("nvidia-work");
   expect(used).toEqual(["nvidia-work"]);
-  const store = loadProfileStore(join(home, "providers.json"));
+  const store = profileStoreFromConfig(join(home, "config.json")); // #492: camada global
   expect(store.activeProfileId).toBe("nvidia-work");
   expect(store.profiles[0]!.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
+  expect(existsSync(join(home, "providers.json"))).toBe(false); // legado nunca é escrito
   expect(out.join(" ")).toContain("salvo: nvidia-work");
 });
 
@@ -60,7 +61,7 @@ test("add custom sem chave e sem ativar", async () => {
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view?.credentialRef).toBeUndefined();
   expect(view?.baseUrl).toBe("http://localhost:11434/v1");
-  expect(loadProfileStore(join(home, "providers.json")).activeProfileId).toBeUndefined();
+  expect(profileStoreFromConfig(join(home, "config.json")).activeProfileId).toBeUndefined();
 });
 
 test("avisa quando a variável da chave não existe", async () => {

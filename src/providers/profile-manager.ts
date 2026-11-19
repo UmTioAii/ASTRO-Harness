@@ -3,12 +3,13 @@ import { isPlainObject, type AstroConfig, type ProviderConfig } from "../core/co
 import { globalConfigPath } from "../astro-home";
 import {
   loadGlobalConfig,
+  loadGlobalProfileStore,
   loadProfileStore,
   profileFromEnv,
   profilesPath,
-  readGlobalProfileStore,
   resolveEffectiveConfig,
   saveProfileStore,
+  saveProfileStoreToConfig,
   type ProfileModel,
   type ProviderProfile,
   type ProviderSource,
@@ -89,7 +90,8 @@ export class ProfileManager {
   readonly #storeInjected: boolean;
   readonly #project: AstroConfig | undefined;
   readonly #projectRefs: { providers: string[]; modelProviders: string[] };
-  readonly #globalProviders: string[];
+  /** Providers declarados à mão na camada global (fora do store) e por isso não editáveis. */
+  #globalProviders: string[];
   readonly #env: NodeJS.ProcessEnv;
   readonly #provider: string | undefined;
   #store: ProviderStore;
@@ -101,14 +103,14 @@ export class ProfileManager {
       providers: Object.keys(opts.project?.providers ?? {}),
       modelProviders: (opts.project?.models ?? []).map((model) => model.provider),
     };
-    const global = this.#env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(this.#env);
-    this.#globalProviders = global !== undefined && isPlainObject(global.providers)
-      ? Object.keys(global.providers)
-      : [];
+    this.#globalProviders = [];
     this.#provider = opts.provider;
     this.#storePath = opts.storePath ?? profilesPath(this.#env);
     this.#storeInjected = opts.storePath !== undefined;
-    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : readGlobalProfileStore(this.#env);
+    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : loadGlobalProfileStore(this.#env);
+    // #492: provider do store também mora no `config.json`; o guarda vale só para
+    // os declarados à mão (sem modelo/perfil), que o CRUD não gerencia.
+    this.#refreshGlobalProviders();
   }
 
   list(): ProfileView[] {
@@ -226,7 +228,17 @@ export class ProfileManager {
   }
 
   #reload(): void {
-    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : readGlobalProfileStore(this.#env);
+    // #492: a mesma fonte da escrita (`config.json` depois do import de #459).
+    this.#store = this.#storeInjected ? loadProfileStore(this.#storePath) : loadGlobalProfileStore(this.#env);
+    this.#refreshGlobalProviders();
+  }
+
+  /** Lista providers da camada global que não pertencem ao store (declarados à mão). */
+  #refreshGlobalProviders(): void {
+    const global = this.#env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(this.#env);
+    const declared = global !== undefined && isPlainObject(global.providers) ? Object.keys(global.providers) : [];
+    const storeIds = new Set(this.#store.profiles.map((profile) => profile.id));
+    this.#globalProviders = declared.filter((id) => !storeIds.has(id));
   }
 
   /** Variável de credencial presente no env desta execução. */
@@ -249,6 +261,7 @@ export class ProfileManager {
 
   #projectProfile(name: string, provider: ProviderConfig): ProviderProfile {
     const config = provider as {
+      name?: string;
       baseUrl?: string;
       credentialRef?: string;
       credentialsPath?: string;
@@ -260,7 +273,8 @@ export class ProfileManager {
       .map((model) => ({ id: model.id, tags: model.tags, context: model.context }));
     return {
       id: name,
-      name,
+      // Rótulo opcional da camada (#492); sem ele, o id é o nome.
+      name: typeof config.name === "string" && config.name !== "" ? config.name : name,
       kind: provider.kind,
       ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
       ...(config.credentialRef === undefined ? {} : { credentialRef: config.credentialRef }),
@@ -277,7 +291,9 @@ export class ProfileManager {
     if (!this.#storeInjected && this.#env.ASTRO_NO_GLOBAL_CONFIG === "1") {
       throw new GlobalStoreDisabledError();
     }
-    saveProfileStore(store, this.#storePath);
+    // #492: a leitura é `config.json`; a escrita vai para a mesma camada global.
+    if (this.#storeInjected) saveProfileStore(store, this.#storePath);
+    else saveProfileStoreToConfig(store, globalConfigPath(this.#env));
     this.#store = store;
   }
 }

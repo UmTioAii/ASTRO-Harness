@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CAPABILITY_KEYS, isKnownCapability, missingCapabilities, type Capability } from "../capabilities";
 import { PROTECTED_FORBIDDEN_ROOTS, DEFAULT_EFFORT_ESCALATION, MAX_AUTO_JUMP, MAX_EFFORT_LEVEL, type CallConfig, type EffortEscalationConfig, type EffortLevel, type ThinkingMode } from "../call-profile";
 import { DEFAULT_OUTPUT_LIMIT, type OutputLimitConfig } from "../output-limit";
@@ -18,6 +20,8 @@ import { checkpointIdProblem } from "../loop-guard";
 
 /** Configuração comum a todos os providers. */
 interface ProviderConfigBase {
+  /** Rótulo de exibição (TUI/REPL); não muda o id/chave do provider (#492). */
+  name?: string;
   /** Domínio de quota compartilhado entre credenciais (default: "default"). */
   quotaDomain?: string;
   /** Headers extras enviados ao provider (ex.: HTTP-Referer, X-Title). */
@@ -568,6 +572,7 @@ function validateProvider(name: string, value: unknown): ProviderConfig {
   const headers = raw.headers === undefined ? undefined : validateHeaders(raw.headers, `${field}.headers`);
   // C6: campos de fallback — prioridade/retries validados; nomes cruzados depois
   const fallbackFields = {
+    ...(raw.name === undefined ? {} : { name: expectString(raw.name, `${field}.name`) }),
     ...(raw.priority === undefined ? {} : { priority: expectPositiveInteger(raw.priority, `${field}.priority`) }),
     ...(raw.fallback === undefined ? {} : { fallback: expectStringArray(raw.fallback, `${field}.fallback`) }),
     ...(raw.maxRetries === undefined ? {} : { maxRetries: expectNonNegativeInteger(raw.maxRetries, `${field}.maxRetries`) }),
@@ -1823,8 +1828,64 @@ function writeConfigFailure(path: string, error: unknown): ConfigError {
 }
 
 /**
+ * Grava `contents` de forma atômica: tmp no mesmo diretório (0600 no POSIX),
+ * fsync, rename. Destino symlink ou não-regular é recusado nomeando só o
+ * caminho; falha deixa o destino anterior intacto e sem tmp órfão
+ * (#495, ADR-0028, I-03).
+ */
+export function writeConfigFileAtomic(path: string, contents: string): void {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new ConfigError(
+        `não foi possível gravar "${path}": o destino é um symlink — use um arquivo regular; nada foi gravado`,
+        "config_write_denied",
+      );
+    }
+    if (existsSync(path) && !statSync(path).isFile()) {
+      throw new ConfigError(
+        `não foi possível gravar "${path}": o destino não é um arquivo regular; nada foi gravado`,
+        "config_write_denied",
+      );
+    }
+  } catch (error) {
+    if (error instanceof ConfigError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw writeConfigFailure(path, error);
+  }
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  try {
+    const fd = openSync(tmp, "wx", 0o600);
+    try {
+      writeFileSync(fd, contents, "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
+    throw writeConfigFailure(path, error);
+  }
+  // Depois do rename o arquivo já é o novo: qualquer erro aqui é best-effort e
+  // não pode virar "falha de escrita" (o chamador desfaria algo já aplicado).
+  if (process.platform !== "win32") {
+    try {
+      const dirFd = openSync(dir, "r");
+      try {
+        fsyncSync(dirFd);
+      } finally {
+        closeSync(dirFd);
+      }
+    } catch {
+      // diretório não fsync-ável: o rename já garantiu a troca atômica
+    }
+  }
+}
+
+/**
  * Lê o JSON cru, aplica `mutate`, valida o resultado com `validateConfig` e
- * grava de forma atômica (tmp + rename, modo 0600). As quatro falhas de
+ * grava de forma atômica (tmp + fsync + rename, modo 0600). As quatro falhas de
  * leitura/parse/schema são `ConfigError` distintos, cada um com o próximo
  * passo (#470); qualquer falha deixa o arquivo original intacto (sem tmp
  * órfão) e nenhuma mensagem contém conteúdo do arquivo, segredo ou stack (I-03).
@@ -1856,14 +1917,7 @@ function updateConfigFile(path: string, mutate: (raw: Record<string, unknown>) =
     const detail = error instanceof Error ? error.message : String(error);
     throw new ConfigError(`${detail} — corrija o campo indicado em "${path}"; o arquivo não foi alterado`, "config_invalid_schema");
   }
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    renameSync(tmp, path);
-  } catch (error) {
-    try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
-    throw writeConfigFailure(path, error);
-  }
+  writeConfigFileAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
 }
 
 /**

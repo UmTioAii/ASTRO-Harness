@@ -6,7 +6,7 @@
 import { ConfigError, updateConfigProviderCredentialRef } from "../core/config";
 import { isEnvName, isVaultCredentialRef, isVaultRef } from "../secrets";
 import { defaultScheme, Vault, vaultPath } from "../vault";
-import { loadEffectiveConfig, loadProfileStore, profilesPath, providerIdentityFor, readGlobalProfileStore, saveProfileStore } from "./profiles";
+import { loadEffectiveConfig, loadProfileStore, providerIdentityFor, saveProfileStore, updateGlobalProviderCredentialRef } from "./profiles";
 
 export interface VaultImportInput {
   provider: string;
@@ -35,18 +35,20 @@ export interface VaultImportResult {
 
 const PLAIN_WARNING = 'aviso: cofre em modo "plain" (sem cifra do SO); o segredo fica em arquivo 0600';
 
-/** Troca a ref de um perfil global pelo writer atômico do store. */
+/** Troca a ref de um perfil global: `config.json` (#491) ou store injetado (testes). */
 function rewriteProfileRef(path: string | undefined, id: string, ref: string, env: NodeJS.ProcessEnv): void {
-  const target = path ?? profilesPath(env);
-  // Sem `storePath` injetado, a leitura é flag-aware: depois da migração o legado
-  // aposentado não é lido (nem pode falhar como JSON inválido) e a escrita falha
-  // citando `config.json` (#459).
-  const store = path === undefined ? readGlobalProfileStore(env) : loadProfileStore(target);
+  if (path === undefined) {
+    // Pós-#459/#491: a camada global é `config.json`; o legado não é lido nem escrito.
+    updateGlobalProviderCredentialRef(env, id, ref);
+    return;
+  }
+  // `storePath` injetado: writer atômico do store legado (testes e uso explícito).
+  const store = loadProfileStore(path);
   const index = store.profiles.findIndex((item) => item.id === id);
   if (index < 0) throw new ConfigError(`provider "${id}" não está no store global`);
   const profiles = [...store.profiles];
   profiles[index] = { ...profiles[index]!, credentialRef: ref };
-  saveProfileStore({ ...store, profiles }, target);
+  saveProfileStore({ ...store, profiles }, path);
 }
 
 /**
