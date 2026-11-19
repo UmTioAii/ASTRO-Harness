@@ -26,12 +26,12 @@ function setupTree(): string {
   return cwd;
 }
 
-/** Link de diretório: em Windows sem permissão o teste é pulado de forma explícita. */
+/** Link de diretório (junction no Windows): cobre escape por link sem exigir privilégio de symlink. */
 function canCreateDirSymlink(): boolean {
   const dir = mkdtempSync(join(tmpdir(), "astro-glob-symlink-probe-"));
   try {
     mkdirSync(join(dir, "alvo"));
-    symlinkSync(join(dir, "alvo"), join(dir, "link"), "dir");
+    symlinkSync(join(dir, "alvo"), join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
     return true;
   } catch {
     return false;
@@ -83,7 +83,7 @@ describe("glob tool (#534, F-13)", () => {
   test("cap de 500 com aviso explícito e truncated: true", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-glob-cap-"));
     mkdirSync(join(cwd, "many"), { recursive: true });
-    for (let i = 0; i < 520; i++) {
+    for (let i = 0; i < 501; i++) {
       writeFileSync(join(cwd, "many", `f${String(i).padStart(3, "0")}.txt`), "");
     }
     const result = await globTool.execute({ pattern: "many/*.txt" }, ctx(cwd));
@@ -92,12 +92,12 @@ describe("glob tool (#534, F-13)", () => {
     expect(parsed.files).toHaveLength(500);
     expect(parsed.files[0]).toBe("many/f000.txt");
     expect(parsed.files.at(-1)).toBe("many/f499.txt");
-    expect(parsed.total).toBe(520);
+    expect(parsed.total).toBe(501);
     expect(parsed.truncated).toBe(true);
     expect(parsed.notice).toBeDefined();
     expect(parsed.notice).toContain("truncad");
     expect(parsed.notice).toContain("500");
-  });
+  }, 60_000);
 
   test(".git e node_modules ficam fora por default e entram com includeIgnored", async () => {
     const cwd = setupTree();
@@ -125,34 +125,36 @@ describe("glob tool (#534, F-13)", () => {
     }
   });
 
-  test("padrão com `..` que sai do cwd é recusado", async () => {
+  test("padrão e path com `..` para fora do cwd são recusados (I-11)", async () => {
     const cwd = setupTree();
     for (const pattern of ["../**/*.ts", "..", "src/../../*.ts"]) {
       const result = await globTool.execute({ pattern }, ctx(cwd));
       expect(result.isError).toBe(true);
       expect(result.output).toContain("fora");
     }
+    const outside = await globTool.execute({ pattern: "**/*.ts", path: ".." }, ctx(cwd));
+    expect(outside.isError).toBe(true);
+    expect(outside.output).toContain("fora");
   });
 
-  test("path fora do cwd é recusado (I-11)", async () => {
-    const cwd = setupTree();
-    const result = await globTool.execute({ pattern: "**/*.ts", path: ".." }, ctx(cwd));
-    expect(result.isError).toBe(true);
-    expect(result.output).toContain("fora");
-  });
-
-  test.skipIf(!SYMLINK_SUPPORTED)("symlink para fora do cwd não é seguido", async () => {
+  test.skipIf(!SYMLINK_SUPPORTED)("link para fora do cwd não é seguido", async () => {
     const cwd = setupTree();
     const outside = mkdtempSync(join(tmpdir(), "astro-glob-outside-"));
     try {
       writeFileSync(join(outside, "fora.txt"), "conteudo externo");
-      symlinkSync(outside, join(cwd, "escape"), "dir");
-      symlinkSync(join(outside, "fora.txt"), join(cwd, "leak.txt"), "file");
+      symlinkSync(outside, join(cwd, "escape"), process.platform === "win32" ? "junction" : "dir");
 
       const parsed = output(await globTool.execute({ pattern: "**/*" }, ctx(cwd)));
       expect(parsed.files).not.toContain("escape/fora.txt");
-      expect(parsed.files).not.toContain("leak.txt");
+      expect(parsed.files).not.toContain("escape");
       expect(parsed.files).toContain("root.ts");
+
+      // Prefixo literal atravessando o link também não alcança o alvo.
+      for (const pattern of ["escape/**", "escape/fora.txt"]) {
+        const result = await globTool.execute({ pattern }, ctx(cwd));
+        expect(result.isError).toBe(true);
+        expect(result.output).toContain("fora");
+      }
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }

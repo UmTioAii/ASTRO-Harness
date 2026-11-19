@@ -474,11 +474,11 @@ function isPathLikeToken(token: string): boolean {
 /**
  * Campos de path por tool (default `["path"]`; `lsp` declara `file`;
  * `move_path` soma origem e destino) e tools com default de `path` para o cwd
- * (`grep`/`list_dir`/git: ".").
+ * (`grep`/`list_dir`/`glob`/git: ".").
  */
 const PATH_FIELDS: Record<string, readonly string[]> = { lsp: ["file"], move_path: ["from", "to"] };
 const DEFAULT_PATH_FIELDS: readonly string[] = ["path"];
-const CWD_DEFAULT_TOOLS: ReadonlySet<string> = new Set(["grep", "list_dir", "git_status", "git_diff"]);
+const CWD_DEFAULT_TOOLS: ReadonlySet<string> = new Set(["grep", "list_dir", "glob", "git_status", "git_diff"]);
 /** Candidatos a path do input (ADR-0027, #391 slice 1): `PATH_FIELDS` + default `path`; `CWD_DEFAULT_TOOLS` sem `path` ganha "."; `run_command` soma tokens path-like de `command` (token nu: slice 4). */
 export function pathCandidatesOf(call: ToolCallLike): string[] {
   if (typeof call.input !== "object" || call.input === null) return [];
