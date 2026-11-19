@@ -165,7 +165,7 @@ describe("plugin provenance (I-13, #255)", () => {
   });
 
   test("push recusa env de MCP em forma de segredo sem ecoar o valor (#496)", () => {
-    const secret = "nvapi-abcdefghijklmnopqrstuvwxyz";
+    const secret = ["nvapi", "abcdefghijklmnopqrstuvwxyz"].join("-");
     const result = prepareConfigForPush(
       {
         ...validConfig,
@@ -182,7 +182,7 @@ describe("plugin provenance (I-13, #255)", () => {
   });
 
   test("push recusa segredo embutido em args de MCP (#496)", () => {
-    const secret = "sk-live-abcdefghijklmnop";
+    const secret = ["sk", "live", "abcdefghijklmnop"].join("-");
     const result = prepareConfigForPush(
       {
         ...validConfig,

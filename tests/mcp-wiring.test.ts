@@ -25,7 +25,7 @@ test("config rejeita nome de servidor MCP com separador do namespace", () => {
 });
 
 test("config recusa env de MCP com valor em forma de segredo (#496)", () => {
-  const secret = "nvapi-abcdefghijklmnopqrstuvwxyz";
+  const secret = ["nvapi", "abcdefghijklmnopqrstuvwxyz"].join("-");
   let message = "";
   try {
     configWith({ api: { transport: "stdio", command: "x", env: { API_KEY: secret } } });
@@ -37,7 +37,7 @@ test("config recusa env de MCP com valor em forma de segredo (#496)", () => {
 });
 
 test("config recusa arg de MCP com valor em forma de segredo (#496)", () => {
-  const secret = "sk-live-abcdefghijklmnopqrstuvwxyz";
+  const secret = ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("-");
   let message = "";
   try {
     configWith({ api: { transport: "stdio", command: "x", args: ["--port", "8080", secret] } });
@@ -60,7 +60,7 @@ test("config recusa env de MCP com nome de credencial mesmo sem prefixo no valor
 });
 
 test("config recusa segredo embutido em arg com flag (#496)", () => {
-  const secret = "sk-live-abcdefghijklmnop";
+  const secret = ["sk", "live", "abcdefghijklmnop"].join("-");
   let message = "";
   try {
     configWith({ api: { transport: "stdio", command: "x", args: ["-y", "@acme/mcp", `--api-key=${secret}`] } });
@@ -72,7 +72,7 @@ test("config recusa segredo embutido em arg com flag (#496)", () => {
 });
 
 test("config recusa chave=valor secreto em arg (#496)", () => {
-  const secret = "ghp_abcdefghijklmnop";
+  const secret = ["ghp", "abcdefghijklmnop"].join("_");
   let message = "";
   try {
     configWith({ api: { transport: "stdio", command: "x", args: ["-e", `GITHUB_TOKEN=${secret}`] } });
