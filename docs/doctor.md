@@ -33,7 +33,9 @@ Segredo nunca entra na saída: `name`, label e detalhe passam por `redactSecrets
 
 O check offline `config` valida a camada de projeto e a config efetiva (global + projeto). A camada de projeto só pode estreitar a política global (ADR-0029, I-01). Se o merge for recusado, `config` vira `fail` com o motivo redigido e o check `anexos` não apresenta TTL ou teto como valores efetivos; a ausência de config usa os defaults documentados.
 
-A coleta aceita `projectCwd`, `configPath`, `projectSkillsRoot` e `userSkillsRoot` para testes isolarem o projeto e as skills. Na CLI, os defaults permanecem o cwd do processo, `<cwd>/astro.config.json`, `<cwd>/.astro/skills` e `~/.astro/skills` (#523).
+A ausência é determinada pelas camadas, não pela resolução de provider: `NoProviderError` não vale como config ausente. Os limites efetivos de anexos (defaults < global < projeto) são validados com o schema do runtime sem depender de provider, então uma camada global presente e inválida (por exemplo, `attachments.artifactTtlDays` não numérico) reprova com exit 1 em vez de virar `TTL 7d`/`1.0 GiB` (#523).
+
+A coleta aceita `projectCwd`, `configPath`, `projectSkillsRoot` e `userSkillsRoot` para testes isolarem o projeto e as skills. Na CLI, os defaults permanecem o cwd do processo, `<cwd>/astro.config.json`, `<cwd>/.astro/skills` e `~/.astro/skills` (#523). Caminho relativo de `configPath` e `projectSkillsRoot` resolve contra `projectCwd`; `userSkillsRoot` resolve contra o cwd do processo (mesma base do loader de skills).
 
 ## `--online`
 

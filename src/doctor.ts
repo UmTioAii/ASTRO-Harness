@@ -7,9 +7,10 @@ import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, 
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { DEFAULT_ATTACHMENTS, loadConfig, loadConfigRaw, type AstroConfig, type MCPServerConfig } from "./core/config";
+import { loadConfig, loadConfigRaw, type AstroConfig, type MCPServerConfig } from "./core/config";
+import { resolveEffectiveAttachments } from "./config-overlay";
 import { credentialMissingMessage } from "./credential-ref";
-import { loadEffectiveConfig, NoProviderError } from "./providers/profiles";
+import { loadEffectiveConfig, loadGlobalConfig, NoProviderError } from "./providers/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "./attachments/store";
 import type { HealthCheck } from "./health";
 import { ARTIFACT_KEY_PATTERN, SHA256_HEX } from "./internal-ids";
@@ -91,6 +92,20 @@ export interface DiskFact {
   freeBytes?: number;
 }
 
+/** Fatos de anexos: config efetiva inválida não tem limites utilizáveis (#523). */
+export type AttachmentFacts = {
+  root: string;
+  realpath?: string;
+  exists: boolean;
+  invalidReason?: string;
+  usageBytes?: number;
+  artifacts?: number;
+  lastGc?: string;
+} & (
+  | { configError: string; ttlDays?: undefined; maxBytes?: undefined }
+  | { configError?: undefined; ttlDays: number; maxBytes: number }
+);
+
 export interface DoctorFacts {
   bunVersion: string;
   nodeVersion: string | undefined;
@@ -119,19 +134,7 @@ export interface DoctorFacts {
     /** Observação informativa (link simbólico resolvido), sem mudar o nível. */
     note?: string;
   };
-  attachments: {
-    root: string;
-    realpath?: string;
-    exists: boolean;
-    invalidReason?: string;
-    /** Config efetiva recusada: os limites abaixo não são valores utilizáveis. */
-    configError?: string;
-    ttlDays: number;
-    maxBytes: number;
-    usageBytes?: number;
-    artifacts?: number;
-    lastGc?: string;
-  };
+  attachments: AttachmentFacts;
   skills?: SkillsFact;
   disk?: DiskFact;
   env: Record<string, string | undefined>;
@@ -586,31 +589,56 @@ function readGlobalConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"]["global
   }
 }
 
-interface EffectiveConfigFacts {
-  ttlDays: number;
-  maxBytes: number;
-  /** Config recusada no merge/validação; o motivo já vem redigido. */
-  error?: string;
+/** Config efetiva dos limites de anexos: ausente usa defaults; inválida não tem valor. */
+type EffectiveConfigFacts =
+  | { status: "ok"; ttlDays: number; maxBytes: number; error?: undefined }
+  | { status: "invalid"; ttlDays?: undefined; maxBytes?: undefined; error: string };
+
+/** Camadas cruas (global + projeto) da config efetiva; ausente = sem camada. */
+function readConfigLayers(
+  configPath: string,
+  env: NodeJS.ProcessEnv,
+): { global?: Record<string, unknown>; project?: Record<string, unknown> } {
+  const global = env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(env);
+  const project = existsSync(configPath) ? loadConfigRaw(configPath) : undefined;
+  return {
+    ...(global === undefined ? {} : { global }),
+    ...(project === undefined ? {} : { project }),
+  };
 }
 
-/** Config efetiva e limites de anexos; ausência usa defaults, erro não. */
+/**
+ * Config efetiva e limites de anexos. `NoProviderError` só diz que não há
+ * provider: a ausência de config é determinada pelas camadas, não pelo erro.
+ * Uma camada presente e inválida reprova com o motivo redigido e sem
+ * apresentar defaults como valores efetivos (#523).
+ */
 function readEffectiveConfig(configPath: string, env: NodeJS.ProcessEnv): EffectiveConfigFacts {
+  let failure: string | undefined;
   try {
     const effective = loadEffectiveConfig(configPath, { env, allowMissing: true });
     return {
+      status: "ok",
       ttlDays: effective.config.attachments.artifactTtlDays,
       maxBytes: effective.config.attachments.artifactMaxBytes,
     };
   } catch (error) {
-    if (error instanceof NoProviderError) {
-      return { ttlDays: DEFAULT_ATTACHMENTS.artifactTtlDays, maxBytes: DEFAULT_ATTACHMENTS.artifactMaxBytes };
+    if (!(error instanceof NoProviderError)) {
+      failure = redactSecrets(error instanceof Error ? error.message : String(error));
     }
-    const detail = error instanceof Error ? error.message : String(error);
+  }
+  try {
+    const layers = readConfigLayers(configPath, env);
+    const attachments = resolveEffectiveAttachments(layers.global, layers.project);
+    if (failure !== undefined) return { status: "invalid", error: failure };
     return {
-      ttlDays: DEFAULT_ATTACHMENTS.artifactTtlDays,
-      maxBytes: DEFAULT_ATTACHMENTS.artifactMaxBytes,
-      error: redactSecrets(detail),
+      status: "ok",
+      ttlDays: attachments.artifactTtlDays,
+      maxBytes: attachments.artifactMaxBytes,
     };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { status: "invalid", error: redactSecrets(detail) };
   }
 }
 
@@ -760,12 +788,10 @@ function collectAttachmentFacts(
 ): DoctorFacts["attachments"] {
   const astroHome = resolveAstroHome(env);
   const root = resolveArtifactRoot({ ...(artifactRoot === undefined ? {} : { flag: artifactRoot }), env, astroHome });
-  const base = {
-    root,
-    ttlDays: effective.ttlDays,
-    maxBytes: effective.maxBytes,
-    ...(effective.error === undefined ? {} : { configError: effective.error }),
-  };
+  // Config efetiva inválida: sem limites utilizáveis (nenhum default é exibido).
+  const base = effective.status === "invalid"
+    ? { root, configError: effective.error }
+    : { root, ttlDays: effective.ttlDays, maxBytes: effective.maxBytes };
   try {
     validateArtifactRoot(root, {
       cwd: projectCwd,
@@ -824,6 +850,9 @@ export function collectFacts(
   const projectCwd = resolve(options.projectCwd ?? process.cwd());
   const configPath = resolve(projectCwd, options.configPath ?? "astro.config.json");
   const projectSkillsRoot = resolve(projectCwd, options.projectSkillsRoot ?? join(".astro", "skills"));
+  // A raiz do usuário é global: caminho relativo resolve contra o cwd do processo
+  // (mesma base do loader de skills), nunca contra o projeto.
+  const userSkillsRoot = resolve(options.userSkillsRoot ?? join(homedir(), ".astro", "skills"));
   const effective = readEffectiveConfig(configPath, env);
   return {
     bunVersion: Bun.version,
@@ -834,7 +863,7 @@ export function collectFacts(
     config: readConfig(env, configPath, effective),
     astroHome: readAstroHome(env),
     attachments: collectAttachmentFacts(env, effective, projectCwd, options.checkPrivate, options.probeWritable, options.artifactRoot),
-    skills: collectSkillFacts(projectSkillsRoot, options.userSkillsRoot ?? join(homedir(), ".astro", "skills")),
+    skills: collectSkillFacts(projectSkillsRoot, userSkillsRoot),
     disk: collectDiskFacts(env, projectCwd),
     env,
   };
