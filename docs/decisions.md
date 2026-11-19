@@ -27,7 +27,7 @@ IDs estáveis; não renumerar.
 | D-15 | **Config validation com defaults seguros** | `status: "active"` por modelo; `quotaDomain: "default"` por provider; modelo duplicado = erro. | Config mínima viável; falha rápida com mensagem acionável. |
 | D-16 | **Squash merge only + linear history** | Branch protection: `allow_squash_merge=true`, `allow_merge_commit=false`, `allow_rebase_merge=false`, `required_linear_history=true`. | Histórico limpo; cada PR = um commit atômico com `Closes #n`. |
 | D-17 | **Vocabulário fechado de tags** (ver D-05) | Duas listas imutáveis em `src/tags.ts`. Validação em `validateModel()`. | Extensão controlada via PR + ADR; sem typos silenciosos. |
-| D-18 | **Taxonomia de erros** (ver D-14) | `ErrorClass` type + `ProviderError` class. Usado em `openai-compat.ts`, `codex-oauth.ts`. | Tratamento uniforme; logs e métricas por classe. Matriz de retry (#556): `transient_rate_limit` até 10 tentativas respeitando `Retry-After`; `outage`/`network_timeout` até 3 com backoff exponencial + jitter; `hard_quota`/`auth`/`invalid_request` = **0 retries** — `hard_quota` cai direto para o próximo provider quando há cadeia. `RETRYABLE_CLASSES`/`maxRetriesFor` em `src/providers/policy.ts` são a fonte única usada por `openai-compat.ts` e `FallbackProvider`. |
+| D-18 | **Taxonomia de erros** (ver D-14) | `ErrorClass` type + `ProviderError` class. Usado em `openai-compat.ts`, `codex-oauth.ts`. | Tratamento uniforme; logs e métricas por classe. Matriz de retry em camadas na seção abaixo (#556); comportamento do adapter e do C6 também em `docs/providers.md`. |
 | D-19 | **Ciclo de vida de modelo** | `ModelStatus`: `active` | `deprecated` | `disabled`. `Registry.require()` só devolve `active`. | Descontinuação segura; modelos legados ficam na config mas não são selecionáveis. |
 | D-20 | **Quota domain por provider** | `quotaDomain` agrupa credenciais que compartilham limite (ex.: mesma conta OpenRouter). Default `"default"`. | Ledger e futuras quotas operam no domínio correto. |
 | D-21 | **Perfis globais de provider** | `~/.astro/providers.json` (`ASTRO_HOME`) guarda perfis sem segredo; projeto vence por nome; ativo segue `--provider` > `ASTRO_PROVIDER` > `activeProfileId` > `agent.model`; env é efêmero e a baseline sem config expõe file tools + shell sob `ask`. | CRUD pelo `/provider` e onboarding sem editar JSON (#201); a origem fica auditada em `run.started`. |
@@ -44,6 +44,18 @@ IDs estáveis; não renumerar.
 
 ---
 
+## Matriz de retry (D-18, #556)
+
+| Camada | Classes transitórias | Classes duras (`hard_quota`/`auth`/`invalid_request`) |
+|---|---|---|
+| Adapter `openai-compat` | até 3 tentativas (1 + 2); backoff exponencial 250ms→10s com jitter ±25%; `Retry-After` vence o backoff | 1 tentativa |
+| `errorPolicy`/`maxRetriesFor` (`src/providers/policy.ts`) | `transient_rate_limit`: até 10 retries com `retry_after`; `outage`/`network_timeout`: até 3 com `retry_backoff` | `hard_quota` → `skip`; `auth`/`invalid_request` → `abort` no profile-fallback |
+| Cadeia C6 (`FallbackProvider`) | retry do mesmo provider até `maxRetries` (config, default 2), backoff linear `retryBackoffMs × attempt`, sem `Retry-After` | não retenta: vai direto ao próximo provider |
+
+No C6 a matriz contribui só o bit retryable/não-retryable; os limites por classe valem no roteador. `auth` no C6 pula para o próximo provider (a credencial do primário pode estar inválida — é para isso que a cadeia existe); o `abort` de `auth` é do profile-fallback.
+
+---
+
 ## Correspondência com a trilha de planejamento
 
 A trilha de planejamento usa numeração própria de decisões. Pares e colisões conhecidos:
@@ -52,7 +64,7 @@ A trilha de planejamento usa numeração própria de decisões. Pares e colisõe
 |---|---|---|
 | D-01 (Bun + TypeScript strict) | D-22 | Mesma decisão, números diferentes |
 | D-05/D-17 (tags de vocabulário fechado) | D-10/D-17 | Mesmo conteúdo |
-| D-14/D-18 (taxonomia de 5 classes de erro) | D-18 | Mesma decisão |
+| D-14/D-18 (taxonomia de seis classes de erro) | D-18 | Mesma decisão |
 | D-20 (quota domain) | D-11 | Mesmo conceito (domínio de cota por conta/org) |
 | D-08 (confinamento de caminho) | — | Sem par direto; na trilha, D-13 cobre workspace |
 | D-09 (auditoria append-only) | D-15 | Trilha D-15 acrescenta corte físico por camada |

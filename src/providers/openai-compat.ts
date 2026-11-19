@@ -190,7 +190,7 @@ function extractErrorDetail(text: string): string {
   return trimmed;
 }
 
-function parseRetryAfter(value: string | null): number | undefined {
+export function parseRetryAfter(value: string | null): number | undefined {
   if (value === null) return undefined;
   const trimmed = value.trim();
   if (trimmed.length === 0) return undefined;
@@ -204,7 +204,7 @@ function parseRetryAfter(value: string | null): number | undefined {
   return Math.max(0, date - Date.now());
 }
 
-function retryDelayMs(
+export function retryDelayMs(
   attempt: number,
   retryAfterMs: number | undefined,
   remainingMs: number,
