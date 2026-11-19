@@ -25,6 +25,7 @@ import {
 import { editTool } from "../src/tools/edit";
 import { movePathTool } from "../src/tools/move-path";
 import { ToolExecutor } from "../src/tools/executor";
+import { globTool } from "../src/tools/glob";
 import { grepTool } from "../src/tools/grep";
 import { listDirTool } from "../src/tools/list-dir";
 import { lspTool } from "../src/tools/lsp";
@@ -758,7 +759,7 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
     }
     expect(audit.readAll().filter((e) => e.tipo === "tool.denied" && e.payload?.reason === HARD_BLOCKED)).toHaveLength(2);
   });
-  test("grep/list_dir sem path negam quando o próprio cwd é hard-block (review A/B)", async () => {
+  test("grep/list_dir/glob sem path negam quando o próprio cwd é hard-block (review A/B)", async () => {
     const home = mkdtempSync(join(tmpdir(), "astro-hb-home-"));
     const savedEnv = { ASTRO_HOME: process.env.ASTRO_HOME, ASTRO_ARTIFACT_ROOT: process.env.ASTRO_ARTIFACT_ROOT };
     process.env.ASTRO_HOME = home;
@@ -768,9 +769,12 @@ describe("hard-block no gate de dispatch (ADR-0027, #391 slice 1)", () => {
       mkdirSync(cwd);
       const audit = new Auditor(join(cwd, "audit.jsonl"));
       const executor = new ToolExecutor({
-        tools: [grepTool, listDirTool], allow: ["grep", "list_dir"], audit, permissionMode: "bypass",
+        tools: [grepTool, listDirTool, globTool],
+        allow: ["grep", "list_dir", "glob"],
+        audit,
+        permissionMode: "bypass",
       });
-      for (const [name, args] of [["grep", { pattern: "x" }], ["list_dir", {}]] as const) {
+      for (const [name, args] of [["grep", { pattern: "x" }], ["list_dir", {}], ["glob", { pattern: "**/*" }]] as const) {
         const result = await executor.run({ cwd, run: "r1", agent: "a" }, { id: "c1", name, arguments: JSON.stringify(args) });
         expect(result.isError).toBe(true);
         expect(result.output).toContain(HARD_BLOCKED);
