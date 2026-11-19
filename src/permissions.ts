@@ -12,7 +12,7 @@
  */
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { redactSecrets } from "./sanitize-external";
+import { sanitizePromptText } from "./sanitize-external";
 import { ToolError, isToolClass, type SideEffects, type Tool, type ToolClass, type ToolManifest } from "./tools/types";
 
 export type PermissionMode = "bypass" | "allow-edits" | "ask";
@@ -144,6 +144,10 @@ export interface ApprovalDetail {
 /** Teto do valor exibido no prompt de aprovação (#536); acima disso entra o marcador `...`. */
 export const APPROVAL_DETAIL_MAX_CHARS = 200;
 const APPROVAL_DETAIL_ELLIPSIS = "...";
+/** Fração do orçamento reservada à cabeça; a cauda mostra o fim do comando (`| sh`). */
+const APPROVAL_DETAIL_HEAD_RATIO = 0.7;
+/** Separador do `move_path` no prompt (#536). */
+const MOVE_ARROW = " -> ";
 
 /** Tools cujo argumento material é um path (#536). `move_path` soma dois paths. */
 const DETAIL_PATH_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit", "delete_path"]);
@@ -151,25 +155,53 @@ const DETAIL_PATH_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit", "d
 const DETAIL_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command"]);
 
 /**
- * Normaliza o valor para uma linha do prompt: cada corrida de
- * controle/quebra de linha vira um espaço (uma linha só na TUI/REPL), sem
- * mexer no espaçamento interno do comando, e o segredo é redigido antes do
- * corte — cortar primeiro poderia exibir um segredo pela metade (I-03).
+ * Todos os nomes com argumento material mapeado (#536). O teste de contrato
+ * confere cada um contra o registry (`BUILTIN_TOOLS`), com exceção explícita
+ * para `delete_path`/`move_path` enquanto não existirem.
  */
-function detailValue(raw: string): string | undefined {
-  const flat = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
-  if (flat.length === 0) return undefined;
-  return redactSecrets(flat);
+export const APPROVAL_DETAIL_TOOLS: ReadonlySet<string> = new Set([
+  ...DETAIL_COMMAND_TOOLS,
+  ...DETAIL_PATH_TOOLS,
+  "move_path",
+]);
+
+/** Quebra de linha/tab é separador real do comando: vira espaço antes da regra canônica. */
+const COMMAND_LINE_BREAK = /[\r\n\t]+/g;
+
+/** Surrogate alto/baixo: corte de string não pode partir um par (emoji) ao meio. */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
 }
 
-/** Corta o valor no teto com marcador explícito (#536); o corte fica visível. */
-function capDetailValue(value: string): string {
-  if (value.length <= APPROVAL_DETAIL_MAX_CHARS) return value;
-  let end = APPROVAL_DETAIL_MAX_CHARS;
-  // Não parte par surrogate (emoji na borda viraria caractere inválido na TUI).
-  const last = value.charCodeAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return `${value.slice(0, end)}${APPROVAL_DETAIL_ELLIPSIS}`;
+/**
+ * Normaliza o valor para uma linha do prompt e o deixa exibível: quebra de
+ * linha vira espaço (uma linha só na TUI/REPL) e `sanitizePromptText` remove as
+ * marcas invisíveis (C0/C1, bidi/Cf, surrogate solto) ANTES de redigir — um
+ * controle embutido abriria o padrão de segredo — e trunca depois (I-03).
+ */
+function detailValue(raw: string): string | undefined {
+  const oneLine = raw.replace(COMMAND_LINE_BREAK, " ").trim();
+  if (oneLine.length === 0) return undefined;
+  const clean = sanitizePromptText(oneLine);
+  return clean.length === 0 ? undefined : clean;
+}
+
+/**
+ * Corta `value` em `budget` caracteres mantendo cabeça E cauda, com o marcador
+ * `...` no meio: o fim do comando (`| sh`, `rm -rf`) continua visível. Nunca
+ * parte par surrogate (emoji na borda viraria caractere inválido na TUI).
+ */
+function elideDetailValue(value: string, budget: number): string {
+  if (value.length <= budget) return value;
+  const room = budget - APPROVAL_DETAIL_ELLIPSIS.length;
+  let head = Math.ceil(room * APPROVAL_DETAIL_HEAD_RATIO);
+  let tail = room - head;
+  if (isHighSurrogate(value.charCodeAt(head - 1))) head -= 1;
+  if (isLowSurrogate(value.charCodeAt(value.length - tail))) tail -= 1;
+  return `${value.slice(0, head)}${APPROVAL_DETAIL_ELLIPSIS}${value.slice(value.length - tail)}`;
 }
 
 /**
@@ -184,20 +216,28 @@ export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined
   if (DETAIL_COMMAND_TOOLS.has(call.name)) {
     if (typeof input.command !== "string") return undefined;
     const command = detailValue(input.command);
-    return command === undefined ? undefined : { kind: "command", value: capDetailValue(command) };
+    return command === undefined
+      ? undefined
+      : { kind: "command", value: elideDetailValue(command, APPROVAL_DETAIL_MAX_CHARS) };
   }
   if (call.name === "move_path") {
     if (typeof input.from !== "string" || typeof input.to !== "string") return undefined;
     const from = detailValue(input.from);
     const to = detailValue(input.to);
-    return from === undefined || to === undefined
-      ? undefined
-      : { kind: "path", value: capDetailValue(`${from} -> ${to}`) };
+    if (from === undefined || to === undefined) return undefined;
+    // Orçamento por lado: um `from` longo não pode esconder o destino.
+    const sideBudget = Math.floor((APPROVAL_DETAIL_MAX_CHARS - MOVE_ARROW.length) / 2);
+    return {
+      kind: "path",
+      value: `${elideDetailValue(from, sideBudget)}${MOVE_ARROW}${elideDetailValue(to, sideBudget)}`,
+    };
   }
   if (DETAIL_PATH_TOOLS.has(call.name)) {
     if (typeof input.path !== "string") return undefined;
     const path = detailValue(input.path);
-    return path === undefined ? undefined : { kind: "path", value: capDetailValue(path) };
+    return path === undefined
+      ? undefined
+      : { kind: "path", value: elideDetailValue(path, APPROVAL_DETAIL_MAX_CHARS) };
   }
   return undefined;
 }
