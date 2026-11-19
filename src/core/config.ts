@@ -118,6 +118,19 @@ export interface AgentConfig {
 export const BASELINE_MAX_STEPS = 500;
 
 /**
+ * Allowlist herdada quando `agent.tools` é omitido (P3): é exatamente o
+ * conjunto que o modo zero-config expõe, então omitir não muda o contrato.
+ */
+export const DEFAULT_AGENT_TOOLS: readonly string[] = [
+  "read_file",
+  "write_file",
+  "edit",
+  "grep",
+  "list_dir",
+  "run_command",
+];
+
+/**
  * Preset de configuração (#515): `simple` fixa passos e turnos em 500 e não
  * aceita esses knobs; `control` expõe `agent.maxSteps` e `run.maxTurns`.
  */
@@ -373,6 +386,12 @@ export interface PathsConfig {
   ledger: string;
   audit: string;
 }
+
+/** `paths` omitido herda onde o modo zero-config grava; mesma semântica de `DEFAULT_AGENT_TOOLS`. */
+export const DEFAULT_PATHS: Readonly<PathsConfig> = {
+  ledger: ".astro/ledger.jsonl",
+  audit: ".astro/audit.jsonl",
+};
 
 export interface AstroConfig {
   /** Preset (#515): `simple` fixa 500 passos/turnos; `control` expõe os knobs. */
@@ -941,7 +960,7 @@ function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>
       model,
       profile,
       maxSteps: raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"),
-      tools: expectStringArray(raw.tools, "agent.tools"),
+      tools: raw.tools === undefined ? [...DEFAULT_AGENT_TOOLS] : expectStringArray(raw.tools, "agent.tools"),
       entryAgent,
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
     };
@@ -950,13 +969,14 @@ function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>
   return {
     model: expectString(raw.model, "agent.model"),
     maxSteps: raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"),
-    tools: expectStringArray(raw.tools, "agent.tools"),
+    tools: raw.tools === undefined ? [...DEFAULT_AGENT_TOOLS] : expectStringArray(raw.tools, "agent.tools"),
     entryAgent,
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
   };
 }
 
 function validatePaths(value: unknown): PathsConfig {
+  if (value === undefined) return { ...DEFAULT_PATHS };
   const raw = expectObject(value, "paths");
   return {
     ledger: expectString(raw.ledger, "paths.ledger"),

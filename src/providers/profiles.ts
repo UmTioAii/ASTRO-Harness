@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_ATTACHMENTS, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
 import { globalConfigPath, statePath } from "../astro-home";
 import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
@@ -568,17 +568,15 @@ export function providerIdentityFor(
   return { providerSource, providerSelection };
 }
 
-/** Sem config, expõe file tools + shell; a allowlist segue I-01 e o gate `ask` (D-24) pede aprovação. */
-const BASELINE_TOOLS = ["read_file", "write_file", "edit", "grep", "list_dir", "run_command"];
-const BASELINE_PATHS = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
+/** Sem config, expõe file tools + shell; a allowlist segue I-01 e o gate `ask` (D-24). */
 const ENV_MODEL_CONTEXT = 128_000;
 
 /** Defaults de código: a camada mais baixa (defaults < global < projeto, ADR-0029). */
 const BASELINE_LAYER: Record<string, unknown> = {
-  agent: { maxSteps: BASELINE_MAX_STEPS, tools: [...BASELINE_TOOLS] },
+  agent: { maxSteps: BASELINE_MAX_STEPS, tools: [...DEFAULT_AGENT_TOOLS] },
   permissions: { mode: "ask" },
   attachments: DEFAULT_ATTACHMENTS,
-  paths: { ...BASELINE_PATHS },
+  paths: { ...DEFAULT_PATHS },
 };
 
 /** Perfil efêmero a partir de OPENAI_*; nunca é gravado. */

@@ -540,3 +540,26 @@ describe("writeConfigFileAtomic (#495)", () => {
     noTmp(dir);
   });
 });
+
+describe("config mínima: allowlist e paths têm default", () => {
+  test("agent sem tools herda as 6 tools do modo zero-config", () => {
+    const raw = structuredClone(valid) as Record<string, unknown>;
+    delete (raw.agent as { tools?: string[] }).tools;
+    const cfg = validateConfig(raw);
+    expect(cfg.agent.tools).toEqual([
+      "read_file",
+      "write_file",
+      "edit",
+      "grep",
+      "list_dir",
+      "run_command",
+    ]);
+  });
+
+  test("paths ausente herda .astro/ledger.jsonl e .astro/audit.jsonl", () => {
+    const raw = structuredClone(valid) as Record<string, unknown>;
+    delete raw.paths;
+    const cfg = validateConfig(raw);
+    expect(cfg.paths).toEqual({ ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" });
+  });
+});
