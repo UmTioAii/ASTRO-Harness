@@ -73,6 +73,13 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     const dNo = no.approveTool(req);
     no.answer("n");
     expect(await dNo).toBe(false);
+
+    for (const answer of ["y", "yes", "sim", "", "x"]) {
+      const outside = createApprovalBridge();
+      const decisionOutside = outside.approveTool(req);
+      outside.answer(answer);
+      expect(await decisionOutside).toBe(false);
+    }
   });
 
   test("approveTool com diff publica a pergunta com o anexo para o overlay (#64 D2)", async () => {

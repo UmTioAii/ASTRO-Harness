@@ -86,6 +86,12 @@ describe("approveTool no REPL (PERM-04, #265)", () => {
     expect(await chatApprovers(io(["once"]), true).approveTool!(req)).toBe(false);
   });
 
+  test("só o vocabulário do prompt aprova: y/yes/sim/vazio negam (#546)", async () => {
+    for (const answer of ["y", "Y", "yes", "Yes", "sim", "SIM", "", "x", "aprovar"]) {
+      expect(await chatApprovers(io([answer]), true).approveTool!(req)).toBe(false);
+    }
+  });
+
   test("prompt cita a tool, a ação e exatamente 3 opções", async () => {
     const prompts: string[] = [];
     const capturing: ReplIO = { read: async (p: string) => { prompts.push(p); return "s"; }, write: () => {} };
