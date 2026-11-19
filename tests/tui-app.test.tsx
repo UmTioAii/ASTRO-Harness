@@ -150,7 +150,7 @@ test("mostra boas-vindas, status e responde um turno", async () => {
   const session = new FakeSession();
   const instance = render(<TuiApp session={session} cwd="/tmp/astro" branch="main" />);
   try {
-    expect(instance.lastFrame()).toContain("astro tui");
+    expect(instance.lastFrame()).toContain("astro · /help");
     expect(instance.lastFrame()).toContain("/tmp/astro (main)");
     expect(instance.lastFrame()).toContain("p/m1");
 

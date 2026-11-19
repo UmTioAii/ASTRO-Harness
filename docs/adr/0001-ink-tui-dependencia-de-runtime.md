@@ -11,12 +11,12 @@ A T2 pede painéis, markdown, editor multi-linha, autocomplete e redimensionamen
 
 ## Decisão
 
-Adotar **Ink 8 + React 19** como única dependência de runtime, carregada por `import()` dinâmico apenas no comando `astro tui`. `run`, `eval`, `bench`, `chat`, `health` e o restante do CLI continuam sem carregar Ink.
+Adotar **Ink 8 + React 19** como única dependência de runtime, carregada por `import()` dinâmico apenas quando a TUI abre (`astro` sem argumento). `run`, `eval`, `bench`, `chat`, `health` e o restante do CLI continuam sem carregar Ink.
 
 ## Consequências
 
 - Ganho: layout, foco, resize e testes de componente (`ink-testing-library`) prontos; menos código de terminal para manter.
-- Custo: `bun install` passa a ser obrigatório para usar a TUI; superfície de supply-chain nova (lockfile fixo e faixa `^`); bundle/startup maior só no subcomando `tui`.
+- Custo: `bun install` passa a ser obrigatório para usar a TUI; superfície de supply-chain nova (lockfile fixo e faixa `^`); bundle/startup maior só quando a TUI abre.
 - Invariantes afetados: D-02 ganha exceção explícita; I-03 e I-01 não mudam (a TUI consome a mesma `AgentSession` e a mesma allowlist).
 
 ## Alternativas descartadas

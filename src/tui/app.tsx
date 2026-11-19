@@ -70,7 +70,7 @@ interface Status {
   costUsd: number | null;
 }
 
-const WELCOME = "astro tui · /help para comandos · /exit para sair";
+const WELCOME = "astro · /help para comandos · /exit para sair";
 
 function statusOf(snapshot: SessionSnapshot): Status {
   return {

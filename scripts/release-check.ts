@@ -119,7 +119,7 @@ O pacote sob teste é local; dependências de runtime vêm do registry.
 
 Passos manuais fora do gate (TUI e provider não são automatizáveis headless):
   1. npm install -g @umtioai/astro-harness@alpha
-  2. astro tui`;
+  2. astro`;
 
 /** Nome de arquivo que o `npm pack` gera para nome+versão do pacote. */
 export function packageSlug(name: string): string {
