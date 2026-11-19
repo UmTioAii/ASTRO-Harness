@@ -1,21 +1,15 @@
 /** Header e footer da TUI (#480): uma linha cada, sem repetir informação. */
 import { Text } from "ink";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { ReactElement } from "react";
+import { packageVersion as manifestVersion } from "../version";
 import type { ThemeColors } from "./theme";
 
 let cachedVersion: string | undefined;
 
-/** Versão do pacote lida de package.json (cacheada em módulo); "desconhecida" se ilegível. */
+/** Versão do pacote vinda de `src/version.ts` (cacheada em módulo); "desconhecida" se ausente. */
 export function packageVersion(): string {
   if (cachedVersion !== undefined) return cachedVersion;
-  try {
-    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "package.json"), "utf8")) as { version?: unknown };
-    cachedVersion = typeof manifest.version === "string" && manifest.version !== "" ? manifest.version : "desconhecida";
-  } catch {
-    cachedVersion = "desconhecida";
-  }
+  cachedVersion = manifestVersion() ?? "desconhecida";
   return cachedVersion;
 }
 
