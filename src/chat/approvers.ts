@@ -69,6 +69,14 @@ export function chatApprovers(
       const answer = io.readCancelable !== undefined
         ? await io.readCancelable(prompt, wait?.signal)
         : await ask(prompt);
+      // #526: a pergunta saiu da fila sem resposta. Fecha a linha do prompt (o
+      // texto seguinte não cola nela) e nomeia o limite quando houve timeout.
+      if (answer === null && io.readCancelable !== undefined) {
+        const notice = wait?.timedOut === true && wait.timeoutMs !== undefined
+          ? `aprovação de "${request.name}" expirada após ${wait.timeoutMs}ms`
+          : `aprovação de "${request.name}" cancelada sem resposta`;
+        io.write(`\n${notice}\n`);
+      }
       return toolChoice(answer);
     },
     trustAsk: async (cwd) => trustChoice(await ask(trustPrompt(cwd))),

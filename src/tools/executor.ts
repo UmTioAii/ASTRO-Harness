@@ -43,6 +43,10 @@ function abortError(reason: unknown): Error {
 /** Cancelamento da espera de aprovação: timeout do gate ou cancelamento do run (#526). */
 export interface ApprovalWait {
   signal?: AbortSignal;
+  /** Limite configurado em ms (`0` = sem limite); ausente quando desligado. */
+  timeoutMs?: number;
+  /** Marcado pelo gate quando a espera terminou por timeout, não por cancelamento. */
+  timedOut?: boolean;
 }
 
 /** Aprovador humano de uma chamada de tool no modo `ask` (PERM-01); `"session"` grava grant na sessão (#266). */
@@ -371,7 +375,11 @@ export class ToolExecutor {
     try {
       // Já cancelado: não abre prompt nenhum.
       if (controller.signal.aborted) return ABORTED;
-      const answer = Promise.resolve(this.approveTool?.(request, { signal: controller.signal }));
+      const wait: ApprovalWait = {
+        signal: controller.signal,
+        ...(this.approvalWaitTimeoutMs > 0 ? { timeoutMs: this.approvalWaitTimeoutMs } : {}),
+      };
+      const answer = Promise.resolve(this.approveTool?.(request, wait));
       const aborted = new Promise<typeof ABORTED>((resolve) => {
         controller.signal.addEventListener("abort", () => resolve(ABORTED), { once: true });
       });
@@ -381,7 +389,11 @@ export class ToolExecutor {
       });
       const outcome = await Promise.race([answer, timeout, aborted]);
       // Expirou: aborta o controller para a TUI/REPL descartar a pergunta pendente.
-      if (outcome === TIMEOUT) controller.abort();
+      // `timedOut` vai antes do abort para a superfície distinguir timeout de cancelamento.
+      if (outcome === TIMEOUT) {
+        wait.timedOut = true;
+        controller.abort();
+      }
       return outcome;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
