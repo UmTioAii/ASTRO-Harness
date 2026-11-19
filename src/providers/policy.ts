@@ -31,6 +31,36 @@ export const DEFAULT_LIMITS: Required<PolicyLimits> = {
 };
 
 /**
+ * Classes que podem ser retentadas (D-18). Fonte única: adapters e
+ * `FallbackProvider` importam daqui em vez de repetir a lista.
+ * As classes duras — `hard_quota`, `auth`, `invalid_request` — nunca entram.
+ */
+export const RETRYABLE_CLASSES: ReadonlySet<ErrorClass> = new Set([
+  "transient_rate_limit",
+  "outage",
+  "network_timeout",
+]);
+
+/** Máximo de retries por classe; 0 nas classes duras (I-09: cota dura não retenta). */
+export function maxRetriesFor(errClass: ErrorClass, limits?: PolicyLimits): number {
+  const l = { ...DEFAULT_LIMITS, ...limits };
+  switch (errClass) {
+    case "transient_rate_limit":
+      return l.maxRateLimitRetries;
+    case "outage":
+    case "network_timeout":
+      return l.maxOutageRetries;
+    case "hard_quota":
+    case "auth":
+    case "invalid_request":
+      return 0;
+    default:
+      // Deny-by-default: classe nova só retenta depois de entrar conscientemente na matriz.
+      return 0;
+  }
+}
+
+/**
  * Devolve a ação para uma classe de erro numa dada tentativa.
  *
  * - `transient_rate_limit`: `retry_after` até o limite; depois `fallback`
@@ -60,6 +90,9 @@ export function errorPolicy(
     case "auth":
       return "abort";
     case "invalid_request":
+      return "abort";
+    default:
+      // Deny-by-default: classe desconhecida não retenta (mesma regra de I-01).
       return "abort";
   }
 }

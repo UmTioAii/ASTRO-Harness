@@ -1,6 +1,7 @@
 import { isAbortError } from "../abort";
 import { applyCallToBody, type AppliedCallProfile, type CallConfig } from "../call-profile";
 import { DEFAULT_PROVIDER_TIMEOUT_MS, networkCall, type NetworkCall } from "./network";
+import { RETRYABLE_CLASSES } from "./policy";
 import { redactSecrets } from "../sanitize-external";
 import { isRedirectRefusal } from "../url-safety";
 import type {
@@ -33,17 +34,20 @@ interface OpenAICompatProviderOptions {
   providerName?: string;
   /** Call profile do modelo (E1-E8). */
   call?: CallConfig;
+  /** Injeção de timer para testes; ausente = `setTimeout` real. */
+  sleepFn?: (ms: number) => Promise<void>;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 const MAX_ATTEMPTS_LIMIT = 3;
 const DEFAULT_WINDOW_MS = 60_000;
-const BASE_BACKOFF_MS = 250;
+export const BASE_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 10_000;
-const BACKOFF_JITTER = 0.25;
+/** Fração de jitter aplicada ao backoff (0 = desligado). */
+export const BACKOFF_JITTER = 0.25;
 const MAX_ERROR_DETAIL_LENGTH = 300;
 
-const RETRYABLE: ReadonlySet<ErrorClass> = new Set(["transient_rate_limit", "outage", "network_timeout"]);
+
 
 /** Retry-After da resposta que originou o erro, quando presente. */
 const retryAfterMsByError = new WeakMap<ProviderError, number>();
@@ -189,7 +193,7 @@ function extractErrorDetail(text: string): string {
   return trimmed;
 }
 
-function parseRetryAfter(value: string | null): number | undefined {
+export function parseRetryAfter(value: string | null): number | undefined {
   if (value === null) return undefined;
   const trimmed = value.trim();
   if (trimmed.length === 0) return undefined;
@@ -203,7 +207,7 @@ function parseRetryAfter(value: string | null): number | undefined {
   return Math.max(0, date - Date.now());
 }
 
-function retryDelayMs(
+export function retryDelayMs(
   attempt: number,
   retryAfterMs: number | undefined,
   remainingMs: number,
@@ -233,6 +237,7 @@ export class OpenAICompatProvider implements Provider {
   private readonly timeoutMs: number;
   private readonly streamTimeoutMs: number | undefined;
   private readonly providerName: string | undefined;
+  private readonly sleepFn: (ms: number) => Promise<void>;
 
   constructor(opts: OpenAICompatProviderOptions) {
     this.url = `${opts.baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -242,6 +247,7 @@ export class OpenAICompatProvider implements Provider {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
     this.streamTimeoutMs = opts.streamTimeoutMs;
     this.providerName = opts.providerName;
+    this.sleepFn = opts.sleepFn ?? sleep;
 
     const headers = new Headers();
     for (const [name, value] of Object.entries(opts.headers ?? {})) {
@@ -270,7 +276,7 @@ export class OpenAICompatProvider implements Provider {
         if (!(error instanceof ProviderError)) throw error;
         // Já emitimos token: repetir duplicaria o texto no painel.
         if (streamStarted.has(req)) throw error;
-        if (!RETRYABLE.has(error.errClass) || attempt >= this.maxAttempts) {
+        if (!RETRYABLE_CLASSES.has(error.errClass) || attempt >= this.maxAttempts) {
           throw error;
         }
 
@@ -278,7 +284,7 @@ export class OpenAICompatProvider implements Provider {
         const delayMs = retryDelayMs(attempt, retryAfterMsByError.get(error), remainingMs);
         if (delayMs === null) throw error;
 
-        await sleep(delayMs);
+        await this.sleepFn(delayMs);
       }
     }
   }

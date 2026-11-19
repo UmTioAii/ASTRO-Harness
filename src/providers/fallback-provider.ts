@@ -1,20 +1,23 @@
 /**
  * Fallback entre providers (C6, D-14): tenta a cadeia em ordem de prioridade
  * (menor primeiro; empate mantém a ordem declarada). Só retrya erros
- * `transient_rate_limit`/`outage`; erros duros vão direto ao próximo da
- * cadeia. Esgotada a cadeia, o último erro sobe. O provider que atende é
- * devolvido em `response.provider` — o ledger registra o real, não o wrapper
- * (I-03: mensagens de erro já vêm redigidas do adapter, F2).
+ * `transient_rate_limit`/`outage`/`network_timeout`; erros duros vão direto
+ * ao próximo da cadeia (inclusive `auth`: a credencial do primário pode estar
+ * inválida, e é exatamente para isso que a cadeia existe; o abort de `auth` é
+ * do profile-fallback, não do C6). Esgotada a cadeia, o último erro sobe. Uma
+ * requisição que já emitiu token nunca troca de provider (duplicaria o texto).
+ * O provider que atende é devolvido em `response.provider` — o ledger registra
+ * o real, não o wrapper (I-03: mensagens de erro já vêm redigidas do adapter).
  */
 import { auditCostUsd, auditDurationMs, type Auditor } from "../audit";
 import { isAbortError } from "../abort";
 import { AccountLockedError } from "../agent-lock";
 import { markProviderFailure, markProviderSuccess } from "./health-state";
+import { maxRetriesFor } from "./policy";
 import { streamStarted } from "./types";
 import { SwapDeniedError, type SwapApprover, type SwapRequest } from "../approval";
 import { ProviderError, type CompletionRequest, type CompletionResponse, type ErrorClass, type Provider } from "./types";
 
-const RETRYABLE: ReadonlySet<string> = new Set(["transient_rate_limit", "outage", "network_timeout"]);
 /** Prioridade padrão quando o provider não declara (D-15). */
 export const DEFAULT_PRIORITY = 100;
 
@@ -196,7 +199,16 @@ export class FallbackProvider implements Provider {
           lastError = error;
           lastClass = errorClass;
           this.#log("provider.failure", { provider: entry.name, errorClass, attempt });
-          if (!RETRYABLE.has(errorClass) || attempt > this.#maxRetries) break; // próximo da cadeia
+          /**
+           * C6 usa o mesmo `maxRetries` (config) para as duas classes: aqui a
+           * matriz contribui apenas o bit retryable/não-retryable. Os limites
+           * por classe (10/3) valem no roteador (`errorPolicy`, profile-fallback).
+           */
+          const cap = maxRetriesFor(errorClass, {
+            maxRateLimitRetries: this.#maxRetries,
+            maxOutageRetries: this.#maxRetries,
+          });
+          if (cap === 0 || attempt > cap) break; // próximo da cadeia
           await sleep(this.#retryBackoffMs * attempt);
         }
       }
