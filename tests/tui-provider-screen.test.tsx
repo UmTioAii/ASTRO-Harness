@@ -8,6 +8,7 @@ import { ProviderScreen, listActions } from "../src/tui/provider-screen";
 import { ProfileManager } from "../src/providers/profile-manager";
 import { getThemeColors } from "../src/tui/theme";
 import { runCommand } from "../src/tui/commands";
+import type { ModelOption } from "../src/tui/models";
 import type { ChatSession } from "../src/chat/repl";
 
 const colors = getThemeColors("dark");
@@ -736,6 +737,140 @@ test("falha de manager.edit após criar a credencial dispara o descarte (#352)",
     expect(discarded).toBe("vault:cred-12345678");
     expect(m.list().some((item) => item.id === "local")).toBe(false);
     expect(frame(instance)).not.toContain(fakeSecret);
+  } finally {
+    instance.unmount();
+  }
+});
+
+const modelInfo555: ModelOption[] = [
+  {
+    ref: "p/m1", provider: "p", id: "m1", tags: ["writing-code"], context: 8192, status: "active",
+    price: { inputPerM: 0.15, outputPerM: 0.6, fonte: "test", verificado: true },
+  },
+  { ref: "p/m2", provider: "p", id: "m2", tags: [], context: 32000, status: "deprecated" },
+];
+
+test("seta direita abre a view de modelos com status, contexto e pre�o (#555)", async () => {
+  const selected: string[] = [];
+  const instance = render(
+    <ProviderScreen
+      manager={manager()}
+      colors={colors}
+      currentModel="p/m1"
+      modelInfo={modelInfo555}
+      onSelectModel={(ref) => { selected.push(ref); }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+    />,
+  );
+  try {
+    await waitFor(() => instance.lastFrame()?.includes("Providers") === true);
+    instance.stdin.write("\u001B[C");
+    await waitFor(() => instance.lastFrame()?.includes("Modelos de") === true);
+    const opened = instance.lastFrame() ?? "";
+    expect(opened).toContain("p/m1 active contexto 8192");
+    expect(opened).toContain("in 0.15/M out 0.6/M");
+    expect(opened).toContain("p/m2 deprecated contexto 32000");
+    expect(opened).toContain("n/d");
+    instance.stdin.write("\r");
+    await waitFor(() => selected.length === 1);
+    expect(selected[0]).toBe("p/m1");
+    await waitFor(() => instance.lastFrame()?.includes("Providers") === true);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("? navega nos modelos e enter seleciona o segundo (#555)", async () => {
+  const selected: string[] = [];
+  const instance = render(
+    <ProviderScreen
+      manager={manager()}
+      colors={colors}
+      modelInfo={modelInfo555}
+      onSelectModel={(ref) => { selected.push(ref); }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+    />,
+  );
+  try {
+    await waitFor(() => instance.lastFrame()?.includes("Providers") === true);
+    instance.stdin.write("\u001B[C");
+    await waitFor(() => instance.lastFrame()?.includes("Modelos de") === true);
+    instance.stdin.write("\u001B[B");
+    await waitFor(() => instance.lastFrame()?.includes("> p/m2") === true);
+    instance.stdin.write("\r");
+    await waitFor(() => selected.length === 1);
+    expect(selected[0]).toBe("p/m2");
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("esc na view de modelos volta � lista sem selecionar (#555)", async () => {
+  const selected: string[] = [];
+  const instance = render(
+    <ProviderScreen
+      manager={manager()}
+      colors={colors}
+      modelInfo={modelInfo555}
+      onSelectModel={(ref) => { selected.push(ref); }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+    />,
+  );
+  try {
+    await waitFor(() => instance.lastFrame()?.includes("Providers") === true);
+    instance.stdin.write("\u001B[C");
+    await waitFor(() => instance.lastFrame()?.includes("Modelos de") === true);
+    instance.stdin.write("\u001b");
+    await waitFor(() => instance.lastFrame()?.includes("Providers") === true);
+    expect(selected).toHaveLength(0);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("sem modelInfo cai no fallback dos modelos do perfil como active (#555)", async () => {
+  const selected: string[] = [];
+  const instance = render(
+    <ProviderScreen
+      manager={manager()}
+      colors={colors}
+      onSelectModel={(ref) => { selected.push(ref); }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+    />,
+  );
+  try {
+    await waitFor(() => instance.lastFrame()?.includes("Providers") === true);
+    instance.stdin.write("\u001B[C");
+    await waitFor(() => instance.lastFrame()?.includes("Modelos de") === true);
+    const opened = instance.lastFrame() ?? "";
+    expect(opened).toContain("p/m1 active contexto 8192");
+    instance.stdin.write("\r");
+    await waitFor(() => selected.length === 1);
+    expect(selected[0]).toBe("p/m1");
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("sem onSelectModel a seta direita n�o abre a view de modelos (#555)", async () => {
+  const instance = render(
+    <ProviderScreen
+      manager={manager()}
+      colors={colors}
+      modelInfo={modelInfo555}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+    />,
+  );
+  try {
+    await waitFor(() => instance.lastFrame()?.includes("Providers") === true);
+    instance.stdin.write("\u001B[C");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(instance.lastFrame() ?? "").not.toContain("Modelos de");
   } finally {
     instance.unmount();
   }
