@@ -483,6 +483,86 @@ describe("AgentSession configSummary / savePermissionMode (#273)", () => {
     }
   });
 
+  test("savePermissionMode recusa modo mais amplo que o teto global, sem gravar nem aplicar (#494)", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-mode-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ permissions: { mode: "ask" } }));
+    const { configPath, session, stop } = setup();
+    const savedMode = process.env.ASTRO_PERMISSION_MODE;
+    delete process.env.ASTRO_PERMISSION_MODE;
+    try {
+      const chat = session({ env: testEnv({ KEY: "k", ASTRO_HOME: home }) });
+      const before = readFileSync(configPath, "utf8");
+      expect(() => chat.savePermissionMode("bypass")).toThrow(/permissions\.mode.*mais amplo que o teto global \(ask\)/);
+      expect(readFileSync(configPath, "utf8")).toBe(before); // arquivo byte a byte intacto
+      expect(chat.permissionMode()).toBe("ask"); // sessão inalterada
+      chat.close();
+    } finally {
+      if (savedMode === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+      else process.env.ASTRO_PERMISSION_MODE = savedMode;
+      stop();
+    }
+  });
+
+  test("savePermissionMode resolve o home global com o mesmo merge do loader (#494)", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-mode-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ permissions: { mode: "ask" } }));
+    const { configPath, session, stop } = setup();
+    const savedMode = process.env.ASTRO_PERMISSION_MODE;
+    const savedHome = process.env.ASTRO_HOME;
+    delete process.env.ASTRO_PERMISSION_MODE;
+    process.env.ASTRO_HOME = home; // home no processo; env da sessão é parcial (sem ASTRO_HOME)
+    try {
+      const chat = session({ env: { KEY: "k" } });
+      const before = readFileSync(configPath, "utf8");
+      expect(() => chat.savePermissionMode("bypass")).toThrow(/mais amplo que o teto global \(ask\)/);
+      expect(readFileSync(configPath, "utf8")).toBe(before);
+      chat.close();
+    } finally {
+      if (savedMode === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+      else process.env.ASTRO_PERMISSION_MODE = savedMode;
+      if (savedHome === undefined) delete process.env.ASTRO_HOME;
+      else process.env.ASTRO_HOME = savedHome;
+      stop();
+    }
+  });
+
+  test("savePermissionMode persiste modo mais restrito que o teto global (#494)", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-mode-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ permissions: { mode: "bypass" } }));
+    const { configPath, session, stop } = setup();
+    const savedMode = process.env.ASTRO_PERMISSION_MODE;
+    delete process.env.ASTRO_PERMISSION_MODE;
+    try {
+      const chat = session({ env: testEnv({ KEY: "k", ASTRO_HOME: home }) });
+      expect(chat.savePermissionMode("allow-edits")).toBe("allow-edits");
+      expect(loadConfig(configPath).permissions?.mode).toBe("allow-edits");
+      expect(chat.permissionMode()).toBe("allow-edits");
+      chat.close();
+    } finally {
+      if (savedMode === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+      else process.env.ASTRO_PERMISSION_MODE = savedMode;
+      stop();
+    }
+  });
+
+  test("savePermissionMode com --no-global-config não aplica teto global (#494)", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-mode-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ permissions: { mode: "ask" } }));
+    const { configPath, session, stop } = setup();
+    const savedMode = process.env.ASTRO_PERMISSION_MODE;
+    delete process.env.ASTRO_PERMISSION_MODE;
+    try {
+      const chat = session({ env: testEnv({ KEY: "k", ASTRO_HOME: home, ASTRO_NO_GLOBAL_CONFIG: "1" }) });
+      expect(chat.savePermissionMode("bypass")).toBe("bypass");
+      expect(loadConfig(configPath).permissions?.mode).toBe("bypass");
+      chat.close();
+    } finally {
+      if (savedMode === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+      else process.env.ASTRO_PERMISSION_MODE = savedMode;
+      stop();
+    }
+  });
+
   test("savePermissionMode persiste no arquivo, troca em runtime, audita e o próximo run usa o modo novo", async () => {
     const { cwd, configPath, session, stop } = setup();
     const saved = process.env.ASTRO_PERMISSION_MODE;

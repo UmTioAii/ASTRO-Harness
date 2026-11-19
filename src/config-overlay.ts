@@ -252,6 +252,20 @@ function assertStepsCeiling(steps: unknown, field: string, ceiling: number): voi
   }
 }
 
+/**
+ * `/config` (#494): a escrita de `permissions.mode` no projeto não pode ampliar
+ * o teto da camada global. Nomeia a chave e o teto, sem ecoar conteúdo de arquivo.
+ */
+export function assertModeWithinGlobal(globalMode: unknown, mode: string): void {
+  const from = typeof globalMode === "string" ? MODE_RANK[globalMode] : undefined;
+  const to = MODE_RANK[mode];
+  if (from !== undefined && to !== undefined && to > from) {
+    throw new ConfigError(
+      `config inválida: "permissions.mode" (${mode}) é mais amplo que o teto global (${String(globalMode)})`,
+    );
+  }
+}
+
 /** Rejeita quando o projeto é mais permissivo que o global. */
 function assertNotWider(globalValue: unknown, mergedValue: unknown, table: Record<string, number>, label: string): void {
   const from = typeof globalValue === "string" ? table[globalValue] : undefined;
