@@ -1408,7 +1408,7 @@ function validateMcpServers(value: unknown): Record<string, MCPServerConfig> {
     // em forma de segredo é recusado nomeando só o campo, nunca o valor.
     const secretField = mcpSecretProblem({ [name]: { args, ...(env === undefined ? {} : { env }) } });
     if (secretField !== undefined) {
-      fail(`config inválida: "${secretField}" parece conter credencial; remova o valor (segredo só via variável de ambiente ou cofre)`);
+      fail(`config inválida: "${secretField}" parece conter credencial; remova o valor da config (em headers use "env:NOME")`);
     }
     const headers = raw2.headers === undefined ? undefined : mcpHeaders(expectObject(raw2.headers, `${field}.headers`), `${field}.headers`);
     const timeoutMs = raw2.timeoutMs === undefined ? 30_000 : expectPositiveInteger(raw2.timeoutMs, `${field}.timeoutMs`);
