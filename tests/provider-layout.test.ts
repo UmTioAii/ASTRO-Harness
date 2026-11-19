@@ -68,6 +68,7 @@ describe("per-provider layout (#553)", () => {
       }
       expect(typeof card.free).toBe("boolean");
       if (card.reasoning) expect(card.efforts.length).toBeGreaterThan(0);
+      else expect(card.efforts).toHaveLength(0);
       if (card.free) expect(card.price === null || (card.price.inputPerM === 0 && card.price.outputPerM === 0)).toBe(true);
     }
     expect(cards.some((card) => card.reasoning)).toBe(true);
