@@ -175,6 +175,34 @@ function parseCompletion(text: string): CompletionResponse {
   };
 }
 
+/**
+ * Classifica um frame de erro dentro do SSE (D-18): providers como NVIDIA podem
+ * devolver o erro no corpo do stream com `code`; sem `code`, o texto decide.
+ * Nunca devolve `hard_quota` por engano: só quota explícita conta (I-09).
+ */
+function classifyStreamError(error: unknown, raw: string): ErrorClass {
+  const code = isRecord(error) && typeof error.code === "string" ? error.code.toLowerCase() : "";
+  const byCode: Record<string, ErrorClass> = {
+    insufficient_quota: "hard_quota",
+    quota_exceeded: "hard_quota",
+    billing_exceeded: "hard_quota",
+    rate_limit_exceeded: "transient_rate_limit",
+    unauthorized: "auth",
+    invalid_api_key: "auth",
+    forbidden: "auth",
+    invalid_request: "invalid_request",
+    bad_request: "invalid_request",
+    model_not_found: "invalid_request",
+  };
+  // hasOwn: `in` casaria chaves da cadeia de protótipos ("constructor").
+  if (Object.hasOwn(byCode, code)) return byCode[code]!;
+  const hay = `${code} ${raw}`.toLowerCase();
+  if (hay.includes("insufficient_quota") || hay.includes("quota exceeded")) return "hard_quota";
+  if (hay.includes("unauthorized") || hay.includes("invalid api key")) return "auth";
+  if (hay.includes("invalid request") || hay.includes("bad request")) return "invalid_request";
+  return "outage";
+}
+
 function extractErrorDetail(text: string): string {
   const trimmed = text.trim();
   if (trimmed.length === 0) return "";
@@ -186,6 +214,8 @@ function extractErrorDetail(text: string): string {
       if (isRecord(error) && typeof error.message === "string") return error.message;
       if (typeof error === "string") return error;
       if (typeof parsed.message === "string") return parsed.message;
+      // NVIDIA NIM (FastAPI) responde erro como {"detail": "..."}.
+      if (typeof parsed.detail === "string") return parsed.detail;
     }
   } catch {
     // Corpo não-JSON: usa o texto cru.
@@ -327,7 +357,8 @@ export class OpenAICompatProvider implements Provider {
           const streamed = await this.streamResponse(req, response, req.onToken, net, activity);
           return { ...streamed, call };
         } catch (error) {
-          // Erros já classificados do stream (ex.: corpo vazio) seguem como estão.
+          // Erros já classificados do stream (ex.: frame de erro, corpo vazio) seguem como estão.
+          if (error instanceof ProviderError) throw error;
           // O timeout próprio vence sobre o abort do caller na mesma janela (#519).
           const own = net.ownTimeout(error);
           if (own === undefined && isAbortError(error, signal)) throw error;
@@ -336,7 +367,8 @@ export class OpenAICompatProvider implements Provider {
             const fallback = activity.chunks > 0 ? "idle" : "total";
             throw this.networkError(error, signal, net, "falha ao ler o stream do provider", fallback);
           }
-          throw error;
+          // Drop no meio do stream (reset/fechamento): indisponibilidade, nunca cota.
+          throw this.networkError(error, signal, net, "falha ao ler o stream do provider", "idle");
         }
       }
 
@@ -454,7 +486,7 @@ export class OpenAICompatProvider implements Provider {
               ? String((payload.error as { message?: unknown }).message ?? "")
               : "erro reportado";
           const detail = truncate(redactSecrets(this.redact(raw)), MAX_ERROR_DETAIL_LENGTH);
-          throw new ProviderError("outage", `stream do provider: ${detail}`);
+          throw new ProviderError(classifyStreamError(payload.error, raw), `stream do provider: ${detail}`);
         }
         const delta = payload.choices?.[0]?.delta;
         if (typeof delta?.content === "string" && delta.content !== "") {
@@ -552,8 +584,14 @@ export class OpenAICompatProvider implements Provider {
       errClass = text.toLowerCase().includes("insufficient_quota")
         ? "hard_quota"
         : "transient_rate_limit";
+    } else if (status === 402) {
+      // Pagamento/cota insuficiente: nunca é transient (I-09).
+      errClass = "hard_quota";
     } else if (status === 401 || status === 403) {
       errClass = "auth";
+    } else if (status === 408 || status === 425) {
+      // Timeout do servidor / too early: indisponibilidade transitória, nunca cota.
+      errClass = "network_timeout";
     } else if (status === 400 || status === 404 || status === 422) {
       errClass = "invalid_request";
     } else if (status >= 500) {
@@ -564,7 +602,7 @@ export class OpenAICompatProvider implements Provider {
       errClass = "outage";
     }
 
-    const detail = truncate(this.redact(extractErrorDetail(text)), MAX_ERROR_DETAIL_LENGTH);
+    const detail = truncate(redactSecrets(this.redact(extractErrorDetail(text))), MAX_ERROR_DETAIL_LENGTH);
     const message =
       `provider respondeu HTTP ${status} (${errClass})` + (detail.length > 0 ? `: ${detail}` : "");
     const error = new ProviderError(errClass, message, status);
