@@ -1,5 +1,17 @@
-/** Catálogo seed de providers: preenche o wizard, não é whitelist. */
+/**
+ * Catálogo seed de providers: preenche o wizard, não é whitelist.
+ *
+ * Layout por provider (#553): cada pasta em `src/providers/<provider>/` tem o
+ * `adapter.ts` (endpoint/credencial/kind) e o `<provider>_models.ts` (model
+ * cards). Este arquivo só compõe os seeds — nenhum dado de modelo mora aqui.
+ */
 import type { ProfileModel } from "./profiles";
+import type { ModelCard, ProviderAdapterSeed } from "./seed";
+import { profileModelsFor } from "./seed";
+import { nvidiaAdapter } from "./nvidia/adapter";
+import { codexAdapter } from "./codex/adapter";
+import { openrouterAdapter } from "./openrouter/adapter";
+import { openaiCompatibleAdapter } from "./openai-compatible/adapter";
 
 export interface CatalogEntry {
   key: string;
@@ -11,47 +23,33 @@ export interface CatalogEntry {
   /** Domínio de quota do seed; o wizard grava no perfil. */
   quotaDomain?: string;
   models: ProfileModel[];
+  /** Cards completos (reasoning/effort/preço/free) para a UI de provider. */
+  cards: readonly ModelCard[];
 }
 
-export const PROVIDER_CATALOG: readonly CatalogEntry[] = [
-  {
-    key: "nvidia",
-    name: "NVIDIA",
-    kind: "openai-compat",
-    baseUrl: "https://integrate.api.nvidia.com/v1",
-    credentialRef: "NVIDIA_API_KEY",
-    quotaDomain: "nvidia",
-    models: [{
-      id: "meta/llama-3.3-70b-instruct",
-      tags: ["writing-code", "tools", "long-context"],
-      context: 131072,
-    }],
-  },
-  {
-    key: "codex",
-    name: "Codex",
-    kind: "codex-oauth",
-    credentialsPath: "~/.codex/auth.json",
-    quotaDomain: "codex",
-    models: [{ id: "gpt-5.5", tags: ["writing-code", "tools", "reasoning"], context: 400000 }],
-  },
-  {
-    key: "openrouter",
-    name: "OpenRouter",
-    kind: "openai-compat",
-    baseUrl: "https://openrouter.ai/api/v1",
-    credentialRef: "OPENROUTER_API_KEY",
-    quotaDomain: "openrouter",
-    models: [{ id: "openai/gpt-4o-mini", tags: ["writing-code", "tools", "fast"], context: 128000 }],
-  },
-  {
-    key: "openai-compatible",
-    name: "OpenAI Compatible",
-    kind: "openai-compat",
-    quotaDomain: "openai-compatible",
-    models: [],
-  },
+function toEntry(seed: ProviderAdapterSeed): CatalogEntry {
+  return {
+    key: seed.key,
+    name: seed.name,
+    kind: seed.kind,
+    ...(seed.baseUrl === undefined ? {} : { baseUrl: seed.baseUrl }),
+    ...(seed.credentialRef === undefined ? {} : { credentialRef: seed.credentialRef }),
+    ...(seed.credentialsPath === undefined ? {} : { credentialsPath: seed.credentialsPath }),
+    ...(seed.quotaDomain === undefined ? {} : { quotaDomain: seed.quotaDomain }),
+    models: profileModelsFor(seed.models),
+    cards: seed.models,
+  };
+}
+
+/** Ordem declarada dos seeds: a mesma que o wizard sempre mostrou. */
+const SEEDS: readonly ProviderAdapterSeed[] = [
+  nvidiaAdapter,
+  codexAdapter,
+  openrouterAdapter,
+  openaiCompatibleAdapter,
 ];
+
+export const PROVIDER_CATALOG: readonly CatalogEntry[] = SEEDS.map(toEntry);
 
 export function catalogEntry(key: string): CatalogEntry | undefined {
   return PROVIDER_CATALOG.find((entry) => entry.key === key);
