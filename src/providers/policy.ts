@@ -54,6 +54,9 @@ export function maxRetriesFor(errClass: ErrorClass, limits?: PolicyLimits): numb
     case "auth":
     case "invalid_request":
       return 0;
+    default:
+      // Deny-by-default: classe nova só retenta depois de entrar conscientemente na matriz.
+      return 0;
   }
 }
 
@@ -87,6 +90,9 @@ export function errorPolicy(
     case "auth":
       return "abort";
     case "invalid_request":
+      return "abort";
+    default:
+      // Deny-by-default: classe desconhecida não retenta (mesma regra de I-01).
       return "abort";
   }
 }
