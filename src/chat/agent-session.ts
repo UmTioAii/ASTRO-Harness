@@ -381,8 +381,9 @@ export class AgentSession {
     }
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
     // #494: a escrita no projeto não pode ampliar o teto global; falhou, nada é
-    // gravado e a sessão continua no modo anterior.
-    const env = this.#env ?? process.env;
+    // gravado e a sessão continua no modo anterior. O home é resolvido com o mesmo
+    // merge do loader (`process.env` + env da sessão): um env parcial não realoca ~/.astro.
+    const env = { ...process.env, ...this.#env };
     if (env.ASTRO_NO_GLOBAL_CONFIG !== "1") {
       const permissions = loadGlobalConfig(env)?.permissions;
       assertModeWithinGlobal(isPlainObject(permissions) ? permissions.mode : undefined, mode);

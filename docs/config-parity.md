@@ -61,7 +61,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | R3 | `--provider` divergente de `agent.profile` é erro; seleção de env/store divergente gera aviso e é ignorada. |
 | R4 | Status (footer da TUI e linha do REPL) e `/details` mostram o provider/modelo efetivos, não a seleção gravada; não mostram a origem. `run.started` audita `providerSource`/`providerSelection`. |
 | R4b | A lista de providers mostra a origem: a TUI sempre (`[source]`) e o REPL em `/provider list`; `/providers` mostra `credentialRef`, não a origem. |
-| R5 | Escrita na camada de projeto não pode ampliar a global (ex.: `mode: bypass` com global `ask`): o merge tem de falhar e o arquivo ficar intacto. |
+| R5 | Escrita na camada de projeto não pode ampliar a global (ex.: `mode: bypass` com global `ask`): o merge tem de falhar e o arquivo ficar intacto. O `/config` verifica o teto global antes de gravar (#494). |
 | R6 | `--no-global-config` remove a camada global de config, mas hoje ainda lê/grava o store de perfis; quando #459 entrar, o store também é desligado e a escrita falha com `GlobalStoreDisabledError` (planejado). Não cria arquivo alternativo. |
 | R7 | Sem TTY, `ask` nega e para (#461); `bypass` explícito continua valendo. Nenhuma superfície troca o modo sozinha. |
 
