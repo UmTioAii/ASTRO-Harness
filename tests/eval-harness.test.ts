@@ -13,7 +13,7 @@ import {
   type CaseResult,
   type EvalReport,
 } from "../src/eval/harness";
-import { runScenario, type ScenarioSpec } from "../src/eval/scenario";
+import { evalRunEnv, runScenario, type ScenarioSpec } from "../src/eval/scenario";
 
 const GOLDEN_ROOT = join(import.meta.dir, "..", "eval", "golden");
 
@@ -567,9 +567,20 @@ describe("eval harness (F5-2)", () => {
     expect(existsSync(join(cwd, ".astro", "skills", "verify", ".sha256"))).toBe(true);
   });
 
+  test("o env do eval descarta a home do chamador e desliga a config global (#549)", () => {
+    const callerHome = mkdtempSync(join(tmpdir(), "astro-caller-home-"));
+    const evalHome = join(tmpdir(), "astro-eval-home-");
+    const env = evalRunEnv({ EVAL_KEY: "k", ASTRO_HOME: callerHome }, evalHome);
+    // A home do chamador nunca chega ao run, e a camada global fica desligada.
+    expect(env.ASTRO_HOME).toBe(evalHome);
+    expect(env.ASTRO_NO_GLOBAL_CONFIG).toBe("1");
+    expect(env.EVAL_KEY).toBe("k");
+  });
+
   test("runCase isola a config global do ASTRO_HOME", async () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-home-"));
-    writeFileSync(join(home, "config.json"), JSON.stringify({ run: { checkpointAt: 0.5 } }));
+    // Teto de 1 passo: cenário que só passa se a camada global do chamador for ignorada.
+    writeFileSync(join(home, "config.json"), JSON.stringify({ agent: { maxSteps: 1 } }));
     const root = mkdtempSync(join(tmpdir(), "astro-global-case-"));
     writeScenarioCase(root, "01-global", {
       schema: 1,

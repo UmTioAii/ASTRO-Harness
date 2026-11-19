@@ -572,6 +572,18 @@ function assertSeedTree(path: string, field: string): void {
   for (const entry of readdirSync(path)) assertSeedTree(join(path, entry), `${field}/${entry}`);
 }
 
+/**
+ * Env do run de eval: `ASTRO_HOME` próprio do caso e camada global desligada.
+ * A home do chamador é sempre descartada, então nenhuma config global vaza para
+ * o golden (#549). Pura para o contrato ser testável sem rodar um cenário.
+ */
+export function evalRunEnv(
+  scenarioEnv: Record<string, string>,
+  evalHome: string,
+): Record<string, string> {
+  return { ...scenarioEnv, ASTRO_HOME: evalHome, ASTRO_NO_GLOBAL_CONFIG: "1" };
+}
+
 /** Executa um `scenario.json`; o harness compara os arquivos esperados depois. */
 export async function runScenario(
   spec: ScenarioSpec,
@@ -590,18 +602,16 @@ export async function runScenario(
   const vars: Record<string, string> = {};
   const scenarioEnv: Record<string, string> = { EVAL_KEY: "eval-provider-secret", ...spec.env };
   const evalHome = join(opts.cwd, ".astro", "eval-home");
-  const env: Record<string, string> = {
-    ...scenarioEnv,
-    ASTRO_HOME: evalHome,
-    ASTRO_NO_GLOBAL_CONFIG: "1",
-  };
+  const env: Record<string, string> = evalRunEnv(scenarioEnv, evalHome);
   // Os mocks falam loopback; a config do golden não deve ir à rede pública (I-11).
   const previousPrivate = process.env.ASTRO_ALLOW_PRIVATE_URLS;
   const previousHome = process.env.ASTRO_HOME;
   const previousNoGlobal = process.env.ASTRO_NO_GLOBAL_CONFIG;
+  // Leitores que caem em `process.env` (trust, path-class) veem a mesma home do
+  // env acima: uma fonte só, para o contrato não divergir entre os dois canais.
   process.env.ASTRO_ALLOW_PRIVATE_URLS = "1";
-  process.env.ASTRO_HOME = evalHome;
-  process.env.ASTRO_NO_GLOBAL_CONFIG = "1";
+  process.env.ASTRO_HOME = env.ASTRO_HOME ?? evalHome;
+  process.env.ASTRO_NO_GLOBAL_CONFIG = env.ASTRO_NO_GLOBAL_CONFIG ?? "1";
   try {
     for (const entry of spec.seed ?? []) {
       // Fonte: só dentro do caseDir e sem link em nenhum nível da árvore.

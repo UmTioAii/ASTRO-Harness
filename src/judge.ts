@@ -157,7 +157,7 @@ export class JudgeStopError extends Error {
   }
 }
 
-/** Juiz pediu continuar sem turno disponível: parada segura com razão estável (I-19). */
+/** Juiz pediu continuar sem passo disponível: parada segura com razão estável (I-19). */
 export class JudgeContinueError extends Error {
   readonly code = "judge_continue_exhausted";
   constructor() {
