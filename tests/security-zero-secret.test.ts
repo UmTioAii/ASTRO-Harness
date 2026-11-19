@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { Auditor } from "../src/audit";
@@ -129,6 +129,21 @@ function syntheticKey(): string {
   return ["s", "k", "-", "proj", "7Qm4Zx9Lk2Vb8Rt5"].join("");
 }
 
+/** Link de arquivo: em Windows sem permissão o teste é pulado de forma explícita. */
+function canCreateFileSymlink(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "astro-symlink-probe-"));
+  try {
+    symlinkSync(join(dir, "alvo.txt"), join(dir, "link.txt"), "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const SYMLINK_SUPPORTED = canCreateFileSymlink();
+
 describe("I-03 zero segredos", () => {
   test("detector reconhece chave sintética e ignora redação/fixture", () => {
     const key = syntheticKey();
@@ -154,18 +169,53 @@ describe("I-03 zero segredos", () => {
   test("corpus Git-aware exclui ignorados e cobre versionados e candidatos", () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-zero-secret-git-"));
     try {
+      const key = syntheticKey();
       writeFileSync(join(dir, ".gitignore"), "astro.config.json\n", "utf8");
-      writeFileSync(join(dir, "tracked.txt"), syntheticKey(), "utf8");
-      writeFileSync(join(dir, "candidate.txt"), syntheticKey(), "utf8");
-      writeFileSync(join(dir, "astro.config.json"), syntheticKey(), "utf8");
+      writeFileSync(join(dir, "tracked.txt"), key, "utf8");
+      writeFileSync(join(dir, "candidate.txt"), key, "utf8");
+      writeFileSync(join(dir, "astro.config.json"), key, "utf8");
       execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
       execFileSync("git", ["add", "--", ".gitignore", "tracked.txt"], { cwd: dir, stdio: "ignore" });
 
-      const findings = scanRepo(dir).map((finding) => finding.file);
-      expect(findings).toEqual(["candidate.txt", "tracked.txt"]);
-      expect(findings).not.toContain("astro.config.json");
+      const findings = scanRepo(dir);
+      expect(findings.map((finding) => `${finding.file}:${finding.line} (${finding.rule})`)).toEqual([
+        "candidate.txt:1 (openai)",
+        "tracked.txt:1 (openai)",
+      ]);
+      expect(JSON.stringify(findings)).not.toContain(key);
+      expect(findings.map((finding) => finding.file)).not.toContain("astro.config.json");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("arquivo versionado removido do working tree é ignorado", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-zero-secret-removed-"));
+    try {
+      writeFileSync(join(dir, "removido.txt"), syntheticKey(), "utf8");
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["add", "--", "removido.txt"], { cwd: dir, stdio: "ignore" });
+      rmSync(join(dir, "removido.txt"));
+
+      expect(scanRepo(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test.skipIf(!SYMLINK_SUPPORTED)("symlink versionado não é seguido", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-zero-secret-symlink-"));
+    const outside = mkdtempSync(join(tmpdir(), "astro-zero-secret-outside-"));
+    try {
+      writeFileSync(join(outside, "fora.txt"), syntheticKey(), "utf8");
+      symlinkSync(join(outside, "fora.txt"), join(dir, "link.txt"), "file");
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["add", "--", "link.txt"], { cwd: dir, stdio: "ignore" });
+
+      expect(scanRepo(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
     }
   }, 30_000);
 

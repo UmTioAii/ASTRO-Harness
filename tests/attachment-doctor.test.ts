@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectFacts, exitCode, runChecks } from "../src/doctor";
+import { collectFacts, doctorJson, exitCode, renderReport, runChecks } from "../src/doctor";
 import { ArtifactStore } from "../src/attachments/store";
 import { FAKE_PRIVATE_ACL } from "./setup";
 
@@ -189,6 +189,52 @@ describe("doctor de anexos (#392)", () => {
     expect(attachments?.detail).not.toContain("TTL");
     expect(attachments?.detail).not.toContain("1.0 GiB");
     expect(exitCode(report)).toBe(1);
+  });
+
+  test("config global inválida sem provider vira fail sanitizado e não mostra defaults", () => {
+    const { projectCwd, astroHome, root } = sandbox();
+    writeFileSync(join(astroHome, "config.json"), JSON.stringify({
+      attachments: { artifactTtlDays: "not-a-number" },
+    }));
+
+    const facts = collectFacts(process.cwd(), {
+      projectCwd,
+      env: envFor(astroHome, root),
+      checkPrivate: () => true,
+    });
+    const report = runChecks(facts);
+    const config = report.checks.find((item) => item.name === "config");
+    const attachments = report.checks.find((item) => item.name === "attachments");
+    expect(config?.level).toBe("fail");
+    expect(attachments?.level).toBe("fail");
+    expect(attachments?.detail ?? "").toContain("config efetiva inválida");
+    expect(attachments?.detail ?? "").not.toContain("TTL");
+    expect(attachments?.detail ?? "").not.toContain("1.0 GiB");
+    expect(facts.attachments.ttlDays).toBeUndefined();
+    expect(exitCode(report)).toBe(1);
+  });
+
+  test("erro de config não expõe valor sintético no caminho", () => {
+    const { projectCwd, astroHome, root } = sandbox();
+    const secret = ["s", "k", "-", "doctor", "-", "SYNTHETIC", "123456789"].join("");
+    const secretDir = join(projectCwd, `cfg-${secret}`);
+    mkdirSync(secretDir, { recursive: true });
+    writeFileSync(join(secretDir, "astro.config.json"), "{not json", "utf8");
+
+    const facts = collectFacts(process.cwd(), {
+      projectCwd,
+      configPath: join(secretDir, "astro.config.json"),
+      env: envFor(astroHome, root),
+      checkPrivate: () => true,
+    });
+    expect(facts.config.error).toBeString();
+    expect(facts.config.error ?? "").not.toContain(secret);
+
+    const report = runChecks(facts);
+    const rendered: string[] = [];
+    renderReport(report, (line) => rendered.push(line));
+    expect(rendered.join("\n")).not.toContain(secret);
+    expect(JSON.stringify(doctorJson(report))).not.toContain(secret);
   });
 
   test("raiz válida reporta uso, artefatos e último GC", () => {
