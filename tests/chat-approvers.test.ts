@@ -168,8 +168,18 @@ describe("prompt de tool com o argumento material (#536)", () => {
     const request = { name: "write_file", action: "edit" as const, mode: "ask" as const };
     const prompt = toolPrompt(request);
     expect(prompt).toBe(
-      'tool "write_file" (ação edit, modo ask). [s] aprovar, [n] negar, [S] aprovar nesta sessão: ',
+      'tool "write_file" (ação edit, modo ask). [s] aprovar, [n] negar, [S] aprovar toda chamada "write_file" nesta sessão: ',
     );
+  });
+
+  test("a opção S nomeia a tool: o grant é por ação+tool, não pelo comando mostrado (#536)", () => {
+    const prompt = toolPrompt({
+      name: "run_command", action: "shell", mode: "ask",
+      detail: { kind: "command", value: "npm test" },
+    });
+    expect(prompt).toContain('[S] aprovar toda chamada "run_command" nesta sessão');
+    // o comando mostrado não é o escopo do grant
+    expect(prompt).not.toContain('[S] aprovar toda chamada "npm test"');
   });
 
   test("detalhe longo já chega truncado pelo gate, mas o prompt não quebra a linha", () => {

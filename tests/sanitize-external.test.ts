@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { redactSecrets } from "../src/sanitize-external";
+import { redactSecrets, sanitizePromptText } from "../src/sanitize-external";
 import { readFileTool } from "../src/tools/read-file";
 
 // Montados em runtime para não expor literais no diff (gate G6)
@@ -105,4 +105,32 @@ test("read_file redige 40 hex em Authorization/AUTHORIZATION", async () => {
   expect(result.isError).toBeUndefined();
   expect(result.output).not.toContain(hex40);
   expect(result.output).toContain("[REDACTED]");
+});
+
+test("redactSecrets redige a senha de userinfo de URL e mantém usuário/host (#536)", () => {
+  const password = "hunter2correcthorse";
+  const redacted = redactSecrets(`git clone https://daniel:${password}@example.test/repo`);
+  expect(redacted).not.toContain(password);
+  expect(redacted).toContain(`https://daniel:[REDACTED]@example.test/repo`);
+  // userinfo sem senha (ssh/git) continua legível
+  expect(redactSecrets("ssh://git@example.test/repo")).toBe("ssh://git@example.test/repo");
+  expect(redactSecrets("https://user@example.test/repo")).toBe("https://user@example.test/repo");
+});
+
+test("sanitizePromptText remove C1 (CSI), bidi, ZWSP e surrogate solto (#536)", () => {
+  const csi = sanitizePromptText("echo ok\u009b2J\u009bHrm -rf build");
+  expect(csi).not.toContain("\u009b");
+  expect(csi).not.toMatch(/[\p{Cc}\p{Cf}\p{Cs}]/u);
+  expect(csi).toContain("rm -rf build");
+
+  expect(sanitizePromptText("harmless.txt\u202Egnp.exe")).toBe("harmless.txtgnp.exe");
+  expect(sanitizePromptText("a\u200Bb")).toBe("ab");
+  expect(sanitizePromptText("x\ud800y")).toBe("xy");
+  expect(sanitizePromptText("ok 😀 fim")).toBe("ok 😀 fim"); // par válido preservado
+});
+
+test("sanitizePromptText remove controle antes da redação (segredo não escapa) (#536)", () => {
+  const clean = sanitizePromptText("chave sk-\u001babcdefghijklmnop fim");
+  expect(clean).not.toContain("abcdefghijklmnop");
+  expect(clean).toContain("[REDACTED]");
 });
