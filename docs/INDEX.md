@@ -24,6 +24,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/roadmap.md` | Histórico das fases concluídas (F0–F7) | ~70 |
 | `docs/roadmap-complementar.md` | Itens planejados das camadas 0–3 (F-xx, T, C, P) | ~120 |
 | `docs/providers.md` | Ao construir provider, validar credencial ou usar os SDKs | ~90 |
+| `docs/provider-cards.md` | Ao mover/editar model cards, adicionar um provider ou ler o contrato do card (#553) | ~45 |
 | `docs/doctor.md` | Ao usar ou alterar `astro doctor`: checks, `--online` e formato `doctor/v1` (#61) | ~90 |
 | `docs/tui-layout.md` | Ao mudar header, footer, erro, aviso ou progresso da TUI (#480) | ~116 |
 | `docs/skills.md` | Ao criar, instalar, revisar ou invocar uma skill (`/<nome>`) | ~100 |
