@@ -83,16 +83,18 @@ describe("glob tool (#534, F-13)", () => {
   test("cap de 500 com aviso explícito e truncated: true", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-glob-cap-"));
     mkdirSync(join(cwd, "many"), { recursive: true });
-    for (let i = 0; i < 501; i++) {
+    // Margem sobre o cap: o teste prova o corte, não a borda exata.
+    for (let i = 0; i < 600; i++) {
       writeFileSync(join(cwd, "many", `f${String(i).padStart(3, "0")}.txt`), "");
     }
     const result = await globTool.execute({ pattern: "many/*.txt" }, ctx(cwd));
     expect(result.isError).toBeFalsy();
     const parsed = output(result);
+    expect(typeof parsed.truncated).toBe("boolean");
     expect(parsed.files).toHaveLength(500);
     expect(parsed.files[0]).toBe("many/f000.txt");
     expect(parsed.files.at(-1)).toBe("many/f499.txt");
-    expect(parsed.total).toBe(501);
+    expect(parsed.total).toBe(600);
     expect(parsed.truncated).toBe(true);
     expect(parsed.notice).toBeDefined();
     expect(parsed.notice).toContain("truncad");
@@ -116,9 +118,16 @@ describe("glob tool (#534, F-13)", () => {
     expect(included.files).toContain("node_modules/pkg/index.js");
   });
 
-  test("padrão absoluto é recusado", async () => {
+  test("padrão absoluto é recusado em qualquer plataforma", async () => {
     const cwd = setupTree();
-    for (const pattern of [join(cwd, "**", "*.ts"), "/etc/**", "C:\\Windows\\**"]) {
+    const patterns = [
+      join(cwd, "**", "*.ts"), // absoluto nativo do SO
+      "/etc/**",
+      "C:\\Windows\\**", // drive absoluto: `isAbsolute` é false no POSIX
+      "C:foo", // drive relativo: não é relativo ao cwd
+      "\\\\server\\share\\**", // UNC
+    ];
+    for (const pattern of patterns) {
       const result = await globTool.execute({ pattern }, ctx(cwd));
       expect(result.isError).toBe(true);
       expect(result.output).toContain("absoluto");
