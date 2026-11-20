@@ -260,7 +260,7 @@ describe("benchmark de providers (F5-4)", () => {
       expect(await proc.exited).toBe(1);
       expect(err).toContain(message);
     }
-  });
+  }, 30_000); // 5 boots reais da CLI (5 casos) no mesmo teste; 5s estoura sob carga Windows (#540)
 
   // Duas pernas da matriz de CI (`.github/workflows/ci.yml`): sem depender de
   // env ambiente, para que qualquer valor externo não altere o resultado.

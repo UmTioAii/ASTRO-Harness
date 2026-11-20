@@ -363,5 +363,5 @@ describe("coverage gate CLI (#59)", () => {
       expect(result.stderr).toContain("uso:");
       expect(result.stdout).toBe("");
     }
-  });
+  }, 30_000); // 4 boots reais da CLI (4 casos) no mesmo teste; 5s estoura sob carga Windows (#540)
 });

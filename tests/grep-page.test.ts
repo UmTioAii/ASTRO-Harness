@@ -36,7 +36,7 @@ describe("grep paginado (S-16, CMP-12)", () => {
     expect(page.results[0]).toHaveProperty("file");
     expect(page.results[0]).toHaveProperty("line");
     expect(page.results[0]).toHaveProperty("match");
-  });
+  }, 20_000); // 150 arquivos criados na fixture; o filtro de FS do win32 estoura 5s sob carga (#540)
 
   test("page 2 devolve o restante e marca hasMore=false", async () => {
     const cwd = manyMatches(150);
@@ -47,7 +47,7 @@ describe("grep paginado (S-16, CMP-12)", () => {
     expect(page.results).toHaveLength(50);
     expect(page.total).toBe(150);
     expect(page.hasMore).toBe(false);
-  });
+  }, 20_000); // 150 arquivos criados na fixture; o filtro de FS do win32 estoura 5s sob carga (#540)
 
   test("página além do total devolve lista vazia, total preservado", async () => {
     const cwd = manyMatches(5);
