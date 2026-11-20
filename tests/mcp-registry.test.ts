@@ -41,14 +41,41 @@ function writeStub(dir: string): string {
 const pidFileOf = (dir: string) => join(dir, "pids");
 const pids = (file: string): number[] =>
   (existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : []).map(Number);
+const alive = (pid: number): boolean => {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
+/** Espera o SO confirmar a morte (não um sleep fixo) e devolve um turno do loop para o `exit` do filho chegar ao transport. */
 const waitDead = async (pid: number): Promise<boolean> => {
-  for (let attempt = 0; attempt < 25; attempt++) {
-    try { process.kill(pid, 0); await new Promise((resolve) => setTimeout(resolve, 100)); } catch { return true; }
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (!alive(pid)) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
 };
+/**
+ * Morte confirmada + entrega do `exit` ao transport. A chamada seguinte precisa ver o cliente
+ * fechado: sem essa entrega o write cai em EPIPE e o erro não é /indisponível/ (#540).
+ */
+const waitObservedDeath = async (pid: number): Promise<boolean> => {
+  if (!(await waitDead(pid))) return false;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  return true;
+};
+/** Espera o sinal real (arquivo de pid, morte do processo) em vez de dormir um tempo fixo. */
+const waitFor = async (condition: () => boolean, label: string, timeoutMs = 15_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`condição não atingida em ${timeoutMs}ms: ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+};
+// `process.execPath` é o próprio binário bun: não passa pelo shim `.cmd` do PATH (um processo menos
+// por spawn). 15000ms cobre spawn real + handshake; 3000ms estourava sob a carga da suíte (#540).
 const stdioCfg = (pidFile: string, delay?: number): MCPServerConfig => ({
-  transport: "stdio", command: "bun", args: [writeStub(join(pidFile, ".."))], timeoutMs: 3000, enabled: true,
+  transport: "stdio", command: process.execPath, args: [writeStub(join(pidFile, ".."))], timeoutMs: 15_000, enabled: true,
   env: delay === undefined ? { PID_FILE: pidFile } : { PID_FILE: pidFile, INIT_DELAY: String(delay) },
 });
 
@@ -59,9 +86,9 @@ test("registry conecta com isolamento, namespace e cache", async () => {
   const warnings: string[] = [];
   const registry = new MCPRegistry({
     servers: {
-      fs: { transport: "stdio", command: "bun", args: [script], timeoutMs: 3000, enabled: true, env: { PID_FILE: pidFile } },
-      morto: { transport: "stdio", command: "bun", args: [join(dir, "nao-existe.js")], timeoutMs: 3000, enabled: true },
-      off: { transport: "stdio", command: "bun", args: [script], timeoutMs: 3000, enabled: false },
+      fs: { transport: "stdio", command: process.execPath, args: [script], timeoutMs: 15_000, enabled: true, env: { PID_FILE: pidFile } },
+      morto: { transport: "stdio", command: process.execPath, args: [join(dir, "nao-existe.js")], timeoutMs: 15_000, enabled: true },
+      off: { transport: "stdio", command: process.execPath, args: [script], timeoutMs: 15_000, enabled: false },
     },
     warn: (message) => warnings.push(message),
   });
@@ -82,7 +109,7 @@ test("registry conecta com isolamento, namespace e cache", async () => {
   expect((await registry.call("fs", "echo", {})).content[0]!.text).toBe("stdio-ok"); // fs segue vivo
 
   registry.close();
-});
+}, 20_000); // 2 spawns reais (fs + morto) no win32
 
 test("erro de tool não reconecta nem reexecuta; morte do servidor reconecta uma vez", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
@@ -106,15 +133,17 @@ test("erro de tool não reconecta nem reexecuta; morte do servidor reconecta uma
   // registro fechado não ressuscita servidor
   registry.close();
   await expect(registry.call("fs", "echo", {})).rejects.toThrow(/fechado/);
-});
+}, 20_000); // 2 spawns reais no win32
 
 test("chamadas concorrentes em cliente morto: MCPError e uma reconexão", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
   const pidFile = pidFileOf(dir);
   const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile) }, warn: () => {} });
   await registry.connectAll();
-  process.kill(pids(pidFile)[0]!); // morte fora do registry
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  const dead = pids(pidFile)[0];
+  expect(dead).toBeDefined();
+  process.kill(dead!); // morte fora do registry
+  await expect(waitObservedDeath(dead!)).resolves.toBe(true); // morte real + entrega do exit
 
   const results = await Promise.allSettled([
     registry.call("fs", "echo", {}),
@@ -127,33 +156,36 @@ test("chamadas concorrentes em cliente morto: MCPError e uma reconexão", async 
   }
   expect(pids(pidFile)).toHaveLength(2); // exatamente uma reconexão
   registry.close();
-});
+}, 20_000);
 
 test("close durante reconexão não deixa órfão e classifica o erro", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
   const pidFile = pidFileOf(dir);
   const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile, 400) }, warn: () => {} });
   await registry.connectAll();
-  process.kill(pids(pidFile)[0]!);
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  const dead = pids(pidFile)[0];
+  expect(dead).toBeDefined();
+  process.kill(dead!);
+  await expect(waitObservedDeath(dead!)).resolves.toBe(true);
 
   const inFlight = registry.call("fs", "echo", {});
-  await new Promise((resolve) => setTimeout(resolve, 100)); // reconexão (initialize lento) em voo
+  await waitFor(() => pids(pidFile).length === 2, "reconexão spawnou (initialize lento em voo)");
   registry.close();
   await expect(inFlight).rejects.toThrow(/fechado/);
   await expect(waitDead(pids(pidFile)[1]!)).resolves.toBe(true); // cliente pós-close é fechado
-});
+}, 20_000);
 
 test("close durante connectAll não deixa órfãos", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
   const pidFile = pidFileOf(dir);
-  const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile), lento: stdioCfg(join(dir, "pids-lento"), 400) }, warn: () => {} });
+  const slowPidFile = join(dir, "pids-lento");
+  const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile), lento: stdioCfg(slowPidFile, 400) }, warn: () => {} });
   const inFlight = registry.connectAll();
-  await new Promise((resolve) => setTimeout(resolve, 150)); // fs conectou, lento em voo
+  await waitFor(() => pids(slowPidFile).length === 1, "fs conectou e o lento está no initialize");
   registry.close();
   await expect(inFlight).rejects.toThrow(/fechado/);
-  await expect(waitDead(pids(join(dir, "pids-lento"))[0]!)).resolves.toBe(true);
-});
+  await expect(waitDead(pids(slowPidFile)[0]!)).resolves.toBe(true);
+}, 20_000);
 
 test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e reseta no sucesso", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
@@ -166,7 +198,7 @@ test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e res
   const registry = new MCPRegistry({
     servers: {
       fs: {
-        transport: "stdio", command: "bun", args: [script], timeoutMs: 3000, enabled: true, retryBackoffMs: 100,
+        transport: "stdio", command: process.execPath, args: [script], timeoutMs: 15_000, enabled: true, retryBackoffMs: 100,
         env: { PID_FILE: pidFile, ATTEMPT_FILE: attemptFile, FAIL_FILE: failFile },
       },
     },
@@ -184,8 +216,7 @@ test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e res
     writeFileSync(failFile, "x");
     const pid = pids(pidFile)[0]!;
     process.kill(pid);
-    await expect(waitDead(pid)).resolves.toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await expect(waitObservedDeath(pid)).resolves.toBe(true); // morte real + entrega do exit
     expect(await failure(registry.call("fs", "echo", {}))).toMatch(/indisponível/);
     expect(attempts()).toBe(2);
 
@@ -210,8 +241,7 @@ test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e res
     writeFileSync(failFile, "x");
     const alive = pids(pidFile)[1]!;
     process.kill(alive);
-    await expect(waitDead(alive)).resolves.toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await expect(waitObservedDeath(alive)).resolves.toBe(true);
     expect(await failure(registry.call("fs", "echo", {}))).toMatch(/indisponível/);
     expect(attempts()).toBe(5);
     expect(await failure(registry.call("fs", "echo", {}))).toMatch(/nova tentativa em 100ms/);
@@ -220,7 +250,7 @@ test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e res
   } finally {
     registry.close();
   }
-}, 15000); // 5 spawns de processo bun; no win32 cada spawn leva ~1s
+}, 30_000); // 5 spawns de processo bun; no win32 cada spawn leva ~1s
 
 test("3 calls concorrentes na mesma reconexão quebrada contam 1 falha e 1 warn (#148)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
@@ -228,7 +258,7 @@ test("3 calls concorrentes na mesma reconexão quebrada contam 1 falha e 1 warn 
   const warnings: string[] = [];
   const registry = new MCPRegistry({
     servers: {
-      morto: { transport: "stdio", command: "bun", args: [join(dir, "nao-existe.js")], timeoutMs: 3000, enabled: true, retryBackoffMs: 100 },
+      morto: { transport: "stdio", command: process.execPath, args: [join(dir, "nao-existe.js")], timeoutMs: 15_000, enabled: true, retryBackoffMs: 100 },
     },
     warn: (message) => warnings.push(message),
     now: () => clock.now,
@@ -266,7 +296,7 @@ test("http com sessão expirada reconecta e recupera", async () => {
     },
   });
   try {
-    const registry = new MCPRegistry({ servers: { api: { transport: "http", url: `http://127.0.0.1:${server.port}/mcp`, timeoutMs: 2000, enabled: true } }, warn: () => {} });
+    const registry = new MCPRegistry({ servers: { api: { transport: "http", url: `http://127.0.0.1:${server.port}/mcp`, timeoutMs: 10_000, enabled: true } }, warn: () => {} });
     try {
       expect((await registry.connectAll()).connected).toHaveLength(1);
       expect((await registry.call("api", "echo", {})).content[0]!.text).toBe("ok:1");
@@ -279,5 +309,5 @@ test("http com sessão expirada reconecta e recupera", async () => {
   } finally {
     server.stop(true);
   }
-});
+}, 20_000); // 3 handshakes de loopback; o teto de 2000ms do handshake estourava sob carga (#540)
 
