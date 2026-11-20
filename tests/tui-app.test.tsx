@@ -322,7 +322,7 @@ test("ignora Enter durante o turno e atualiza o status após /model", async () =
   }
 });
 
-test("progresso mostra passo n/max enquanto o turno roda e limpa ao terminar (#508)", async () => {
+test("progresso mostra passo n/max durante o turno e não fica visível no fim (#508)", async () => {
   class StepSession extends FakeSession {
     override async send(
       prompt: string,
@@ -368,7 +368,7 @@ test("progresso sem evento de passo fica no estado neutro, sem número (#508)", 
   }
 });
 
-test("progresso de passo limpa quando o turno falha (#508)", async () => {
+test("progresso não fica visível depois de um turno com erro (#508)", async () => {
   class FailingStepSession extends FakeSession {
     override async send(
       _prompt: string,

@@ -64,6 +64,20 @@ describe("onStep no loop single-agent (#508)", () => {
     expect(s.requests).toHaveLength(2);
   });
 
+  test("teto do passo cai quando o budget escolhe lower_effort (#508)", async () => {
+    const s = singleSetup([resp({ toolCalls: [writeCall("c1")] }), resp({ content: "pronto" })]);
+    s.opts.maxSteps = 10;
+    s.opts.budget = { scope: "use-as-you-go", limitUsd: 0.000001, warnAt: 0.8, onExceed: "ask" };
+    s.opts.budgetDecide = () => "lower_effort";
+    const events: Array<[number, number]> = [];
+    s.opts.onStep = (step, maxSteps) => { events.push([step, maxSteps]); };
+    const result = await runSession(s.opts, "tarefa");
+    expect(result.steps).toBe(2);
+    // passo 1 sem gasto (10/10); o gasto do 1º passo esgota o budget e o
+    // lower_effort no passo 2 reduz o teto para 2 + floor(8/2) = 6.
+    expect(events).toEqual([[1, 10], [2, 6]]);
+  });
+
   test("usa o maxSteps resolvido da sessão no denominador", async () => {
     const s = singleSetup([resp({ toolCalls: [writeCall("c1")] }), resp({ toolCalls: [writeCall("c2")] })]);
     s.opts.maxSteps = 2;

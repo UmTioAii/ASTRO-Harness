@@ -398,6 +398,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       busyRef.current = true;
       const shellTurn = new AbortController();
       turn.current = shellTurn;
+      setStepProgress(undefined); // começo de turno: sem passo de um turno anterior
       setBusy(true);
       try {
         const result = await shell.run(text.slice(1), shellTurn.signal);
@@ -491,6 +492,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     busyRef.current = true;
     const controller = new AbortController();
     turn.current = controller;
+    setStepProgress(undefined); // começo de turno: sem passo de um turno anterior
     setBusy(true);
     // deltas do provider passam pelo throttle: leading edge + trailing (#64)
     const sink = createThrottledSink({
@@ -502,7 +504,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     try {
       const prompt = materializePrompt(command.text, pendingAttachments.current);
       const attachments = pendingAttachments.current;
-      setStepProgress(undefined); // até o 1º evento o total é desconhecido
       const turnOptions: SendTurnOptions = {
         ...(attachments.length === 0 ? {} : { attachments, approveAttachment }),
         onStep: (step, maxSteps) => setStepProgress({ step, maxSteps }),
@@ -538,7 +539,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     } finally {
       sink.flush(); // invalida timer pendente: nenhum delta emite depois do turno
       setPartial(undefined);
-      setStepProgress(undefined); // sucesso, erro ou abort: a linha de progresso não fica presa
       const saved = persist(true);
       if (saved.failed) commandState.current.lastFile = undefined;
       else if (saved.path !== undefined) commandState.current.lastFile = saved.path;

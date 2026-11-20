@@ -86,6 +86,20 @@ describe("AgentSession (T1, #62)", () => {
       stop();
     }
   });
+  test("SendTurnOptions.onStep chega ao loop com o teto da config (#508)", async () => {
+    const { session, stop } = setup();
+    const chat = session();
+    try {
+      const events: Array<[number, number]> = [];
+      await chat.send("x", undefined, undefined, undefined, {
+        onStep: (step, maxSteps) => events.push([step, maxSteps]),
+      });
+      expect(events).toEqual([[1, 3]]);
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
   test("turno com imagem não persiste base64 no histórico nem no snapshot", async () => {
     const { cwd, session, stop } = setup();
     // ACL fake injetado: no runner windows do CI o PowerShell real estoura o timeout.
