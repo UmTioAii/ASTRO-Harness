@@ -17,6 +17,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/security-threat-matrix.md` | Ao avaliar ameaça, mitigação ou cobertura de segurança (I-01/I-03/I-11/I-15) | ~45 |
 | `docs/decisions.md` | Ao precisar do motivo de uma escolha (D-xx) | ~100 |
 | `docs/config-parity.md` | Ao decidir onde um ajuste mora, quem lê/grava, ou o que vence entre flag e valor salvo (D-31, D-CFG2/Q-10) | ~105 |
+| `docs/astro-home-layout.md` | Ao mover skills, sessões ou estado da TUI, ou ao mexer na chave do projeto em `$ASTRO_HOME` (#468) | ~60 |
 | `docs/adr/` | Decisão arquitetural nova ou revisão de uma antiga | 1 por arquivo |
 | `docs/adr/0029-config-global-home.md` | Configuração global, precedência e migração de `$ASTRO_HOME` (#401) | S1 |
 | `docs/adr/0030-presets-simple-control-e-nome-de-profile.md` | Presets Simple/Control e a fronteira entre `profile` e `preset` (#478) | ~45 |

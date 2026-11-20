@@ -5,11 +5,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Auditor } from "../src/audit";
 import { SessionApi } from "../src/chat/session-api";
+import { projectDataDir } from "../src/home-layout";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 test("bun src/cli.ts chat roda um turno e encerra com /exit", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-chat-cli-"));
+  const home = mkdtempSync(join(tmpdir(), "astro-chat-cli-home-"));
+  const env = { ASTRO_HOME: home };
   const server = Bun.serve({ port: 0, async fetch() {
     return Response.json({ choices: [{ message: { content: "ok do mock" } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
   } });
@@ -24,7 +27,7 @@ test("bun src/cli.ts chat roda um turno e encerra com /exit", async () => {
     }));
     const proc = Bun.spawn(["bun", "src/cli.ts", "chat", "--config", configPath, "--cwd", cwd], {
       cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
-      env: { ...process.env, KEY: "k" } as Record<string, string>,
+      env: { ...process.env, KEY: "k", ASTRO_HOME: home } as Record<string, string>,
     });
     proc.stdin.write("olá\n/providers\n/help\n/exit\n");
     proc.stdin.end();
@@ -38,9 +41,11 @@ test("bun src/cli.ts chat roda um turno e encerra com /exit", async () => {
     expect(stdout).toContain("Comandos:"); // a linha /help depois do turno não foi perdida
     expect(stdout).toContain("p (openai-compat)");
     expect(stdout).toContain("1 step(s)");
-    expect(existsSync(join(cwd, ".astro", "sessions.db"))).toBe(true);
-    expect(existsSync(join(cwd, ".astro", "sessions"))).toBe(false); // o runtime não grava JSON (#366)
-    const api = new SessionApi(join(cwd, ".astro"));
+    // sessões vivem na chave do projeto sob $ASTRO_HOME, não no cwd (#468)
+    expect(existsSync(join(projectDataDir(cwd, env), "sessions.db"))).toBe(true);
+    expect(existsSync(join(cwd, ".astro", "sessions.db"))).toBe(false);
+    expect(existsSync(join(projectDataDir(cwd, env), "sessions"))).toBe(false); // o runtime não grava JSON (#366)
+    const api = new SessionApi(projectDataDir(cwd, env));
     try {
       const sessions = api.list();
       expect(sessions).toHaveLength(1);
@@ -58,7 +63,9 @@ test("bun src/cli.ts chat roda um turno e encerra com /exit", async () => {
 
 test("chat continua com /exit quando o banco de sessões está corrompido", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-chat-cli-corrupt-sessions-"));
-  const astroDir = join(cwd, ".astro");
+  const home = mkdtempSync(join(tmpdir(), "astro-chat-cli-corrupt-home-"));
+  const env = { ASTRO_HOME: home };
+  const astroDir = projectDataDir(cwd, env);
   mkdirSync(astroDir, { recursive: true });
   writeFileSync(join(astroDir, "sessions.db"), "not a SQLite database", "utf8");
   const configPath = join(cwd, "astro.config.json");
@@ -70,7 +77,7 @@ test("chat continua com /exit quando o banco de sessões está corrompido", asyn
   }));
   const proc = Bun.spawn(["bun", "src/cli.ts", "chat", "--config", configPath, "--cwd", cwd], {
     cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, KEY: "k" } as Record<string, string>,
+    env: { ...process.env, KEY: "k", ASTRO_HOME: home } as Record<string, string>,
   });
   proc.stdin.write("/exit\n");
   proc.stdin.end();

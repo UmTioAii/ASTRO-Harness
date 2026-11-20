@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Auditor } from "../audit";
+import { ensurePrivateDir } from "../home-layout";
 import { resolvedOutboundUrlProblem } from "../url-safety";
 import { parseSkill } from "./loader";
 import { SKILL_MAX_BYTES, SKILL_NAME_RE, SkillError, type Skill, type SkillSource } from "./types";
@@ -156,10 +157,10 @@ export async function installSkill(opts: InstallSkillOptions): Promise<Skill> {
   }
 
   if (directory !== undefined) {
-    mkdirSync(root, { recursive: true });
+    ensurePrivateDir(root);
     cpSync(directory, targetDir, { recursive: true, dereference: false, filter: (path) => basename(path) !== ".sha256" });
   } else {
-    mkdirSync(targetDir, { recursive: true });
+    ensurePrivateDir(targetDir);
     writeFileSync(join(targetDir, "SKILL.md"), content);
   }
 

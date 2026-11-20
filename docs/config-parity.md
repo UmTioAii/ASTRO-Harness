@@ -13,7 +13,7 @@ Comparado com o OpenCode: o núcleo descobre uma config única (`packages/core/s
 | Superfície OpenCode | Paridade | Decisão no ASTRO |
 |---|---|---|
 | config do núcleo (global/projeto/explicit) | mesma | `$ASTRO_HOME/config.json` + projeto (`astro.config.json`/`--config`), ADR-0029 |
-| preferências do cliente (tema, abas) | mesma | `.astro/tui.json`, estado de UI, descartável |
+| preferências do cliente (tema, abas) | mesma | `$ASTRO_HOME/tui.json` (global) e `$ASTRO_HOME/projects/<chave>/tui.json` (override), estado de UI, descartável (#468) |
 | app/desktop/web como clientes adicionais | não se aplica | ASTRO é local: CLI, TUI e REPL no mesmo processo e nas mesmas camadas |
 | flags de CLI | mesma | efêmeras; vencem a invocação, nunca gravam |
 | servidor/sync de config | não se aplica | só `config push/pull` explícito via registry |
@@ -47,8 +47,8 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | knobs editáveis (`agent.maxSteps`, `budget.*`, `team.*BudgetUsd`, `permissions.mode`) | camada 3 | lê | tela `/config` (tecla `e`) e `/config chave valor` gravam | `/config chave valor` grava | whitelist fechada em `EDITABLE_CONFIG_KEYS`; pré-valida teto global antes de gravar; preset `simple` read-only nos knobs de controle (#558) |
 | `permissions.approvalTimeoutMs` | camada 3 | lê | `/config` só imprime | lê | compartilhado; teto da espera por aprovação (#526) |
 | trust | `$ASTRO_HOME/state.json` | pergunta no TTY | pergunta; revoga no `/config` | pergunta | compartilhado; revogação TUI-only |
-| tema, `lastModel`, favoritos, recentes | estado de UI (`.astro/tui.json` hoje; #468 define a raiz) | não lê | lê/grava | não lê | TUI-only: preferência de terminal |
-| sessões | `.astro/sessions.db` (SQLite; `.astro/sessions/` é legado migrado; #468 move para `$ASTRO_HOME`) | sem comando | picker: lista/renomeia/exclui/retoma | lista/retoma/exclui (TTY) | compartilhado; renomear TUI-only |
+| tema, `lastModel`, favoritos, recentes | estado de UI: global em `$ASTRO_HOME/tui.json`, override por projeto em `$ASTRO_HOME/projects/<chave>/tui.json` (#468) | não lê | lê/grava | não lê | TUI-only: preferência de terminal |
+| sessões | `$ASTRO_HOME/projects/<chave>/sessions.db` (SQLite; `sessions/` ao lado é o JSON v1 importado; #468) | sem comando | picker: lista/renomeia/exclui/retoma | lista/retoma/exclui (TTY) | compartilhado; renomear TUI-only |
 | `--allow-critical`/`--allow-sensitive`/`--i-understand` | invocação | entrada | herda | herda | CLI-only: allowlist é ato explícito (ADR-0027) |
 | `--artifact-root` | invocação de `chat`/TUI | entrada | herda | herda | CLI-only na entrada, compartilhado na sessão |
 | `config push/pull`, `providers vault-import`, `doctor --fix`, `config migrate` (alvo) | camada 3/2, `$ASTRO_HOME` | executa | não expõe | não expõe | CLI-only: operação administrativa |
@@ -79,17 +79,18 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 | `$ASTRO_HOME/vault.json` | segredo de API key (OAuth Codex: `~/.codex/auth.json`) | runtime | wizard da TUI; `vault-import --apply` |
 | `$ASTRO_HOME/providers.json` | legado pré-#459 | só antes de `migrations.providers` | import-only após #459; escrita recusada |
 | `$ASTRO_HOME/trusted.json` | legado de trust | só antes de `migrations.trust` | importado e preservado; `saveTrustedStore` com caminho explícito ainda grava |
-| `.astro/tui.json` | tema, `lastModel`, favoritos, recentes | só TUI | só TUI |
+| `$ASTRO_HOME/tui.json` | tema e preferências globais da TUI (camada base) | só TUI | usuário (editado à mão) |
+| `$ASTRO_HOME/projects/<chave>/tui.json` | override do projeto: tema, `lastModel`, favoritos, recentes | só TUI | só TUI |
 
-- `.astro/tui.json` é estado de UI, não config: ausente ou inválido cai nos defaults, o CLI/REPL nunca leem e ele não vence config explícita. `lastModel` no boot da TUI só é aplicado quando a config não declara `agent.model` e sem `--provider` (#497): o modelo declarado nunca é trocado em silêncio (I-08).
-- #468 move a raiz desse estado para `$ASTRO_HOME` (tema global com override por projeto); a autoridade continua TUI-only.
+- O estado da TUI é estado de UI, não config: ausente ou inválido cai nos defaults, o CLI/REPL nunca leem e ele não vence config explícita. `lastModel` no boot da TUI só é aplicado quando a config não declara `agent.model` e sem `--provider` (#497): o modelo declarado nunca é trocado em silêncio (I-08).
+- #468 moveu a raiz desse estado para `$ASTRO_HOME`: tema global com override por projeto, e o `.astro/tui.json` legado não é lido nem apagado (`docs/astro-home-layout.md`); a autoridade continua TUI-only.
 - `activeProfileId` mora junto dos providers (store legado; `config.json` após #459/#492); `lastModel` é dica de UI. Depois de `/model`, `●` (ativo salvo) e `em uso` (sessão) podem divergir — é esperado.
 - O rótulo de exibição do provider vive em `providers.<id>.name` no `config.json` e faz round-trip pelo CRUD/dump (#492); no projeto, o mesmo campo vence o id na lista. Escrita em `config.json`/`astro.config.json` que seja symlink é recusada com `config_write_denied` (#495). `config.json` inválido faz o CRUD falhar fechado (nada é gravado) até a camada ser corrigida.
 - Na lista de perfis (`/provider list` no REPL, tela da TUI), projeto e o perfil efêmero do ambiente aparecem com `[source]`, mas são somente leitura; ativar é runtime-only. Só perfil global grava `activeProfileId`.
 
 ## Migração e retrocompatibilidade
 
-- A TUI não introduz migração própria: reusa as camadas; `tui.json` é opcional e descartável.
+- A TUI não introduz migração própria: reusa as camadas; `$ASTRO_HOME/tui.json` é opcional e descartável, e o legado `.astro/tui.json` fica intacto sem ser lido (#468).
 - #459 importa `providers.json` uma vez para `config.json` e marca `migrations.providers`; depois disso o legado é import-only (preservado byte a byte, não lido, escrita recusada com `ProfileStoreMigratedError`, nome planejado em #459).
 - `trusted.json` é importado e preservado (#403); depois de `migrations.trust` não é mais lido, mas `saveTrustedStore` não recusa escrita em caminho explícito — diferente de `providers.json` após #459.
 - Antes de #459, o CRUD da TUI/REPL ainda grava o store legado; é a janela de migração, não uma segunda fonte. Quando #459 entrar e antes de #492, o CRUD recusa; o alvo é um só: `config.json`.

@@ -16,6 +16,7 @@ import { ARTIFACT_KEY_PATTERN, SHA256_HEX } from "./internal-ids";
 import { headerEnvNames } from "./mcp/headers";
 import type { McpConnector } from "./mcp/probe";
 import { resolveAstroHome } from "./permissions";
+import { projectSkillsRoot as projectSkillsRootFor, skillsUserRoot } from "./home-layout";
 import { redactSecrets } from "./sanitize-external";
 import { isVaultCredentialRef, isVaultRef } from "./secrets";
 import { loadSkillsFromRoot } from "./skills/loader";
@@ -683,8 +684,9 @@ function loadSkillRoot(
 
 /**
  * Skills opcionais: carrega as raízes reais e converte avisos em fato (sem
- * prompt, I-03). A raiz do usuário é a mesma do runtime (`~/.astro/skills`),
- * independente de `$ASTRO_HOME`; fica injetável para teste não tocar o home real.
+ * prompt, I-03). A raiz do usuário é a mesma do runtime (`$ASTRO_HOME/skills`),
+ * e a do projeto usa a chave do cwd (#468); ambas ficam injetáveis para teste
+ * não tocar o home real.
  */
 function collectSkillFacts(projectRoot: string, userRoot: string): SkillsFact {
   const warnings: string[] = [];
@@ -816,19 +818,23 @@ export function collectFacts(
     projectCwd?: string;
     /** Config de projeto explícita; default é `<projectCwd>/astro.config.json`. */
     configPath?: string;
-    /** Raiz de skills do projeto; default é `<projectCwd>/.astro/skills`. */
+    /** Raiz de skills do projeto; default é a do runtime (`$ASTRO_HOME/projects/<chave>/skills`). */
     projectSkillsRoot?: string;
-    /** Raiz de skills do usuário; default é a do runtime (`~/.astro/skills`). */
+    /** Raiz de skills do usuário; default é a do runtime (`$ASTRO_HOME/skills`). */
     userSkillsRoot?: string;
   } = {},
 ): DoctorFacts {
   const env = options.env ?? process.env;
   const projectCwd = resolve(options.projectCwd ?? process.cwd());
   const configPath = resolve(projectCwd, options.configPath ?? "astro.config.json");
-  const projectSkillsRoot = resolve(projectCwd, options.projectSkillsRoot ?? join(".astro", "skills"));
+  // Sem opção explícita, a raiz é a do runtime, sem `resolve`: `$ASTRO_HOME` relativo é
+  // resolvido contra o cwd do processo pelo loader, não contra o projeto (#468).
+  const projectSkillsRoot = options.projectSkillsRoot === undefined
+    ? projectSkillsRootFor(projectCwd, env)
+    : resolve(projectCwd, options.projectSkillsRoot);
   // A raiz do usuário é global: caminho relativo resolve contra o cwd do processo
   // (mesma base do loader de skills), nunca contra o projeto.
-  const userSkillsRoot = resolve(options.userSkillsRoot ?? join(homedir(), ".astro", "skills"));
+  const userSkillsRoot = resolve(options.userSkillsRoot ?? skillsUserRoot(env));
   const effective = readEffectiveConfig(configPath, env);
   return {
     bunVersion: Bun.version,

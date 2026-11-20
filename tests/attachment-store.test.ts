@@ -70,6 +70,14 @@ describe("validateArtifactRoot", () => {
     expect(() => validateArtifactRoot(astroHome, context(cwd, astroHome))).toThrow();
   });
 
+  test("rejeita raiz sobre o estado novo do home: projects, skills e tui.json (#468)", () => {
+    const { cwd, astroHome } = sandbox();
+    for (const statePath of ["projects", "skills", "tui.json"]) {
+      // sem criar nada: o subárvore isento do hard-block não pode cobrir estado do harness
+      expect(() => validateArtifactRoot(join(astroHome, statePath), context(cwd, astroHome))).toThrow(/attachment_root_invalid|estado/i);
+    }
+  });
+
   test("rejeita raiz que é worktree git", () => {
     const { root, cwd, astroHome } = sandbox();
     mkdirSync(join(root, ".git"));

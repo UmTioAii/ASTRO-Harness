@@ -686,8 +686,9 @@ export async function runScenario(
           approveSwap: () => true,
           // O golden usa sempre o provider/mock do scenario.json, nunca a seleção salva no ASTRO_HOME.
           ignoreStoredSelection: true,
-          // Skills do usuário ficam dentro do case; nunca ~/.astro/skills do host.
+          // Skills do case ficam dentro do case; nunca as do home do host (#468).
           skillsUserRoot: join(opts.cwd, ".astro", "user-skills"),
+          skillsProjectRoot: join(opts.cwd, ".astro", "skills"),
         });
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);

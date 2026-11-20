@@ -14,6 +14,7 @@ import {
   satisfiesMinimum,
   type DoctorFacts,
 } from "../src/doctor";
+import { projectSkillsRoot } from "../src/home-layout";
 
 const VALID_SKILL = `---\nname: ok\ndescription: ok\nversion: 1.0.0\n---\nPrompt\n`;
 
@@ -461,6 +462,36 @@ test("skills válidas na raiz do usuário são contadas", () => {
   const check = runChecks(collected).checks.find((item) => item.label === "skills");
   expect(check?.level).toBe("ok");
   expect(check?.detail).toContain("1 do usuário");
+});
+
+test("raiz padrão de skills do projeto vem do $ASTRO_HOME declarado (#468)", () => {
+  const projectCwd = sandbox();
+  const home = sandbox();
+  writeSkill(projectSkillsRoot(projectCwd, { ASTRO_HOME: home }), "home-skill", VALID_SKILL);
+  const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    env: { ...process.env, ASTRO_HOME: home },
+    userSkillsRoot: join(sandbox(), "skills"),
+    checkPrivate: () => true,
+  });
+  expect(collected.skills?.project).toBe(1);
+});
+
+test("$ASTRO_HOME relativo não diverge do loader (resolvido pelo cwd do processo) (#468)", () => {
+  const projectCwd = join(sandbox(), "nested", "proj");
+  mkdirSync(projectCwd, { recursive: true });
+  const home = sandbox();
+  const relativeHome = relative(process.cwd(), home);
+  expect(relativeHome).not.toBe("");
+  // o loader resolve o caminho relativo contra o cwd do processo, não contra o projeto
+  writeSkill(projectSkillsRoot(projectCwd, { ASTRO_HOME: relativeHome }), "rel-skill", VALID_SKILL);
+  const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    env: { ...process.env, ASTRO_HOME: relativeHome },
+    userSkillsRoot: join(sandbox(), "skills"),
+    checkPrivate: () => true,
+  });
+  expect(collected.skills?.project).toBe(1);
 });
 
 test("config global malformada falha mesmo com config de projeto válida", () => {
