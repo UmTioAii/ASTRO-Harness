@@ -19,6 +19,9 @@ import { assertConfinedPath } from "./tools/paths";
 /** Teto default de caracteres injetados (`memory.maxChars`). */
 export const DEFAULT_MEMORY_MAX_CHARS = 8000;
 
+/** Piso de `memory.maxChars`: abaixo disso o marcador de corte não cabe inteiro. */
+export const MIN_MEMORY_MAX_CHARS = 200;
+
 /** Nome do arquivo de memória nas duas raízes. */
 export const MEMORY_FILE_NAME = "memory.md";
 
@@ -74,6 +77,8 @@ export interface LoadMemoryOptions {
   audit?: MemoryAudit;
   run?: string;
   agent?: string;
+  /** `false` omite a linha que ensina `memory_write` (tool fora da allowlist). */
+  memoryWriteAllowed?: boolean;
 }
 
 /** Caminhos canônicos dos dois arquivos, sem tocar o disco. */
@@ -93,24 +98,68 @@ export function memoryTruncationMarker(omittedBytes: number): string {
 }
 
 /**
- * Divide o texto em blocos de seção: o preâmbulo (antes do primeiro `## `) e
- * cada `## título` até o próximo heading de mesmo nível. O bloco inteiro entra
- * ou fica de fora - nunca um pedaço.
+ * Índices das linhas que abrem uma seção de nível 2 (`## `), ignorando o que
+ * está dentro de code fence ``` ou ~~~. É a única regra de split do módulo:
+ * loader, detecção de fim de corpo em `memory_write` e validação do texto novo
+ * usam esta função, então `## ` dentro de bloco de código nunca vira seção.
  */
-function sectionChunks(text: string): string[] {
-  const chunks: string[] = [];
-  let current: string[] = [];
-  for (const line of text.split("\n")) {
-    if (/^##\s/.test(line) && current.some((entry) => entry.trim() !== "")) {
-      chunks.push(current.join("\n"));
-      current = [];
+export function topLevelHeadingIndexes(lines: readonly string[]): number[] {
+  const headings: number[] = [];
+  let fence: { char: string; length: number } | undefined;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    const marker = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence === undefined) {
+      // Info string de fence com backtick não abre bloco (CommonMark).
+      if (marker !== null && !(marker[1]!.startsWith("`") && marker[2]!.includes("`"))) {
+        fence = { char: marker[1]![0]!, length: marker[1]!.length };
+        continue;
+      }
+      if (/^##\s/.test(line)) headings.push(index);
+      continue;
     }
-    current.push(line);
+    if (marker !== null && marker[1]![0] === fence.char && marker[1]!.length >= fence.length && marker[2]!.trim() === "") {
+      fence = undefined;
+    }
   }
-  chunks.push(current.join("\n"));
-  return chunks
-    .map((chunk) => chunk.replace(/\s+$/, ""))
-    .filter((chunk) => chunk.trim().length > 0);
+  return headings;
+}
+
+function lineStarts(text: string): number[] {
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  return starts;
+}
+
+/**
+ * Divide o texto em blocos de seção: o preâmbulo (antes do primeiro `## `) e
+ * cada `## título` até o próximo heading de mesmo nível, respeitando fences. O
+ * bloco inteiro entra ou fica de fora - nunca um pedaço.
+ */
+export function splitMemoryChunks(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const headings = topLevelHeadingIndexes(lines);
+  const starts = lineStarts(normalized);
+  const cuts = [0, ...headings];
+  const chunks: string[] = [];
+  for (let index = 0; index < cuts.length; index++) {
+    const from = cuts[index]!;
+    const to = index + 1 < cuts.length ? starts[cuts[index + 1]!]! : normalized.length;
+    if (to <= starts[from]!) continue;
+    const chunk = normalized.slice(starts[from]!, to).replace(/\s+$/, "");
+    if (chunk.trim().length > 0) chunks.push(chunk);
+  }
+  return chunks;
+}
+
+/** `true` quando o texto traz um `## ` de nível 2 fora de code fence. */
+export function hasTopLevelHeading(text: string): boolean {
+  return topLevelHeadingIndexes(text.replace(/\r\n/g, "\n").split("\n")).length > 0;
 }
 
 interface Chunk {
@@ -152,7 +201,7 @@ function readMemoryFile(
   }
   try {
     const text = redactSecrets(readFileSync(path, "utf8"));
-    return sectionChunks(text).map((chunk) => ({ scope, path, text: chunk }));
+    return splitMemoryChunks(text).map((chunk) => ({ scope, path, text: chunk }));
   } catch {
     warn(`memória: não foi possível ler ${path}; seguindo sem ela`);
     return undefined;
@@ -177,8 +226,9 @@ function groupChunks(chunks: readonly Chunk[], truncatedPaths: ReadonlySet<strin
   return blocks;
 }
 
-function compose(blocks: readonly MemoryBlock[], marker?: string): string {
-  const parts = [MEMORY_HEADING, "", MEMORY_HINT];
+function compose(blocks: readonly MemoryBlock[], marker: string | undefined, hint: string | undefined): string {
+  const parts = [MEMORY_HEADING];
+  if (hint !== undefined) parts.push("", hint);
   for (const block of blocks) {
     parts.push("", `### ${labelOf(block.scope)} (${block.path})`, "", block.text);
   }
@@ -201,18 +251,18 @@ interface Fit {
  * fixo, heading de cada bloco e o marcador de corte. O marcador entra no
  * orçamento; por isso o corte é recalculado com o tamanho do próximo omitido.
  */
-function fitChunks(chunks: readonly Chunk[], maxChars: number): Fit {
+function fitChunks(chunks: readonly Chunk[], maxChars: number, hint: string | undefined): Fit {
   for (let count = chunks.length; count >= 0; count--) {
     const kept = chunks.slice(0, count);
     const omitted = chunks.slice(count);
     const marker = omitted.length === 0 ? undefined : memoryTruncationMarker(bytesOf(omitted));
     const truncatedPaths = new Set(omitted.map((chunk) => chunk.path));
-    const prompt = compose(groupChunks(kept, truncatedPaths), marker);
+    const prompt = compose(groupChunks(kept, truncatedPaths), marker, hint);
     if (prompt.length <= maxChars) return { blocks: groupChunks(kept, truncatedPaths), omitted, prompt };
   }
   // Nem o cabeçalho cabe no teto: só o marcador, cortado - nenhuma seção pela metade.
   const marker = memoryTruncationMarker(bytesOf(chunks));
-  return { blocks: [], omitted: [...chunks], prompt: marker.slice(0, maxChars) };
+  return { blocks: [], omitted: [...chunks], prompt: marker.slice(0, Math.max(maxChars, marker.length)) };
 }
 
 /**
@@ -228,7 +278,10 @@ export function loadMemory(opts: LoadMemoryOptions): MemorySnapshot {
   };
   const env = opts.env ?? process.env;
   const paths = resolveMemoryPaths(opts.cwd, env);
-  const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MEMORY_MAX_CHARS));
+  // Piso de 200 (MIN_MEMORY_MAX_CHARS): abaixo disso o marcador de corte não
+  // caberia inteiro e o prompt receberia um marcador pela metade.
+  const maxChars = Math.max(MIN_MEMORY_MAX_CHARS, Math.floor(opts.maxChars ?? DEFAULT_MEMORY_MAX_CHARS));
+  const hint = opts.memoryWriteAllowed === false ? undefined : MEMORY_HINT;
   const chunks = [
     ...(readMemoryFile("global", paths.global, resolve(resolveAstroHome(env)), [], warn) ?? []),
     ...(readMemoryFile("project", paths.project, resolve(opts.cwd), [], warn) ?? []),
@@ -238,7 +291,7 @@ export function loadMemory(opts: LoadMemoryOptions): MemorySnapshot {
     return { paths, maxChars, blocks: [], truncated: false, usedChars: 0, remainingChars: maxChars, warnings };
   }
 
-  const fit = fitChunks(chunks, maxChars);
+  const fit = fitChunks(chunks, maxChars, hint);
   if (fit.omitted.length > 0) {
     const omittedBytes = bytesOf(fit.omitted);
     if (opts.audit !== undefined && opts.run !== undefined) {

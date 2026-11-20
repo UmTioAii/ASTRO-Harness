@@ -755,6 +755,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     cwd,
     env,
     ...(config.memory === undefined ? {} : { maxChars: config.memory.maxChars }),
+    // Sem a tool na allowlist, o prompt não ensina uma chamada que vai negar (I-01).
+    memoryWriteAllowed: config.agent.tools.includes("memory_write"),
     warn: (message) => console.warn(`aviso: ${message}`),
     audit,
     run,
@@ -1203,6 +1205,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         audit,
         baseMaxSteps: sessionMaxSteps,
         baseSystemPrompt: systemPromptBase,
+        ...(memorySection === undefined ? {} : { memorySection }),
         entryAgent,
         taskHash: shortTaskHash(opts.task),
         ...(config.run === undefined

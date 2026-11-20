@@ -18,7 +18,7 @@ import { outboundUrlProblem, urlProblem } from "../url-safety";
 import { CAPACITY_TAGS, ROLE_TAGS, isKnownTag } from "../tags";
 import { isJudgeMode, type JudgeMode } from "../judge";
 import { checkpointIdProblem } from "../loop-guard";
-import { DEFAULT_MEMORY_MAX_CHARS } from "../memory";
+import { DEFAULT_MEMORY_MAX_CHARS, MIN_MEMORY_MAX_CHARS } from "../memory";
 
 /** Configuração comum a todos os providers. */
 interface ProviderConfigBase {
@@ -1628,13 +1628,14 @@ function validateMemory(value: unknown): MemoryConfig {
   for (const key of Object.keys(raw)) {
     if (key !== "maxChars") fail(`config inválida: "memory.${key}" desconhecido`);
   }
-  return {
-    maxChars: raw.maxChars === undefined
-      ? DEFAULT_MEMORY_MAX_CHARS
-      : expectPositiveInteger(raw.maxChars, "memory.maxChars"),
-  };
+  const maxChars = raw.maxChars === undefined
+    ? DEFAULT_MEMORY_MAX_CHARS
+    : expectPositiveInteger(raw.maxChars, "memory.maxChars");
+  if (maxChars < MIN_MEMORY_MAX_CHARS) {
+    fail(`config inválida: "memory.maxChars" deve ser >= ${MIN_MEMORY_MAX_CHARS} (recebido: ${maxChars})`);
+  }
+  return { maxChars };
 }
-
 /**
  * Valida `webSearch` (#57): a chave é sempre um NOME de variável de ambiente
  * (I-03); `custom` exige baseUrl. Default de resultados 5, teto 10.

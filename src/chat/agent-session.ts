@@ -244,6 +244,7 @@ export class AgentSession {
       cwd: this.#cwd,
       ...(this.#env === undefined ? {} : { env: this.#env }),
       maxChars: this.memoryMaxChars(),
+      memoryWriteAllowed: this.#config.agent.tools.includes("memory_write"),
     }));
     const projectInstructions = [readAgentsMd(this.#cwd), memorySection]
       .filter((part): part is string => part !== undefined && part.length > 0)

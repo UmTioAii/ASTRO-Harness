@@ -936,6 +936,8 @@ export interface MultiAgentSessionOptions {
   audit: Auditor;
   baseMaxSteps: number;
   baseSystemPrompt?: string;
+  /** Seção `## Memory` já montada; acompanha o override de cada agent (review #579). */
+  memorySection?: string;
   entryAgent: string;
   /** Tracing OTLP (F6-2); ausente = sem spans. */
   tracer?: TracerLike;
@@ -1039,7 +1041,15 @@ export async function runMultiAgentSession(
     if (!(await opts.approveSwap(request))) throw new SwapDeniedError(request, "denied");
   };
   let currentMaxSteps = currentAgent.maxSteps ?? opts.baseMaxSteps;
-  let currentSystemPrompt = currentAgent.systemPrompt ?? opts.baseSystemPrompt;
+  /**
+   * Override do agent entra com a memória no fim: um `agents.<nome>.systemPrompt`
+   * não pode apagar a memória do run (review #579).
+   */
+  const agentPromptOf = (prompt: string | undefined): string | undefined => {
+    if (prompt === undefined || opts.memorySection === undefined) return prompt;
+    return `${prompt}\n\n${opts.memorySection}`;
+  };
+  let currentSystemPrompt = agentPromptOf(currentAgent.systemPrompt) ?? opts.baseSystemPrompt;
   let step = 0;
   let agentSteps = 0; // steps do agent atual
   /** Teto de escopo do agent atual (I-02): máximo de tools disponíveis no baseExecutor. */
@@ -1261,7 +1271,7 @@ export async function runMultiAgentSession(
       currentAgentName = pending.artifact.to;
       currentAgent = toAgent;
       currentMaxSteps = currentAgent.maxSteps ?? opts.baseMaxSteps;
-      currentSystemPrompt = currentAgent.systemPrompt ?? opts.baseSystemPrompt;
+      currentSystemPrompt = agentPromptOf(currentAgent.systemPrompt) ?? opts.baseSystemPrompt;
       currentTools = currentAgent.tools ? new Set(currentAgent.tools) : new Set();
       if (opts.spawns?.get(currentAgentName) !== undefined) currentTools.delete("spawn_agent");
       // Teto de escopo na retomada = máximo do baseExecutor (I-02)
@@ -1534,7 +1544,7 @@ export async function runMultiAgentSession(
           currentAgentName = handoff.to;
           currentAgent = toAgent;
           currentMaxSteps = currentAgent.maxSteps ?? opts.baseMaxSteps;
-          currentSystemPrompt = currentAgent.systemPrompt ?? opts.baseSystemPrompt;
+          currentSystemPrompt = agentPromptOf(currentAgent.systemPrompt) ?? opts.baseSystemPrompt;
           currentTools = currentAgent.tools ? new Set(currentAgent.tools) : new Set();
           if (opts.spawns?.get(currentAgentName) !== undefined) currentTools.delete("spawn_agent");
           // #551 (A9): só o escopo declarado cruza a fronteira — na 1ª visita

@@ -524,3 +524,16 @@ describe("memória: system prompt de agent nomeado (review #579)", () => {
     }
   });
 });
+
+describe("memory_write: CRLF (review #579)", () => {
+  test("preserva CRLF das seções intocadas ao substituir outra", async () => {
+    const { cwd, env } = project();
+    const tool = createMemoryWriteTool({ audit: new Auditor(join(cwd, "audit.jsonl")), env });
+    const path = join(cwd, ".astro", "memory.md");
+    writeFileSync(path, "## A\r\n\r\nalpha\r\n\r\n## B\r\n\r\nbeta\r\n", "utf8");
+
+    const result = await tool.execute({ scope: "project", section: "B", text: "novo" }, { cwd, run: "r1", agent: "default" });
+    expect(result.isError).not.toBe(true);
+    expect(readFileSync(path, "utf8")).toBe("## A\r\n\r\nalpha\r\n\r\n## B\r\n\r\nnovo\r\n");
+  });
+});

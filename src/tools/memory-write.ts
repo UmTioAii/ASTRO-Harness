@@ -9,11 +9,14 @@
  * O texto é redigido antes de tocar o disco (I-03) e a auditoria leva só
  * `{ scope, section, chars }`, nunca conteúdo.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   MEMORY_SCOPES,
+  hasTopLevelHeading,
   resolveMemoryPaths,
+  topLevelHeadingIndexes,
   type MemoryAudit,
   type MemoryScope,
 } from "../memory";
@@ -82,37 +85,59 @@ function parseInput(input: unknown): MemoryWriteInput {
   if (Array.from(text).length > MAX_MEMORY_TEXT_CHARS) {
     throw new ToolError(`entrada inválida: "text" excede ${MAX_MEMORY_TEXT_CHARS} caracteres`);
   }
+  // `## ` de nível 2 no texto criaria uma seção nova e quebraria o contrato de
+  // "uma seção por chamada"; dentro de fence é conteúdo legítimo.
+  if (hasTopLevelHeading(text)) {
+    throw new ToolError('entrada inválida: "text" não pode conter heading de nível 2 ("## ") fora de code fence');
+  }
   return { scope: input.scope as MemoryScope, section, text };
 }
 
 /**
- * Substitui o corpo de `## section` ou acrescenta a seção no fim. Um `## ` de
- * qualquer seção encerra o corpo; outro nível de heading (`###`) continua
- * dentro dela. O arquivo existente é redigido de novo antes de reescrever
- * (nada de segredo antigo voltar) - leitura e escrita são do mesmo alvo.
+ * Substitui o corpo de `## section` ou acrescenta a seção no fim. Os headings
+ * são localizados pelo splitter fence-aware: `## ` dentro de ``` nunca encerra
+ * a seção. Se o arquivo tiver seções duplicadas com o mesmo título, todas são
+ * fundidas na primeira posição (uma chamada = uma seção no arquivo).
+ *
+ * As seções não tocadas são copiadas byte a byte - nada de re-serializar ou
+ * redigir o que já está em disco.
  */
 export function applyMemorySection(existing: string, section: string, text: string): string {
+  const newline = existing.includes("\r\n") ? "\r\n" : "\n";
+  const lines = existing.split("\n");
+  const headings = topLevelHeadingIndexes(lines);
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
   const heading = `## ${section}`;
-  const lines = existing.replace(/\r\n/g, "\n").split("\n");
-  const start = lines.findIndex((line) => line.trimEnd() === heading);
-  const body = `## ${section}\n\n${text}`;
-  if (start < 0) {
-    const trimmed = existing.replace(/\s+$/, "");
-    return trimmed.length === 0 ? `${body}\n` : `${trimmed}\n\n${body}\n`;
+  const matches = headings.filter((index) => lines[index]!.trimEnd() === heading);
+  const replacement = `## ${section}${newline}${newline}${text}`;
+
+  if (matches.length === 0) {
+    const base = existing.replace(/\s+$/, "");
+    return base.length === 0
+      ? `${replacement}${newline}`
+      : `${base}${newline}${newline}${replacement}${newline}`;
   }
-  let end = lines.length;
-  for (let index = start + 1; index < lines.length; index++) {
-    if (/^##\s/.test(lines[index]!)) {
-      end = index;
-      break;
-    }
-  }
-  const before = lines.slice(0, start).join("\n").replace(/\s+$/, "");
-  const after = lines.slice(end).join("\n").replace(/\s+$/, "");
-  return [before, body, after]
-    .filter((part) => part.length > 0)
-    .join("\n\n")
-    .concat("\n");
+
+  const endOf = (index: number): number => {
+    const next = headings.find((candidate) => candidate > index);
+    return next === undefined ? existing.length : starts[next]!;
+  };
+  let output = "";
+  let cursor = 0;
+  matches.forEach((index, order) => {
+    const start = starts[index]!;
+    const end = endOf(index);
+    output += existing.slice(cursor, start);
+    if (order === 0) output += replacement + (end === existing.length ? newline : newline + newline);
+    cursor = end;
+  });
+  output += existing.slice(cursor);
+  return output.replace(/(?:\r?\n)+$/, "") + newline;
 }
 
 /** Cria a tool; o audit e o env vêm do run (mesmo `Auditor` das outras tools). */
@@ -177,16 +202,35 @@ export function createMemoryWriteTool(deps: MemoryWriteDeps): Tool {
       const text = redactSecrets(parsed.text);
       const chars = Array.from(text).length;
       try {
-        let existing = "";
-        try {
-          existing = redactSecrets(readFileSync(target, "utf8"));
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== "ENOENT") throw error;
-        }
+        // Lê o arquivo como está: seções intocadas não passam por redação de
+        // novo (o que já está em disco foi decidido quando foi escrito).
+        const existing = existsSync(target) ? readFileSync(target, "utf8") : "";
         const content = applyMemorySection(existing, parsed.section, text);
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, content, "utf8");
+        const delta = content.length - existing.length;
+        const targetDir = dirname(target);
+        // Home global com 0700, como o cofre; o `.astro` do projeto já é do cwd.
+        if (parsed.scope === "global") {
+          mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+          if (process.platform !== "win32") {
+            try { chmodSync(targetDir, 0o700); } catch { /* melhor esforço */ }
+          }
+        } else {
+          mkdirSync(targetDir, { recursive: true });
+        }
+        // I-16: backup antes de trocar, mesmo formato do `edit`.
+        if (existing.length > 0) {
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          copyFileSync(target, `${target}.${stamp}.bak`);
+        }
+        // Troca atômica: tmp no mesmo diretório + rename.
+        const tmp = `${target}.${randomUUID()}.tmp`;
+        try {
+          writeFileSync(tmp, content, { encoding: "utf8", flag: "wx" });
+          renameSync(tmp, target);
+        } catch (error) {
+          try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
+          throw error;
+        }
         // Só contagem e identificação da seção: o texto nunca vai ao audit (I-03).
         deps.audit.append({
           run: ctx.run,
@@ -195,7 +239,9 @@ export function createMemoryWriteTool(deps: MemoryWriteDeps): Tool {
           payload: { scope: parsed.scope, section: parsed.section, chars },
         });
         return {
-          output: `memória escrita: ${parsed.scope} "${parsed.section}" (${chars} caracteres) em ${target}`,
+          output:
+            `memória escrita: ${parsed.scope} "${parsed.section}" ` +
+            `(${chars} caracteres, delta ${delta >= 0 ? "+" : ""}${delta}) em ${target}`,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
