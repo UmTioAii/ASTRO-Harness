@@ -1259,10 +1259,10 @@ export async function runMultiAgentSession(
       if (opts.spawns?.get(currentAgentName) !== undefined) currentTools.delete("spawn_agent");
       // Teto de escopo na retomada = máximo do baseExecutor (I-02)
       // currentCeiling não muda — já é o máximo do baseExecutor
-      if (!restoreAgentState(currentAgentName) && opts.spawns?.get(currentAgentName) !== undefined) {
-        messages.length = 0;
-        messages.push({ role: "system", content: currentSystemPrompt ?? DEFAULT_SYSTEM_PROMPT });
-      }
+      // #551 (A9): só o escopo declarado cruza a fronteira — na 1ª visita de
+      // qualquer agent (declarado ou spawned) o histórico do emissor não vai;
+      // em visita de volta, o próprio estado salvo do agent é restaurado.
+      if (!restoreAgentState(currentAgentName)) messages.length = 0;
       if (messages.length === 0) {
         messages.push({ role: "system", content: currentSystemPrompt ?? DEFAULT_SYSTEM_PROMPT });
       } else {
@@ -1526,10 +1526,10 @@ export async function runMultiAgentSession(
           currentSystemPrompt = currentAgent.systemPrompt ?? opts.baseSystemPrompt;
           currentTools = currentAgent.tools ? new Set(currentAgent.tools) : new Set();
           if (opts.spawns?.get(currentAgentName) !== undefined) currentTools.delete("spawn_agent");
-          if (!restoreAgentState(currentAgentName) && opts.spawns?.get(currentAgentName) !== undefined) {
-            messages.length = 0;
-            messages.push({ role: "system", content: currentSystemPrompt ?? DEFAULT_SYSTEM_PROMPT });
-          }
+          // #551 (A9): só o escopo declarado cruza a fronteira — na 1ª visita
+          // de qualquer agent (declarado ou spawned) o histórico do emissor
+          // não vai; em visita de volta, o estado salvo do próprio agent volta.
+          if (!restoreAgentState(currentAgentName)) messages.length = 0;
           // O system prompt é sempre o do agente que vai executar (inclusive 1ª visita).
           if (messages.length === 0) {
             messages.push({ role: "system", content: currentSystemPrompt ?? DEFAULT_SYSTEM_PROMPT });

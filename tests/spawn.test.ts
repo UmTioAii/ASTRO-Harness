@@ -189,4 +189,71 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     const body = JSON.parse(result.output) as { model: string };
     expect(body.model).toBe("p2/m2"); // p1 preso; escolhe p2
   });
+
+  test("#551: com 1 provider (1 conta) o spawn é recusado antes da escolha de modelo, com erro claro", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-spawn-1p-"));
+    const cfg = validateConfig({
+      providers: { p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "KEY1" } },
+      models: [{ provider: "p1", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } }],
+      modelPool: { fast: { model: "p1/m1" } },
+      agent: { model: "p1/m1", maxSteps: 5, tools: ["handoff", "read_file"] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    });
+    const ledger = new Ledger(join(cwd, "ledger.jsonl"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    const registry = new Registry(cfg);
+    const spawns = new SpawnRegistry();
+    // Em produção o orchestrator segura a única conta do run (A4):
+    acquireAgentLock(ledger, audit, {
+      run: "r1", agent_id: "planner", session_id: "r1", provider: "p1", credentialRef: "KEY1", accountRef: "KEY1",
+    });
+    const tool = createSpawnAgentTool({ config: cfg, registry, ledger, audit, cwd, spawns, enabled: true });
+    const ctx: ToolContext = { cwd, run: "r1", agent: "planner", allow: ["handoff", "read_file"], maxSteps: 3 };
+
+    const result = await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx);
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.output) as { error: string; message: string };
+    // Erro claro de teto (não account_locked tardio): cita as contas disponíveis.
+    expect(body.error).toBe("spawn_limit_exceeded");
+    expect(body.message).toContain("conta");
+    // Recusado ANTES da escolha de modelo: nenhum filho registrado nem lock novo.
+    expect(spawns.size).toBe(0);
+    expect(ledger.readAllEntries().some((e) => e.kind === "agent" && e.event === "created" && e.agent_id === "sub-1")).toBe(false);
+  });
+
+  test("#551: teto de agentes ativos é clampado pelas contas declaradas e o erro cita as contas", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-spawn-clamp-"));
+    const cfg = validateConfig({
+      providers: {
+        p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "KEY1" },
+        p2: { kind: "openai-compat", baseUrl: "http://p2/v1", credentialRef: "KEY2" },
+      },
+      models: [
+        { provider: "p1", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+        { provider: "p2", id: "m2", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+      ],
+      modelPool: { fast: { model: "p1/m1" }, smart: { model: "p2/m2" } },
+      agent: { model: "p1/m1", maxSteps: 9, tools: ["spawn_agent", "handoff", "read_file"] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    });
+    const ledger = new Ledger(join(cwd, "ledger.jsonl"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    const registry = new Registry(cfg);
+    const spawns = new SpawnRegistry();
+    acquireAgentLock(ledger, audit, {
+      run: "r1", agent_id: "planner", session_id: "r1", provider: "p1", credentialRef: "KEY1", accountRef: "KEY1",
+    });
+    const tool = createSpawnAgentTool({ config: cfg, registry, ledger, audit, cwd, spawns, enabled: true });
+    const ctx: ToolContext = { cwd, run: "r1", agent: "planner", allow: ["handoff", "read_file"], maxSteps: 9 };
+
+    const first = await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx);
+    expect(first.isError).toBe(false); // usa a 2ª conta (p2)
+    const second = await tool.execute({ need: "writing-code", task: "b", tools: [] }, ctx);
+    expect(second.isError).toBe(true);
+    // 2 contas declaradas: o 3º agente vivo (pai + sub-1) já esgota o teto,
+    // e o erro claro cita as contas em vez de drenar quota/RPM no stall do lock.
+    expect(JSON.parse(second.output)).toMatchObject({ error: "spawn_limit_exceeded" });
+    expect(JSON.parse(second.output).message).toContain("conta");
+    expect(spawns.size).toBe(1);
+  });
 });
