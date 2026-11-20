@@ -1,5 +1,6 @@
 /** Resumo da config do harness para `/config` (#273): puro, sem I/O. */
 import type { AstroConfig, BudgetConfig } from "../core/config";
+import type { EditableConfigKey } from "../core/config-edit";
 import { DEFAULT_APPROVAL_TIMEOUT_MS, type PermissionMode } from "../permissions";
 
 export interface CostLine {
@@ -19,6 +20,8 @@ export interface ConfigSummary {
   /** Um linha por modelo com preço declarado (`pricing` sobrescreve `model.price`). */
   costs: CostLine[];
   budget: string;
+  /** Valores atuais dos knobs editáveis via /config (#558), como texto. */
+  knobs: { key: EditableConfigKey; value: string }[];
 }
 
 function budgetText(budget: BudgetConfig | undefined): string {
@@ -38,6 +41,35 @@ function approvalTimeoutText(value: number | undefined): string {
   return value === 0 ? "desligado" : String(value);
 }
 
+/** Knobs editáveis com o valor atual na config (seção ausente = knob não listado). */
+function knobEntries(config: AstroConfig): { key: EditableConfigKey; value: string }[] {
+  const fmt = (value: number | null): string => (value === null ? "null" : String(value));
+  const knobs: { key: EditableConfigKey; value: string }[] = [
+    { key: "agent.maxSteps", value: String(config.agent.maxSteps) },
+    { key: "permissions.mode", value: config.permissions.mode },
+  ];
+  const budget = config.budget;
+  if (budget !== undefined) {
+    knobs.push(
+      { key: "budget.scope", value: budget.scope },
+      { key: "budget.limitUsd", value: fmt(budget.limitUsd) },
+      { key: "budget.warnAt", value: String(budget.warnAt) },
+      { key: "budget.onExceed", value: budget.onExceed },
+      ...(budget.hardCeilingUsd === undefined
+        ? []
+        : [{ key: "budget.hardCeilingUsd" as const, value: fmt(budget.hardCeilingUsd) }]),
+    );
+  }
+  const team = config.team;
+  if (team !== undefined) {
+    for (const name of ["projectBudgetUsd", "sessionBudgetUsd", "weekBudgetUsd"] as const) {
+      const value = team[name];
+      if (value !== undefined) knobs.push({ key: `team.${name}` as EditableConfigKey, value: fmt(value) });
+    }
+  }
+  return knobs;
+}
+
 /** Monta o resumo a partir da config carregada; `mode` é o modo ativo da sessão. */
 export function configSummaryOf(config: AstroConfig, configPath: string, mode: PermissionMode): ConfigSummary {
   const costs: CostLine[] = [];
@@ -54,6 +86,7 @@ export function configSummaryOf(config: AstroConfig, configPath: string, mode: P
     approvalTimeoutMs: approvalTimeoutText(config.permissions.approvalTimeoutMs),
     costs,
     budget: budgetText(config.budget),
+    knobs: knobEntries(config),
   };
 }
 

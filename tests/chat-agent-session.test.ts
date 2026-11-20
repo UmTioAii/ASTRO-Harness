@@ -609,6 +609,101 @@ describe("AgentSession configSummary / savePermissionMode (#273)", () => {
   });
 });
 
+describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", () => {
+  // A API ainda não existe no RED: o cast mantém o typecheck limpo e o teste falha em runtime.
+  type Editable = { applyConfigEdits?: (edits: Record<string, string>) => unknown };
+
+  test("persiste agent.maxSteps no arquivo e no resumo da sessão (próximo run relê o arquivo)", () => {
+    const { configPath, session, stop } = setup();
+    const saved = process.env.ASTRO_PERMISSION_MODE;
+    try {
+      delete process.env.ASTRO_PERMISSION_MODE;
+      const chat = session();
+      const before = readFileSync(configPath, "utf8");
+      const editable = chat as unknown as Editable;
+      expect(typeof editable.applyConfigEdits).toBe("function"); // RED: método ainda não existe
+      editable.applyConfigEdits!({ "agent.maxSteps": "50" });
+      expect(loadConfig(configPath).agent.maxSteps).toBe(50); // persistido no disco
+      expect(chat.configSummary().maxSteps).toBe(50); // sessão recarregada em memória
+      expect(readFileSync(configPath, "utf8")).not.toBe(before);
+      chat.close();
+    } finally {
+      if (saved === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+      else process.env.ASTRO_PERMISSION_MODE = saved;
+      stop();
+    }
+  });
+
+  test("valor inválido é rejeitado com mensagem pt-BR e o arquivo fica byte a byte intacto", () => {
+    const { configPath, session, stop } = setup();
+    const saved = process.env.ASTRO_PERMISSION_MODE;
+    try {
+      delete process.env.ASTRO_PERMISSION_MODE;
+      const chat = session();
+      const before = readFileSync(configPath, "utf8");
+      const editable = chat as unknown as Editable;
+      expect(typeof editable.applyConfigEdits).toBe("function");
+      expect(() => editable.applyConfigEdits!({ "agent.maxSteps": "abc" })).toThrow(/agent\.maxSteps/);
+      expect(() => editable.applyConfigEdits!({ "agent.maxSteps": "-5" })).toThrow(/agent\.maxSteps/);
+      expect(() => editable.applyConfigEdits!({ "chave.falsa": "1" })).toThrow(/não editável/);
+      expect(readFileSync(configPath, "utf8")).toBe(before);
+      expect(chat.configSummary().maxSteps).toBe(3);
+      chat.close();
+    } finally {
+      if (saved === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+      else process.env.ASTRO_PERMISSION_MODE = saved;
+      stop();
+    }
+  });
+
+  test("preset simple deixa agent.maxSteps read-only; permissions.mode continua editável (#273)", () => {
+    const { configPath, session, stop } = setup();
+    const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    raw.preset = "simple";
+    writeFileSync(configPath, JSON.stringify(raw));
+    const saved = process.env.ASTRO_PERMISSION_MODE;
+    try {
+      delete process.env.ASTRO_PERMISSION_MODE;
+      const chat = session();
+      const before = readFileSync(configPath, "utf8");
+      const editable = chat as unknown as Editable;
+      expect(typeof editable.applyConfigEdits).toBe("function");
+      expect(() => editable.applyConfigEdits!({ "agent.maxSteps": "100" })).toThrow(/"control"/);
+      expect(readFileSync(configPath, "utf8")).toBe(before);
+      editable.applyConfigEdits!({ "permissions.mode": "allow-edits" }); // modo segue editável no simple
+      expect(loadConfig(configPath).permissions.mode).toBe("allow-edits");
+      expect(chat.permissionMode()).toBe("allow-edits");
+      chat.close();
+    } finally {
+      if (saved === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+      else process.env.ASTRO_PERMISSION_MODE = saved;
+      stop();
+    }
+  });
+
+  test("não amplia o teto global de passos (ADR-0029, #494/#558)", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-steps-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ agent: { maxSteps: 20 } }));
+    const { configPath, session, stop } = setup();
+    const saved = process.env.ASTRO_PERMISSION_MODE;
+    try {
+      delete process.env.ASTRO_PERMISSION_MODE;
+      const chat = session({ env: testEnv({ KEY: "k", ASTRO_HOME: home }) });
+      const before = readFileSync(configPath, "utf8");
+      const editable = chat as unknown as Editable;
+      expect(typeof editable.applyConfigEdits).toBe("function");
+      expect(() => editable.applyConfigEdits!({ "agent.maxSteps": "50" })).toThrow(/teto global/);
+      expect(readFileSync(configPath, "utf8")).toBe(before);
+      expect(chat.configSummary().maxSteps).toBe(3);
+      chat.close();
+    } finally {
+      if (saved === undefined) delete process.env.ASTRO_PERMISSION_MODE;
+      else process.env.ASTRO_PERMISSION_MODE = saved;
+      stop();
+    }
+  });
+});
+
 describe("AgentSession.revokeTrustedFolder (#267)", () => {
   test("remove do store, audita trust.revoked e é no-op quando ausente", () => {
     const { cwd, session, stop } = setup();

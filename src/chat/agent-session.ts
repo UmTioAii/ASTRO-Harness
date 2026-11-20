@@ -12,6 +12,7 @@ import { TodoPlanStore } from "../tools/todo-write";
 import type { TrustAsk } from "../trust";
 import { canonicalFolder, TrustedFolders, trustStatePath } from "../trust";
 import { isPlainObject, updateConfigPermissionsMode } from "../core/config";
+import { updateConfigKnobs, type EditableConfigKey } from "../core/config-edit";
 import { assertModeWithinGlobal } from "../config-overlay";
 import type { AstroConfig } from "../core/config";
 import { SANDBOX_DISABLED_WARNING } from "../tools/run-command";
@@ -396,6 +397,25 @@ export class AgentSession {
     updateConfigPermissionsMode(this.#configPath, mode);
     this.#config = { ...this.#config, permissions: { mode } };
     return this.setPermissionMode(mode);
+  }
+
+  /**
+   * Aplica edições do `/config` (#558): grava no arquivo primeiro (pré-validado
+   * contra a camada global, ADR-0029, e atômico); se falhar, runtime e arquivo
+   * ficam intactos. Depois recarrega a config do disco e, se
+   * `permissions.mode` mudou, reaplica na sessão (audita `mode.changed`). O
+   * próximo `send` chama `runTask` com o mesmo `configPath`, que relê o
+   * arquivo — o valor novo vale já no próximo turno.
+   */
+  applyConfigEdits(edits: Partial<Record<EditableConfigKey, string>>): AstroConfig {
+    if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
+    // Mesmo merge do loader: um env parcial não realoca ~/.astro (#494).
+    const env = { ...process.env, ...this.#env };
+    updateConfigKnobs(this.#configPath, edits, { env });
+    this.reload();
+    const mode = resolvePermissionMode(process.env.ASTRO_PERMISSION_MODE, this.#config.permissions.mode);
+    if (mode !== this.#permissionMode) this.setPermissionMode(mode);
+    return this.#config;
   }
 
   /**
