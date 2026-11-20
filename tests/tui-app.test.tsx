@@ -616,6 +616,125 @@ test("Tab completa comando e @arquivo no painel", async () => {
   }
 });
 
+test("enter no menu completa o comando e só o segundo enter roda, uma vez (#471)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-enter-complete-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("/cl");
+    await waitFor(() => frameHas(instance, "/clear")); // menu aberto
+    instance.stdin.write("\r"); // completa a linha, não roda
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(session.cleared).toBe(0);
+    expect(session.sent).toEqual([]);
+    instance.stdin.write("\r"); // linha já é /clear: roda
+    await waitFor(() => session.cleared === 1);
+    await waitFor(() => frameHas(instance, "contexto limpo"));
+    expect(session.cleared).toBe(1);
+    instance.stdin.write("\r"); // buffer vazio depois do envio: nada roda de novo
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(session.cleared).toBe(1);
+    expect(session.sent).toEqual([]);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("enter com a linha exatamente igual ao comando destacado roda sem segunda tecla (#471)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-enter-exact-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("/clear");
+    await waitFor(() => frameHas(instance, "/clear"));
+    instance.stdin.write("\r");
+    await waitFor(() => session.cleared === 1);
+    expect(session.cleared).toBe(1);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("enter com argumento depois do comando envia a linha inteira, sem completar (#471)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-enter-arg-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("/model p/m2");
+    await new Promise((resolve) => setTimeout(resolve, 50)); // menu fechado: há espaço na linha
+    instance.stdin.write("\r");
+    await waitFor(() => session.model === "p/m2");
+    expect(session.model).toBe("p/m2");
+    expect(session.sent).toEqual([]); // comando não vira turno
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("enter com texto normal e com a entrada vazia não muda (#471)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-enter-text-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("\r"); // vazio: nada acontece
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(session.sent).toEqual([]);
+    expect(session.cleared).toBe(0);
+    instance.stdin.write("texto livre");
+    instance.stdin.write("\r");
+    await waitFor(() => session.sent.length === 1);
+    expect(session.sent).toEqual(["texto livre"]);
+    expect(session.cleared).toBe(0);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("shift+enter com o menu aberto quebra linha e não completa nem roda o comando (#471)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-enter-shift-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("/clear");
+    instance.stdin.write("\u001b[13;2u"); // shift+enter (kitty)
+    instance.stdin.write("x");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(session.cleared).toBe(0);
+    instance.stdin.write("\r");
+    await waitFor(() => session.sent.length === 1);
+    // se o shift+enter tivesse completado ou rodado, a linha não seria "/clear\nx"
+    expect(session.sent).toEqual(["/clear\nx"]);
+    expect(session.cleared).toBe(0);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("linefeed com o menu aberto também quebra linha e não roda o comando (#471)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-enter-linefeed-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    await waitFor(() => frameHas(instance, "enter envia"));
+    instance.stdin.write("/cl");
+    instance.stdin.write("\n"); // shift+enter em terminal sem kitty
+    instance.stdin.write("x");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(session.cleared).toBe(0);
+    instance.stdin.write("\r");
+    await waitFor(() => session.sent.length === 1);
+    expect(session.sent).toEqual(["/cl\nx"]);
+    expect(session.cleared).toBe(0);
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("reindexa ao digitar @ e vê arquivo criado depois do mount", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-reindex-"));
   const instance = render(<TuiApp session={new FakeSession()} cwd={cwd} />);
