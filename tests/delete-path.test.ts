@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Auditor } from "../src/audit";
@@ -160,5 +160,56 @@ describe("delete_path (#535)", () => {
     expect(await run("ask")).toMatchObject({ asked: 1, deleted: true });
     expect(await run("allow-edits")).toMatchObject({ asked: 1, deleted: true });
     expect(await run("bypass")).toMatchObject({ asked: 0, deleted: true });
+  });
+
+  test("ADS do NTFS (.env::$DATA) não fura o hard-block na chamada direta (review)", async () => {
+    if (process.platform !== "win32") return; // forma ADS só existe no NTFS
+    const cwd = dir();
+    writeFileSync(join(cwd, ".env"), "CHAVE=sintetica\n");
+    const result = await deletePathTool.execute({ path: ".env::$DATA" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("hard-block");
+    expect(existsSync(join(cwd, ".env"))).toBe(true);
+  });
+
+  test("allow-critical não autoriza o delete (decisão: só leitura/escrita pontual)", async () => {
+    const cwd = dir();
+    // Nome crítico *configurável*: o allow-critical do gate libera, a tool não obedece.
+    const critical = join(cwd, "db-password.txt");
+    writeFileSync(critical, "valor-sintetico\n");
+    const executor = new ToolExecutor({
+      tools: [deletePathTool],
+      allow: ["delete_path"],
+      audit: new Auditor(join(cwd, "audit.jsonl")),
+      permissionMode: "bypass",
+    });
+    const result = await executor.run(
+      { ...ctx(cwd), allowCritical: [critical] },
+      { id: "c1", name: "delete_path", arguments: JSON.stringify({ path: "db-password.txt" }) },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("hard-block");
+    expect(existsSync(critical)).toBe(true);
+  });
+
+  test("tool.call registra o path (redigido) para a classe delete (review)", async () => {
+    const cwd = dir();
+    writeFileSync(join(cwd, "a.txt"), "x");
+    const auditPath = join(cwd, "audit.jsonl");
+    const executor = new ToolExecutor({
+      tools: [deletePathTool],
+      allow: ["delete_path"],
+      audit: new Auditor(auditPath),
+      permissionMode: "bypass",
+    });
+    await executor.run(ctx(cwd), {
+      id: "c1",
+      name: "delete_path",
+      arguments: JSON.stringify({ path: "a.txt" }),
+    });
+    const events = readFileSync(auditPath, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
+    expect(events.find((event) => event.tipo === "tool.call")?.payload)
+      .toMatchObject({ name: "delete_path", paths: ["a.txt"] });
   });
 });

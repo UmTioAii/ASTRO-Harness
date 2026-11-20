@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Auditor } from "../src/audit";
@@ -182,5 +182,93 @@ describe("move_path (#535)", () => {
     expect(allowEdits).toMatchObject({ asked: 0, moved: true });
     const bypass = await run("bypass");
     expect(bypass).toMatchObject({ asked: 0, moved: true });
+  });
+
+  test("overwrite: true pede aprovação em allow-edits (destrutivo, review B1)", async () => {
+    const cwd = dir();
+    writeFileSync(join(cwd, "a.txt"), "novo");
+    writeFileSync(join(cwd, "b.txt"), "antigo");
+    let asked = 0;
+    const executor = new ToolExecutor({
+      tools: [movePathTool],
+      allow: ["move_path"],
+      audit: new Auditor(join(cwd, "audit.jsonl")),
+      permissionMode: "allow-edits",
+      approveTool: () => {
+        asked++;
+        return true;
+      },
+    });
+    const result = await executor.run(ctx(cwd), {
+      id: "c1",
+      name: "move_path",
+      arguments: JSON.stringify({ from: "a.txt", to: "b.txt", overwrite: true }),
+    });
+    expect(asked).toBe(1);
+    expect(result.isError).toBeFalsy();
+    expect(readFileSync(join(cwd, "b.txt"), "utf8")).toBe("novo");
+  });
+
+  test("overwrite: true guarda o destino em .bak antes de substituir (review B1)", async () => {
+    const cwd = dir();
+    writeFileSync(join(cwd, "a.txt"), "novo");
+    writeFileSync(join(cwd, "b.txt"), "antigo");
+    const result = await movePathTool.execute({ from: "a.txt", to: "b.txt", overwrite: true }, ctx(cwd));
+    expect(result.isError).toBeFalsy();
+    expect(result.output).toContain(".bak");
+    const backups = readdirSync(cwd).filter((name) => name.startsWith("b.txt.") && name.endsWith(".bak"));
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(cwd, backups[0] as string), "utf8")).toBe("antigo");
+    expect(readFileSync(join(cwd, "b.txt"), "utf8")).toBe("novo");
+  });
+
+  test("junction como origem não pode ir para dentro do próprio alvo (review B2)", async () => {
+    const cwd = dir();
+    mkdirSync(join(cwd, "src"));
+    writeFileSync(join(cwd, "src", "keep.txt"), "x");
+    try {
+      symlinkSync(join(cwd, "src"), join(cwd, "link"), process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return; // plataforma sem link: caso coberto pelo teste de diretório real
+    }
+    const result = await movePathTool.execute({ from: "link", to: "link/sub" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("própria origem");
+    expect(readFileSync(join(cwd, "src", "keep.txt"), "utf8")).toBe("x");
+  });
+
+  test("allow-critical não autoriza mover hard-block (decisão: só leitura/escrita pontual)", async () => {
+    const cwd = dir();
+    // Nome crítico *configurável*: o allow-critical do gate libera, a tool não obedece.
+    const critical = join(cwd, "db-password.txt");
+    writeFileSync(critical, "valor-sintetico\n");
+    const result = await movePathTool.execute(
+      { from: "db-password.txt", to: "x.txt" },
+      { ...ctx(cwd), allowCritical: [critical] },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("hard-block");
+    expect(existsSync(critical)).toBe(true);
+  });
+
+  test("tool.call registra os paths (redigidos) para a classe edit (review)", async () => {
+    const cwd = dir();
+    writeFileSync(join(cwd, "a.txt"), "x");
+    const auditPath = join(cwd, "audit.jsonl");
+    const executor = new ToolExecutor({
+      tools: [movePathTool],
+      allow: ["move_path"],
+      audit: new Auditor(auditPath),
+      permissionMode: "bypass",
+    });
+    await executor.run(ctx(cwd), {
+      id: "c1",
+      name: "move_path",
+      arguments: JSON.stringify({ from: "a.txt", to: "b.txt" }),
+    });
+    const events = readFileSync(auditPath, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
+    expect(events.find((event) => event.tipo === "tool.call")?.payload)
+      .toMatchObject({ name: "move_path", paths: ["a.txt", "b.txt"] });
   });
 });
