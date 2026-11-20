@@ -1815,6 +1815,7 @@ test("erro fatal com item na fila encerra a sessão sem enviar o enfileirado (#5
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
     await waitFor(() => exits === 1);
+    await waitFor(() => instance.lastFrame()?.includes("erro: budget") === true);
     expect(session.sent).toEqual(["vai falhar"]); // fila descartada junto com a sessão
     expect(instance.lastFrame()).toContain("erro: budget");
   } finally {
