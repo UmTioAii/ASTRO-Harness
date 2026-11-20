@@ -54,6 +54,7 @@ import { createWebFetchTool } from "../tools/web-fetch";
 import { TodoPlanStore, createTodoWriteTool } from "../tools/todo-write";
 import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, SpawnRegistry } from "../spawn";
 import { grepTool } from "../tools/grep";
+import { globTool } from "../tools/glob";
 import { listDirTool } from "../tools/list-dir";
 import { gitDiffTool, gitStatusTool } from "../tools/git";
 import { editTool } from "../tools/edit";
@@ -176,7 +177,7 @@ export interface RunReport {
 const AGENT_NAME = "default";
 const TASK_HASH_LENGTH = 16;
 
-export const BUILTIN_TOOLS: readonly Tool[] = [readFileTool, writeFileTool, runCommandTool, handoffTool, grepTool, listDirTool, gitStatusTool, gitDiffTool, editTool, movePathTool, deletePathTool, lspTool, pipelineTool];
+export const BUILTIN_TOOLS: readonly Tool[] = [readFileTool, writeFileTool, runCommandTool, handoffTool, grepTool, globTool, listDirTool, gitStatusTool, gitDiffTool, editTool, movePathTool, deletePathTool, lspTool, pipelineTool];
 
 const TOOLS_BY_NAME = new Map(BUILTIN_TOOLS.map((tool) => [tool.manifest.name, tool]));
 /** Env de sistema que o shell precisa; não são segredos, mesmo se o servidor MCP os declarar. */

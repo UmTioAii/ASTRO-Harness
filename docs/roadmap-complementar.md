@@ -53,7 +53,7 @@ Status possíveis: `concluído`, `em andamento`, `planejado`, `bloqueado`; o sta
 | F-30 | Custo atribuído por agente com granularidade de profile e `astro cost --by-agent` | concluído | #85 | F-29 | F-31 |
 | F-31 | Health e fallback por profile estendendo C6 (ADR-0007) | concluído | #86 | F-30, C6 | — |
 
-Nota: F-13 (`glob`) ficou fora por não ser confirmado como lacuna dos diferenciais (multi-agente, multi-provider, comunicação). Pode voltar como issue própria.
+Nota: F-13 (`glob`) ficou fora por não ser confirmado como lacuna dos diferenciais (multi-agente, multi-provider, comunicação). Voltou como issue própria e foi entregue em #534: `src/tools/glob.ts`, `Bun.Glob` sem dependência nova, `class: read_common`, confinado ao `cwd` (I-11), cap de 500 com aviso e `truncated: true`, `.git`/`node_modules` fora por default com `includeIgnored`.
 
 ## Camada 1 — interface
 
