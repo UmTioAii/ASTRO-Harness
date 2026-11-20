@@ -2,7 +2,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createPathClassifier } from "../path-class";
 import { PATH_HARD_BLOCKED, denyDisplayPath, resolveArtifactRoot, resolveAstroHome } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
-import { resolveWithin } from "./paths";
+import { canonicalize, isWithin, resolveWithin } from "./paths";
 import { sanitizedEnv } from "./run-command";
 import { ToolError, type Tool, type ToolContext, type ToolResult } from "./types";
 
@@ -262,8 +262,12 @@ function hardBlockedPath(paths: readonly string[], repoRoot: string, ctx: ToolCo
     protectedPaths: ctx.protectedPaths,
     artifactRoot: resolveArtifactRoot(env),
   });
+  const root = canonicalize(ctx.cwd);
   for (const path of paths) {
     const absolute = resolve(repoRoot, path);
+    // Contenção real (I-11): junction/symlink que sai do cwd é recusado antes
+    // do nome, porque o nome pode ser comum (`leak.txt`) e parecer normal.
+    if (!isWithin(root, canonicalize(absolute))) return denyDisplayPath(ctx.cwd, absolute);
     if (classify(absolute) === "hard-block") return denyDisplayPath(ctx.cwd, absolute);
   }
   return undefined;
@@ -402,7 +406,8 @@ export const gitDiffTool: Tool = {
     name: "git_diff",
     description:
       "Mostra o diff unificado do worktree (ou do index com staged) limitado ao " +
-      "diretório de trabalho. `base` aceita só commit de 40 hexadecimais. Somente leitura.",
+      "diretório de trabalho. `base` aceita só commit de 40 hexadecimais. " +
+      "Saída JSON {staged, base, truncated, diff}. Somente leitura.",
     parameters: {
       type: "object",
       properties: {
@@ -453,7 +458,7 @@ export const gitDiffTool: Tool = {
 
       // Enumera os paths alterados e barra hard-block ANTES de gerar conteúdo.
       const listArgs = [
-        "--no-pager", "--no-optional-locks", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--name-status", "-z",
+        "--no-pager", "--no-optional-locks", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative", "--name-status", "-z",
       ];
       if (staged) listArgs.push("--cached");
       if (base !== undefined) listArgs.push(base);
@@ -464,13 +469,13 @@ export const gitDiffTool: Tool = {
       const blocked = hardBlockedPath(parseNameStatus(changed.stdout), repoRoot, ctx);
       if (blocked !== undefined) {
         return {
-          output: `diff negado (${PATH_HARD_BLOCKED}): "${blocked}" — conteúdo hard-block não é devolvido (ADR-0027)`,
+          output: `diff negado (${PATH_HARD_BLOCKED}): "${blocked}" — conteúdo hard-block não é devolvido (ADR-0027); use \`path\` para os demais arquivos`,
           isError: true,
           code: PATH_HARD_BLOCKED,
         };
       }
 
-      const args = ["--no-pager", "--no-optional-locks", "diff", "--no-color", "--no-ext-diff", "--no-textconv"];
+      const args = ["--no-pager", "--no-optional-locks", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative"];
       if (staged) args.push("--cached");
       if (base !== undefined) args.push(base);
       args.push("--", path);

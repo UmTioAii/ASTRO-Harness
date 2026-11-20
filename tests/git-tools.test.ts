@@ -339,6 +339,62 @@ describe("git_diff", () => {
     },
   );
 
+  test.skipIf(process.platform !== "win32")(
+    "BLOCKER 2: junction fora do cwd com nome comum não vaza",
+    { timeout: 30_000 },
+    async () => {
+      const outside = mkdtempSync(join(tmpdir(), "astro-git-outside-common-"));
+      writeFileSync(join(outside, "leak.txt"), "SEGREDO-COMUM-1\n");
+      const cwd = mkdtempSync(join(tmpdir(), "astro-git-junction-common-"));
+      git(cwd, "init", "-q");
+      writeFileSync(join(cwd, "seed.txt"), "x\n");
+      mkdirSync(join(cwd, "sub"));
+      symlinkSync(outside, join(cwd, "sub", "link"), "junction");
+      git(cwd, "add", "seed.txt");
+      git(cwd, "add", "-f", "sub/link/leak.txt");
+      git(cwd, "commit", "-q", "-m", "init");
+      writeFileSync(join(outside, "leak.txt"), "SEGREDO-COMUM-2\n");
+
+      for (const input of [{}, { path: "sub" }]) {
+        const result = await gitDiffTool.execute(input, ctx(cwd));
+        expect(result.isError).toBe(true);
+        expect(result.code).toBe("path_hard_blocked");
+        expect(result.output).not.toContain("SEGREDO-COMUM");
+      }
+
+      const executor = new ToolExecutor({
+        tools: [gitDiffTool],
+        allow: ["git_diff"],
+        audit: new Auditor(join(cwd, ".astro", "audit.jsonl")),
+        permissionMode: "ask",
+      });
+      const viaExecutor = await executor.run(ctx(cwd), { id: "1", name: "git_diff", arguments: "{}" });
+      expect(viaExecutor.isError).toBe(true);
+      expect(viaExecutor.code).toBe("path_hard_blocked");
+      expect(viaExecutor.output).not.toContain("SEGREDO-COMUM");
+      expect(viaExecutor.output).toContain("use `path` para os demais arquivos");
+    },
+  );
+
+  testGit("pathspec literal: a[1].txt não expande para a1.txt", async () => {
+    const cwd = repo({ "a[1].txt": "literal-um\n", "a1.txt": "outro-um\n" });
+    writeFileSync(join(cwd, "a[1].txt"), "literal-dois\n");
+    writeFileSync(join(cwd, "a1.txt"), "outro-dois\n");
+    const result = await diff(cwd, { path: "a[1].txt" });
+    expect(result.diff).toContain("literal-dois");
+    expect(result.diff).not.toContain("outro-dois");
+    expect(result.diff).not.toContain("a1.txt");
+  });
+
+  testGit("--no-relative mantém paths do repo com diff.relative=true", async () => {
+    const cwd = repo({ "sub/x.txt": "um\n" });
+    git(cwd, "config", "diff.relative", "true");
+    writeFileSync(join(cwd, "sub", "x.txt"), "dois\n");
+    const result = await diff(join(cwd, "sub"));
+    expect(result.diff).toContain("a/sub/x.txt");
+    expect(result.diff).toContain("+dois");
+  });
+
   testGit("GIT_CONFIG_PARAMETERS e GIT_COMMON_DIR são neutralizados", async () => {
     const cwd = repo({ "a.txt": "um\n" });
     writeFileSync(join(cwd, "a.txt"), "dois\n");
