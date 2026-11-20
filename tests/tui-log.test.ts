@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import * as logModule from "../src/tui/log";
-import { LOG_CAP, appendLog, sessionHeaderLine, tailLog } from "../src/tui/log";
+import { LOG_CAP, appendLog, laneLine, sessionHeaderLine, tailLog } from "../src/tui/log";
 
 describe("buffer de log da sessão em memória (#514, docs/tui-layout.md §/log)", () => {
   test("appendLog anexa e, acima do teto, descarta as linhas mais antigas", () => {
@@ -55,14 +54,10 @@ describe("buffer de log da sessão em memória (#514, docs/tui-layout.md §/log)
 });
 
 describe("laneLine — prefixo de lane para o /log mostrar lanes separadas (#560)", () => {
-  // RED: laneLine ainda não existe; cast estrutural mantém o typecheck limpo.
-  const api = logModule as unknown as { laneLine?: (lane: string, line: string) => string };
-
   test("prefixa a linha com [lane] e a sanitização continua no appendLog", () => {
-    expect(api.laneLine).toBeTypeOf("function"); // RED: ainda não existe
-    expect(api.laneLine!("turno", "turno concluído · 1 step(s)")).toBe("[turno] turno concluído · 1 step(s)");
-    expect(api.laneLine!("sessão", "ASTRO v1.0.0 · p/m1")).toBe("[sessão] ASTRO v1.0.0 · p/m1");
-    const [line] = appendLog([], api.laneLine!("aviso", "custo alto token=abcdef123456"));
+    expect(laneLine("turno", "turno concluído · 1 step(s)")).toBe("[turno] turno concluído · 1 step(s)");
+    expect(laneLine("sessão", "ASTRO v1.0.0 · p/m1")).toBe("[sessão] ASTRO v1.0.0 · p/m1");
+    const [line] = appendLog([], laneLine("aviso", "custo alto token=abcdef123456"));
     expect(line).toContain("[aviso]");
     expect(line).toContain("[REDACTED]"); // I-03: a lane não enfraquece a redação
     expect(line).not.toContain("abcdef123456");

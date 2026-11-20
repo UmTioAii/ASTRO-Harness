@@ -1731,3 +1731,86 @@ test("/log mostra as lanes separadas por prefixo [lane] (#560)", async () => {
   }
 });
 
+test("turno com erro não fatal não engole a fila: drena ao fim do turno (#561)", async () => {
+  class Flaky extends FakeSession {
+    override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      return super.send(prompt, signal);
+    }
+  }
+  const session = new Flaky();
+  session.failNext = true; // 1º turno quebra com erro não fatal
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-queue-err-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    instance.stdin.write("falha");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
+    instance.stdin.write("depois");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
+    await waitFor(() => instance.lastFrame()?.includes("erro: boom") === true);
+    // caminho de falha: o erro do turno não pode descartar o enfileirado
+    await waitFor(() => instance.lastFrame()?.includes("eco:depois") === true);
+    expect(session.sent).toEqual(["falha", "depois"]);
+    await waitFor(() => (instance.lastFrame() ?? "").includes("fila:") === false); // indicador limpa
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("fila com comando de barra + prompt drena em ordem FIFO após o turno (#561)", async () => {
+  class Slow extends FakeSession {
+    override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      return super.send(prompt, signal);
+    }
+  }
+  const session = new Slow();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-queue-fifo-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    instance.stdin.write("um");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
+    instance.stdin.write("/clear");
+    instance.stdin.write("\r"); // linha exata: entra na fila (não roda durante o turno)
+    instance.stdin.write("dois");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("fila: 2") === true);
+    await waitFor(() => instance.lastFrame()?.includes("contexto limpo") === true);
+    await waitFor(() => instance.lastFrame()?.includes("eco:dois") === true);
+    expect(session.sent).toEqual(["um", "dois"]); // comando não vira prompt
+    expect(session.cleared).toBe(1);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("erro fatal com item na fila encerra a sessão sem enviar o enfileirado (#561)", async () => {
+  class FatalSlow extends FakeSession {
+    override async send(prompt: string): Promise<TurnResult> {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      this.sent.push(prompt);
+      throw new Error("budget", { cause: new BudgetExceededError("limit", {} as never) });
+    }
+  }
+  let exits = 0;
+  const session = new FatalSlow();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-queue-fatal-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} onExit={() => { exits++; }} />);
+  try {
+    instance.stdin.write("vai falhar");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
+    instance.stdin.write("nao envia");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
+    await waitFor(() => exits === 1);
+    expect(session.sent).toEqual(["vai falhar"]); // fila descartada junto com a sessão
+    expect(instance.lastFrame()).toContain("erro: budget");
+  } finally {
+    instance.unmount();
+  }
+});
+
