@@ -73,36 +73,36 @@ npm install "$TARBALL"
 
 ## 5. TUI e provider mock
 
-O gate exige a TUI abrindo e o wizard de provider concluindo sem credencial real. Salve `mock-openai.mjs` e suba um endpoint OpenAI-compatible local:
-
-```js
-// mock-openai.mjs — resposta fixa; nenhuma chamada externa
-import { createServer } from "node:http";
-createServer((req, res) => {
-  if (req.method === "GET" && req.url?.endsWith("/models")) return res.writeHead(200, { "content-type": "application/json" }).end('{"data":[{"id":"mock-model","object":"model"}]}');
-  if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) return res.writeHead(404).end();
-  req.resume(); req.on("end", () => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
-    choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9 } })));
-}).listen(8787, "127.0.0.1", () => console.log("mock: http://127.0.0.1:8787/v1"));
-```
-
-No diretório limpo do §4 (mesmo shell, terminal interativo). O mock é loopback; o opt-in abaixo vale para este processo e filhos e só afeta URLs validadas por `outboundUrlProblem` (provider, `web_fetch`, webhook, MCP, telemetria, skill); `webSearch.baseUrl` usa só `urlProblem` (qualquer provider); contrato e bloqueios em `docs/web-tools.md`:
+O gate tem duas partes: automática (`bun run smoke:packed`, #542) e manual (wizard e telas), as duas sem credencial real.
 
 ```bash
-node mock-openai.mjs &
-mkdir -p "$TMP/astro-home" && export ASTRO_HOME="$TMP/astro-home"   # isola perfis e cofre
-ASTRO_ALLOW_PRIVATE_URLS=1 ./node_modules/.bin/astro    # opt-in de dev: só nesta invocação (processo e filhos)
+bun run smoke:packed          # --json: resumo de máquina
+```
+
+| Etapa | Prova |
+|---|---|
+| build + `npm pack` + instalação | 1 `.tgz` com a versão do `package.json`; `npm i --no-audit --no-fund <tgz>` em temporário com identidade conferida |
+| `--version` / `--help` / `doctor` | `astro <versão>`; `astro run` e `astro chat`; `0 fail` com `ASTRO_HOME` temporário |
+| TUI | primeiro frame `ASTRO v<versão> · mock/mock-model`, 1 turno, mock com exatamente 1 `POST /chat/completions` (modelo, prompt, `Authorization`) e ctrl+c em exit 0 |
+
+- A TUI roda `dist/cli.js` instalado com o Bun do pacote mais `--preload scripts/packed-smoke-tty.ts`, que faz o pipe passar por TTY (Ink e `runTui` só olham `isTTY`). Sem frame em 30 s o processo é morto e a etapa falha; se o pacote reportar falta de terminal, a etapa sai como `pulado` no resumo.
+- Hermético: mock em `127.0.0.1` com porta efêmera, chave falsa por `credentialRef` (`ASTRO_PACKED_SMOKE_KEY`), `ASTRO_HOME`/projeto/trust/tarball em temporário removido no fim. Rede só no `npm install` (§4).
+
+Manual — o que o script não cobre (wizard e telas), no diretório limpo do §4 em terminal interativo:
+
+```bash
+node scripts/mock-openai.mjs &          # da raiz do repo; loopback, sem chamada externa
+cd "$TMP" && mkdir -p "$TMP/astro-home" && export ASTRO_HOME="$TMP/astro-home"
+ASTRO_ALLOW_PRIVATE_URLS=1 ./node_modules/.bin/astro    # opt-in só deste processo
 ```
 
 | Passo | Valor |
 |---|---|
 | adicionar (`a`) | `custom`, nome `mock`, base URL `http://127.0.0.1:8787/v1` |
-| modelos / credencial | `mock-model` / vazio (provider local, sem chave) |
-| salvar | ativa e fecha o setup; a TUI abre |
-| na TUI: `/providers` → `t` → enter | `ok` com latência |
+| modelos / credencial / salvar | `mock-model` / vazio (provider local, sem chave); salvar ativa e abre a TUI |
+| na TUI | `/providers` → `t` → enter: `ok` com latência; um prompt; `/log` com header e linhas de turno; `/model` (#511) |
 
-- Fora da TUI, `astro providers test mock` exige `astro.config.json` no diretório; `401/403` indica credencial; timeout, abort ou conexão recusada aparecem como `outage` (a tela não usa `network_timeout`). Tela e `providers.json` nunca mostram segredo (`I-03`). Provider real: smoke manual de `docs/providers.md`.
+- `ASTRO_ALLOW_PRIVATE_URLS` vale para o processo e os filhos e só afeta URLs de `outboundUrlProblem` (provider, `web_fetch`, webhook, MCP, telemetria, skill); contrato em `docs/web-tools.md`. Fora da TUI, `astro providers test mock` exige `astro.config.json`; `401/403` é credencial, timeout ou recusa viram `outage`; tela e `providers.json` nunca mostram segredo (`I-03`). Provider real: `docs/providers.md`.
 
 ## 6. Publicação
 
