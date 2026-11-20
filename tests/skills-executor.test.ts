@@ -6,7 +6,7 @@ import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
 import { buildSkillRegistry, isSkillCommand, resolveSkillCommand, resolveTaskSkill } from "../src/skills/executor";
 import { loadSkillsFromRoot } from "../src/skills/loader";
-import { projectSkillsRoot } from "../src/home-layout";
+import { projectSkillsRoot, skillsUserRoot } from "../src/home-layout";
 import { testEnv } from "./setup";
 
 const SKILL = `---\nname: commit\ndescription: Cria um commit com a mudança atual\nversion: 1.0.0\npermissions:\n  tools: [read_file, run_command]\n---\nRevise o diff e crie o commit. Argumentos: $ARGUMENTS\n`;
@@ -197,6 +197,30 @@ test("run com skill pedindo tool fora da allowlist falha fechado", async () => {
   expect(auditText).toContain("run.started");
   expect(auditText).toContain("run.stopped");
   expect(auditText).not.toContain("skill.loaded");
+});
+
+test("run resolve as raízes de skill pelo env do run, não pelo process.env", async () => {
+  const up = Bun.serve({
+    port: 0,
+    fetch: async () => Response.json({
+      choices: [{ message: { content: "pronto" } }], usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }),
+  });
+  try {
+    const home = mkdtempSync(join(tmpdir(), "astro-skexec-env-home-"));
+    const dir = mkdtempSync(join(tmpdir(), "astro-skexec-env-"));
+    const env = { ...testEnv({ KEY_A: "dummy" }), ASTRO_HOME: home };
+    expect(env.ASTRO_HOME).not.toBe(process.env.ASTRO_HOME);
+    skillDir(projectSkillsRoot(dir, env), "commit", SKILL_SCRIPTS);
+    skillDir(skillsUserRoot(env), "user-skill", SKILL.replace("name: commit", "name: user-skill"));
+
+    const cfgPath = writeRunConfig(dir, up.port!, ["read_file", "run_command"]);
+    const report = await runTask({ approveTool: () => true, configPath: cfgPath, task: "/commit revisar o diff", cwd: dir, env });
+    expect(report.final).toBe("pronto");
+    expect(readFileSync(join(dir, ".astro", "audit.jsonl"), "utf8")).toContain("\"name\":\"commit\"");
+  } finally {
+    up.stop(true);
+  }
 });
 
 test("loadSkillsFromRoot recusa skill com sha256 divergente do sidecar", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Auditor } from "../src/audit";
 import { SessionApi } from "../src/chat/session-api";
 import { astroHomePath } from "../src/astro-home";
@@ -42,6 +42,14 @@ function makeRecord(id: string) {
     turns: 1, tokensIn: 10, tokensOut: 5, costUsd: null,
   };
 }
+
+function writeProject(cwd: string, env: Record<string, string>, text: string): void {
+  const file = projectTuiConfigPath(cwd, env);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, text, "utf8");
+}
+
+const caseInsensitivePlatform = (): boolean => process.platform === "win32" || process.platform === "darwin";
 
 describe("layout de $ASTRO_HOME (#468)", () => {
   test("as duas raízes de skills saem de $ASTRO_HOME, nunca de homedir() ou do cwd", () => {
@@ -85,6 +93,26 @@ describe("layout de $ASTRO_HOME (#468)", () => {
     expect(projectKey(overLimit)).toBe(projectKey(overLimit));
     expect(projectKey(overLimit)).not.toBe(projectKey(`${overLimit}b`));
   });
+
+  test("barra invertida é separador só no win32: no POSIX é literal", () => {
+    if (process.platform === "win32") return; // no win32 `a\b` e `a/b` são o mesmo caminho
+    expect(projectKey("/a\\b")).not.toBe(projectKey("/a/b"));
+    expect(projectKey("/a\\b")).toContain("_x5c");
+  });
+
+  test("caixa do projeto só dobra onde o filesystem não diferencia (win32/darwin)", () => {
+    const upper = projectKey("/home/Dev/Proj");
+    const lower = projectKey("/home/dev/proj");
+    if (caseInsensitivePlatform()) expect(upper).toBe(lower);
+    else expect(upper).not.toBe(lower);
+  });
+
+  test("escape de byte usa dois dígitos: 0x01 seguido de 'f' não colide com 0x1f", () => {
+    if (process.platform === "win32") return; // win32 não aceita controle no nome
+    expect(projectKey("/\u0001f")).not.toBe(projectKey("/\u001f"));
+    expect(projectKey("/\u0001f")).toContain("_x01");
+    expect(projectKey("/\u001f")).toContain("_x1f");
+  });
 });
 
 describe("sessões sob $ASTRO_HOME (#468)", () => {
@@ -125,6 +153,39 @@ describe("sessões sob $ASTRO_HOME (#468)", () => {
     expect(first.startsWith(env.ASTRO_HOME!)).toBe(true);
     expect(second.startsWith(env.ASTRO_HOME!)).toBe(true);
   });
+
+  test("raiz de sessões com junction para fora do home é recusada antes de criar (I-11)", () => {
+    const { home, env } = tempHome();
+    const cwd = tempDir("astro-layout-session-escape-");
+    const outside = tempDir("astro-layout-session-outside-");
+    mkdirSync(join(home, "projects"), { recursive: true });
+    symlinkSync(outside, projectDataDir(cwd, env), process.platform === "win32" ? "junction" : "dir");
+
+    expect(() => new SessionApi(projectDataDir(cwd, env), { home })).toThrow(/ASTRO_HOME/);
+    expect(existsSync(join(outside, "sessions.db"))).toBe(false);
+  });
+
+  test("purga de cópia legada não apaga arquivo fora do home (I-11)", () => {
+    const { home, env } = tempHome();
+    const cwd = tempDir("astro-layout-session-purge-");
+    const dir = projectDataDir(cwd, env);
+    const outside = tempDir("astro-layout-purge-outside-");
+    const created = new SessionApi(dir, { home });
+    created.save(makeRecord("s1"));
+    created.close();
+
+    // `sessions/` é um junction: a purga não pode seguir para fora
+    symlinkSync(outside, join(dir, "sessions"), process.platform === "win32" ? "junction" : "dir");
+    const stamped = join(outside, "2026-11-19T12-00-00-000Z-s1.json");
+    writeFileSync(stamped, JSON.stringify(makeRecord("s1")), "utf8");
+    const api = new SessionApi(dir, { home });
+    try {
+      expect(api.delete("s1")).toBe(true);
+    } finally {
+      api.close();
+    }
+    expect(existsSync(stamped)).toBe(true);
+  });
 });
 
 describe("tema global com override por projeto (#468)", () => {
@@ -160,6 +221,34 @@ describe("tema global com override por projeto (#468)", () => {
     expect(loadTuiConfig(cwd, env).theme).toBe("light");
     expect(() => saveTuiConfig(cwd, { theme: "contrast" }, env)).toThrow(/ASTRO_HOME/);
   });
+
+  test("recusa não cria diretório fora do home (I-11)", () => {
+    const { home, env } = tempHome();
+    const cwd = tempDir("astro-layout-theme-mkdir-");
+    const outside = tempDir("astro-layout-theme-mkdir-out-");
+    // `projects` inteiro é um junction: nenhuma criação pode acontecer antes da guarda
+    symlinkSync(outside, join(env.ASTRO_HOME!, "projects"), process.platform === "win32" ? "junction" : "dir");
+
+    expect(() => saveTuiConfig(cwd, { theme: "light" }, env)).toThrow(/ASTRO_HOME/);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(existsSync(join(home, "projects", projectKey(cwd)))).toBe(false);
+  });
+
+  test("lista do projeto vence a global, inclusive quando é vazia", () => {
+    const { env } = tempHome();
+    const cwd = tempDir("astro-layout-theme-list-");
+    writeFileSync(
+      globalTuiConfigPath(env),
+      JSON.stringify({ theme: "light", favoriteModels: ["p/a"], recentModels: ["p/r"] }),
+      "utf8",
+    );
+    writeProject(cwd, env, JSON.stringify({ favoriteModels: [] }));
+    expect(loadTuiConfig(cwd, env)).toEqual({ theme: "light", favoriteModels: [], recentModels: ["p/r"] });
+
+    // gravar a lista vazia também vence a global (limpar favoritos no projeto)
+    saveTuiConfig(cwd, { favoriteModels: [] }, env);
+    expect(loadTuiConfig(cwd, env).favoriteModels).toEqual([]);
+  });
 });
 
 describe("loaders leem a raiz nova (#468)", () => {
@@ -186,5 +275,19 @@ describe("loaders leem a raiz nova (#468)", () => {
     expect(code).toBe(0);
     expect(verifySkill(projectSkillsRoot(cwd, env), "deploy").ok).toBe(true);
     expect(existsSync(join(cwd, ".astro", "skills"))).toBe(false);
+  });
+
+  test("install cria home, chave do projeto e raiz de skills com 0700 (POSIX)", async () => {
+    if (process.platform === "win32") return;
+    const home = join(tempDir("astro-layout-modes-"), "home");
+    const env = { ASTRO_HOME: home };
+    const cwd = tempDir("astro-layout-modes-proj-");
+    const source = skillDir(tempDir("astro-layout-modes-src-"), "deploy");
+    await runSkillsCommand(["install", source], {
+      cwd, env, auditPath: join(tempDir("astro-layout-modes-audit-"), "audit.jsonl"), out: () => {},
+    });
+    for (const dir of [home, join(home, "projects"), projectDataDir(cwd, env), projectSkillsRoot(cwd, env)]) {
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    }
   });
 });
