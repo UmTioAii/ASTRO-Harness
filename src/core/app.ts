@@ -171,6 +171,7 @@ const TASK_HASH_LENGTH = 16;
 
 export const BUILTIN_TOOLS: readonly Tool[] = [readFileTool, writeFileTool, runCommandTool, handoffTool, grepTool, listDirTool, gitStatusTool, gitDiffTool, editTool, lspTool, pipelineTool];
 
+const TOOLS_BY_NAME = new Map(BUILTIN_TOOLS.map((tool) => [tool.manifest.name, tool]));
 /** Env de sistema que o shell precisa; não são segredos, mesmo se o servidor MCP os declarar. */
 const SYSTEM_ENV = /^(PATH|PATHEXT|HOME|USERPROFILE|SYSTEMROOT|WINDIR|TEMP|TMP|TMPDIR|SHELL|COMSPEC|LANG|LC_ALL|TERM)$/i;
 
