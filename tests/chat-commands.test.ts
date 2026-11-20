@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  COMMAND_NAMES, HELP_TEXT, modeListText, parseCommand, resolveModeCommand, suggestCommand, unknownCommandMessage,
+  COMMAND_NAMES, HELP_TEXT, modeListText, parseCommand, resolveModeCommand, resolveShellCommand, suggestCommand,
+  unknownCommandMessage,
 } from "../src/chat/commands";
 import { detailsLines, formatUptime } from "../src/chat/repl";
 import type { SessionSnapshot } from "../src/chat/agent-session";
@@ -38,6 +39,23 @@ describe("comandos do chat (T1, #62)", () => {
     expect(resolveModeCommand({ mode: "ask" }, "ask", false)).toEqual({ kind: "unsupported" });
     expect(modeListText("bypass")).toBe("→ bypass\n  allow-edits\n  ask\nativo: bypass");
   });
+  test("/shell: parser e resolveShellCommand só grava depois do confirm (#474)", () => {
+    expect(parseCommand("/shell")).toEqual({ kind: "shell" });
+    expect(parseCommand("/shell PWSH")).toEqual({ kind: "shell", shell: "pwsh" });
+    expect(parseCommand("/shell pwsh confirm")).toEqual({ kind: "shell", shell: "pwsh", confirm: true });
+    expect(COMMAND_NAMES).toContain("shell");
+    expect(HELP_TEXT).toContain("/shell");
+    expect(resolveShellCommand({}, ["pwsh", "cmd"], true)).toEqual({ kind: "list", shells: ["pwsh", "cmd"] });
+    expect(resolveShellCommand({ shell: "bash" }, ["pwsh"], true)).toEqual({
+      kind: "invalid", shell: "bash", shells: ["pwsh"],
+    });
+    expect(resolveShellCommand({ shell: "pwsh" }, ["pwsh"], true)).toEqual({ kind: "needs-confirm", shell: "pwsh" });
+    expect(resolveShellCommand({ shell: "pwsh", confirm: true }, ["pwsh"], true)).toEqual({
+      kind: "switch", shell: "pwsh",
+    });
+    expect(resolveShellCommand({ shell: "pwsh", confirm: true }, ["pwsh"], false)).toEqual({ kind: "unsupported" });
+  });
+
   test("/config é reconhecido e entra na ajuda e nos nomes (#273)", () => {
     expect(parseCommand("/config")).toEqual({ kind: "config" });
     // com argumento vira edição (#558): chave sem valor é rejeitada no handler com "uso:"

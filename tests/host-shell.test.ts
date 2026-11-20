@@ -1,0 +1,296 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Auditor } from "../src/audit";
+import { validateConfig, ConfigError } from "../src/core/config";
+import { parseConfigEditValue } from "../src/core/config-edit";
+import { ToolExecutor } from "../src/tools/executor";
+import { HOST_SHELLS, detectHostShells, hostShellArgv, selectHostShell } from "../src/tools/host-shell";
+import type { ToolContext, ToolResult } from "../src/tools/types";
+import {
+  HOST_SHELL_BYPASS_CONFIRMATION_ENV,
+  configureRunCommand,
+  resolveRunCommandMode,
+  runCommandTool,
+} from "../src/tools/run-command";
+import { installDockerSpawnMock, installNoDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
+
+let mock: DockerMock | undefined;
+afterEach(() => {
+  mock?.restore();
+  mock = undefined;
+});
+
+const baseConfig = {
+  providers: { openai: { kind: "openai-compat", baseUrl: "http://localhost", credentialRef: "OPENAI_API_KEY" } },
+  models: [{ provider: "openai", id: "gpt-4o-mini", tags: ["writing-code", "tools"], context: 128000 }],
+  agent: { model: "openai/gpt-4o-mini", maxSteps: 12, tools: ["run_command"] },
+  paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+};
+
+const cwd = (): string => mkdtempSync(join(tmpdir(), "astro-host-"));
+
+function auditEvents(path: string): Record<string, unknown>[] {
+  try {
+    return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+async function hostExecutor(
+  mod: Awaited<ReturnType<typeof isolatedRunCommand>>,
+  opts: { cwd: string; mode?: "ask" | "allow-edits" | "bypass"; approve?: (request: unknown) => unknown; env?: NodeJS.ProcessEnv },
+): Promise<{ executor: ToolExecutor; auditPath: string; requests: unknown[] }> {
+  const auditPath = join(opts.cwd, ".astro", "audit.jsonl");
+  const requests: unknown[] = [];
+  const executor = new ToolExecutor({
+    tools: [mod.runCommandTool],
+    allow: ["run_command"],
+    audit: new Auditor(auditPath),
+    permissionMode: opts.mode ?? "ask",
+    approveTool: (request) => {
+      requests.push(request);
+      const answer = opts.approve?.(request);
+      return answer === undefined ? true : (answer as boolean);
+    },
+  });
+  return { executor, auditPath, requests };
+}
+
+const ctxOf = (dir: string, extra: Partial<ToolContext> = {}): ToolContext => ({
+  cwd: dir, run: "r1", agent: "coder", env: { ...process.env }, secretEnvNames: ["OPENAI_API_KEY"], ...extra,
+});
+
+describe("config do shell no host (#474)", () => {
+  test("sandbox default continua docker; 'auto' é opt-in e 'false' continua desligando", () => {
+    const cfg = validateConfig(structuredClone(baseConfig));
+    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("docker");
+    expect(resolveRunCommandMode(undefined)).toBe("docker");
+    expect(resolveRunCommandMode(true)).toBe("docker");
+    expect(resolveRunCommandMode(false)).toBe("disabled");
+    expect(resolveRunCommandMode("auto")).toBe("auto");
+  });
+
+  test("'sandbox': 'auto' é aceito; valor fora do vocabulário é ConfigError", () => {
+    const raw = structuredClone(baseConfig) as Record<string, unknown>;
+    raw.tools = { run_command: { sandbox: "auto" } };
+    expect(validateConfig(raw).tools?.run_command?.sandbox).toBe("auto");
+    const bad = structuredClone(baseConfig) as Record<string, unknown>;
+    bad.tools = { run_command: { sandbox: "host" } };
+    expect(() => validateConfig(bad)).toThrow(ConfigError);
+  });
+
+  test("shell.default só aceita shell do vocabulário", () => {
+    const raw = structuredClone(baseConfig) as Record<string, unknown>;
+    raw.shell = { default: "pwsh" };
+    expect(validateConfig(raw).shell?.default).toBe("pwsh");
+    const bad = structuredClone(baseConfig) as Record<string, unknown>;
+    bad.shell = { default: "fish" };
+    expect(() => validateConfig(bad)).toThrow(ConfigError);
+  });
+
+  test("/shell grava shell.default pelo /config com validação do vocabulário", () => {
+    expect(parseConfigEditValue("shell.default", "cmd")).toBe("cmd");
+    expect(() => parseConfigEditValue("shell.default", "fish")).toThrow(ConfigError);
+  });
+
+  test("astro.config.example.json não ensina mais sandbox:false", () => {
+    const example = JSON.parse(readFileSync("astro.config.example.json", "utf8")) as Record<string, unknown>;
+    expect(JSON.stringify(example)).not.toContain('"sandbox": false');
+    expect((example.tools as { run_command: { sandbox: string } }).run_command.sandbox).toBe("auto");
+  });
+});
+
+describe("detecção e argv de shell do host (#474)", () => {
+  test("lista só os shells presentes, na ordem canônica", () => {
+    const present = new Set(["cmd", "bash"]);
+    const which = (name: string): string | null => (present.has(name) ? `C:/bin/${name}` : null);
+    expect(detectHostShells(which)).toEqual(["cmd", "bash"]);
+    expect(HOST_SHELLS).toContain("pwsh");
+  });
+
+  test("selectHostShell respeita o default configurado e falha fechado quando ausente", () => {
+    expect(selectHostShell(["powershell", "cmd"], "cmd")).toEqual({ kind: "shell", shell: "cmd" });
+    expect(selectHostShell(["cmd"], "bash")).toMatchObject({ kind: "error", code: "shell_not_available" });
+    expect(selectHostShell([], undefined)).toMatchObject({ kind: "error", code: "shell_none_available" });
+    // default por plataforma: Windows prefere pwsh, POSIX prefere sh via bash/zsh/sh
+    expect(selectHostShell(["cmd", "powershell"], undefined, "win32")).toEqual({ kind: "shell", shell: "powershell" });
+    expect(selectHostShell(["sh", "bash"], undefined, "linux")).toEqual({ kind: "shell", shell: "bash" });
+  });
+
+  test("argv do host passa o comando como argumento único do shell", () => {
+    expect(hostShellArgv("cmd", "echo a && echo b")).toEqual(["cmd.exe", "/d", "/s", "/c", "echo a && echo b"]);
+    expect(hostShellArgv("powershell", "Get-ChildItem")).toEqual([
+      "powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem",
+    ]);
+    expect(hostShellArgv("sh", "echo oi")).toEqual(["sh", "-c", "echo oi"]);
+  });
+});
+
+describe("run_command no host: opt-in, aprovado por comando (#474)", () => {
+  test("sandbox=true (default) segue no Docker e não spawna shell do host", async () => {
+    mock = installDockerSpawnMock(() => "docker-ok");
+    const mod = await isolatedRunCommand("host-regress-docker");
+    mod.configureRunCommand({ sandbox: true });
+    const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
+    expect(result.isError).toBeFalsy();
+    expect(result.output).toContain("docker-ok");
+    expect(mock.runCalls.length).toBeGreaterThan(0);
+    expect(mock.calls.every((cmd) => cmd[0] === "docker")).toBe(true);
+  });
+
+  test("sandbox=true sem Docker recusa e não cai no host", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("host-default-refuse");
+    mod.configureRunCommand({ sandbox: true });
+    const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("Docker");
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
+  });
+
+  test("sandbox='auto' com Docker usa o Docker (nada no host)", async () => {
+    mock = installDockerSpawnMock(() => "docker-ok");
+    const mod = await isolatedRunCommand("host-auto-docker");
+    mod.configureRunCommand({ mode: "auto" });
+    const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
+    expect(result.output).toContain("docker-ok");
+    expect(mock.calls.every((cmd) => cmd[0] === "docker")).toBe(true);
+  });
+
+  test("sandbox='auto' sem Docker roda no host depois da aprovação, com o comando no prompt", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "astro-host-ok\n" });
+    const mod = await isolatedRunCommand("host-auto-approve");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "ask" });
+    const dir = cwd();
+    const { executor, requests, auditPath } = await hostExecutor(mod, { cwd: dir });
+    const result = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo astro-host-ok" }),
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.output).toContain("astro-host-ok");
+    expect(requests).toHaveLength(1);
+    expect((requests[0] as { detail?: { kind: string; value: string } }).detail).toEqual({
+      kind: "command", value: "echo astro-host-ok",
+    });
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker").length).toBeGreaterThan(0);
+    const hostEvent = auditEvents(auditPath).find((event) => event.tipo === "host_shell.decision");
+    expect(hostEvent?.payload).toMatchObject({ decision: "allow", permissionMode: "ask" });
+    expect(JSON.stringify(hostEvent)).not.toContain("astro-host-ok");
+  });
+
+  test("negar a aprovação não executa nada e o audit registra a decisão sem o comando", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("host-auto-deny");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "ask" });
+    const dir = cwd();
+    const { executor, auditPath } = await hostExecutor(mod, { cwd: dir, approve: () => false });
+    const result = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo TOPSECRET-abc123" }),
+    });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("permissão negada");
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
+    const events = auditEvents(auditPath);
+    const decision = events.find((event) => event.tipo === "permission.decision");
+    expect(decision?.payload).toMatchObject({ name: "run_command", decision: "deny" });
+    expect(JSON.stringify(events)).not.toContain("TOPSECRET-abc123");
+  });
+
+  test("grant de sessão não pula a aprovação por comando no host", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const mod = await isolatedRunCommand("host-auto-session-grant");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "ask" });
+    const dir = cwd();
+    const { executor, requests } = await hostExecutor(mod, { cwd: dir, approve: () => "session" });
+    const call = () => executor.run(ctxOf(dir), {
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo dois" }),
+    });
+    await call();
+    await call();
+    expect(requests).toHaveLength(2);
+  });
+
+  test("bypass recusa o host sem confirmação explícita e executa com ela", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "bypass-ok\n" });
+    const mod = await isolatedRunCommand("host-bypass");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "bypass" });
+    const dir = cwd();
+    const { executor, auditPath } = await hostExecutor(mod, { cwd: dir, mode: "bypass" });
+    const denied = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo bypass-ok" }),
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.code).toBe("host_shell_confirmation_required");
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
+    const denyEvent = auditEvents(auditPath).find((event) => event.tipo === "host_shell.decision");
+    expect(denyEvent?.payload).toMatchObject({ decision: "deny", reason: "bypass_confirmation_required" });
+
+    const allowed = await executor.run(
+      ctxOf(dir, {
+        env: { ...process.env, [HOST_SHELL_BYPASS_CONFIRMATION_ENV]: "1" },
+      }),
+      { id: "c2", name: "run_command", arguments: JSON.stringify({ command: "echo bypass-ok" }) },
+    );
+    expect(allowed.isError).toBeFalsy();
+    expect(allowed.output).toContain("bypass-ok");
+  });
+
+  test("hard-block vence: comando que toca caminho protegido não chega ao host", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("host-hard-block");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "ask" });
+    const dir = cwd();
+    const { executor } = await hostExecutor(mod, { cwd: dir });
+    const result = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "cat ~/.astro/vault.json" }),
+    });
+    expect(result.isError).toBe(true);
+    expect(result.code).toBe("path_hard_blocked");
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
+  });
+
+  test("saída do host é redigida antes de voltar ao modelo", async () => {
+    const secret = "AKIAABCDEFGHIJKLMNOP";
+    mock = installNoDockerSpawnMock({ stdout: `token=${secret}\n` });
+    const mod = await isolatedRunCommand("host-redact");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "ask" });
+    const dir = cwd();
+    const { executor } = await hostExecutor(mod, { cwd: dir });
+    const result = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo token" }),
+    });
+    expect(result.output).not.toContain(secret);
+    expect(result.output).toContain("[REDACTED]");
+  });
+
+  test("env do host não herda nomes de segredo e o shell.default inválido falha fechado", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const mod = await isolatedRunCommand("host-shell-default");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "ask", shellDefault: "bash" });
+    const dir = cwd();
+    const { executor } = await hostExecutor(mod, { cwd: dir });
+    const result = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo ok" }),
+    });
+    // `bash` pode não existir no Windows: falha fechada em vez de trocar de shell em silêncio.
+    if (detectHostShells().includes("bash")) {
+      expect(result.isError).toBeFalsy();
+    } else {
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("shell_not_available");
+    }
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker").every((cmd) => !cmd.includes("-c") || cmd[0] === "bash")).toBe(true);
+  });
+});
+
+describe("config tools.run_command.sandbox com 'auto' (#474)", () => {
+  test("runCommandTool de run() continua recusando sandbox=false", async () => {
+    const mod = await isolatedRunCommand("host-disabled");
+    mod.configureRunCommand({ sandbox: false });
+    const result: ToolResult = await mod.runCommandTool.execute({ command: "echo x" }, ctxOf(cwd()));
+    expect(result.code).toBe("sandbox_required_for_shell");
+  });
+});

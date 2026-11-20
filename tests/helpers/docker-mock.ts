@@ -105,6 +105,43 @@ export function installDockerSpawnMock(run?: (argv: string[]) => DockerRunReply)
   } };
 }
 
+/**
+ * Mock de host sem Docker (#474): `docker info` falha (daemon ausente) e
+ * qualquer outro comando é o shell do host, respondido por `reply` e registrado
+ * em `calls`. Nada executa de verdade.
+ */
+export function installNoDockerSpawnMock(reply: DockerRunReply = {}): DockerMock {
+  const origSpawn = Bun.spawn as unknown as (arg: unknown, opts?: unknown) => unknown;
+  const origSpawnSync = Bun.spawnSync as unknown as (arg: unknown, opts?: unknown) => unknown;
+  const calls: string[][] = [];
+  const runCalls: string[][] = [];
+  const r = typeof reply === "string"
+    ? { code: 0, stdout: reply, stderr: "", hang: false }
+    : { code: reply.code ?? 0, stdout: reply.stdout ?? "", stderr: reply.stderr ?? "", hang: reply.hang === true };
+
+  const spawnMock = (arg: unknown): unknown => {
+    const { cmd } = cmdOf(arg);
+    calls.push(cmd);
+    if (cmd[0] === "docker") {
+      if (cmd.includes("run")) runCalls.push(cmd);
+      return fakeProc({ code: 1, stdout: "", stderr: "Cannot connect to the Docker daemon" });
+    }
+    return fakeProc(r);
+  };
+  const spawnSyncMock = (arg: unknown): unknown => {
+    const { cmd } = cmdOf(arg);
+    calls.push(cmd);
+    return { exitCode: 1, success: false, pid: 424_242, stdout: new Uint8Array(0), stderr: new Uint8Array(0) };
+  };
+
+  (Bun as { spawn: unknown }).spawn = spawnMock;
+  (Bun as { spawnSync: unknown }).spawnSync = spawnSyncMock;
+  return { calls, runCalls, restore() {
+    (Bun as { spawn: unknown }).spawn = origSpawn;
+    (Bun as { spawnSync: unknown }).spawnSync = origSpawnSync;
+  } };
+}
+
 /** Módulo fresco de run-command (query-string): estado do sandbox e o cache do probe ficam isolados. */
 export async function isolatedRunCommand(tag: string): Promise<RunCommandModule> {
   return (await import("../../src/tools/run-command.ts?iso=" + encodeURIComponent(tag))) as RunCommandModule;
