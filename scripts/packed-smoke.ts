@@ -28,6 +28,7 @@ import { saveHomeState, type AstroHomeState } from "../src/home-state";
 import { resolveBun } from "../src/launcher";
 import { redactSecrets } from "../src/sanitize-external";
 import { canonicalFolder } from "../src/trust";
+import { TERMS_VERSION } from "../src/terms";
 import {
   installedAstroBin,
   readPackageMeta,
@@ -271,9 +272,18 @@ export function smokeConfig(input: number): Record<string, unknown> {
   };
 }
 
-/** `$ASTRO_HOME/state.json`: o diretório do smoke já confiável (sem prompt). */
+/**
+ * `$ASTRO_HOME/state.json`: diretório do smoke já confiável (sem prompt) e
+ * termos já aceitos na versão corrente. Sem o aceite, o portão de #479 mostra
+ * a tela dos termos antes do primeiro frame e o smoke para ali.
+ */
 export function trustState(folder: string): AstroHomeState {
-  return { version: 1, trust: { folders: [folder] }, migrations: { providers: true, trust: true } };
+  return {
+    version: 1,
+    trust: { folders: [folder] },
+    migrations: { providers: true, trust: true },
+    terms: { version: TERMS_VERSION, acceptedAt: new Date().toISOString() },
+  };
 }
 
 /**

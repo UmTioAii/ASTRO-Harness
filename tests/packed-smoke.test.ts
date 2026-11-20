@@ -46,6 +46,7 @@ import {
 } from "../scripts/packed-smoke";
 import { loadHomeState, saveHomeState } from "../src/home-state";
 import { TrustedFolders, canonicalFolder } from "../src/trust";
+import { TERMS_VERSION } from "../src/terms";
 
 const version = "0.1.0-alpha.4";
 
@@ -131,6 +132,9 @@ test("trustState grava a pasta do projeto no estado global isolado", () => {
     version: 1,
     trust: { folders: ["C:\\tmp\\astro-packed-smoke"] },
     migrations: { providers: true, trust: true },
+    // O portão dos termos (#479) roda antes do primeiro frame: sem semear o
+    // aceite, a TUI para na tela dos termos e o smoke nunca desenha o header.
+    terms: { version: TERMS_VERSION, acceptedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) },
   });
 });
 
