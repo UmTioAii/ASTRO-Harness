@@ -496,6 +496,11 @@ describe("writeConfigFileAtomic (#495)", () => {
     expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   };
 
+  // O `inspectWindowsAcl` sobe o PowerShell 5.1, e o runner windows-latest paga
+  // 20–50 s no primeiro spawn do processo (scan de antivírus); o orçamento
+  // default de 20 s do CI mata o filho e a leitura volta `undefined`.
+  const ACL_READ_BUDGET_MS = 120_000;
+
   test("grava conteúdo via tmp+rename e destino privado (0600 ou DACL owner-only)", () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-config-495-"));
     const path = join(dir, "astro.config.json");
@@ -511,7 +516,7 @@ describe("writeConfigFileAtomic (#495)", () => {
       expect(statSync(path).mode & 0o077).toBe(0);
     }
     noTmp(dir);
-  });
+  }, ACL_READ_BUDGET_MS);
 
   // O runner windows-latest levava 20–40 s por spawn do PowerShell 5.1 e o
   // `Set-Acl` com `FileSecurity` falhava lá; um `SystemRoot` sem powershell.exe
@@ -538,7 +543,7 @@ describe("writeConfigFileAtomic (#495)", () => {
     expect(acl).toBeDefined();
     expect(windowsAclIsPrivate(acl!.sddl, acl!.userSid)).toBe(true);
     noTmp(dir);
-  });
+  }, ACL_READ_BUDGET_MS);
 
   // Symlink de arquivo exige privilégio no Windows; a recusa é coberta no POSIX.
   test.skipIf(process.platform === "win32")("recusa destino symlink sem tocar no alvo e sem tmp (#495)", () => {
