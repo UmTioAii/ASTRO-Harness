@@ -45,7 +45,7 @@ const REDACT_VAULT_SECRET = /("secret"\s*:\s*")((?:[^"\\]|\\.)*)(")/gi;
 
 // Userinfo de URL (#536): `git clone https://user:senha@host` — a senha sai, o
 // usuário e o host ficam. Sem senha (`ssh://git@host`) não casa.
-const REDACT_URL_USERINFO = /(\/\/[^\s/:@]+:)([^\s/@]+)(@)/g;
+const REDACT_URL_USERINFO = /(\/\/[^\s/:@]*:)([^\s/@]+)(@)/g;
 
 // JSON `"apiKey":"..."`, env `TOKEN=...`/`x-api-key: ...` (aspas normais ou escapadas)
 const SECRET_KEY = "(?:[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?key|secret|password|token(?!s))[A-Za-z0-9_-]*)";

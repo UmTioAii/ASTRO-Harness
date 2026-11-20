@@ -115,6 +115,10 @@ test("redactSecrets redige a senha de userinfo de URL e mantém usuário/host (#
   // userinfo sem senha (ssh/git) continua legível
   expect(redactSecrets("ssh://git@example.test/repo")).toBe("ssh://git@example.test/repo");
   expect(redactSecrets("https://user@example.test/repo")).toBe("https://user@example.test/repo");
+  // usuário vazio: forma canônica de Redis/Postgres (`redis://:senha@host`)
+  const redis = redactSecrets("redis-cli -u redis://:s3cr3tpw@cache.test:6379");
+  expect(redis).not.toContain("s3cr3tpw");
+  expect(redis).toContain("redis://:[REDACTED]@cache.test:6379");
 });
 
 test("sanitizePromptText remove C1 (CSI), bidi, ZWSP e surrogate solto (#536)", () => {
