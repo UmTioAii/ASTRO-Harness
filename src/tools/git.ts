@@ -1,4 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { createPathClassifier } from "../path-class";
+import { PATH_HARD_BLOCKED, denyDisplayPath, resolveArtifactRoot, resolveAstroHome } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
 import { resolveWithin } from "./paths";
 import { sanitizedEnv } from "./run-command";
@@ -16,7 +18,7 @@ const COMMIT_SHA = /^[0-9a-f]{40}$/i;
  * programa de diff: descartadas antes de spawnar o git (sem
  * `--no-index`, sem diff externo, sem rede).
  */
-const DROP_ENV = /^(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_NAMESPACE|GIT_CONFIG|GIT_CONFIG_SYSTEM|GIT_CONFIG_COUNT|GIT_CONFIG_(KEY|VALUE)_\d+|GIT_EXTERNAL_DIFF|GIT_DIFF_OPTS|GIT_PAGER|GIT_SSH_COMMAND)$/i;
+const DROP_ENV = /^(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_NAMESPACE|GIT_COMMON_DIR|GIT_CONFIG|GIT_CONFIG_SYSTEM|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS|GIT_CONFIG_(KEY|VALUE)_\d+|GIT_EXTERNAL_DIFF|GIT_DIFF_OPTS|GIT_PAGER|GIT_SSH_COMMAND)$/i;
 
 /** Erro tipado da tool: vira `ToolResult` com `code`, nunca throw para o executor. */
 class GitToolError extends Error {
@@ -59,6 +61,7 @@ export function gitEnv(ctx: ToolContext): Record<string, string> {
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_OPTIONAL_LOCKS = "0";
   env.GIT_NO_LAZY_FETCH = "1";
+  env.GIT_LITERAL_PATHSPECS = "1";
   env.GIT_PAGER = "cat";
   env.GIT_ASKPASS = "";
   env.SSH_ASKPASS = "";
@@ -75,7 +78,9 @@ async function runGit(args: readonly string[], ctx: ToolContext, timeoutMs: numb
   let proc: ReturnType<typeof Bun.spawn>;
   try {
     proc = Bun.spawn({
-      cmd: ["git", ...args],
+      // `--literal-pathspecs` é defesa em profundidade contra magic pathspec:
+      // `:(top)`, `:/`, `:(exclude)` e `:(glob)` deixam de ser interpretados.
+      cmd: ["git", "--literal-pathspecs", ...args],
       cwd: ctx.cwd,
       stdin: "ignore",
       stdout: "pipe",
@@ -139,6 +144,8 @@ function relativePath(cwd: string, raw: unknown): string {
   if (typeof raw !== "string") throw new ToolError("path inválido: esperado string");
   if (raw.includes("\0")) throw new ToolError("path inválido: contém byte nulo");
   if (raw.startsWith("-")) throw new ToolError(`path inválido: não pode começar com "-": ${raw}`);
+  // Magic pathspec (`:(top)`, `:/`, `:(exclude)`, `:(glob)`) escaparia do cwd.
+  if (raw.startsWith(":")) throw new ToolError(`path inválido: pathspec magic não é aceito: ${raw}`);
   if (isAbsolute(raw)) throw new ToolError(`path inválido: use caminho relativo ao cwd: ${raw}`);
   const target = resolveWithin(cwd, raw);
   const value = relative(resolve(cwd), target);
@@ -221,20 +228,110 @@ function parseStatus(stdout: string, prefix: string): StatusEntry[] {
 }
 
 /**
- * Envelope do diff: cabeçalho estável com `truncated`, corpo redigido (I-03)
- * e marcador explícito quando o cap corta o conteúdo.
+ * Parse do `git diff --name-status -z`: `status\0path\0`, e em rename/copy
+ * `status\0old\0new\0`. Devolve todos os paths para a classificação de segurança.
+ */
+function parseNameStatus(stdout: string): string[] {
+  const parts = stdout.split("\0");
+  const paths: string[] = [];
+  for (let i = 0; i < parts.length;) {
+    const status = parts[i++];
+    if (status === undefined || status.length === 0) continue;
+    const first = parts[i++];
+    if (first === undefined) break;
+    paths.push(first);
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const second = parts[i++];
+      if (second !== undefined) paths.push(second);
+    }
+  }
+  return paths;
+}
+
+/**
+ * ADR-0027: nenhum tool lê conteúdo hard-block, nem via diff. Cada path
+ * alterado é classificado sobre o realpath (junction/symlink incluso); um
+ * único hard-block recusa o diff inteiro antes de produzir conteúdo.
+ */
+function hardBlockedPath(paths: readonly string[], repoRoot: string, ctx: ToolContext): string | undefined {
+  if (paths.length === 0) return undefined;
+  const env = ctx.env ?? process.env;
+  const classify = createPathClassifier({
+    cwd: ctx.cwd,
+    astroHome: resolveAstroHome(env),
+    protectedPaths: ctx.protectedPaths,
+    artifactRoot: resolveArtifactRoot(env),
+  });
+  for (const path of paths) {
+    const absolute = resolve(repoRoot, path);
+    if (classify(absolute) === "hard-block") return denyDisplayPath(ctx.cwd, absolute);
+  }
+  return undefined;
+}
+
+/**
+ * Envelope do status com cap em bytes (não só em número de entradas): 500
+ * paths longos não podem virar 100k de saída. `total`/`truncated` preservam a
+ * contagem real quando o corte acontece.
+ */
+function boundedStatus(entries: StatusEntry[], total: number): string {
+  const serialize = (kept: StatusEntry[]): string => {
+    const result: Record<string, unknown> = { clean: total === 0, entries: kept };
+    if (total > kept.length) {
+      result.total = total;
+      result.truncated = true;
+    }
+    return JSON.stringify(result);
+  };
+  const budget = MAX_OUTPUT - 128;
+  const kept: StatusEntry[] = [];
+  let used = 0;
+  for (const entry of entries.slice(0, MAX_STATUS_ENTRIES)) {
+    const cost = Buffer.byteLength(JSON.stringify(entry), "utf8") + 1;
+    if (used + cost > budget) break;
+    kept.push(entry);
+    used += cost;
+  }
+  let output = serialize(kept);
+  while (kept.length > 0 && Buffer.byteLength(output, "utf8") > MAX_OUTPUT) {
+    kept.pop();
+    output = serialize(kept);
+  }
+  return output;
+}
+
+/** Conteúdo binário (NUL/controle) nunca vai para o contexto: vira `(binário)`. */
+function sanitizeBinary(body: string): string {
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(body)) return "(binário)";
+  return body.replace(/^Binary files .* differ\r?$/gm, "(binário)");
+}
+
+/** Envelope estruturado do diff; `truncated` é campo, não texto de cabeçalho. */
+function diffEnvelope(staged: boolean, base: string | undefined, truncated: boolean, diff: string): string {
+  return JSON.stringify({ staged, base: base ?? null, truncated, diff });
+}
+
+/**
+ * Diff em envelope JSON e cap medido em bytes (o corpo pode crescer com o
+ * escape do JSON). Acima do cap, corta com marcador explícito.
  */
 function boundedDiff(raw: string, staged: boolean, base: string | undefined): string {
-  const body = redactSecrets(raw).replace(/\r\n/g, "\n");
-  const header = (truncated: boolean): string =>
-    `git_diff staged=${staged} base=${base ?? "none"} truncated=${truncated}`;
-  if (body.length === 0) return `${header(false)}\n(sem diferenças)`;
-  const complete = `${header(false)}\n${body}`;
-  if (complete.length <= MAX_OUTPUT) return complete;
+  const body = sanitizeBinary(redactSecrets(raw).replace(/\r\n/g, "\n"));
+  const complete = diffEnvelope(staged, base, false, body);
+  if (Buffer.byteLength(complete, "utf8") <= MAX_OUTPUT) return complete;
 
-  const marker = `[... diff truncado (truncated: true): ${body.length} caracteres no total, exibindo o início ...]`;
-  const budget = Math.max(0, MAX_OUTPUT - header(true).length - marker.length - 2);
-  return `${header(true)}\n${body.slice(0, budget)}\n${marker}`;
+  const marker = (omitted: number): string => `\n[... diff truncado: ${omitted} caracteres omitidos ...]`;
+  const build = (keep: number): string =>
+    diffEnvelope(staged, base, true, body.slice(0, keep) + marker(body.length - keep));
+  // Maior prefixo cujo envelope ainda cabe no cap (escape do JSON incluído).
+  let low = 0;
+  let high = body.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(build(middle), "utf8") <= MAX_OUTPUT) low = middle;
+    else high = middle - 1;
+  }
+  return build(low);
 }
 
 /** Estado estruturado do repositório: entradas compactas e confinadas ao cwd. */
@@ -287,13 +384,7 @@ export const gitStatusTool: Tool = {
       if (failed !== undefined) return failed;
 
       const total = parseStatus(outcome.stdout, prefix);
-      const entries = total.slice(0, MAX_STATUS_ENTRIES);
-      const result: Record<string, unknown> = { clean: total.length === 0, entries };
-      if (total.length > entries.length) {
-        result.total = total.length;
-        result.truncated = true;
-      }
-      return { output: JSON.stringify(result) };
+      return { output: boundedStatus(total, total.length) };
     } catch (error) {
       if (error instanceof GitToolError) {
         return { output: error.message, isError: true, code: error.code };
@@ -349,11 +440,41 @@ export const gitDiffTool: Tool = {
       const base = commitBase(raw);
       const staged = raw.staged === true;
       const path = relativePath(ctx.cwd, raw.path);
+      const timeout = gitDiffTool.manifest.timeoutMs;
+      // Raiz do repo para converter os paths do diff (repo-root) em absolutos.
+      const rootOutcome = await runGit(
+        ["--no-pager", "--no-optional-locks", "rev-parse", "--show-toplevel"],
+        ctx,
+        timeout,
+      );
+      const rootFailed = gitFailure(rootOutcome);
+      if (rootFailed !== undefined) return rootFailed;
+      const repoRoot = rootOutcome.stdout.trim();
+
+      // Enumera os paths alterados e barra hard-block ANTES de gerar conteúdo.
+      const listArgs = [
+        "--no-pager", "--no-optional-locks", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--name-status", "-z",
+      ];
+      if (staged) listArgs.push("--cached");
+      if (base !== undefined) listArgs.push(base);
+      listArgs.push("--", path);
+      const changed = await runGit(listArgs, ctx, timeout);
+      const changedFailed = gitFailure(changed);
+      if (changedFailed !== undefined) return changedFailed;
+      const blocked = hardBlockedPath(parseNameStatus(changed.stdout), repoRoot, ctx);
+      if (blocked !== undefined) {
+        return {
+          output: `diff negado (${PATH_HARD_BLOCKED}): "${blocked}" — conteúdo hard-block não é devolvido (ADR-0027)`,
+          isError: true,
+          code: PATH_HARD_BLOCKED,
+        };
+      }
+
       const args = ["--no-pager", "--no-optional-locks", "diff", "--no-color", "--no-ext-diff", "--no-textconv"];
       if (staged) args.push("--cached");
       if (base !== undefined) args.push(base);
       args.push("--", path);
-      const outcome = await runGit(args, ctx, gitDiffTool.manifest.timeoutMs);
+      const outcome = await runGit(args, ctx, timeout);
       const failed = gitFailure(outcome);
       if (failed !== undefined) return failed;
       return { output: boundedDiff(outcome.stdout, staged, base) };
