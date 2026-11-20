@@ -24,6 +24,7 @@ export type ReplCommand =
   | { kind: "init" }
   | { kind: "usage" }
   | { kind: "log"; arg?: string }
+  | { kind: "memory"; pathsOnly?: boolean }
   | { kind: "theme"; theme?: string }
   | { kind: "attach"; path?: string; range?: string }
   | { kind: "paste" }
@@ -55,6 +56,7 @@ export const HELP_TEXT = [
   "  /init           cria AGENTS.md no cwd se ainda não existir",
   "  /usage          uso da sessão (turnos, tokens, custo) e budget, se houver",
   "  /log [n]        log da sessão em memória (na TUI); com n, só as últimas n linhas",
+  "  /memory [path]  memória injetada (blocos, arquivos e orçamento); com path, só os caminhos",
   "  /theme [tema]   lista ou troca o tema da TUI (dark, light, contrast; alias /themes)",
   "  /attach <path> [ini:fim]  anexa arquivo ou diretório (fora do cwd pede confirmação)",
   "  /paste          anexa o texto do clipboard",
@@ -66,7 +68,7 @@ export const HELP_TEXT = [
 /** Nomes de comando (sem a barra), com aliases, na ordem do /help. */
 export const COMMAND_NAMES = [
   "help", "model", "mode", "config", "providers", "provider", "session", "details", "compact", "summarize",
-  "save", "sessions", "resume", "export", "init", "usage", "log", "theme", "attach", "paste", "detach",
+  "save", "sessions", "resume", "export", "init", "usage", "log", "memory", "theme", "attach", "paste", "detach",
   "clear", "new", "exit", "quit", "q",
 ] as const;
 
@@ -229,6 +231,8 @@ export function parseCommand(line: string): ReplCommand {
       return { kind: "usage" };
     case "log":
       return { kind: "log", ...(arg === "" ? {} : { arg }) };
+    case "memory":
+      return arg.toLowerCase() === "path" ? { kind: "memory", pathsOnly: true } : { kind: "memory" };
     case "theme":
     case "themes":
       return { kind: "theme", ...(arg === "" ? {} : { theme: arg.toLowerCase() }) };

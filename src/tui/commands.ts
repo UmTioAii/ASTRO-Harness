@@ -8,6 +8,7 @@ import { redactSecrets } from "../sanitize-external";
 import { exportSession } from "../chat/export";
 import { initAgents } from "../chat/init";
 import { usageLines } from "../chat/usage";
+import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryReport } from "../memory";
 import { THEMES, isTheme, type Theme } from "./theme";
 import {
   EDITABLE_CONFIG_KEYS,
@@ -158,6 +159,14 @@ export async function runCommand(
     case "usage": {
       try {
         return { entries: [{ kind: "info", text: usageLines(session.snapshot(), session.budgetStatus?.()).join("\n") }] };
+      } catch (error) {
+        return { entries: [{ kind: "error", text: `erro: ${messageOf(error)}` }] };
+      }
+    }
+    case "memory": {
+      try {
+        const snapshot = loadMemory({ cwd, maxChars: session.memoryMaxChars?.() ?? DEFAULT_MEMORY_MAX_CHARS });
+        return { entries: [{ kind: "info", text: memoryReport(snapshot, command.pathsOnly === true ? { pathsOnly: true } : {}) }] };
       } catch (error) {
         return { entries: [{ kind: "error", text: `erro: ${messageOf(error)}` }] };
       }

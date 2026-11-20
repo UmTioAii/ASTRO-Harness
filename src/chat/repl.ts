@@ -27,6 +27,7 @@ import { initAgents } from "./init";
 import { isFatalSessionError } from "./session-errors";
 import { redactSecrets } from "../sanitize-external";
 import { usageLines } from "./usage";
+import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryReport } from "../memory";
 import type { BudgetStatus } from "../budget";
 import type { QuotaStatus } from "../quota";
 
@@ -76,6 +77,8 @@ export interface ChatSession {
   trustedFolders?(): string[];
   /** Status do budget derivado do ledger (`/usage`, #63); ausente sem budget na config. */
   budgetStatus?(): BudgetStatus | undefined;
+  /** Teto de memória injetada (`memory.maxChars`, #532); ausente usa o default. */
+  memoryMaxChars?(): number;
   /** Status da quota do domínio ativo (#64, F6-3); ausente sem limite declarado. */
   quotaStatus?(): QuotaStatus | undefined;
   /** Health agregado, sob demanda (status bar da TUI). */
@@ -539,6 +542,18 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
           io.write(usageLines(session.snapshot(), session.budgetStatus?.()).join("\n"));
         } catch (error) {
           // ledger corrompido não derruba o REPL: imprime erro redacted e segue
+          io.write(paint(`erro: ${messageOf(error)}`, RED, style));
+        }
+        continue;
+      }
+      if (command.kind === "memory") {
+        try {
+          const snapshot = loadMemory({
+            cwd,
+            maxChars: session.memoryMaxChars?.() ?? DEFAULT_MEMORY_MAX_CHARS,
+          });
+          io.write(memoryReport(snapshot, command.pathsOnly === true ? { pathsOnly: true } : {}));
+        } catch (error) {
           io.write(paint(`erro: ${messageOf(error)}`, RED, style));
         }
         continue;

@@ -31,6 +31,7 @@ import { Ledger } from "../ledger";
 import { isPermissionMode, resolveAstroHome, resolvePermissionMode, type PermissionMode } from "../permissions";
 import { canonicalize } from "../tools/paths";
 import { readAgentsMd } from "../spawn";
+import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryPrompt } from "../memory";
 import { forceCompaction, recordCompactionSuccess } from "../compaction/breaker";
 import { assertWithinQuota, quotaStatus, type QuotaStatus } from "../quota";
 import { DEFAULT_SYSTEM_PROMPT, safePrompt } from "../core/session";
@@ -237,7 +238,16 @@ export class AgentSession {
     });
     const baseSystemPrompt = opts.systemPrompt ?? this.#config.agent.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
     // CMP-8: AGENTS.md entra no system do chat/TUI e sobrevive à compactação.
-    const projectInstructions = readAgentsMd(this.#cwd);
+    // #532: a memória segue a mesma regra - lida no início da sessão, global
+    // antes de project, já redigida e limitada por `memory.maxChars`.
+    const memorySection = memoryPrompt(loadMemory({
+      cwd: this.#cwd,
+      ...(this.#env === undefined ? {} : { env: this.#env }),
+      maxChars: this.memoryMaxChars(),
+    }));
+    const projectInstructions = [readAgentsMd(this.#cwd), memorySection]
+      .filter((part): part is string => part !== undefined && part.length > 0)
+      .join("\n\n");
     this.#systemPrompt = projectInstructions.length === 0
       ? baseSystemPrompt
       : `${baseSystemPrompt}\n\n${projectInstructions}`;
@@ -360,6 +370,11 @@ export class AgentSession {
   /** Resumo da config carregada para `/config` (#273); o modo é o ativo da sessão. */
   configSummary(): ConfigSummary {
     return configSummaryOf(this.#config, this.#configPath, this.#permissionMode);
+  }
+
+  /** Teto de memória injetada (`/memory`, #532); default quando a config omite. */
+  memoryMaxChars(): number {
+    return this.#config.memory?.maxChars ?? DEFAULT_MEMORY_MAX_CHARS;
   }
 
   /** `attachments.directory.showHidden` da config efetiva, lido por `/attach <dir>` (#392). */

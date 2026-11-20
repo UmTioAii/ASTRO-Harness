@@ -89,20 +89,20 @@ describe("mem\u00f3ria: inje\u00e7\u00e3o no system prompt (#532)", () => {
 
   test("cap trunca na fronteira de se\u00e7\u00e3o e audita memory.truncated com bytes", () => {
     const { cwd, env } = project();
-    const big = "b".repeat(400);
+    const big = "z".repeat(400);
     writeProjectMemory(cwd, `## Curta\n\naaaa\n\n## Longa\n\n${big}\n`);
     const auditPath = join(cwd, "audit.jsonl");
     const audit = new Auditor(auditPath);
 
-    const snapshot = loadMemory({ cwd, env, maxChars: 150, audit, run: "r1", agent: "default" });
+    const snapshot = loadMemory({ cwd, env, maxChars: 400, audit, run: "r1", agent: "default" });
     const prompt = memoryPrompt(snapshot)!;
 
     expect(prompt).toContain("## Curta");
     expect(prompt).toContain("aaaa");
     expect(prompt).not.toContain("## Longa");
-    expect(prompt).not.toContain("bbbb");
+    expect(prompt).not.toContain("zzzz");
     expect(prompt).toMatch(MARKER);
-    expect(prompt.length).toBeLessThanOrEqual(150);
+    expect(prompt.length).toBeLessThanOrEqual(400);
     expect(snapshot.remainingChars).toBeGreaterThanOrEqual(0);
     expect(snapshot.usedChars).toBe(prompt.length);
 
@@ -110,7 +110,7 @@ describe("mem\u00f3ria: inje\u00e7\u00e3o no system prompt (#532)", () => {
     expect(truncated).toHaveLength(1);
     expect(truncated[0]!.payload.scope).toBe("project");
     expect(truncated[0]!.payload.bytes as number).toBeGreaterThan(400);
-    expect(truncated[0]!.payload.maxChars).toBe(150);
+    expect(truncated[0]!.payload.maxChars).toBe(400);
   });
 
   test("linha com forma de segredo nunca chega ao prompt", () => {

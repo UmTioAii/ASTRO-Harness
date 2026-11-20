@@ -18,6 +18,7 @@ import { outboundUrlProblem, urlProblem } from "../url-safety";
 import { CAPACITY_TAGS, ROLE_TAGS, isKnownTag } from "../tags";
 import { isJudgeMode, type JudgeMode } from "../judge";
 import { checkpointIdProblem } from "../loop-guard";
+import { DEFAULT_MEMORY_MAX_CHARS } from "../memory";
 
 /** Configuração comum a todos os providers. */
 interface ProviderConfigBase {
@@ -410,6 +411,11 @@ export const DEFAULT_PATHS: Readonly<PathsConfig> = {
   audit: ".astro/audit.jsonl",
 };
 
+/** Memória persistida (#532): teto de caracteres injetados no system prompt. */
+export interface MemoryConfig {
+  maxChars: number;
+}
+
 export interface AstroConfig {
   /** Preset (#515): `simple` fixa 500 passos/turnos; `control` expõe os knobs. */
   preset: Preset;
@@ -458,6 +464,8 @@ export interface AstroConfig {
   compaction?: CompactionConfig;
   /** Ferramenta web_search (#57): backend, env da chave e resultados default. */
   webSearch?: WebSearchConfig;
+  /** Memória persistida (#532): `maxChars` limita o que entra no system prompt. */
+  memory?: MemoryConfig;
   paths: PathsConfig;
 }
 
@@ -1611,6 +1619,23 @@ function validateCompaction(value: unknown): CompactionConfig {
 }
 
 /**
+ * Memória (#532): `memory.maxChars` inteiro positivo; ausente mantém o default
+ * do loader (DEFAULT_MEMORY_MAX_CHARS), então a config não congela o número.
+ */
+function validateMemory(value: unknown): MemoryConfig {
+  if (!isPlainObject(value)) fail('config inválida: "memory" deve ser um objeto');
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (key !== "maxChars") fail(`config inválida: "memory.${key}" desconhecido`);
+  }
+  return {
+    maxChars: raw.maxChars === undefined
+      ? DEFAULT_MEMORY_MAX_CHARS
+      : expectPositiveInteger(raw.maxChars, "memory.maxChars"),
+  };
+}
+
+/**
  * Valida `webSearch` (#57): a chave é sempre um NOME de variável de ambiente
  * (I-03); `custom` exige baseUrl. Default de resultados 5, teto 10.
  */
@@ -1799,13 +1824,16 @@ export function validateConfig(raw: unknown): AstroConfig {
   // web_search (#57): ausente = tool não registrada
   const webSearch = root.webSearch === undefined ? undefined : validateWebSearch(root.webSearch);
 
+  // Memória (#532): ausente = default (8000 caracteres)
+  const memory = root.memory === undefined ? undefined : validateMemory(root.memory);
+
   const paths = validatePaths(root.paths);
 
   // Segurança (ADR-0027, #391 slice 3b): ausente = sem seção `security`
   const security = root.security === undefined ? undefined : validateSecurity(root.security);
   const effort = root.effort === undefined ? undefined : validateEffort(root.effort);
 
-  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
 }
 
 /** Lê o JSON cru de um config, sem validar (o merge por camadas vem antes). */
