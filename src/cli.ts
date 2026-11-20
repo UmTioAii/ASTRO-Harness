@@ -45,6 +45,7 @@ import { createInterface } from "node:readline";
 import type { SwapApprover } from "./approval";
 import type { BudgetChoice, BudgetDecider, BudgetStatus } from "./budget";
 import { trustChoice, trustPrompt, type TrustAsk } from "./trust";
+import { ensureTermsAccepted, ttyTermsAsk, TERMS_UNATTENDED_NOTICE } from "./terms";
 import { continueTask, findCheckpointAgents, loadCheckpoint, type NoProgressDecider } from "./loop-guard";
 
 /** Aprovação interativa de troca (F-19); sem TTY retorna undefined (runtime nega/pending). */
@@ -1413,6 +1414,14 @@ async function main(argv: string[]): Promise<number> {
     let sessionApi: import("./chat/session-api").SessionApi | undefined;
     try {
       const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+      // #479: termos de uso antes de abrir a sessão. Recusa sai sem gravar nada;
+      // sem TTY (stdin em pipe, CI) segue com um aviso e sem registrar aceite.
+      const terms = await ensureTermsAccepted({ ask: ttyTermsAsk() });
+      if (terms.kind === "declined") {
+        console.error("termos de uso não aceitos — saindo sem gravar nada");
+        return 1;
+      }
+      if (terms.kind === "unattended") console.error(`aviso: ${TERMS_UNATTENDED_NOTICE}`);
       const configPath = resolve(o.configPath);
       const project = loadProjectConfig(configPath, { env: process.env });
       const manager = new ProfileManager({

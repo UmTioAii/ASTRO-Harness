@@ -6,6 +6,7 @@ import { ProfileManager } from "../providers/profile-manager";
 import { NoProviderError, NO_PROVIDER_MESSAGE, loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { ensureFirstRunConfig } from "../chat/init";
+import { ensureTermsAccepted, ttyTermsAsk } from "../terms";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
 import { createSecretHandlers } from "./vault-secret";
@@ -13,7 +14,7 @@ import { createApprovalBridge } from "./approvals";
 import { createShellRunner, type ShellRunner } from "./shell";
 import { getThemeColors, loadTuiConfig } from "./theme";
 import { projectDataDir } from "../home-layout";
-import { astroHomePath } from "../astro-home";
+import { astroHomePath, statePath } from "../astro-home";
 
 export interface RunTuiOptions {
   configPath: string;
@@ -173,6 +174,12 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
     return 1;
   }
   try {
+    // #479: termos de uso antes de qualquer escrita (config, sessão, estado).
+    const terms = await ensureTermsAccepted({ path: statePath(opts.env ?? process.env), ask: ttyTermsAsk() });
+    if (terms.kind === "declined") {
+      console.error("termos de uso não aceitos — saindo sem gravar nada");
+      return 1;
+    }
     const [{ render }, { AgentSession }, { openSessionApi }, { TuiApp }] = await Promise.all([
       import("ink"),
       import("../chat/agent-session"),

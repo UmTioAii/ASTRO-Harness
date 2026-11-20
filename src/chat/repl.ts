@@ -28,6 +28,7 @@ import { isFatalSessionError } from "./session-errors";
 import { redactSecrets } from "../sanitize-external";
 import { usageLines } from "./usage";
 import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryReport } from "../memory";
+import { formatTerms, loadTermsAcceptance } from "../terms";
 import { detectHostShells } from "../tools/host-shell";
 import type { BudgetStatus } from "../budget";
 import type { QuotaStatus } from "../quota";
@@ -580,6 +581,10 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         } catch (error) {
           io.write(paint(`erro: ${messageOf(error)}`, RED, style));
         }
+        continue;
+      }
+      if (command.kind === "terms") {
+        io.write(formatTerms(loadTermsAcceptance()));
         continue;
       }
       if (command.kind === "log") {

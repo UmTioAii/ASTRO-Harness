@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Auditor } from "../src/audit";
 import { SessionApi } from "../src/chat/session-api";
 import { projectDataDir } from "../src/home-layout";
+import { TERMS_UNATTENDED_NOTICE } from "../src/terms";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -34,7 +35,8 @@ test("bun src/cli.ts chat roda um turno e encerra com /exit", async () => {
     const exit = await proc.exited;
     const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();
-    expect(stderr).toBe("");
+    // #479: sem TTY o chat não pergunta os termos; só avisa, sem gravar o aceite.
+    expect(stderr.split("\n").filter((line) => line !== "" && line !== `aviso: ${TERMS_UNATTENDED_NOTICE}`)).toEqual([]);
     expect(exit).toBe(0);
     expect(stdout).toContain("astro chat");
     expect(stdout).toContain("ok do mock");

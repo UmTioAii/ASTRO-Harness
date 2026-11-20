@@ -48,6 +48,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | `shell.default` | camada 3 | lê | `/shell <shell> confirm` grava | `/shell <shell> confirm` grava | shell do fallback host no `auto` (ADR-0031); só vocabulário de `HOST_SHELLS` e só shell presente na máquina (#474) |
 | `permissions.approvalTimeoutMs` | camada 3 | lê | `/config` só imprime | lê | compartilhado; teto da espera por aprovação (#526) |
 | trust | `$ASTRO_HOME/state.json` | pergunta no TTY | pergunta; revoga no `/config` | pergunta | compartilhado; revogação TUI-only |
+| termos de uso | `$ASTRO_HOME/state.json` (`terms.version`/`terms.acceptedAt`, #479) | não lê | pergunta no boot; `/terms` lê | pergunta; `/terms` lê | estado: um aceite por versão, sem TTY prossegue com aviso |
 | tema, `lastModel`, favoritos, recentes | estado de UI: global em `$ASTRO_HOME/tui.json`, override por projeto em `$ASTRO_HOME/projects/<chave>/tui.json` (#468) | não lê | lê/grava | não lê | TUI-only: preferência de terminal |
 | sessões | `$ASTRO_HOME/projects/<chave>/sessions.db` (SQLite; `sessions/` ao lado é o JSON v1 importado; #468) | sem comando | picker: lista/renomeia/exclui/retoma | lista/retoma/exclui (TTY) | compartilhado; renomear TUI-only |
 | `--allow-critical`/`--allow-sensitive`/`--i-understand` | invocação | entrada | herda | herda | CLI-only: allowlist é ato explícito (ADR-0027) |
@@ -76,7 +77,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 |---|---|---|---|
 | `$ASTRO_HOME/config.json` | config global: providers, models, preferências; provider guarda só referência de credencial; `mcpServers.*.env`/`args` não têm screening — lacuna (#496) | CLI/TUI/REPL | usuário; import de #459; CRUD da TUI/REPL (#492); `vault-import --apply` (#491) |
 | `astro.config.json`/`--config` | política do projeto | CLI/TUI/REPL | usuário; `/config` da TUI (`permissions.mode`); `config pull`; `vault-import` de provider do projeto |
-| `$ASTRO_HOME/state.json` | trust e `migrations.*` | todas | prompt de trust (TTY), revogação da TUI, migrações |
+| `$ASTRO_HOME/state.json` | trust, `migrations.*` e o aceite dos termos (`terms.version`/`terms.acceptedAt`, #479) | todas | prompt de trust (TTY), revogação da TUI, migrações e aceite dos termos (TTY) |
 | `$ASTRO_HOME/vault.json` | segredo de API key (OAuth Codex: `~/.codex/auth.json`) | runtime | wizard da TUI; `vault-import --apply` |
 | `$ASTRO_HOME/providers.json` | legado pré-#459 | só antes de `migrations.providers` | import-only após #459; escrita recusada |
 | `$ASTRO_HOME/trusted.json` | legado de trust | só antes de `migrations.trust` | importado e preservado; `saveTrustedStore` com caminho explícito ainda grava |
