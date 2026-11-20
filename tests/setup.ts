@@ -16,14 +16,29 @@ export const FAKE_PRIVATE_ACL: WindowsAcl = {
 /** Diretório ASTRO_HOME temporário criado para a suíte de testes. */
 export const TEST_ASTRO_HOME = mkdtempSync(join(tmpdir(), "astro-tests-home-"));
 
+/**
+ * Conjuntos de provider (#472): a suíte não herda provider do host, senão um
+ * `OPENAI_*`/`NVIDIA_*` exportado na máquina mudaria a resolução do ambiente.
+ */
+const HOST_PROVIDER_VARS = [
+  "ASTRO_PROVIDER", "ASTRO_MODEL", "ASTRO_BASE_URL",
+  "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL",
+  "NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL",
+  "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_BASE_URL",
+] as const;
+
+for (const name of HOST_PROVIDER_VARS) delete process.env[name];
+
 /** Variáveis de ambiente obrigatórias para que os testes usem o home temporário e URLs privadas. */
 export const TEST_BASE_ENV: Readonly<Record<string, string>> = {
   ASTRO_HOME: TEST_ASTRO_HOME,
   ASTRO_ALLOW_PRIVATE_URLS: "1",
+  ASTRO_ALLOW_INSECURE_BASE_URL: "1",
 } as const;
 
 process.env.ASTRO_HOME = TEST_ASTRO_HOME;
 process.env.ASTRO_ALLOW_PRIVATE_URLS = "1";
+process.env.ASTRO_ALLOW_INSECURE_BASE_URL = "1";
 
 /**
  * Mescla variáveis de ambiente do teste com a base obrigatória (ASTRO_HOME + ASTRO_ALLOW_PRIVATE_URLS).

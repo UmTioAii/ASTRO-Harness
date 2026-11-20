@@ -16,7 +16,12 @@ interface RunResult {
 
 async function runCli(args: string[], opts: { cwd: string; env: Record<string, string | undefined>; stdin?: string }): Promise<RunResult> {
   const baseEnv: Record<string, string | undefined> = { ...process.env };
-  for (const key of ["ASTRO_PROVIDER", "ASTRO_MODEL", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"]) {
+  for (const key of [
+    "ASTRO_PROVIDER", "ASTRO_MODEL", "ASTRO_BASE_URL",
+    "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL",
+    "NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL",
+    "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_BASE_URL",
+  ]) {
     delete baseEnv[key];
   }
   const home = opts.env.ASTRO_HOME ?? mkdtempSync(join(tmpdir(), "astro-wire-home-"));
