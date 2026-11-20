@@ -1,16 +1,26 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   SMOKE_KEY_ENV,
   SMOKE_KEY_VALUE,
   SMOKE_MODEL,
   SMOKE_PROMPT,
+  SmokeError,
   completionProblem,
   firstFrame,
+  packagedBun,
   parseArgs,
+  redactSmokeText,
+  runPlan,
   smokeConfig,
   trustState,
+  type PlanStep,
   type RecordedRequest,
 } from "../scripts/packed-smoke";
+import { loadHomeState, saveHomeState } from "../src/home-state";
+import { TrustedFolders, canonicalFolder } from "../src/trust";
 
 const version = "0.1.0-alpha.4";
 
@@ -90,8 +100,97 @@ test("trustState grava a pasta do projeto no estado global isolado", () => {
 });
 
 test("parseArgs aceita --json e recusa argumento desconhecido", () => {
-  expect(parseArgs([])).toEqual({ json: false, help: false });
-  expect(parseArgs(["--json"])).toEqual({ json: true, help: false });
-  expect(parseArgs(["--help"])).toEqual({ json: false, help: true });
+  expect(parseArgs([])).toEqual({ json: false, help: false, allowSkipTui: false });
+  expect(parseArgs(["--json"])).toEqual({ json: true, help: false, allowSkipTui: false });
+  expect(parseArgs(["--help"])).toEqual({ json: false, help: true, allowSkipTui: false });
+  expect(parseArgs(["--allow-skip-tui"])).toEqual({ json: false, help: false, allowSkipTui: true });
   expect(() => parseArgs(["--publish"])).toThrow("--publish");
+});
+
+function step(overrides: Partial<PlanStep> & Pick<PlanStep, "id">): PlanStep {
+  return {
+    label: overrides.id,
+    required: true,
+    body: () => ({ status: "passed", detail: "ok" }),
+    ...overrides,
+  };
+}
+
+test("runPlan fecha como falha quando uma etapa obrigatória sai pulada", async () => {
+  const lines: string[] = [];
+  const plan = [
+    step({ id: "install" }),
+    step({ id: "tui", body: () => ({ status: "skipped", detail: "precisa de TTY" }) }),
+    step({ id: "depois" }),
+  ];
+  const { results, failure } = await runPlan(plan, (line) => lines.push(line));
+
+  expect(failure).toContain("tui");
+  expect(failure).toContain("obrigatória");
+  expect(results.map((result) => result.status)).toEqual(["passed", "failed", "not-run"]);
+  expect(lines.join("\n")).toContain("falhou");
+});
+
+test("runPlan só tolera etapa pulada quando ela não é obrigatória", async () => {
+  const { results, failure } = await runPlan(
+    [step({ id: "tui", required: false, body: () => ({ status: "skipped", detail: "sem TTY" }) })],
+    () => {},
+  );
+
+  expect(failure).toBeNull();
+  expect(results).toEqual([{ id: "tui", status: "skipped", detail: "sem TTY" }]);
+});
+
+test("runPlan redige o valor da chave de fixture na mensagem de falha", async () => {
+  const { results, failure } = await runPlan([
+    step({
+      id: "tui",
+      body: () => {
+        throw new SmokeError(`spawn falhou com Bearer ${SMOKE_KEY_VALUE}`);
+      },
+    }),
+  ], () => {});
+
+  expect(failure).not.toContain(SMOKE_KEY_VALUE);
+  expect(results[0]!.detail).not.toContain(SMOKE_KEY_VALUE);
+});
+
+test("redactSmokeText apaga a chave da fixture por identidade", () => {
+  const redacted = redactSmokeText(`erro: ${SMOKE_KEY_VALUE} recusada`);
+  expect(redacted).not.toContain(SMOKE_KEY_VALUE);
+  expect(redacted).toContain("[redigido]");
+});
+
+test("packagedBun prefere o binário real do pacote de plataforma", () => {
+  const platformManifest = join("/pkgs", "@oven", "bun-linux-x64", "package.json");
+  expect(packagedBun("/proj/node_modules/@umtioai/astro-harness", {
+    platform: "linux",
+    arch: "x64",
+    resolve: (id) => (id.startsWith("@oven/") ? platformManifest : join("/pkgs", "bun", "package.json")),
+    exists: () => true,
+    stat: () => ({ size: 60_000_000 }),
+  })).toBe(join(platformManifest, "..", "bin", "bun"));
+});
+
+test("packagedBun recusa o placeholder de 450 bytes em vez de deixar o spawn falhar", () => {
+  expect(() => packagedBun("/proj/node_modules/@umtioai/astro-harness", {
+    platform: "linux",
+    arch: "x64",
+    resolve: () => join("/pkgs", "bun", "package.json"),
+    exists: () => true,
+    stat: () => ({ size: 450 }),
+  })).toThrow(/Bun do pacote instalado/);
+});
+
+test("trustState gravado por saveHomeState passa no realpath do TrustedFolders", () => {
+  const dir = mkdtempSync(join(tmpdir(), "astro-packed-smoke-trust-"));
+  const statePath = join(dir, "state.json");
+  try {
+    const seeded = trustState(canonicalFolder(dir));
+    saveHomeState(seeded, statePath);
+    expect(loadHomeState(statePath)).toEqual(seeded);
+    expect(new TrustedFolders(statePath).isTrusted(dir)).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
