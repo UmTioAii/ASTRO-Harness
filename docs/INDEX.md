@@ -33,6 +33,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/release.md` | Ao preparar, publicar ou reverter uma versão npm (#230) | ~150 |
 | `docs/mcp.md` | Ao configurar servidores MCP, transports, reconexão ou modelo de confiança | ~60 |
 | `docs/web-tools.md` | Ao configurar `webSearch` ou usar `web_search`/`web_fetch` | ~50 |
+| `docs/todo-write.md` | Ao usar ou alterar `todo_write` (plano do run, F-17) | ~40 |
 
 Referências usadas nos documentos:
 

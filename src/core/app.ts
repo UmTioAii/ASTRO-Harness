@@ -49,6 +49,7 @@ import { createListModelCandidatesTool } from "../tools/list-model-candidates";
 import { createTaskTool } from "../tools/task";
 import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-search";
 import { createWebFetchTool } from "../tools/web-fetch";
+import { TodoPlanStore, createTodoWriteTool } from "../tools/todo-write";
 import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, SpawnRegistry } from "../spawn";
 import { grepTool } from "../tools/grep";
 import { listDirTool } from "../tools/list-dir";
@@ -128,6 +129,8 @@ export interface RunOptions {
   runId?: string;
   /** Estado compartilhado pela sessão (#476): aviso de preço ausente uma vez por modelo, entre turnos. */
   warnedNoPrice?: Set<string>;
+  /** Plano do `todo_write` compartilhado pela sessão (#539): sobrevive aos turnos, nunca ao disco. */
+  todoPlans?: TodoPlanStore;
   /** Modelo do turno (`provider/id`); ausente usa `agent.model`. */
   model?: string;
   /** Não emite run.started/run.completed (a sessão de chat emite por sessão). */
@@ -972,6 +975,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   }
   // web_fetch (#57): sem config; allowlist e permissão continuam valendo (I-01).
   toolsByName.set("web_fetch", createWebFetchTool({ audit }));
+  // todo_write (#539): plano do run em memória, por `ctx.run`. O store vem da
+  // sessão no chat (um turno = um runTask) e é novo em run isolado; nada em disco.
+  const todoPlans = opts.todoPlans ?? new TodoPlanStore();
+  toolsByName.set("todo_write", createTodoWriteTool({ audit, store: todoPlans }));
   // #552: teto de spawns por run vem de spawn.maxActive (clamp em DEFAULT_MAX_SPAWNS_PER_RUN).
   const spawns = new SpawnRegistry({ limit: spawnLimitFromConfig(config) });
   // Preenchidos depois de resolver a allowlist/modo; a closure da task lê no call.
