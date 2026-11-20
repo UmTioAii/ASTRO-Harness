@@ -5,6 +5,7 @@ import { Auditor } from "../audit";
 import { allowlistLoadEvents } from "../allowlists";
 import { headerEnvNames } from "../mcp/headers";
 import { effectiveOutputCap } from "../output-limit";
+import { resolvePermissionMode, type PermissionMode } from "../permissions";
 import { loadEffectiveConfig } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { ToolExecutor, type ToolApprover } from "../tools/executor";
@@ -28,6 +29,12 @@ export interface ShellOptions {
   allowMissingConfig?: boolean;
   /** Aprovador do gate no modo ask; ausente = fail-closed (deny). */
   approveTool?: ToolApprover;
+  /**
+   * Modo de permissão corrente da sessão (TUI `/mode` em runtime, #271/#557);
+   * avaliado a cada `run`. Sem ele, cai em `ASTRO_PERMISSION_MODE` e depois em
+   * `permissions.mode` da config — a mesma precedência do run (D-24).
+   */
+  permissionMode?: () => PermissionMode | undefined;
   /** `allow-critical` da CLI (ADR-0027 slice 5a): path liberado não é mascarado no sandbox. */
   allowCritical?: readonly string[];
   /** `allow-sensitive` da CLI (ADR-0027 slice 5b): reclassifica no gate e audita no load. */
@@ -93,6 +100,12 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         tools: [runCommandTool],
         allow: ["run_command"],
         audit,
+        // #557: o `!cmd` segue o mesmo modo resolvido do run (D-24) — bypass
+        // não pergunta, ask/allow-edits perguntam por comando (ação shell).
+        permissionMode: resolvePermissionMode(
+          opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
+          config.permissions.mode,
+        ),
         // `!` segue o mesmo teto de aprovação da sessão (#526).
         ...(config.permissions.approvalTimeoutMs === undefined
           ? {}

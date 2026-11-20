@@ -179,6 +179,25 @@ describe("!cmd segue o modo de permissão resolvido, por comando (#557)", () => 
     expect(result.isError).toBe(false);
     expect(result.output).toContain("astro-edits-557");
   });
+
+  test("permissionMode explícito (runtime /mode) vence a config e é reavaliado por run", async () => {
+    const { cwd, configPath } = config(["run_command"], "KEY", true, true, "ask");
+    let asked = 0;
+    let mode: "ask" | "bypass" = "ask";
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: () => { asked += 1; return true; },
+      permissionMode: () => mode,
+    });
+    const denied = await shell.run("echo astro-mode-ask-557");
+    expect(asked).toBe(1); // ask perguntou
+    expect(denied.isError).toBe(false);
+    mode = "bypass"; // /mode bypass em runtime
+    const bypassed = await shell.run("echo astro-mode-bypass-557");
+    expect(asked).toBe(1); // bypass não perguntou de novo
+    expect(bypassed.isError).toBe(false);
+    expect(bypassed.output).toContain("astro-mode-bypass-557");
+  });
 });
 
 test("abortar mata o processo filho, não só o shell", async () => {
