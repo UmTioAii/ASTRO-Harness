@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { loadHomeState, saveHomeState } from "../src/home-state";
+import { HomeStateUnwritableError, loadHomeState, saveHomeState } from "../src/home-state";
 import {
   TERMS_LINES,
   TERMS_UNATTENDED_NOTICE,
@@ -25,14 +25,29 @@ function stateFile(): string {
   return join(mkdtempSync(join(tmpdir(), "astro-terms-")), "home", "state.json");
 }
 
+/** Linhas numeradas da seção dona do texto em `docs/terms.md`, sem o número. */
+function docTermsLines(): Array<{ number: number; text: string }> {
+  const doc = readFileSync(join(import.meta.dir, "..", "docs", "terms.md"), "utf8");
+  const section = doc.split(/^## /m).find((part) => part.startsWith("Texto (versão 1)"));
+  if (section === undefined) throw new Error("docs/terms.md sem a seção `Texto (versão 1)`");
+  const found: Array<{ number: number; text: string }> = [];
+  // `\r?` porque no Windows o checkout do doc chega em CRLF (core.autocrlf).
+  for (const line of section.split(/\r?\n/u)) {
+    const match = /^(\d+)\. (.+)$/.exec(line);
+    if (match !== null) found.push({ number: Number(match[1]), text: match[2]! });
+  }
+  return found;
+}
+
 describe("termos de uso (#479)", () => {
-  test("texto: cinco linhas em português, versionado e presente no doc dono", () => {
+  test("texto: cinco linhas em português, versionado e idêntico ao doc dono, na mesma ordem", () => {
     expect(TERMS_LINES).toHaveLength(5);
     for (const line of TERMS_LINES) expect(line.trim()).not.toBe("");
     expect(TERMS_VERSION).toMatch(/^\d+$/);
-    // Sem rede: o texto vive no repositório e não pode divergir do doc da revisão jurídica.
-    const doc = readFileSync(join(import.meta.dir, "..", "docs", "terms.md"), "utf8");
-    for (const line of TERMS_LINES) expect(doc).toContain(line);
+    // Sem rede: o texto vive no repositório e não pode divergir do doc da revisão
+    // jurídica. Igualdade (não `toContain`) para que editar só o doc quebre o teste
+    // em vez de deixar o texto embarcado desatualizado com a suíte verde.
+    expect(docTermsLines()).toEqual(TERMS_LINES.map((text, index) => ({ number: index + 1, text })));
   });
 
   test("primeiro run: pergunta, Enter aceita e grava versão + data ISO (0600/0700 no POSIX)", async () => {
@@ -53,6 +68,18 @@ describe("termos de uso (#479)", () => {
       expect(statSync(path).mode & 0o777).toBe(0o600);
       expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
     }
+  });
+
+  // `skipIf` (não `if/return`) para o skip aparecer no relatório; no Windows vale a ACL do perfil.
+  test.skipIf(process.platform === "win32")("diretório de estado pré-existente é ajustado para 0700 no POSIX (melhor esforço)", () => {
+    const path = stateFile();
+    const dir = dirname(path);
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o755); // outro módulo pode ter criado o $ASTRO_HOME assim
+    saveTermsAcceptance({ version: TERMS_VERSION, acceptedAt: ISO }, path);
+    // `mode` do mkdirSync é ignorado em diretório existente: sem chmod o 0700 do doc não vale.
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   test("mesma versão não pergunta e o registro sobrevive a um novo run", async () => {
@@ -129,6 +156,28 @@ describe("termos de uso (#479)", () => {
       writeFileSync(path, JSON.stringify(invalid));
       expect(() => loadTermsAcceptance(path)).toThrow(path);
     }
+  });
+
+  test("estado não gravável: erro tipado citando só o caminho, sem tmp e sem tocar no bloqueio", () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-terms-"));
+    const blocker = join(root, "home"); // um arquivo no lugar do $ASTRO_HOME
+    writeFileSync(blocker, "não é diretório\n");
+    const path = join(blocker, "state.json");
+    let thrown: unknown;
+    try {
+      saveHomeState({ version: 1, trust: { folders: [] }, migrations: { providers: false, trust: false } }, path);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(HomeStateUnwritableError);
+    const error = thrown as HomeStateUnwritableError;
+    expect(error.code).toBe("state_unwritable");
+    expect(error.message).toContain(blocker);
+    // Sem o `code` duplicado do EEXIST nem jargão de mkdir: só o caminho.
+    expect(error.message).not.toMatch(/EEXIST|mkdir|file already exists/);
+    // Fail-closed: nada foi criado e nenhum `.tmp` sobrou.
+    expect(readFileSync(blocker, "utf8")).toBe("não é diretório\n");
+    expect(readdirSync(root)).toEqual(["home"]);
   });
 
   test("/terms: comando reconhecido e lido por inteiro na TUI", async () => {

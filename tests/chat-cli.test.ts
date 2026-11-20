@@ -129,6 +129,23 @@ test("chat sem --config inválido falha claro", async () => {
   expect(await new Response(proc.stderr).text()).toContain("erro:");
 }, 20_000);
 
+test("chat com --config inválido não imprime o aviso dos termos antes do erro de config (#591)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "astro-chat-cli-terms-"));
+  const home = mkdtempSync(join(tmpdir(), "astro-chat-cli-terms-home-"));
+  const configPath = join(dir, "astro.config.json");
+  writeFileSync(configPath, "{ nope\n");
+  const proc = Bun.spawn(["bun", "src/cli.ts", "chat", "--config", configPath, "--cwd", dir], {
+    cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, ASTRO_HOME: home } as Record<string, string>,
+  });
+  proc.stdin.end();
+  expect(await proc.exited).toBe(1);
+  const stderr = await new Response(proc.stderr).text();
+  // O aviso não pode vir antes de um erro de config que ele não causa.
+  expect(stderr).not.toContain(TERMS_UNATTENDED_NOTICE);
+  expect(stderr).toContain("erro:");
+}, 20_000);
+
 /** `chat` sem TTY com mock que pede uma tool na 1ª chamada e responde texto na 2ª (#262). */
 async function chatToolTurn(opts: { prefix: string; tools: string[]; name: string; args: Record<string, unknown> }) {
   const cwd = mkdtempSync(join(tmpdir(), opts.prefix));
