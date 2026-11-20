@@ -293,7 +293,7 @@ test("erro fatal de sessão encerra a TUI", async () => {
   }
 });
 
-test("ignora Enter durante o turno e atualiza o status após /model", async () => {
+test("enfileira Enter durante o turno (#560) e atualiza o status após /model", async () => {
   class Slow extends FakeSession {
     override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
       await new Promise((resolve) => setTimeout(resolve, 80));
@@ -309,13 +309,15 @@ test("ignora Enter durante o turno e atualiza o status após /model", async () =
     await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
     instance.stdin.write("outra");
     instance.stdin.write("\r");
-    await waitFor(() => instance.lastFrame()?.includes("eco:demora") === true);
-    expect(session.sent).toEqual(["demora"]);
+    // #560: semântica nova — Enter durante o turno entra na fila em vez de ser descartado
+    await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
+    await waitFor(() => instance.lastFrame()?.includes("eco:outra") === true);
+    expect(session.sent).toEqual(["demora", "outra"]);
 
     instance.stdin.write("/model p/m2");
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("modelo: p/m2") === true);
-    expect(instance.lastFrame()).toMatch(/1 turno\(s\)/);
+    expect(instance.lastFrame()).toMatch(/2 turno\(s\)/);
     expect(instance.lastFrame()).toContain("p/m2");
   } finally {
     instance.unmount();

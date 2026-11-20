@@ -19,9 +19,9 @@ import { runCommand, type CommandState, type Entry } from "./commands";
 import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
 import type { ShellRunner } from "./shell";
-import { COMMANDS, applyCompletion, commandDescription, completionItems, suggestionWindow } from "./editor";
+import { COMMANDS, applyCompletion, commandDescription, completionItems, enterAction, suggestionWindow } from "./editor";
 import { Header, budgetColor, footerBase, modeColor, packageVersion } from "./banner";
-import { appendLog, sessionHeaderLine, tailLog } from "./log";
+import { appendLog, laneLine, sessionHeaderLine, tailLog } from "./log";
 import { LogScreen } from "./log-screen";
 import { errorLine } from "./error-hint";
 import { indexFiles } from "./files";
@@ -91,6 +91,20 @@ function EntryLine({ entry, colors }: { entry: Entry; colors: ThemeColors }): Re
   if (entry.kind === "user") return <Text color={colors.accent}>{"> "}{entry.text}</Text>;
   if (entry.kind === "assistant") return <Markdown text={entry.text} />;
   if (entry.kind === "error") return <Text color={colors.error}>{entry.text}</Text>;
+  if (entry.kind === "shell") {
+    // Bloco shell (#560): cabeçalho com comando/cwd/exit e corpo com a saída.
+    const meta = entry.shell;
+    const tone = meta?.isError === true ? colors.error : colors.accent;
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor={tone} paddingX={1}>
+        <Text color={tone}>
+          {"$ "}{meta?.command ?? entry.text}
+          {meta === undefined ? null : <Text dimColor>{`  ·  cwd: ${meta.cwd} · exit: ${meta.exitLabel}`}</Text>}
+        </Text>
+        <Text color={meta?.isError === true ? colors.error : undefined}>{entry.text}</Text>
+      </Box>
+    );
+  }
   return <Text dimColor>{entry.text}</Text>;
 }
 
@@ -140,6 +154,11 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   /** Progresso do passo (#508): undefined = desconhecido (turno não iniciado ou sem evento). */
   const [stepProgress, setStepProgress] = useState<{ step: number; maxSteps: number } | undefined>(undefined);
   const [partial, setPartial] = useState<string | undefined>(undefined);
+  /** Fila de mensagens digitadas durante o turno (#560): enviadas ao fim do turno. */
+  const queueRef = useRef<string[]>([]);
+  const [queued, setQueued] = useState(0);
+  /** Bloco thinking recolhido com ctrl+t durante o stream (#560). */
+  const [thinkingCollapsed, setThinkingCollapsed] = useState(false);
   const [initialConfig] = useState(() => loadTuiConfig(cwd));
   const [theme, setTheme] = useState<Theme>(initialConfig.theme);
   const colors = getThemeColors(theme);
@@ -167,7 +186,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       setHealth(state === undefined ? undefined : { provider, state });
       // Só transições de saúde vão para o /log (#514, docs/tui-layout.md §/log)
       if (state !== undefined) {
-        const line = `saúde: ${provider} ${state}`;
+        const line = laneLine("saúde", `saúde: ${provider} ${state}`); // lane separada (#560)
         if (lastHealthLogRef.current !== line) {
           lastHealthLogRef.current = line;
           logLine(line);
@@ -203,7 +222,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     const header = sessionHeaderLine({ version: packageVersion(), model: session.snapshot().model, endpoint: endpointOf() });
     if (lastLogHeaderRef.current === header) return;
     lastLogHeaderRef.current = header;
-    logLine(header);
+    logLine(laneLine("sessão", header)); // lane separada no /log (#560)
   };
   const pendingAttachments = useRef<LoadedAttachment[]>([]);
   const exited = useRef(false);
@@ -386,11 +405,12 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     }
   };
 
-  const submit = async (): Promise<void> => {
-    const text = inputRef.current.trim();
+  /** Envia `raw` (já sem o clear do editor); usado pelo Enter e pelo dreno da fila (#560). */
+  const submitText = async (raw: string): Promise<void> => {
+    const text = raw.trim();
     if (text === "") return;
-    setInput(() => "");
     if (text.startsWith("!")) {
+      const command = text.slice(1);
       setEntries((current) => [...current, { kind: "user", text }]);
       if (shell === undefined) {
         setEntries((current) => [...current, { kind: "error", text: "shell indisponível" }]);
@@ -402,10 +422,15 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       setStepProgress(undefined); // começo de turno: sem passo de um turno anterior
       setBusy(true);
       try {
-        const result = await shell.run(text.slice(1), shellTurn.signal);
+        const result = await shell.run(command, shellTurn.signal);
+        // Bloco shell (#560): comando/cwd/exit no cabeçalho, saída no corpo.
         setEntries((current) => [
           ...current,
-          { kind: result.isError ? "error" : "info", text: result.output },
+          {
+            kind: "shell" as const,
+            text: result.output,
+            shell: { command, cwd, exitLabel: result.isError ? "erro" : "0", isError: result.isError },
+          },
         ]);
       } finally {
         busyRef.current = false;
@@ -519,13 +544,13 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       pendingAttachments.current = [];
       sink.flush();
       setPartial(undefined);
-      // Resumo do turno sai da conversa e vai para o /log (#514, docs/tui-layout.md)
-      logLine(`turno concluído · ${result.steps} step(s)`);
-      logLine(statusLine(result));
+      // Resumo do turno sai da conversa e vai para o /log (#514, docs/tui-layout.md), lane [turno] (#560)
+      logLine(laneLine("turno", `turno concluído · ${result.steps} step(s)`));
+      logLine(laneLine("turno", statusLine(result)));
       const contextNote = result.warning ? `⚠ contexto ${Math.round(result.contextRatio * 100)}% (≥80%)` : undefined;
       if (contextNote !== undefined) {
-        // 1ª ocorrência fica só inline; repetições vão para o /log (#514, doc §/log)
-        if (contextInlineRef.current) logLine(contextNote);
+        // 1ª ocorrência fica só inline; repetições vão para o /log (#514, doc §/log), lane [aviso] (#560)
+        if (contextInlineRef.current) logLine(laneLine("aviso", contextNote));
         else contextInlineRef.current = true;
       }
       appendEntries([
@@ -549,6 +574,33 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       setBusy(false);
       if (exitRequested.current) finish();
     }
+  };
+
+  /** Envia a próxima mensagem da fila, se houver (#560). */
+  const drainQueue = (): void => {
+    const next = queueRef.current.shift();
+    setQueued(queueRef.current.length);
+    if (next !== undefined) void dispatch(next);
+  };
+
+  /**
+   * Envia `raw` e, quando a submissão não abre turno (comando de barra), drena o
+   * resto da fila (#560). Turnos longos drenam no próprio `finally` do turno.
+   */
+  const dispatch = async (raw: string): Promise<void> => {
+    try {
+      await submitText(raw);
+    } finally {
+      if (!exited.current && !exitRequested.current && !busyRef.current) drainQueue();
+    }
+  };
+
+  /** Enter no editor: limpa a linha e envia; durante o turno vai para a fila (#560). */
+  const submit = (): void => {
+    const text = inputRef.current.trim();
+    if (text === "") return;
+    setInput(() => "");
+    void dispatch(text);
   };
 
   useInput((value, key) => {    if (screen !== undefined || modelPicker || configOpen || sessionPicker || diffOpen || logScreen !== undefined) return; const ctrl = key.ctrl === true;
@@ -580,8 +632,15 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       }
       return;
     }
-    if (busy || busyRef.current) return;
-    if (leader.current) {
+    // #560: o editor continua editável durante o turno; Enter enfileira a mensagem.
+    const streaming = busy || busyRef.current;
+    if (streaming) leader.current = false; // leader não vale durante o stream
+    if (ctrl && value === "t") {
+      // ctrl+t recolhe/mostra o bloco de thinking (#560)
+      setThinkingCollapsed((current) => !current);
+      return;
+    }
+    if (!streaming && leader.current) {
       leader.current = false;
       runKeybind(`${LEADER} ${value.toLowerCase()}`, {
         session,
@@ -593,7 +652,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       });
       return;
     }
-    if (ctrl && value === "x") {
+    if (!streaming && ctrl && value === "x") {
       leader.current = true;
       return;
     }
@@ -625,7 +684,24 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       return;
     }
     if (key.return) {
-      void submit();
+      const suggestion = suggestions.length > 0 ? suggestions[selectedIndex] : undefined;
+      if (suggestion !== undefined && enterAction(inputRef.current, suggestion) === "apply-completion") {
+        // #471: 1º Enter aplica a completion na linha; o próximo Enter confirma e roda
+        setInput(() => applyCompletion(inputRef.current, suggestion));
+        setSelected(0);
+        return;
+      }
+      if (streaming) {
+        // #560: durante o turno a mensagem vai para a fila, enviada no fim do turno
+        const text = inputRef.current.trim();
+        if (text !== "") {
+          queueRef.current.push(text);
+          setQueued(queueRef.current.length);
+        }
+        setInput(() => "");
+        return;
+      }
+      submit();
       return;
     }
     if (key.backspace || key.delete) {
@@ -918,11 +994,18 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} />}
       </Static>
       {busy ? (
-        <Text color={colors.warning}>
-          {stepProgress === undefined ? "pensando…" : `pensando… passo ${stepProgress.step}/${stepProgress.maxSteps}`}
-        </Text>
+        // Bloco thinking (#560): rótulo com passo + stream parcial, recolhível com ctrl+t
+        <Box flexDirection="column" borderStyle="round" borderColor={colors.warning} paddingX={1}>
+          <Text color={colors.warning}>
+            {thinkingCollapsed
+              ? "pensando… recolhido (ctrl+t mostra)"
+              : stepProgress === undefined
+                ? "pensando…"
+                : `pensando… passo ${stepProgress.step}/${stepProgress.maxSteps}`}
+          </Text>
+          {thinkingCollapsed || partial === undefined ? null : <Text>{partial}</Text>}
+        </Box>
       ) : null}
-      {partial === undefined ? null : <Text>{partial}</Text>}
       {question === undefined ? null : (
         <Text color={colors.warning}>
           {question.text}
@@ -934,6 +1017,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           {toastLine(toast)}
         </Text>
       ))}
+      {queued > 0 ? <Text color={colors.warning}>{`fila: ${queued} na fila (enviada ao fim do turno)`}</Text> : null}
       <Box marginTop={1} borderStyle="round" borderColor={mode === "bypass" ? colors.error : colors.accent} paddingX={1} flexDirection="column">
         {inputLines.map((line, index) => (
           <Box key={index}>
@@ -943,7 +1027,11 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           </Box>
         ))}
       </Box>
-      {question === undefined ? <Text dimColor>  enter envia · shift+enter nova linha</Text> : null}
+      {question === undefined ? (
+        <Text dimColor>
+          {busy ? "  enter entra na fila · ctrl+t recolhe pensamento · shift+enter nova linha" : "  enter envia · shift+enter nova linha"}
+        </Text>
+      ) : null}
       {win.start > 0 ? <Text dimColor>  …</Text> : null}
       {visibleSuggestions.map((item, offset) => {
         const index = win.start + offset;

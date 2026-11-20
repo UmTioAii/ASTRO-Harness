@@ -16,7 +16,10 @@ Onde cada informação da TUI vive: header de identidade, footer de números, er
 | Footer | Repete provider, modelo, saúde e modo; mostra `0 turno(s)`, `0/0 tokens`, `n/d` e nenhum orçamento quando não há | Só campos com valor; modo sempre; bypass em vermelho |
 | Erro | Linha vermelha sem saída + toast com o mesmo texto | Linha vermelha com próximo passo, uma vez, sem toast |
 | Estado | Aviso reimpresso a cada turno e às vezes em toast | Uma linha cinza, uma vez por sessão |
-| Progresso | `pensando…`, sem passo | `pensando… passo n/max` |
+| Progresso | `pensando…`, sem passo | `pensando… passo n/max` em bloco, recolhível com ctrl+t (#560) |
+| Shell `!cmd` | saída como linha de info/erro | bloco com borda: `$ cmd · cwd: … · exit: 0\|erro` + saída (#560) |
+| Entrada durante o turno | descartada | fila (`fila: N`), enviada ao fim do turno (#560) |
+| Enter com menu aberto | submete o prefixo digitado | 1º Enter aplica a completion, 2º Enter roda (#471, #560) |
 | Status do turno | Entrada `[modelo] N step(s) · tokens · total` na conversa + toast | Só em `/log`; o footer já tem os números |
 | Endpoint | No header, competindo com modelo | `/log`, no cabeçalho da sessão |
 | Modo | No header e no footer | Só no footer; bypass também pinta a borda do input |
@@ -86,6 +89,19 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 - O evento `onStep(step, maxSteps)` vem antes de cada chamada ao provider e carrega só números. A linha some quando o turno termina (sucesso, erro ou abort), porque o progresso só renderiza com turno em andamento.
 - Sem evento de passo — o intervalo entre o início do turno e o 1º evento, ou uma execução single-shot sem o callback — fica só `pensando…`: nunca um número inventado. Cada `send` começa um loop novo no passo 1.
 
+## Blocos e fila (#560)
+
+| Bloco | Render | Notas |
+|---|---|---|
+| usuário | `> texto` | inalterado |
+| shell `!cmd` | caixa com `$ cmd · cwd: … · exit: 0\|erro`, saída no corpo | `exit` é `0`/`erro` porque o contrato `ToolResult` não traz código numérico |
+| thinking | caixa com `pensando…` (ou `passo n/max`) + stream parcial | ctrl+t recolhe/mostra; some no fim do turno |
+| resposta | Markdown | inalterado |
+
+- Durante o turno o editor continua editável; Enter coloca a mensagem na fila (`fila: N` acima do input) e o dreno acontece no fim do turno, na ordem digitada.
+- Tab completa; o 1º Enter aplica a completion na linha e o próximo Enter confirma e roda (#471). Linha já exata ao comando destacado roda no 1º Enter; linha com argumento submete direto; completions de `@arquivo` não seguram o Enter.
+- O REPL (`astro chat`) fica com linhas planas: fora de escopo desta issue.
+
 ## /log
 
 | Move para `/log` | Fica inline |
@@ -99,9 +115,10 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 | Detalhe de tool: nome, duração, custo | |
 
 - `/log` abre a tela com o buffer da sessão; `/log <n>` mostra as últimas `n` linhas.
+- Cada linha do buffer carrega a lane no prefixo — `[sessão]`, `[turno]`, `[saúde]`, `[aviso]` (#560) — e a sanitização (I-03) continua no `appendLog`.
 - O buffer é de memória: a fonte durável continua sendo audit/ledger.
 - Lacuna conhecida: detalhe de tool (nome, duração, custo) precisa de hook de evento de tool em `ChatSession` (análogo à lacuna do `onStep` acima) e fica para issue própria; nesta entrega o buffer não recebe detalhe de tool.
-- Implementação (#514): buffer ring em `src/tui/log.ts` (`LOG_CAP = 1000`, linhas sanitizadas com `redactSecrets` + controle), tela em `src/tui/log-screen.tsx`, comando em `src/tui/commands.ts` (`openLog`) ligado em `src/tui/app.tsx`. Cabeçalho da sessão (com endpoint), resumo por turno, transições de saúde e avisos repetidos de orçamento/contexto são anexados ao buffer; no REPL `/log` avisa que é só da TUI.
+- Implementação (#514): buffer ring em `src/tui/log.ts` (`LOG_CAP = 1000`, linhas sanitizadas com `redactSecrets` + controle), tela em `src/tui/log-screen.tsx`, comando em `src/tui/commands.ts` (`openLog`) ligado em `src/tui/app.tsx`. Cabeçalho da sessão (com endpoint), resumo por turno, transições de saúde e avisos repetidos de orçamento/contexto são anexados ao buffer com `laneLine` (#560); no REPL `/log` avisa que é só da TUI.
 
 ## Estados removidos
 

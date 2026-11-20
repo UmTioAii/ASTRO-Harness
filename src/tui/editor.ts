@@ -70,3 +70,17 @@ export function applyCompletion(line: string, choice: string): string {
   if (at < 0) return line;
   return `${line.slice(0, at)}${choice} `;
 }
+
+export type EnterAction = "apply-completion" | "run";
+
+/**
+ * Semântica do Enter com o menu de sugestões aberto (#471): sem sugestão
+ * ativa, linha já igual ao comando destacado ou linha com argumento → "run";
+ * prefixo de comando de barra → "apply-completion" (1º Enter aplica na linha,
+ * 2º Enter roda). Completions de `@arquivo` ficam em "run" (fora de escopo).
+ */
+export function enterAction(line: string, suggestion: string | undefined): EnterAction {
+  if (suggestion === undefined) return "run";
+  if (!line.startsWith("/") || line.includes(" ")) return "run";
+  return line === suggestion ? "run" : "apply-completion";
+}

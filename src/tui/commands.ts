@@ -16,13 +16,15 @@ import {
   parseConfigEditValue,
 } from "../core/config-edit";
 
-export type EntryKind = "user" | "assistant" | "info" | "error";
+export type EntryKind = "user" | "assistant" | "info" | "error" | "shell";
 
 export interface Entry {
   kind: EntryKind;
   text: string;
   /** Estado da sessão (#480): cinza e uma vez por sessão; comando comum não deduplica. */
   state?: boolean;
+  /** Bloco shell (#560): comando executado e metadados do cabeçalho (cwd/exit). */
+  shell?: { command: string; cwd: string; exitLabel: string; isError: boolean };
 }
 
 export interface CommandState {
