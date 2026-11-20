@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadHomeState, saveHomeState } from "../src/home-state";
@@ -16,8 +16,8 @@ import {
   type TermsAcceptance,
 } from "../src/terms";
 import { parseCommand } from "../src/chat/commands";
+import { runRepl, type ChatSession } from "../src/chat/repl";
 import { runCommand } from "../src/tui/commands";
-import type { ChatSession } from "../src/chat/repl";
 
 const ISO = "2026-11-20T12:00:00.000Z";
 
@@ -100,13 +100,13 @@ describe("termos de uso (#479)", () => {
     expect(TERMS_UNATTENDED_NOTICE).toContain(`versão ${TERMS_VERSION}`);
   });
 
-  test("prompt e /terms: texto completo, só Enter aceita, EOF recusa", async () => {
+  test("prompt e /terms: texto completo, só Enter aceita, espaço não aceita, EOF recusa", async () => {
     const prompt = termsPrompt();
     for (const line of TERMS_LINES) expect(prompt).toContain(line);
     expect(termsPrompt({ version: "0", acceptedAt: ISO })).toContain("versão 0");
     expect(termsChoice("")).toBe(true);
-    expect(termsChoice("   ")).toBe(true);
-    for (const answer of ["n", "s", null, undefined]) expect(termsChoice(answer)).toBe(false);
+    // Enter é a única aceitação: espaço, tab e qualquer resposta não vazia recusam.
+    for (const answer of [" ", "   ", "\t", "\n", "n", "s", null, undefined]) expect(termsChoice(answer)).toBe(false);
 
     const pending = formatTerms(undefined);
     for (const line of TERMS_LINES) expect(pending).toContain(line);
@@ -140,5 +140,45 @@ describe("termos de uso (#479)", () => {
     expect(pending.entries[0]!.text).toContain("ainda não aceito");
     saveTermsAcceptance({ version: TERMS_VERSION, acceptedAt: ISO }, path);
     expect((await runCommand({ kind: "terms" }, {} as ChatSession, {}, { termsPath: path })).entries[0]!.text).toContain(ISO);
+  });
+
+  test("/terms relata estado ilegível em vez de derrubar a TUI e o REPL", async () => {
+    const path = stateFile();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '{"terms":');
+
+    // TUI: entrada de aviso, não exceção.
+    const tui = await runCommand({ kind: "terms" }, {} as ChatSession, {}, { termsPath: path });
+    expect(tui.entries).toHaveLength(1);
+    for (const line of TERMS_LINES) expect(tui.entries[0]!.text).toContain(line);
+    expect(tui.entries[0]!.text).toContain("ilegível");
+    expect(tui.entries[0]!.text).toContain(path);
+    // A mensagem cita o caminho, nunca o conteúdo do arquivo (I-03).
+    writeFileSync(path, '{"apiKey":"sk-live-nao-pode-vazar"');
+    const redacted = await runCommand({ kind: "terms" }, {} as ChatSession, {}, { termsPath: path });
+    expect(redacted.entries[0]!.text).not.toContain("nao-pode-vazar");
+
+    // Caminho que não é arquivo (home presente, estado ilegível) também não derruba.
+    const notAFile = join(mkdtempSync(join(tmpdir(), "astro-terms-")), "state.json");
+    mkdirSync(notAFile);
+    expect((await runCommand({ kind: "terms" }, {} as ChatSession, {}, { termsPath: notAFile })).entries[0]!.text)
+      .toContain(notAFile);
+
+    // REPL: imprime o aviso e segue vivo para o /exit.
+    const previous = process.env.ASTRO_HOME;
+    process.env.ASTRO_HOME = dirname(path);
+    const outputs: string[] = [];
+    const lines = ["/terms", "/exit"];
+    try {
+      await runRepl({ close: () => {} } as unknown as ChatSession, {
+        read: async () => lines.shift() ?? null,
+        write: (text) => { outputs.push(text); },
+      });
+    } finally {
+      if (previous === undefined) delete process.env.ASTRO_HOME;
+      else process.env.ASTRO_HOME = previous;
+    }
+    expect(outputs.join("\n")).toContain("ilegível");
+    expect(outputs.join("\n")).not.toContain("nao-pode-vazar");
   });
 });
