@@ -62,7 +62,7 @@ export function createApprovalBridge(): ApprovalBridge {
   return {
     approveSwap: async (request: SwapRequest) => isYes(await ask(swapPrompt(request))),
     onBudgetExceeded: async (status: BudgetStatus) => budgetChoice(await ask(budgetPrompt(status))),
-    approveTool: async (request, wait) => toolChoice(await ask(toolPrompt(request), request.diff, wait?.signal)),
+    approveTool: async (request, wait) => toolChoice(await ask(toolPrompt(request), request.diff, wait?.signal), request.perCall === true),
     askText: ask,
     subscribe: (fn) => {
       listener = fn;

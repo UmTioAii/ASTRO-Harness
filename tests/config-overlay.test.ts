@@ -87,8 +87,10 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), acme: { baseUrl: "https://outro.example/v1" } } }), /redireciona a credencial global/],
     // Nem reaproveitar a mesma referência em outro provider.
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), evil: { kind: "openai-compat", baseUrl: "https://evil.example/v1", credentialRef: "ACME_KEY" } } }), /redireciona a credencial global/],
-    // Global força Docker: o projeto não volta para o host (#474).
+    // Global força Docker: o projeto não reabre o host (#474).
     [{ tools: { run_command: { sandbox: true } } }, project({ tools: { run_command: { sandbox: "auto" } } }), /amplia o sandbox global/],
+    // Global desligado: o projeto não reabre nem para Docker nem para o host.
+    [{ tools: { run_command: { sandbox: false } } }, project({ tools: { run_command: { sandbox: true } } }), /reabre o shell desligado/],
   ];
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);

@@ -869,27 +869,29 @@ describe("argumento material no pedido de aprovação (#536)", () => {
     expect(JSON.stringify(run)).not.toContain(SYNTH);
   });
 
-  test("valor longo elide com cabeça e cauda visíveis, marcador ... no meio (#536)", () => {
+  test("comando longo aparece inteiro no prompt: o host não aprova o que não vê (#474)", () => {
     // `z` (não-hex) para o corte ser o do prompt, não o da redação.
     const detail = approvalDetailOf(call("run_command", { command: `echo ${"z".repeat(400)}` }));
-    expect(detail?.value.length).toBe(200);
+    expect(detail?.value.length).toBe(405);
     expect(detail?.value.startsWith("echo zzzz")).toBe(true);
-    expect(detail?.value).toContain("...");
+    expect(detail?.value).not.toContain("...");
     expect(detail?.value.endsWith("z")).toBe(true);
   });
 
-  test("a cauda do comando continua visível (o `| sh` não some no corte) (#536)", () => {
+  test("a cauda do comando continua visível porque nada é cortado (#474)", () => {
     const command = `${"echo z".repeat(60)} | sh`;
     const value = approvalDetailOf(call("run_command", { command }))?.value ?? "";
-    expect(value.length).toBe(200);
-    expect(value).toContain("...");
+    expect(value.length).toBe(command.length);
+    expect(value).not.toContain("...");
     expect(value.endsWith(" | sh")).toBe(true);
   });
 
-  test("corte não parte par surrogate (emoji na borda) (#536)", () => {
-    const detail = approvalDetailOf(call("run_command", { command: `${"z".repeat(137)}😀${"z".repeat(200)}` }));
+  test("comando longo não parte par surrogate (emoji na borda) (#536)", () => {
+    const emoji = String.fromCodePoint(0x1f600);
+    const detail = approvalDetailOf(call("run_command", { command: `${"z".repeat(137)}${emoji}${"z".repeat(200)}` }));
     // `\p{Cs}` com `u` só casa surrogate solto; par válido (emoji) é um code point.
     expect(detail?.value).not.toMatch(/\p{Cs}/u);
+    expect(detail?.value).toContain(emoji);
   });
 
   test("quebra de linha e controle viram espaço: o prompt é uma linha só (#536)", () => {

@@ -459,6 +459,7 @@ export class ToolExecutor {
           mode: this.mode,
           ...(detail === undefined ? {} : { detail }),
           ...(annex === undefined ? {} : { diff: annex }),
+          ...(requiresPerCallApproval(action) ? { perCall: true } : {}),
         });
         // Espera sem resposta morre no teto (#526): recusa como deny, audita e o run segue.
         if (outcome === TIMEOUT) {

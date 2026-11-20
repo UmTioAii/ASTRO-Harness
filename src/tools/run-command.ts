@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, write
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
-import { DEFAULT_PERMISSION_MODE, resolveArtifactRoot, resolveAstroHome, setPerCallApproval, type ApprovalDetail, type PermissionMode } from "../permissions";
+import { resolveArtifactRoot, resolveAstroHome, setPerCallApproval, type ApprovalDetail, type PermissionMode } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
 import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
@@ -101,9 +101,8 @@ function killProcessTree(proc: { pid: number; kill: () => void }): void {
 // --- Sandbox (F4-6) ---
 
 let sandboxEnabled = false;
-/** Estado do #474 (opt-in `sandbox: "auto"`): modo, modo de permissão e `shell.default`. */
-let commandMode: RunCommandMode = "auto";
-let permissionMode: PermissionMode = DEFAULT_PERMISSION_MODE;
+/** Estado do #474 (`sandbox: "auto"`): modo e `shell.default`. */
+let commandMode: RunCommandMode = "disabled";
 let preferredShell: string | undefined;
 let dockerProbe: Promise<boolean> | undefined;
 
@@ -159,13 +158,10 @@ export function configureRunCommand(opts: {
   sandbox?: boolean;
   /** Modo resolvido (#474); `sandbox` continua aceito para compatibilidade dos chamadores. */
   mode?: RunCommandMode;
-  /** Modo de permissão corrente: decide a exigência extra do host em `bypass` (#474). */
-  permissionMode?: PermissionMode;
   /** `shell.default` da config (#474); ausente = ordem da plataforma. */
   shellDefault?: string;
 }): void {
   commandMode = opts.mode ?? (opts.sandbox === false ? "disabled" : opts.sandbox === true ? "docker" : "auto");
-  permissionMode = opts.permissionMode ?? DEFAULT_PERMISSION_MODE;
   preferredShell = opts.shellDefault;
   // `sandbox: true` mantém o caminho Docker byte a byte; `isRunCommandSandboxEnabled`
   // segue significando "Docker", como antes.
@@ -547,6 +543,7 @@ async function runDockerProcess(
  */
 function auditHostDecision(
   ctx: ToolContext,
+  mode: PermissionMode,
   decision: "allow" | "deny",
   extra: { reason?: string; shell?: string } = {},
 ): void {
@@ -556,7 +553,7 @@ function auditHostDecision(
     tipo: "host_shell.decision",
     payload: {
       decision,
-      permissionMode,
+      permissionMode: mode,
       ...(extra.reason === undefined ? {} : { reason: extra.reason }),
       ...(extra.shell === undefined ? {} : { shell: extra.shell }),
     },
@@ -581,15 +578,17 @@ async function runOnHost(
 ): Promise<ToolResult> {
   const env = ctx.env ?? process.env;
   // Sem executor não houve allowlist/gate: o host só existe atrás do gate (#474).
-  if (ctx.executor === undefined) {
+  const executorMode = ctx.executor?.permissionMode;
+  if (ctx.executor === undefined || executorMode === undefined) {
     return failureCode(
-      "host_shell_requires_gate: shell no host só executa via ToolExecutor (allowlist e aprovação por comando)",
+      "host_shell_requires_gate: shell no host só executa via ToolExecutor com modo de permissão resolvido",
       "host_shell_requires_gate",
     );
   }
   // `bypass` não abre prompt: sem a confirmação explícita o host recusa (fail-closed).
-  if (permissionMode === "bypass" && env[HOST_SHELL_BYPASS_CONFIRMATION_ENV] !== "1") {
-    auditHostDecision(ctx, "deny", { reason: "bypass_confirmation_required" });
+  // O modo vem do EXECUTOR que autorizou a chamada, nunca de estado global (#474).
+  if (executorMode === "bypass" && env[HOST_SHELL_BYPASS_CONFIRMATION_ENV] !== "1") {
+    auditHostDecision(ctx, executorMode, "deny", { reason: "bypass_confirmation_required" });
     return failureCode(
       `host_shell_confirmation_required: em modo bypass o shell no host exige confirmação explícita ` +
         `(${HOST_SHELL_BYPASS_CONFIRMATION_ENV}=1); use o Docker ou o modo ask`,
@@ -599,10 +598,10 @@ async function runOnHost(
 
   const selection = selectHostShell(detectHostShells(), preferredShell);
   if (selection.kind === "error") {
-    auditHostDecision(ctx, "deny", { reason: selection.code });
+    auditHostDecision(ctx, executorMode, "deny", { reason: selection.code });
     return failureCode(selection.message, selection.code);
   }
-  auditHostDecision(ctx, "allow", { shell: selection.shell });
+  auditHostDecision(ctx, executorMode, "allow", { shell: selection.shell });
 
   const argv = hostShellArgv(selection.shell, command);
   const proc = Bun.spawn({

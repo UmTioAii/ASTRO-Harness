@@ -55,7 +55,7 @@ Caractere de controle escapa para 2–6 caracteres no JSON; por isso o envelope 
 ## Aprovação e auditoria
 
 - Manifesto: `class: "shell"`, `permission: "execute"`, `sideEffects: "process"`, `retryable: false`, `idempotent: false`. A classe é `shell` porque executa um processo do projeto: a matriz (PERM-01) pede aprovação em `ask` e `allow-edits` e libera em `bypass`; perfil de agente `read-only`/`write` é negado antes da execução.
-- Prompt: a tool implementa `Tool.approvalDetail` e entrega o comando da config (com o `filter`, quando válido) como detalhe material; o executor normaliza (uma linha, redigido, até 200 caracteres). Sem essa seção, o prompt diria só `run_tests`.
+- Prompt: a tool implementa `Tool.approvalDetail` e entrega o comando da config (com o `filter`, quando válido) como detalhe material; o executor normaliza (uma linha, redigido; comando inteiro, sem elisão). Sem essa seção, o prompt diria só `run_tests`.
 - Executa só com `run_tests` em `agent.tools` (I-01); não entra em `DEFAULT_AGENT_TOOLS`.
 - Audit: evento `tests.result` com `{ command, exitCode, durationMs, truncated, isError }` — comando redigido e **nunca** a saída dos testes. `tool.call`/`tool.result` continuam sem conteúdo.
 - Cenário de eval (`src/eval/scenario.ts`) recusa `run_tests` na allowlist e `run.tests` na config: o golden é hermético e não declara comando de teste do projeto.

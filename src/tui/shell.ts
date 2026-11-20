@@ -105,10 +105,9 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
         config.permissions.mode,
       );
-      // #474: o modo corrente vale já nesta execução (`bypass` host exige confirmação).
+      // #474: o modo do executor decide a confirmação extra do host em `bypass`.
       configureRunCommand({
         mode: runCommandMode,
-        permissionMode: currentMode,
         ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
       });
       const executor = new ToolExecutor({

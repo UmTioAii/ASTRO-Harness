@@ -1160,7 +1160,6 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   // `sandbox: true` continua sem tocar no caminho Docker.
   configureRunCommand({
     mode: runCommandMode,
-    permissionMode,
     ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
   });
   // `bypass` é perigoso: avisa uma vez e deixa a ativação no audit sanitizado (I-04, #268).

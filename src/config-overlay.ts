@@ -159,8 +159,11 @@ export function assertNarrowed(
   const projectSandbox = projectRunCommand?.sandbox;
   const toSandbox = projectSandbox === undefined ? undefined : SANDBOX_RANK[String(projectSandbox)];
   if (fromSandbox !== undefined && toSandbox !== undefined && toSandbox > fromSandbox) {
+    const reason = fromSandbox === 0
+      ? "reabre o shell desligado no global"
+      : "reabre o host (auto) onde o global força Docker";
     throw new ConfigError(
-      "config inválida: o projeto amplia o sandbox global (auto/host onde o global força Docker); use sandbox: true para endurecer",
+      `config inválida: o projeto amplia o sandbox global (${reason}); use sandbox: true para endurecer`,
     );
   }
   // Teto da espera por aprovação (#526): `0` desliga o limite, então é
