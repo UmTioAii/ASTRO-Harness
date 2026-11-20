@@ -95,7 +95,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 - #459 importa `providers.json` uma vez para `config.json` e marca `migrations.providers`; depois disso o legado é import-only (preservado byte a byte, não lido, escrita recusada com `ProfileStoreMigratedError`, nome planejado em #459).
 - `trusted.json` é importado e preservado (#403); depois de `migrations.trust` não é mais lido, mas `saveTrustedStore` não recusa escrita em caminho explícito — diferente de `providers.json` após #459.
 - Antes de #459, o CRUD da TUI/REPL ainda grava o store legado; é a janela de migração, não uma segunda fonte. Quando #459 entrar e antes de #492, o CRUD recusa; o alvo é um só: `config.json`.
-- Schema da config (ADR-0028, #493): implementado e igual nas duas camadas, checado por camada de origem antes do merge. Ausente = `0.0.0` (legado), aceito e migrado em memória; major à frente falha fechado. `astro config migrate [--config <path>] [--apply]` é o único escritor da migração — dry-run por default, atômico, idempotente e CLI-only.
+- Schema da config (ADR-0028, #493): implementado e igual nas duas camadas, checado por camada de origem antes do merge e antes de qualquer erro de forma. Ausente = `0.0.0` (legado), aceito e migrado em memória; major à frente falha fechado. `astro config migrate [--config <path>] [--apply]` é o único escritor da migração — dry-run por default, atômico, idempotente e CLI-only. Chave removida (ex.: `run.maxTurns`) não é migrada por `config migrate`: o erro dedicado indica o substituto (`agent.maxSteps`).
 
 ## Lacunas de implementação
 

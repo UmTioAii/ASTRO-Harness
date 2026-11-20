@@ -6,11 +6,13 @@ import {
   CONFIG_SCHEMA_VERSION,
   ConfigError,
   loadConfig,
+  migrationSecurityProblem,
+  runConfigMigrations,
   validateConfig,
   type AstroConfig,
 } from "../src/core/config";
 import { migrateConfigFile } from "../src/core/config-migrate";
-import { validateProjectLayer } from "../src/providers/profiles";
+import { loadProjectConfig, validateProjectLayer } from "../src/providers/profiles";
 
 // Sentinelas montados em runtime para não disparar o gate de segredos.
 const SENTINEL = ["sentinel", "-", "nao", "-", "vaza"].join("");
@@ -183,6 +185,75 @@ describe("ADR-0028 versão do schema", () => {
   });
 });
 
+describe("guarda de migração (ADR-0028)", () => {
+  test("mode: ask -> bypass é recusado (BLOCKER 1)", () => {
+    expect(migrationSecurityProblem({ permissions: { mode: "ask" } }, { permissions: { mode: "bypass" } }))
+      .toBe("permissions.mode");
+  });
+
+  test("mode: bypass -> ask é permitido (endurecer sempre pode)", () => {
+    expect(migrationSecurityProblem({ permissions: { mode: "bypass" } }, { permissions: { mode: "ask" } }))
+      .toBeUndefined();
+  });
+
+  test("mode desconhecido conta como o mais permissivo", () => {
+    expect(migrationSecurityProblem({ permissions: { mode: "ask" } }, { permissions: { mode: "custom" } }))
+      .toBe("permissions.mode");
+  });
+
+  const cases: Array<[string, Record<string, unknown>, Record<string, unknown>, string | undefined]> = [
+    ["sandbox desligado", { tools: { run_command: { sandbox: true } } }, { tools: { run_command: { sandbox: false } } }, "tools.run_command.sandbox"],
+    ["budget maior", { budget: { scope: "month", limitUsd: 10 } }, { budget: { scope: "month", limitUsd: 20 } }, "budget.limitUsd"],
+    ["teto físico removido", { budget: { scope: "month", limitUsd: 10, hardCeilingUsd: 50 } }, { budget: { scope: "month", limitUsd: 10 } }, "budget.hardCeilingUsd"],
+    ["aviso mais tarde", { budget: { scope: "month", limitUsd: 10, warnAt: 0.8 } }, { budget: { scope: "month", limitUsd: 10, warnAt: 0.5 } }, "budget.warnAt"],
+    ["paths movido", { paths: { ledger: "l", audit: "a" } }, { paths: { ledger: "l2", audit: "a" } }, "paths"],
+    ["allowlist cresceu", { agent: { tools: ["read_file"] } }, { agent: { tools: ["read_file", "delete_path"] } }, "agent.tools"],
+    ["allowlist default virou explícita", { agent: { model: "p/m" } }, { agent: { model: "p/m", tools: ["delete_path"] } }, "agent.tools"],
+    ["allowlist default voltou ao omitir", { agent: { model: "p/m", tools: ["read_file"] } }, { agent: { model: "p/m" } }, "agent.tools"],
+    ["allowlist de agent nomeado cresceu", { agents: { coder: { tools: ["read_file"] } } }, { agents: { coder: { tools: ["read_file", "write_file"] } } }, "agents.coder.tools"],
+    ["chave injetada em mcpServers", { mcpServers: {} }, { mcpServers: { evil: { transport: "stdio", command: "sh" } } }, "mcpServers.evil"],
+    ["chave injetada aninhada", { mcpServers: { evil: { transport: "stdio", command: "sh" } } }, { mcpServers: { evil: { transport: "stdio", command: "sh", env: { TOKEN: "x" } } } }, "mcpServers.evil.env"],
+    ["provider injetado", { providers: {} }, { providers: { p: { kind: "openai-compat" } } }, "providers.p"],
+    ["perfil de pool injetado", { modelPool: {} }, { modelPool: { fast: { model: "p/m" } } }, "modelPool.fast"],
+    ["policy de agente injetada", { agents: {} }, { agents: { coder: { model: "p/m" } } }, "agents.coder"],
+    ["carimbo de version é permitido", {}, { version: CONFIG_SCHEMA_VERSION }, undefined],
+  ];
+
+  for (const [name, before, after, expected] of cases) {
+    test(`recusa/permite: ${name}`, () => {
+      expect(migrationSecurityProblem(before, after)).toBe(expected);
+    });
+  }
+
+  test("cadeia recusa passo que afrouxa permissions.mode (BLOCKER 1)", () => {
+    let caught: unknown;
+    try {
+      runConfigMigrations(
+        { permissions: { mode: "ask" } },
+        0,
+        { 0: () => ({ permissions: { mode: "bypass" } }) },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ConfigError);
+    expect((caught as ConfigError).code).toBe("config_migration_required");
+    expect((caught as Error).message).toContain("permissions.mode");
+  });
+
+  test("cadeia aceita passo que só endurece", () => {
+    expect(runConfigMigrations(
+      { permissions: { mode: "bypass" } },
+      0,
+      { 0: () => ({ permissions: { mode: "ask" } }) },
+    )).toEqual({ permissions: { mode: "ask" } });
+  });
+
+  test("cadeia sem passo para o major falha config_migration_required", () => {
+    expect(codeOf(() => runConfigMigrations({}, 0, {}))).toBe("config_migration_required");
+  });
+});
+
 describe("astro config migrate (ADR-0028)", () => {
   test("dry-run é o default e não grava nada", () => {
     const path = tempConfig(base({ $schema: "https://example.invalid/s.json", agent: { model: "mock/m1", maxSteps: 3, tools: [], systemPrompt: SENTINEL } }));
@@ -266,6 +337,24 @@ describe("astro config migrate (ADR-0028)", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
+  test("config de projeto que depende da camada global migra e recebe version (BLOCKER 2)", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-config-migrate-layered-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({
+      providers: { g: { kind: "openai-compat", baseUrl: "https://g.example/v1", credentialRef: "KEY" } },
+      models: [{ provider: "g", id: "m1", tags: ["writing-code"], context: 4096 }],
+    }));
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-migrate-layered-"));
+    const path = join(dir, "astro.config.json");
+    // Forma do first-run de `ensureFirstRunConfig`: só `agent.model`.
+    writeFileSync(path, JSON.stringify({ agent: { model: "g/m1" } }));
+    const report = migrateConfigFile(path, { apply: true, env: { ASTRO_HOME: home } });
+    expect(report.written).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      agent: { model: "g/m1" },
+      version: CONFIG_SCHEMA_VERSION,
+    });
+  });
+
   test("config de projeto incompleta não é gravada (validação sempre)", () => {
     const path = tempConfig({ version: CONFIG_SCHEMA_VERSION, agent: { maxSteps: 1 } });
     const before = readFileSync(path, "utf8");
@@ -336,6 +425,24 @@ describe("ADR-0028 nas duas camadas (global e projeto)", () => {
     const merged = validateProjectLayer(base(), envFor(home));
     expect(Object.keys(merged.providers)).toContain("global");
     expect(merged.version).toBeUndefined();
+  });
+
+  test("major à frente na camada de projeto vence o erro de forma (XOR model/profile)", () => {
+    const path = tempConfig(base({
+      version: "2.0.0",
+      agent: { model: "mock/m1", profile: "p", maxSteps: 1, tools: [] },
+    }));
+    expect(codeOf(() => loadProjectConfig(path, { env: { ASTRO_NO_GLOBAL_CONFIG: "1" } })))
+      .toBe("config_ahead_of_harness");
+  });
+
+  test("major à frente na camada global vence o erro de forma", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-config-schema-home-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({
+      version: "2.0.0",
+      agent: { model: "p/m", profile: "p" },
+    }));
+    expect(codeOf(() => validateProjectLayer(base(), envFor(home)))).toBe("config_ahead_of_harness");
   });
 });
 

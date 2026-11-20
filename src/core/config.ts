@@ -20,6 +20,7 @@ import { CAPACITY_TAGS, ROLE_TAGS, isKnownTag } from "../tags";
 import { isJudgeMode, type JudgeMode } from "../judge";
 import { checkpointIdProblem } from "../loop-guard";
 import { DEFAULT_MEMORY_MAX_CHARS, MIN_MEMORY_MAX_CHARS } from "../memory";
+import { hardenWindowsAclFile } from "../attachments/acl";
 
 /** Configuração comum a todos os providers. */
 interface ProviderConfigBase {
@@ -1976,6 +1977,8 @@ function validateConfigMetadata(document: Record<string, unknown>, source: strin
 }
 
 const PERMISSION_MODE_RANK: Readonly<Record<string, number>> = { ask: 0, "allow-edits": 1, bypass: 2 };
+/** Modo desconhecido (ou de tipo errado) conta como o mais permissivo: fail-closed. */
+const MOST_PERMISSIVE_MODE_RANK = 2;
 
 function nestedSection(value: unknown, ...keys: string[]): Record<string, unknown> | undefined {
   let current: unknown = value;
@@ -1992,28 +1995,72 @@ function stringSet(value: unknown): Set<string> | undefined {
     : undefined;
 }
 
+/** Rank de permissividade: maior = mais permissivo; desconhecido = 2. */
+function permissionModeRank(mode: unknown): number {
+  if (typeof mode !== "string") return MOST_PERMISSIVE_MODE_RANK;
+  return PERMISSION_MODE_RANK[mode] ?? MOST_PERMISSIVE_MODE_RANK;
+}
+
+/**
+ * Allowlist efetiva de tools (I-01/D-07): `agent.tools` omitido significa as 6
+ * tools default, não "sem tools"; agent nomeado sem `tools` herda do principal.
+ */
+function effectiveToolAllowlist(source: Record<string, unknown>, agentName?: string): Set<string> {
+  const base = stringSet(nestedSection(source, "agent")?.tools) ?? new Set(DEFAULT_AGENT_TOOLS);
+  if (agentName === undefined) return base;
+  return stringSet(nestedSection(source, "agents", agentName)?.tools) ?? base;
+}
+
+/**
+ * Conteúdo que aparece no destino sem existir na origem: chave nova em qualquer
+ * nível (inclusive dentro de contêiner de nome livre, como `mcpServers.evil`) e
+ * item novo em lista (`tools`, `providers`, `modelPool`, `plugins`). Migração
+ * transforma o que existe; `version` é a única adição permitida (o carimbo).
+ */
+function addedContentProblem(before: unknown, after: unknown, field: string): string | undefined {
+  if (isPlainObject(before) && isPlainObject(after)) {
+    for (const key of Object.keys(after)) {
+      if (field === "" && key === "version") continue;
+      const path = field === "" ? key : `${field}.${key}`;
+      if (!Object.hasOwn(before, key)) return path;
+      const nested = addedContentProblem(before[key], after[key], path);
+      if (nested !== undefined) return nested;
+    }
+    return undefined;
+  }
+  if (Array.isArray(before) && Array.isArray(after)) {
+    if (after.length > before.length) return field;
+    for (let index = 0; index < after.length; index += 1) {
+      const nested = addedContentProblem(before[index], after[index], `${field}[${index}]`);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Problema de segurança introduzido por um passo de migração: a chave citada
  * ficaria mais permissiva ou teria sido injetada (ADR-0028). Chave ausente conta
- * como default, então o guard é fail-closed.
+ * como default, então o guard é fail-closed. Exportado para o teste de tabela
+ * (não é API de runtime).
  */
-function migrationSecurityProblem(
+export function migrationSecurityProblem(
   before: Record<string, unknown>,
   after: Record<string, unknown>,
 ): string | undefined {
-  for (const key of Object.keys(after)) {
-    if (key !== "version" && !Object.hasOwn(before, key)) return key;
-  }
-  const beforePermissions = nestedSection(before, "permissions");
-  const afterPermissions = nestedSection(after, "permissions");
-  if (beforePermissions !== undefined) {
-    if (afterPermissions === undefined) return "permissions";
-    const rank = (mode: unknown): number => (typeof mode === "string" ? PERMISSION_MODE_RANK[mode] ?? 0 : 0);
-    if (rank(afterPermissions.mode ?? "ask") < rank(beforePermissions.mode ?? "ask")) return "permissions.mode";
-  }
+  const added = addedContentProblem(before, after, "");
+  if (added !== undefined) return added;
+
+  // `permissions.mode`: só endurecer. `bypass`/desconhecido é o topo do rank.
+  const beforeMode = nestedSection(before, "permissions")?.mode ?? "ask";
+  const afterMode = nestedSection(after, "permissions")?.mode ?? "ask";
+  if (permissionModeRank(afterMode) > permissionModeRank(beforeMode)) return "permissions.mode";
+
+  // `tools.run_command.sandbox` ausente = true (fail-closed).
   const beforeSandbox = nestedSection(before, "tools", "run_command")?.sandbox;
   const afterSandbox = nestedSection(after, "tools", "run_command")?.sandbox;
   if (afterSandbox === false && beforeSandbox !== false) return "tools.run_command.sandbox";
+
   const beforeBudget = nestedSection(before, "budget");
   const afterBudget = nestedSection(after, "budget");
   if (beforeBudget !== undefined) {
@@ -2029,26 +2076,39 @@ function migrationSecurityProblem(
       return "budget.hardCeilingUsd";
     }
     if (beforeBudget.onExceed === "stop" && afterBudget.onExceed !== "stop") return "budget.onExceed";
+    const beforeWarnAt = beforeBudget.warnAt;
+    const afterWarnAt = afterBudget.warnAt;
+    if (typeof beforeWarnAt === "number" && typeof afterWarnAt === "number" && afterWarnAt < beforeWarnAt) {
+      return "budget.warnAt";
+    }
   }
+
   const beforePaths = nestedSection(before, "paths");
   if (beforePaths !== undefined && JSON.stringify(beforePaths) !== JSON.stringify(nestedSection(after, "paths"))) {
     return "paths";
   }
+
+  // Entropia maior = menos conteúdo barrado (ADR-0027).
   const beforeEntropy = nestedSection(before, "security")?.entropyThreshold;
   const afterEntropy = nestedSection(after, "security")?.entropyThreshold;
   if (typeof beforeEntropy === "number" && (typeof afterEntropy !== "number" || afterEntropy > beforeEntropy)) {
     return "security.entropyThreshold";
   }
-  // A allowlist de tools nunca cresce (I-01).
-  const beforeTools = stringSet(nestedSection(before, "agent")?.tools);
-  const afterTools = stringSet(nestedSection(after, "agent")?.tools);
-  if (beforeTools !== undefined && (afterTools === undefined || [...afterTools].some((tool) => !beforeTools.has(tool)))) {
-    return "agent.tools";
+
+  // Allowlist de tools nunca cresce (I-01), inclusive quando a origem omite a
+  // chave e o default de seis tools entra em vigor.
+  const beforeTools = effectiveToolAllowlist(before);
+  const afterTools = effectiveToolAllowlist(after);
+  if ([...afterTools].some((tool) => !beforeTools.has(tool))) return "agent.tools";
+  for (const name of Object.keys(nestedSection(after, "agents") ?? {})) {
+    const beforeAgentTools = effectiveToolAllowlist(before, name);
+    const afterAgentTools = effectiveToolAllowlist(after, name);
+    if ([...afterAgentTools].some((tool) => !beforeAgentTools.has(tool))) return `agents.${name}.tools`;
   }
   return undefined;
 }
 
-type ConfigMigrationStep = (document: Record<string, unknown>) => Record<string, unknown>;
+export type ConfigMigrationStep = (document: Record<string, unknown>) => Record<string, unknown>;
 
 /**
  * Major 0 -> 1: o major 1 só endurece a validação das seções de forma fixa, sem
@@ -2064,14 +2124,20 @@ const CONFIG_MIGRATIONS: Readonly<Record<number, ConfigMigrationStep>> = Object.
   0: migrateV0ToV1,
 });
 
-function migrateToSupported(
+/**
+ * Roda a cadeia de passos puros por major, recusando qualquer passo que afrouxe
+ * chave de segurança ou acrescente conteúdo (ADR-0028). Exportado para permitir
+ * testar a recusa com uma tabela injetada.
+ */
+export function runConfigMigrations(
   document: Record<string, unknown>,
   fromMajor: number,
-  source: string | undefined,
+  steps: Readonly<Record<number, ConfigMigrationStep>>,
+  source?: string,
 ): Record<string, unknown> {
   let current = document;
   for (let major = fromMajor; major < CONFIG_SCHEMA_MAJOR; major += 1) {
-    const step = CONFIG_MIGRATIONS[major];
+    const step = steps[major];
     if (step === undefined) {
       throw new ConfigError(
         `${configLabel(source)}: não há migração do major ${major} para ${major + 1} rumo ao major ` +
@@ -2091,6 +2157,14 @@ function migrateToSupported(
     current = next;
   }
   return current;
+}
+
+function migrateToSupported(
+  document: Record<string, unknown>,
+  fromMajor: number,
+  source: string | undefined,
+): Record<string, unknown> {
+  return runConfigMigrations(document, fromMajor, CONFIG_MIGRATIONS, source);
 }
 
 export interface ConfigDocumentMeta {
@@ -2443,10 +2517,10 @@ function writeConfigFailure(path: string, error: unknown): ConfigError {
 }
 
 /**
- * Grava `contents` de forma atômica: tmp no mesmo diretório (0600 no POSIX),
- * fsync, rename. Destino symlink ou não-regular é recusado nomeando só o
- * caminho; falha deixa o destino anterior intacto e sem tmp órfão
- * (#495, ADR-0028, I-03).
+ * Grava `contents` de forma atômica: tmp no mesmo diretório (0600 no POSIX e
+ * DACL owner-only no Windows, ADR-0028), fsync, rename. Destino symlink ou
+ * não-regular é recusado nomeando só o caminho; falha deixa o destino anterior
+ * intacto e sem tmp órfão (#495, ADR-0028, I-03).
  */
 export function writeConfigFileAtomic(path: string, contents: string): void {
   try {
@@ -2477,9 +2551,22 @@ export function writeConfigFileAtomic(path: string, contents: string): void {
     } finally {
       closeSync(fd);
     }
+    // Windows ignora o modo do `open`: a DACL owner-only vai no temporário antes
+    // do rename; falha aborta a troca e o destino anterior fica intacto.
+    if (process.platform === "win32") {
+      try {
+        hardenWindowsAclFile(tmp);
+      } catch {
+        throw new ConfigError(
+          `não foi possível gravar "${path}": a ACL owner-only do arquivo temporário não pôde ser aplicada; nada foi gravado`,
+          "config_write_denied",
+        );
+      }
+    }
     renameSync(tmp, path);
   } catch (error) {
     try { unlinkSync(tmp); } catch { /* tmp já não existe */ }
+    if (error instanceof ConfigError) throw error;
     throw writeConfigFailure(path, error);
   }
   // Depois do rename o arquivo já é o novo: qualquer erro aqui é best-effort e

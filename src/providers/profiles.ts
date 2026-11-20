@@ -530,11 +530,13 @@ export function validateProjectLayer(
   // O schema de cada camada crua: `model` e `profile` não convivem e `models`
   // não se repete (a mescla entre camadas resolve o XOR, o conflito dentro da
   // camada é erro).
-  assertLayerSchema(projectLayer);
-  assertLayerSchema(global);
-  // ADR-0028: versão e chaves são checadas por camada de origem, antes do merge.
+  // ADR-0028: versão e chaves são checadas por camada de origem, antes do merge
+  // e antes de qualquer erro de forma (um 2.0.0 com XOR/duplicata reporta
+  // `config_ahead_of_harness`, não o erro de forma).
   const projectDoc = inspectLayerDocument(projectLayer, projectSource);
   const globalDoc = global === undefined ? {} : inspectLayerDocument(global, globalConfigPath(homeEnv));
+  assertLayerSchema(projectDoc);
+  assertLayerSchema(globalDoc);
   const declared = mergeConfigLayers(globalDoc, projectDoc);
   // Todo model declarado aponta para um provider declarado nas camadas.
   assertDeclaredProviders(declared);
@@ -1075,8 +1077,12 @@ export function loadEffectiveConfig(
   if (!exists && opts.allowMissing !== true) {
     throw new ConfigError(`configuração não encontrada: "${configPath}"`);
   }
-  const project = exists ? loadConfigRaw(configPath) : undefined;
-  const global = useGlobal ? loadGlobalConfig(homeEnv) : undefined;
+  const projectRaw = exists ? loadConfigRaw(configPath) : undefined;
+  const globalRaw = useGlobal ? loadGlobalConfig(homeEnv) : undefined;
+  // ADR-0028: versão e chaves por camada de origem antes do erro de forma, para
+  // que um `2.0.0` com XOR/duplicata reporte `config_ahead_of_harness`.
+  const project = projectRaw === undefined ? undefined : inspectLayerDocument(projectRaw, configPath);
+  const global = globalRaw === undefined ? undefined : inspectLayerDocument(globalRaw, globalConfigPath(homeEnv));
   // O schema de cada camada crua: `model` e `profile` não convivem e `models`
   // não se repete (a mescla entre camadas resolve o XOR, o conflito dentro da
   // camada é erro).

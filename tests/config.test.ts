@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, loadConfig, providerAccountRefFor, providerCredentialRefFor, updateConfigPermissionsMode, validateConfig, writeConfigFileAtomic } from "../src/core/config";
+import { inspectWindowsAcl, windowsAclIsPrivate } from "../src/attachments/acl";
 import { accountRefOf } from "../src/agent-lock";
 import type { ModelConfig, ModelStatus } from "../src/core/config";
 import type { PermissionMode } from "../src/permissions";
@@ -495,12 +496,20 @@ describe("writeConfigFileAtomic (#495)", () => {
     expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   };
 
-  test("grava conteúdo via tmp+rename e 0600 no POSIX", () => {
+  test("grava conteúdo via tmp+rename e destino privado (0600 ou DACL owner-only)", () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-config-495-"));
     const path = join(dir, "astro.config.json");
     writeConfigFileAtomic(path, "{\n  \"a\": 1\n}\n");
     expect(readFileSync(path, "utf8")).toBe("{\n  \"a\": 1\n}\n");
-    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Roda em toda plataforma: trocar o escritor atômico por `writeFileSync`
+    // deixa de garantir a privacidade que o ADR-0028 exige.
+    if (process.platform === "win32") {
+      const acl = inspectWindowsAcl(path);
+      expect(acl).toBeDefined();
+      expect(windowsAclIsPrivate(acl!.sddl, acl!.userSid)).toBe(true);
+    } else {
+      expect(statSync(path).mode & 0o077).toBe(0);
+    }
     noTmp(dir);
   });
 
@@ -529,12 +538,15 @@ describe("writeConfigFileAtomic (#495)", () => {
     const path = join(dir, "dir-destino");
     mkdirSync(path);
     let message = "";
+    let code: string | undefined;
     try {
       writeConfigFileAtomic(path, "novo");
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigError);
+      code = (error as ConfigError).code;
       message = (error as Error).message;
     }
+    expect(code).toBe("config_write_denied");
     expect(message).toContain(path);
     expect(statSync(path).isDirectory()).toBe(true);
     noTmp(dir);

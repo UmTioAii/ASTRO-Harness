@@ -109,21 +109,27 @@ export function inspectWindowsAcl(path: string): WindowsAcl | undefined {
  * com `Set-Acl`. Uma DACL nova descarta ACEs herdadas *e* explícitas; `icacls
  * /inheritance:r` só remove as herdadas e deixaria uma ACE explícita da raiz.
  */
-const HARDEN_SCRIPT = [
-  "$ErrorActionPreference='Stop'",
-  "$path=$env:ASTRO_ACL_PATH",
-  "$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
-  "$acl=New-Object System.Security.AccessControl.DirectorySecurity",
-  "$acl.SetAccessRuleProtection($true,$false)",
-  "$acl.SetOwner($sid)",
-  "foreach($id in @($sid.Value,'S-1-5-18','S-1-5-32-544')){",
-  "  $rule=New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($id)),[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Allow)",
-  "  $acl.AddAccessRule($rule)",
-  "}",
-  "Set-Acl -LiteralPath $path -AclObject $acl",
-  "Write-Output $sid.Value",
-  "Write-Output (Get-Acl -LiteralPath $path).Sddl",
-].join("\n");
+function hardenScript(securityClass: "DirectorySecurity" | "FileSecurity", inheritance: string): string {
+  return [
+    "$ErrorActionPreference='Stop'",
+    "$path=$env:ASTRO_ACL_PATH",
+    "$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+    `$acl=New-Object System.Security.AccessControl.${securityClass}`,
+    "$acl.SetAccessRuleProtection($true,$false)",
+    "$acl.SetOwner($sid)",
+    "foreach($id in @($sid.Value,'S-1-5-18','S-1-5-32-544')){",
+    "  $rule=New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($id)),[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.InheritanceFlags]'" + inheritance + "',[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Allow)",
+    "  $acl.AddAccessRule($rule)",
+    "}",
+    "Set-Acl -LiteralPath $path -AclObject $acl",
+    "Write-Output $sid.Value",
+    "Write-Output (Get-Acl -LiteralPath $path).Sddl",
+  ].join("\n");
+}
+
+const HARDEN_SCRIPT = hardenScript("DirectorySecurity", "ContainerInherit,ObjectInherit");
+/** Arquivo regular: FileSecurity, sem flags de herança (ADR-0028, config 0600). */
+const HARDEN_FILE_SCRIPT = hardenScript("FileSecurity", "None");
 
 /**
  * Reescreve a DACL da raiz como owner-only numa única chamada ao PowerShell e
@@ -131,10 +137,22 @@ const HARDEN_SCRIPT = [
  * `powershell.exe` absoluto, cwd do sistema, env mínimo. Qualquer falha lança.
  */
 export function hardenWindowsAcl(path: string): WindowsAcl {
+  return runHardenScript(HARDEN_SCRIPT, path);
+}
+
+/**
+ * Mesma garantia para um arquivo regular (ex.: config temporário, ADR-0028):
+ * DACL owner-only com FileSecurity. Qualquer falha lança.
+ */
+export function hardenWindowsAclFile(path: string): WindowsAcl {
+  return runHardenScript(HARDEN_FILE_SCRIPT, path);
+}
+
+function runHardenScript(script: string, path: string): WindowsAcl {
   const root = windowsRoot();
   const exe = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   if (!existsSync(exe)) throw new Error("powershell.exe não encontrado");
-  const output = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", HARDEN_SCRIPT], {
+  const output = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
     timeout: 60_000, // runner windows-latest: o cold start do PowerShell passa de 15 s
     windowsHide: true,

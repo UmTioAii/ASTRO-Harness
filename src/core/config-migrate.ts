@@ -8,12 +8,12 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { globalConfigPath } from "../astro-home";
 import { assertLayerSchema } from "../config-overlay";
+import { validateProjectLayer } from "../providers/profiles";
 import {
   CONFIG_SCHEMA_VERSION,
   ConfigError,
   loadConfigRaw,
   migrateConfigInMemory,
-  validateConfig,
   writeConfigFileAtomic,
 } from "./config";
 
@@ -52,11 +52,15 @@ export function migrateConfigFile(
     );
   }
   const meta = migrateConfigInMemory(loadConfigRaw(path), { source: path });
-  // Valida sempre, mesmo quando não há migração: `--apply` nunca grava config inválida.
-  if (isGlobalLayer(path, options.env ?? process.env)) {
+  // Valida sempre, mesmo quando não há migração: `--apply` nunca grava config
+  // incompatível. A camada de projeto é validada como camada (com global +
+  // store), porque um arquivo de first-run pode declarar só `agent.model`; a
+  // global é parcial por contrato.
+  const env = options.env ?? process.env;
+  if (isGlobalLayer(path, env)) {
     assertLayerSchema(meta.document);
   } else {
-    validateConfig(meta.document, { source: path });
+    validateProjectLayer(meta.document, env, path);
   }
   const from = meta.versionDeclared ? meta.declaredVersion : "ausente (0.0.0)";
   const base = {
