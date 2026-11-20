@@ -1,4 +1,4 @@
-# ADR-0031: shell no host com aprovação por comando
+# ADR-0031: shell no host por padrão, Docker como hardening opcional
 
 - Status: aceita
 - Data: 2026-11-20
@@ -7,25 +7,25 @@
 
 ## Contexto
 
-`run_command` só executava em container Docker (ADR-0027) e `sandbox: false` desligava o shell por completo. Em máquina sem Docker o shell ficava inutilizável, mesmo com o usuário disposto a aprovar cada comando, e `astro.config.example.json` ainda ensinava `"sandbox": false` - forma que só desligava a tool.
+`run_command` só executava em container Docker (ADR-0027) e `sandbox: false` desligava o shell por completo. Em máquina sem Docker o shell ficava inutilizável, mesmo com o usuário disposto a aprovar cada comando. O custo de operação do Docker (daemon, imagem, latência) também não se justifica quando o usuário já aprova comando a comando.
 
 ## Decisão
 
-`tools.run_command.sandbox` aceita três valores: `true`/ausente (default) = só Docker, comportamento anterior; `"auto"` = Docker quando disponível, senão **host com aprovação por comando**; `false` = shell desligado (I-19). O host é opt-in explícito; Docker continua o default e a recomendação.
+O **default é o shell no host**, com aprovação por comando. `tools.run_command.sandbox`: ausente e `"auto"` = host; `true`/`"docker"` = container Docker; `false` = shell desligado (I-19). Docker é o **hardening recomendado para repositório não confiável**, disponível por config, e não o default.
 
-No caminho do host, o comando passa por: allowlist/ceiling e gate de permissão do executor (o prompt mostra o comando), hard-block de path sobre os tokens path-like do comando (I-11), env sanitizado (`secrets.ts`), redação ANTES do truncamento (I-03) e audit `host_shell.decision` só com decisão/modo/shell, nunca comando ou saída.
+Todo comando no host passa por: allowlist/ceiling e gate de permissão do executor (o prompt mostra o comando, sem reutilizar grant de sessão), hard-block de path sobre os tokens path-like (I-11), env sanitizado (`secrets.ts`), redação ANTES do truncamento (I-03) e audit `host_shell.decision` só com decisão/modo/shell - nunca comando ou saída. O host só executa atrás do `ToolExecutor`; chamada direta recusa `host_shell_requires_gate`. Em `bypass` o host recusa com `host_shell_confirmation_required` salvo `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1`, porque `bypass` não abre prompt.
 
-Regras próprias do host: `shell` não reutiliza grant de sessão no modo `auto` - cada comando pede aprovação de novo; em `bypass` o host recusa com `host_shell_confirmation_required` salvo `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1`, porque `bypass` não abre prompt e sem essa confirmação o comando rodaria sem nenhuma revisão humana. `shell.default` (gravado por `/shell` após `confirm`) só vale se o shell existir na máquina; ausente = `shell_not_available`, sem troca silenciosa.
+`shell.default` (gravado por `/shell` após `confirm`) só vale se o shell existir na máquina; ausente = `shell_not_available`, sem troca silenciosa. O projeto pode endurecer o global (Docker ou desligado), nunca voltar ao host quando o global força Docker. `run_tests` mantém a regra própria: exige Docker.
 
 ## Consequências
 
-- Ganho: shell utilizável sem Docker, com escopo por comando e rastro de auditoria; Docker segue intacto byte a byte.
-- Perda no host (sem compensação): isolamento de rede (`--network none`), rootfs read-only, máscaras `:ro` de `.git`/hard-blocks, `HOME=/tmp` e neutralização de git. O comando vê o FS e a rede do usuário e pode alcançar processos/credenciais fora do alcance das tools.
-- Compensa parcialmente: allowlist, aprovação por comando, hard-block no dispatch, env sem nomes de segredo, redação e audit sem saída. Não é equivalente ao Docker; por isso o host nunca é default.
-- Invariantes afetados: I-11 (sandbox deixa de ser o único modo, mas continua default), I-03, I-19.
+- Ganho: shell utilizável sem Docker, com escopo por comando e rastro de auditoria; Docker disponível como hardening.
+- O que o host **perde** em relação ao Docker: isolamento de rede (`--network none`), rootfs read-only, máscaras `:ro` de `.git`/hard-blocks, `HOME=/tmp` e neutralização de git. O comando vê o FS e a rede do usuário e pode alcançar processos/credenciais fora do alcance das tools; o hard-block só casa tokens literais, então expansão como `$HOME/.astro/...` não é pega lexicalmente.
+- O que **compensa**: aprovação por comando com o comando no prompt, allowlist/ceiling, hard-block no dispatch, env sanitizado, redação antes do truncamento, audit sem saída e confirmação extra em `bypass`. Não é equivalente ao Docker: use `sandbox: true` em repositório não confiável.
+- Invariantes afetados: I-11 (Docker deixa de ser o default, mas segue recomendado), I-03, I-19.
 
 ## Alternativas descartadas
 
-- Manter `sandbox: false` como host: silencioso e sem prompt por comando; mantido como shell desligado.
-- Host como default sem Docker: amplia o raio de dano sem ato explícito do usuário.
+- Docker como default: falha em máquina sem daemon e mantém o shell inutilizável, contra o título da issue.
+- `sandbox: false` como host: silencioso e sem prompt por comando; mantido como shell desligado.
 - Auto-aprovar em `bypass`: comando arbitrário sem revisão humana.

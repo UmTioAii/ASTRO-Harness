@@ -102,7 +102,7 @@ function killProcessTree(proc: { pid: number; kill: () => void }): void {
 
 let sandboxEnabled = false;
 /** Estado do #474 (opt-in `sandbox: "auto"`): modo, modo de permissão e `shell.default`. */
-let commandMode: RunCommandMode = "docker";
+let commandMode: RunCommandMode = "host";
 let permissionMode: PermissionMode = DEFAULT_PERMISSION_MODE;
 let preferredShell: string | undefined;
 let dockerProbe: Promise<boolean> | undefined;
@@ -164,15 +164,15 @@ export function configureRunCommand(opts: {
   /** `shell.default` da config (#474); ausente = ordem da plataforma. */
   shellDefault?: string;
 }): void {
-  commandMode = opts.mode ?? (opts.sandbox === false ? "disabled" : "docker");
+  commandMode = opts.mode ?? (opts.sandbox === false ? "disabled" : opts.sandbox === true ? "docker" : "host");
   permissionMode = opts.permissionMode ?? DEFAULT_PERMISSION_MODE;
   preferredShell = opts.shellDefault;
   // `sandbox: true` mantém o caminho Docker byte a byte; `isRunCommandSandboxEnabled`
   // segue significando "Docker", como antes.
   sandboxEnabled = commandMode === "docker";
-  // #474: no modo `auto` o shell pode cair no host, então `shell` deixa de aceitar
-  // grant de sessão - cada comando pede aprovação mostrando o comando.
-  setPerCallApproval("shell", commandMode === "auto");
+  // #474: no modo `host` o shell não tem o isolamento do Docker, então deixa de
+  // aceitar grant de sessão - cada comando pede aprovação mostrando o comando.
+  setPerCallApproval("shell", commandMode === "host");
 }
 
 /** Estado atual do sandbox do run_command (diagnóstico e testes). */
@@ -180,18 +180,18 @@ export function isRunCommandSandboxEnabled(): boolean {
   return sandboxEnabled;
 }
 
-/** Modo efetivo do `run_command` (#474): Docker, auto (Docker → host) ou desligado. */
-export type RunCommandMode = "docker" | "auto" | "disabled";
+/** Modo efetivo do `run_command` (#474): host (default), Docker (opt-in) ou desligado. */
+export type RunCommandMode = "host" | "docker" | "disabled";
 
 /**
- * Resolve `tools.run_command.sandbox` (#474): `true`/ausente = Docker (default,
- * comportamento anterior); `"auto"` = Docker quando disponível, senão host com
- * aprovação por comando; `false` = shell desligado (I-19).
+ * Resolve `tools.run_command.sandbox` (#474): ausente e `"auto"` = host com
+ * aprovação por comando (default); `true`/`"docker"` = container Docker;
+ * `false` = shell desligado (I-19).
  */
-export function resolveRunCommandMode(configured: boolean | "auto" | undefined): RunCommandMode {
+export function resolveRunCommandMode(configured: boolean | "auto" | "docker" | undefined): RunCommandMode {
   if (configured === false) return "disabled";
-  if (configured === "auto") return "auto";
-  return "docker";
+  if (configured === true || configured === "docker") return "docker";
+  return "host";
 }
 
 /**
@@ -202,11 +202,11 @@ export function resolveRunCommandMode(configured: boolean | "auto" | undefined):
 export const HOST_SHELL_BYPASS_CONFIRMATION_ENV = "ASTRO_HOST_SHELL_CONFIRM_BYPASS";
 
 /**
- * Sandbox ligado salvo opt-out explícito (`sandbox: false`), que NÃO roda no host:
- * recusa com `sandbox_required_for_shell` (I-19, slice 4b). Sem Docker, recusa (I-11).
+ * Shell ligado salvo opt-out explícito (`sandbox: false`, I-19). O default é o
+ * host com aprovação por comando (#474); `sandbox: true` força Docker.
  */
-export function resolveSandboxSetting(configured: boolean | "auto" | undefined): boolean {
-  // `"auto"` conta como sandbox ligado (Docker quando existe); só `false` desliga.
+export function resolveSandboxSetting(configured: boolean | "auto" | "docker" | undefined): boolean {
+  // `"auto"` conta como shell ligado (host); só `false` desliga.
   return configured !== false;
 }
 
@@ -667,8 +667,9 @@ export const runCommandTool: Tool = {
     name: "run_command",
     description:
       "Executa um comando de shell no diretório de trabalho e devolve a saída. " +
-      "Só em container Docker efêmero isolado; sem sandbox recusa (sandbox_required_for_shell). " +
-      "Com tools.run_command.sandbox \"auto\" e sem Docker, roda no host com aprovação por comando.",
+      "No default roda no host, com aprovação por comando; com tools.run_command.sandbox: true " +
+      "roda em container Docker efêmero isolado (recomendado para repositório não confiável). " +
+      "Com sandbox:false recusa (sandbox_required_for_shell).",
     parameters: {
       type: "object",
       properties: {
@@ -703,9 +704,9 @@ export const runCommandTool: Tool = {
       return { ...failure(error.message), code: error.code };
     }
 
-    // `auto` (#474): Docker quando disponível; sem Docker, host com aprovação por
-    // comando (o gate já rodou antes: allowlist, prompt e hard-block).
-    if (commandMode === "auto" && !(await detectDockerAvailable())) {
+    // `host` é o default (#474): o gate já rodou (allowlist, prompt com o comando,
+    // hard-block) e o piso próprio do host vale em runOnHost.
+    if (commandMode === "host") {
       return runOnHost(command, ctx, runCommandTool.manifest.timeoutMs);
     }
 
@@ -932,10 +933,12 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
         };
       }
 
-      // Mesma recusa do run_command (I-19): `sandbox: false` não executa no host.
-      // `auto` (#474) também não: o host do ADR-0031 vale só para `run_command`.
+      // `run_tests` mantém a regra própria (#474): exige Docker, mesmo com o host
+      // como default - o argv vem da config e a decisão é executá-lo isolado.
       if (commandMode !== "docker") {
-        const mode = commandMode === "auto" ? "sandbox:auto (host só para run_command)" : "sandbox:false";
+        const mode = commandMode === "host"
+          ? "sandbox:host (run_tests exige Docker)"
+          : "sandbox:false";
         const error = new SandboxRequiredForShellError(mode, "run_tests");
         return { ...failure(error.message), code: error.code };
       }
