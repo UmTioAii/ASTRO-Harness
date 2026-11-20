@@ -20,7 +20,7 @@
  *
  * Uso: bun scripts/packed-smoke.ts [--json]
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -54,6 +54,8 @@ const STEP_TIMEOUT_MS = 15 * 60_000;
 const POLL_MS = 50;
 const REMOVE_ATTEMPTS = 6;
 const REMOVE_DELAY_MS = 150;
+/** Carência do kill normal antes do SIGKILL: o filho tem 2 s para sair sozinho. */
+const KILL_GRACE_MS = 2_000;
 /** Prefixo próprio: o temporário não se confunde com o do `release:check`. */
 const TEMP_PREFIX = "astro-packed-smoke-";
 /** Mensagem do `runTui` quando o processo não tem terminal. */
@@ -78,6 +80,39 @@ function npmBinary(): string {
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+}
+
+/** Raiz temporária e os três subdiretórios: uma remoção cobre tudo. */
+export interface SmokeDirs {
+  root: string;
+  packDir: string;
+  projectDir: string;
+  home: string;
+}
+
+/** Layout puro: nenhum subdiretório fica fora da raiz que o `finally` remove. */
+export function smokeDirs(root: string): SmokeDirs {
+  return {
+    root,
+    packDir: join(root, "pack"),
+    projectDir: join(root, "project"),
+    home: join(root, "home"),
+  };
+}
+
+/**
+ * Um `mkdtemp` só: se um `mkdir` falhar, a raiz já criada é removida aqui —
+ * não existe diretório órfão entre a criação e a instalação do handler.
+ */
+export function createSmokeDirs(): SmokeDirs {
+  const dirs = smokeDirs(makeTempDir());
+  try {
+    for (const dir of [dirs.packDir, dirs.projectDir, dirs.home]) mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    rmSync(dirs.root, { recursive: true, force: true });
+    throw error;
+  }
+  return dirs;
 }
 
 /** Remove só diretório criado por este script (prefixo e pai `tmpdir()`). */
@@ -212,8 +247,17 @@ preload do smoke falsifica o TTY; "precisa de um terminal" significa que o
 preload não rodou e o run falha. O resumo só é "ok" com o boot da TUI.
 O wizard de provider segue manual: docs/release.md §5.`;
 
+/** Porta usável no loopback: `0`, `NaN` ou fracionária apontaria a config para `:0`. */
+export function requirePort(port: number): number {
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new SmokeError(`porta do mock inválida: ${String(port)} (esperava inteiro entre 1 e 65535)`);
+  }
+  return port;
+}
+
 /** Config do projeto temporário: provider local sem chave real, modelo fixo. */
-export function smokeConfig(port: number): Record<string, unknown> {
+export function smokeConfig(input: number): Record<string, unknown> {
+  const port = requirePort(input);
   return {
     providers: {
       [SMOKE_PROVIDER]: {
@@ -335,6 +379,18 @@ export function providerOk(output: string, provider = SMOKE_PROVIDER): boolean {
   return providerOkLine(output, provider) !== undefined;
 }
 
+/**
+ * Linha `ok` obrigatória: sem ela a etapa falha em vez de inventar "ok" no
+ * detalhe do resumo. O `waitUntil` antes já provou a linha; isto fecha o furo.
+ */
+export function requiredProviderOkLine(output: string, provider = SMOKE_PROVIDER): string {
+  const line = providerOkLine(output, provider);
+  if (line === undefined) {
+    throw new SmokeError(`/providers não mostrou "${provider}: ok · <latência>":\n${failureTail(output)}`);
+  }
+  return line;
+}
+
 /** Confirmação do `t` na tela de providers (`Testar mock?`). */
 export function providerTestPrompt(output: string): boolean {
   return tuiLines(output).includes(`Testar ${SMOKE_PROVIDER}?`);
@@ -372,8 +428,18 @@ function outputOf(result: RunResult): string {
 }
 
 /** Ambiente sem segredos do host; o smoke só acrescenta as variáveis dele. */
-function smokeEnv(extra: Record<string, string> = {}): Record<string, string> {
-  return { ...stepEnv(process.env), ...extra };
+function smokeEnv(extra: Record<string, string> = {}, source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return { ...stepEnv(source), ...extra };
+}
+
+/**
+ * `npm install` grava no cache do npm. Sem `NPM_CONFIG_CACHE` herdado, o cache
+ * vai para dentro do temporário (removido no fim) em vez do `~/.npm` do host.
+ */
+export function npmInstallEnv(packDir: string, source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const inherited = source.NPM_CONFIG_CACHE ?? source.npm_config_cache;
+  if (inherited !== undefined && inherited !== "") return smokeEnv({}, source);
+  return smokeEnv({ NPM_CONFIG_CACHE: join(packDir, "npm-cache") }, source);
 }
 
 interface MockServer {
@@ -385,8 +451,10 @@ interface MockServer {
 /**
  * Mock OpenAI-compatible: grava cada requisição, responde o health
  * (`GET /v1/models`, para `/providers` → `t` resolver `ok`) e um turno fixo.
+ * O health exige o mesmo Bearer do provider: sem ele o mock responde 401, então
+ * a linha `ok` prova que o `credentialRef` do `astro.config.json` resolveu.
  */
-function startMock(): MockServer {
+export function startMock(): MockServer {
   const requests: RecordedRequest[] = [];
   let stopped = false;
   const json = (body: unknown, status = 200): Response =>
@@ -398,13 +466,12 @@ function startMock(): MockServer {
       const path = new URL(request.url).pathname;
       const body = request.method === "POST" ? await request.text() : "";
       const authorizationHeader = request.headers.get("authorization");
-      requests.push({
-        method: request.method,
-        path,
-        authorization: authorizationHeader === null ? undefined : authorizationHeader,
-        body,
-      });
+      const authorization = authorizationHeader === null ? undefined : authorizationHeader;
+      requests.push({ method: request.method, path, authorization, body });
       if (request.method === "GET" && path.endsWith("/models")) {
+        if (authorization !== `Bearer ${SMOKE_KEY_VALUE}`) {
+          return json({ error: { message: "mock: health exige Authorization Bearer" } }, 401);
+        }
         return json({ object: "list", data: [{ id: SMOKE_MODEL, object: "model" }] });
       }
       if (!path.endsWith("/chat/completions")) {
@@ -420,25 +487,31 @@ function startMock(): MockServer {
       });
     },
   });
-  return {
-    port: server.port ?? 0,
-    requests,
-    stop: () => {
-      if (stopped) return;
-      stopped = true;
-      void server.stop(true);
-    },
-  };
+  try {
+    return {
+      port: requirePort(server.port ?? 0),
+      requests,
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        void server.stop(true);
+      },
+    };
+  } catch (error) {
+    void server.stop(true);
+    throw error;
+  }
 }
 
 /** Filho/mock vivos, para o handler de sinal encerrar antes de remover o temporário. */
 export interface CleanupRegistry {
-  child?: { kill: () => void; readonly exited: Promise<number>; readonly exitCode: number | null };
+  child?: { kill: (signal?: NodeJS.Signals) => void; readonly exited: Promise<number>; readonly exitCode: number | null };
   mock?: { stop: () => void };
+  /** Limpeza única: todo chamador recebe esta mesma promise (idempotente). */
+  releasing?: Promise<void>;
 }
 
-/** Encerra filho e mock e espera o filho sair (Windows segura o `cwd` até lá). */
-export async function releaseResources(registry: CleanupRegistry): Promise<void> {
+async function doRelease(registry: CleanupRegistry, graceMs: number): Promise<void> {
   const mock = registry.mock;
   registry.mock = undefined;
   if (mock !== undefined) {
@@ -448,7 +521,22 @@ export async function releaseResources(registry: CleanupRegistry): Promise<void>
   registry.child = undefined;
   if (child === undefined) return;
   try { child.kill(); } catch { /* já morto */ }
-  await Promise.race([child.exited.catch(() => -1), Bun.sleep(EXIT_MS)]);
+  const exited = child.exited.catch(() => -1);
+  if (await Promise.race([exited, Bun.sleep(graceMs).then(() => undefined)]) !== undefined) return;
+  // Sem saída na carência: SIGKILL antes de remover diretórios (Windows segura o `cwd`).
+  try { child.kill("SIGKILL"); } catch { /* já morto */ }
+  await Promise.race([exited, Bun.sleep(EXIT_MS)]);
+}
+
+/**
+ * Encerra filho e mock e espera o filho sair (Windows segura o `cwd` até lá).
+ * Memoizada: o `finally` do plano e o handler de sinal compartilham a mesma
+ * limpeza — o filho é morto uma vez e o SIGKILL só entra se o kill normal não
+ * bastar na carência.
+ */
+export function releaseResources(registry: CleanupRegistry, graceMs = KILL_GRACE_MS): Promise<void> {
+  registry.releasing ??= doRelease(registry, graceMs);
+  return registry.releasing;
 }
 
 interface TuiContext {
@@ -456,6 +544,12 @@ interface TuiContext {
   home: string;
   pkgDir: string;
   version: string;
+}
+
+/** Decisão do boot da TUI: com frame é `passed`; sem frame é erro, nunca "pulado". */
+export interface TuiBoot {
+  status: "passed";
+  frame: string;
 }
 
 /**
@@ -473,6 +567,16 @@ export function tuiBootError(output: string, exitCode: number | null): SmokeErro
   return new SmokeError(
     `a TUI não desenhou o primeiro frame em ${FIRST_FRAME_MS / 1000}s (exit ${exitCode ?? "n/a"}):\n${failureTail(output)}`,
   );
+}
+
+/**
+ * Decisão pura do boot, para teste: o tipo não admite `skipped`, então a etapa
+ * não tem como "passar" sem primeiro frame (é o gate do #542).
+ */
+export function bootOutcome(output: string, exitCode: number | null, version: string): TuiBoot {
+  const frame = firstFrame(output, version);
+  if (frame === undefined) throw tuiBootError(output, exitCode);
+  return { status: "passed", frame };
 }
 
 /** Boot da TUI instalada contra o mock; etapa obrigatória, falha sem frame ou sem TTY. */
@@ -540,10 +644,7 @@ async function runTui(ctx: TuiContext, registry: CleanupRegistry): Promise<StepO
     while (Date.now() < deadline && firstFrame(out, ctx.version) === undefined && child.exitCode === null) {
       await Bun.sleep(POLL_MS);
     }
-    if (firstFrame(out, ctx.version) === undefined) {
-      throw tuiBootError(tuiOutput(), child.exitCode);
-    }
-    const frame = firstFrame(out, ctx.version)!;
+    const frame = bootOutcome(tuiOutput(), child.exitCode, ctx.version).frame;
 
     // `/providers` → `t` → enter: health real (GET /v1/models) até `ok` com latência.
     await write("/providers");
@@ -560,7 +661,7 @@ async function runTui(ctx: TuiContext, registry: CleanupRegistry): Promise<StepO
     if (!await waitUntil(() => providerOk(out), SCREEN_MS)) {
       throw new SmokeError(`/providers não mostrou "ok" com latência em ${SCREEN_MS / 1000}s:\n${tail()}`);
     }
-    const healthLine = providerOkLine(out) ?? `${SMOKE_PROVIDER}: ok`;
+    const healthLine = requiredProviderOkLine(out);
     // Volta para a conversa: esc fecha a tela de providers.
     await write("\u001b");
     await Bun.sleep(200);
@@ -711,7 +812,7 @@ export function planSteps(ctx: SmokePlanContext, registry: CleanupRegistry = {})
         const result = run(
           [npm, "install", "--no-audit", "--no-fund", tarball],
           ctx.projectDir,
-          smokeEnv(),
+          npmInstallEnv(ctx.packDir),
           STEP_TIMEOUT_MS,
         );
         if (result.code !== 0) throw new SmokeError(`npm install falhou (exit ${result.code}):\n${outputOf(result)}`);
@@ -792,6 +893,8 @@ export interface SmokeSummary {
   tuiBooted: boolean;
   steps: StepResult[];
   failure: string | null;
+  /** Remoções que falharam no fim: aparecem no `--json` mesmo com outra falha. */
+  cleanupWarnings: string[];
 }
 
 /** A TUI só "bootou" se a etapa existe e passou. */
@@ -809,9 +912,18 @@ export function summaryFor(
   version: string,
   results: readonly StepResult[],
   failure: string | null,
+  cleanupWarnings: readonly string[] = [],
 ): SmokeSummary {
   const booted = tuiBooted(results);
-  return { ok: failure === null && booted, packageName: name, version, tuiBooted: booted, steps: [...results], failure };
+  return {
+    ok: failure === null && booted,
+    packageName: name,
+    version,
+    tuiBooted: booted,
+    steps: [...results],
+    failure,
+    cleanupWarnings: [...cleanupWarnings],
+  };
 }
 
 /** Código de saída do resumo: só zero sem falha. */
@@ -819,37 +931,72 @@ export function exitCodeFor(failure: string | null): number {
   return failure === null ? 0 : 1;
 }
 
+/** Linha final: toda etapa é obrigatória, então não existe contador de puladas. */
+export function okLine(count: number): string {
+  return `smoke:packed ok (${count} etapas, nenhuma etapa pode ser pulada)`;
+}
+
+/** Dependências do handler de sinal, injetadas para teste (fs, `exit`, `process.on`). */
+export interface SignalCleanupDeps {
+  remove: (dir: string) => void;
+  exit: (code: number) => void;
+  onSignal: (signal: "SIGINT" | "SIGTERM", handler: () => void) => () => void;
+  warn: (message: string) => void;
+}
+
+/**
+ * Handler idempotente: a primeira chamada mata o filho, remove cada diretório e
+ * sai uma vez (130 no SIGINT, 143 no SIGTERM); as demais recebem a mesma
+ * promise, então um segundo sinal não repete remoção nem `exit`.
+ */
+export function createSignalCleanup(
+  dirs: readonly string[],
+  registry: CleanupRegistry,
+  deps: SignalCleanupDeps,
+): (signal: "SIGINT" | "SIGTERM") => Promise<void> {
+  let pending: Promise<void> | undefined;
+  return (signal) => {
+    pending ??= (async () => {
+      await releaseResources(registry);
+      for (const dir of dirs) {
+        try {
+          deps.remove(dir);
+        } catch (error) {
+          const message = redactSmokeText(error instanceof Error ? error.message : String(error));
+          deps.warn(`smoke:packed: falha ao limpar ${dir} no sinal: ${message}\n`);
+        }
+      }
+      deps.exit(signal === "SIGINT" ? 130 : 143);
+    })();
+    return pending;
+  };
+}
+
 /**
  * Ctrl-C/SIGTERM não pode deixar temporário com `node_modules` nem filho vivo.
  * Filho e mock são encerrados e aguardados ANTES do `rm` (Windows segura o
  * `cwd`), cada diretório é removido com retry e o processo sai uma vez só.
+ * No Windows um `child.kill()` programático chega em `exit=143` sem passar por
+ * este handler (docs/release.md §5).
  */
-export function installCleanupHandlers(dirs: readonly string[], registry: CleanupRegistry): () => void {
-  let stopping = false;
-  const onSignal = (signal: "SIGINT" | "SIGTERM"): void => {
-    if (stopping) return;
-    stopping = true;
-    void (async () => {
-      await releaseResources(registry);
-      for (const dir of dirs) {
-        try {
-          removeTempDirWithRetry(dir);
-        } catch (error) {
-          const message = redactSmokeText(error instanceof Error ? error.message : String(error));
-          process.stderr.write(`smoke:packed: falha ao limpar ${dir} no sinal: ${message}\n`);
-        }
-      }
-      process.exit(signal === "SIGINT" ? 130 : 143);
-    })();
-  };
-  const onSigint = (): void => onSignal("SIGINT");
-  const onSigterm = (): void => onSignal("SIGTERM");
-  process.on("SIGINT", onSigint);
-  process.on("SIGTERM", onSigterm);
-  return () => {
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-  };
+export function installCleanupHandlers(
+  dirs: readonly string[],
+  registry: CleanupRegistry,
+  deps: Partial<SignalCleanupDeps> = {},
+): () => void {
+  const onSignal = deps.onSignal ?? ((signal: "SIGINT" | "SIGTERM", handler: () => void) => {
+    process.on(signal, handler);
+    return () => { process.off(signal, handler); };
+  });
+  const cleanup = createSignalCleanup(dirs, registry, {
+    remove: deps.remove ?? removeTempDirWithRetry,
+    exit: deps.exit ?? ((code) => { process.exit(code); }),
+    warn: deps.warn ?? ((message) => { process.stderr.write(message); }),
+    onSignal,
+  });
+  const offs = (["SIGINT", "SIGTERM"] as const)
+    .map((signal) => onSignal(signal, () => { void cleanup(signal); }));
+  return () => { for (const off of offs) off(); };
 }
 
 async function main(): Promise<number> {
@@ -867,71 +1014,67 @@ async function main(): Promise<number> {
 
   const root = resolve(import.meta.dir, "..");
   const meta = readPackageMeta(root);
-  const packDir = makeTempDir();
-  const projectDir = makeTempDir();
-  // ASTRO_HOME fora do cwd do projeto: o doctor recusa artifact root dentro do cwd.
-  const home = makeTempDir();
-  writeFileSync(
-    join(projectDir, "package.json"),
-    `${JSON.stringify({ name: "astro-packed-smoke", private: true }, null, 2)}\n`,
-  );
-  const pkgDir = join(projectDir, "node_modules", ...meta.name.split("/"));
-  const emit = options.json ? () => {} : (line: string) => console.log(line);
+  // Uma raiz só (pack/project/home): o handler entra logo depois da criação e
+  // o `finally` remove tudo de uma vez, mesmo se um `mkdir`/`writeFile` falhar.
+  const dirs = createSmokeDirs();
   const registry: CleanupRegistry = {};
-
-  const steps = planSteps({
-    root,
-    name: meta.name,
-    version: meta.version,
-    packDir,
-    projectDir,
-    home,
-    pkgDir,
-  }, registry);
-
-  if (!options.json) {
-    console.log(`smoke:packed: ${meta.name}@${meta.version}`);
-    console.log(`smoke:packed: temporário ${projectDir}`);
-  }
-
-  const created = [projectDir, home, packDir];
-  const clearSignalHandlers = installCleanupHandlers(created, registry);
+  const clearSignalHandlers = installCleanupHandlers([dirs.root], registry);
+  const emit = options.json ? () => {} : (line: string) => console.log(line);
+  const cleanupWarnings: string[] = [];
   let results: StepResult[] = [];
   let failure: string | null = null;
 
   try {
-    const plan = await runPlan(steps, emit);
+    writeFileSync(
+      join(dirs.projectDir, "package.json"),
+      `${JSON.stringify({ name: "astro-packed-smoke", private: true }, null, 2)}\n`,
+    );
+    const pkgDir = join(dirs.projectDir, "node_modules", ...meta.name.split("/"));
+
+    if (!options.json) {
+      console.log(`smoke:packed: ${meta.name}@${meta.version}`);
+      console.log(`smoke:packed: temporário ${dirs.root}`);
+    }
+
+    const plan = await runPlan(planSteps({
+      root,
+      name: meta.name,
+      version: meta.version,
+      packDir: dirs.packDir,
+      projectDir: dirs.projectDir,
+      home: dirs.home,
+      pkgDir,
+    }, registry), emit);
     results = plan.results;
     failure = plan.failure;
+  } catch (error) {
+    // Fora do `runPlan` (mkdir/write do projeto): falha do run, não stack cru.
+    failure = redactSmokeText(error instanceof Error ? error.message : String(error));
   } finally {
-    // Filho/mock primeiro: o `rm` do temporário só funciona com eles fora.
+    // Filho/mock primeiro (promise memoizada): o `rm` só funciona com eles fora.
     await releaseResources(registry);
-    // Cada diretório tem o seu `try`: um rm que falha não aborta os outros dois
-    // e o primeiro erro é preservado como falha do run.
-    for (const dir of created) {
-      try {
-        removeTempDirWithRetry(dir);
-      } catch (error) {
-        const message = redactSmokeText(error instanceof Error ? error.message : String(error));
-        if (failure === null) failure = `cleanup: ${message}`;
-        else emit(`  aviso: falha ao limpar ${dir}: ${message}`);
-      }
+    // Uma raiz só: um `rm`, um aviso — que nunca é engolido no `--json`.
+    try {
+      removeTempDirWithRetry(dirs.root);
+    } catch (error) {
+      const message = redactSmokeText(error instanceof Error ? error.message : String(error));
+      cleanupWarnings.push(`falha ao limpar ${dirs.root}: ${message}`);
+      if (failure === null) failure = `cleanup: ${message}`;
     }
     // Handlers saem só depois do laço: um sinal no meio ainda limpa tudo.
     clearSignalHandlers();
   }
 
-  const summary = summaryFor(meta.name, meta.version, results, failure);
-  const skipped = results.filter((result) => result.status === "skipped").length;
+  const summary = summaryFor(meta.name, meta.version, results, failure, cleanupWarnings);
   // `ok` também exige o boot da TUI: sem ele o run não pode sair 0.
   const effectiveFailure = summary.ok ? null : (failure ?? "a etapa TUI não bootou");
 
   if (options.json) {
     console.log(JSON.stringify(summary, null, 2));
-  } else if (effectiveFailure === null) {
-    console.log(`smoke:packed ok (${results.length} etapas, ${skipped} pulada(s))`);
   } else {
-    console.error(`smoke:packed falhou: ${effectiveFailure}`);
+    for (const warning of cleanupWarnings) console.error(`smoke:packed: aviso: ${warning}`);
+    if (effectiveFailure === null) console.log(okLine(results.length));
+    else console.error(`smoke:packed falhou: ${effectiveFailure}`);
   }
   return exitCodeFor(effectiveFailure);
 }
