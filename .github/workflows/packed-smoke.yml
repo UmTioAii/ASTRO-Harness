@@ -1,0 +1,30 @@
+name: packed-smoke
+
+# `bun run smoke:packed` instala o tarball e abre a TUI instalada contra um mock
+# em loopback: precisa do registry e leva ~2 min, então nunca roda em PR.
+# Manual: workflow_dispatch. Nightly: schedule (Linux só; o job existe para
+# pegar regressão de pacote/registry, não para duplicar a matriz de SO do `test`).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  packed-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      # O smoke usa `node` (launcher do pacote) e `npm` (pack/install).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: bun install --frozen-lockfile
+      - name: TUI empacotada (bun run smoke:packed)
+        run: bun run smoke:packed

@@ -30,6 +30,8 @@ A matriz `test` roda nos dois SOs de propósito: há regressões específicas de
 
 O bench noturno/ manual fica em `.github/workflows/bench.yml`; métricas, filtro e opt-in em `docs/eval.md`.
 
+O `smoke:packed` (TUI instalada) fica em `.github/workflows/packed-smoke.yml`, manual (`workflow_dispatch`) e noturno: precisa do registry e leva ~2 min, então não roda em PR. O job é `ubuntu-latest` apenas — regressão de empacotamento no Windows continua coberta só localmente (`bun run smoke:packed`). Detalhes da etapa em `docs/release.md` §5.
+
 ## Pré-requisitos e comportamento condicional
 
 - **Docker**: só é usado quando `docker info` responde com engine **Linux** (`OSType=linux`). Windows containers e ausência de daemon → recusa clara do sandbox, sem downgrade. Testes de sandbox têm timeout de 60s (pull + quatro execuções).
