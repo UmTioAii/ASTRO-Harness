@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -16,6 +16,7 @@ import type { ToolResult } from "../src/tools/types";
 import { testEnv } from "./setup";
 
 const SECRET = ["s", "k", "-"].join("") + "live-todo-secret-987654";
+const SECRET_TWO = ["s", "k", "-"].join("") + "live-todo-other-123456";
 const MARKER = "ITEM-NAO-PODE-IR-PARA-O-AUDIT";
 
 function setup() {
@@ -138,6 +139,38 @@ describe("todo_write validação estrita (nada muda no erro)", () => {
     expect(result).toMatchObject({ isError: true, code: "invalid_input" });
   });
 
+  test("duas chaves diferentes não colidem na deduplicação", async () => {
+    const { tool, ctx } = setup();
+    const result = await tool.execute({ items: [item(`chave ${SECRET}`), item(`chave ${SECRET_TWO}`)] }, ctx());
+    expect(result.isError).not.toBe(true);
+    expect(planOf(result).total).toBe(2);
+    expect(result.output).not.toContain(SECRET);
+    expect(result.output).not.toContain(SECRET_TWO);
+  });
+
+  test("corta por code point: a redação não parte um par surrogate no teto", async () => {
+    const { tool, ctx } = setup();
+    // "TOKEN=abc" cresce 7 unidades ao redigir e empurra o corte para dentro do par do emoji.
+    const content = `TOKEN=abc ${"x".repeat(182)}🚀🚀`;
+    const stored = planOf(await tool.execute({ items: [item(content)] }, ctx())).items[0]!.content;
+    expect(Array.from(stored)).toHaveLength(MAX_TODO_CONTENT_LENGTH);
+    expect(stored.endsWith("🚀")).toBe(true);
+    expect(/[\uD800-\uDBFF]$/.test(stored)).toBe(false);
+    expect(stored).toContain("TOKEN=[REDACTED]");
+  });
+
+  test("auditoria falha antes de mudar o plano", async () => {
+    const { cwd } = setup();
+    const store = new TodoPlanStore();
+    const tool = createTodoWriteTool({
+      audit: { append: () => { throw new Error("audit lock"); } },
+      store,
+    });
+    const result = await tool.execute({ items: [item("planejar")] }, { cwd, run: "r1", agent: "planner" });
+    expect(result).toMatchObject({ isError: true });
+    expect(store.get("r1")).toHaveLength(0);
+  });
+
   test("entrada malformada nunca lança: sempre resultado tipado", async () => {
     const { tool, ctx } = setup();
     for (const input of [null, "x", [], {}, { items: "x" }, { items: [null] }, { items: [], extra: 1 }]) {
@@ -148,6 +181,25 @@ describe("todo_write validação estrita (nada muda no erro)", () => {
 });
 
 describe("todo_write saída redigida e audit sem conteúdo (I-03)", () => {
+  test("plano grande acima do cap vira artefato redigido, sem segredo", async () => {
+    const { tool, audit, cwd } = setup();
+    const executor = new ToolExecutor({ tools: [tool], allow: ["todo_write"], audit, approveTool: () => true });
+    const items = Array.from({ length: MAX_TODO_ITEMS }, (_v, index) => item(`${SECRET} tarefa ${index}`));
+    const result = await executor.run(
+      { cwd, run: "r1", agent: "planner", outputLimitTokens: 100 },
+      { id: "call-big", name: "todo_write", arguments: JSON.stringify({ items }) },
+    );
+    expect(result.isError).not.toBe(true);
+    expect(result.output).toContain("saída truncada");
+    // O artefato é do executor (CMP-10), não da tool: existe, e o texto é redigido.
+    const artifactDir = join(cwd, ".astro", "outputs", "r1");
+    const files = readdirSync(artifactDir);
+    expect(files).toHaveLength(1);
+    const artifact = readFileSync(join(artifactDir, files[0]!), "utf8");
+    expect(artifact).not.toContain(SECRET);
+    expect(artifact).toContain("[REDACTED]");
+  });
+
   test("redige segredo no content devolvido e no plano guardado", async () => {
     const { tool, store, ctx } = setup();
     const result = await tool.execute({ items: [item(`usar a chave ${SECRET}`)] }, ctx());

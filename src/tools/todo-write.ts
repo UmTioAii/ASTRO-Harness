@@ -65,6 +65,16 @@ function hasUnknownField(value: Record<string, unknown>, allowed: readonly strin
 }
 
 /**
+ * Corta por code point: a redação pode aumentar a string e um `slice` por
+ * unidade UTF-16 guardaria metade de um par surrogate. `Array.from` nunca
+ * separa o par (mesmo padrão de `boundHookToolResult` em `src/chat/hooks.ts`).
+ */
+function truncateCodePoints(value: string, limit: number): string {
+  const points = Array.from(value);
+  return points.length <= limit ? value : points.slice(0, limit).join("");
+}
+
+/**
  * Valida e sanitiza o plano inteiro antes de qualquer efeito: erro não muda
  * nada. Mensagens citam índice e campo, nunca o texto do item (I-03).
  */
@@ -106,13 +116,14 @@ function parsePlan(input: unknown): TodoItem[] {
     if (typeof value.status !== "string" || !(TODO_STATUSES as readonly string[]).includes(value.status)) {
       throw new TodoInputError(`item ${position}: "status" inválido (use "pending", "in_progress" ou "done")`);
     }
-    // Redige antes de guardar: o plano alimenta a UI e o próximo prompt (I-03).
-    const content = redactSecrets(trimmed).slice(0, MAX_TODO_CONTENT_LENGTH);
-    if (seen.has(content)) {
+    // Duplicata é comparada no texto trimado, antes da redação: duas chaves
+    // diferentes caem no mesmo `[REDACTED]` e não podem virar o mesmo item.
+    if (seen.has(trimmed)) {
       throw new TodoInputError(`item ${position}: "content" repete um item anterior`);
     }
-    seen.add(content);
-    items.push({ content, status: value.status as TodoStatus });
+    seen.add(trimmed);
+    // Redige antes de guardar: o plano alimenta a UI e o próximo prompt (I-03).
+    items.push({ content: truncateCodePoints(redactSecrets(trimmed), MAX_TODO_CONTENT_LENGTH), status: value.status as TodoStatus });
   });
   return items;
 }
@@ -134,9 +145,11 @@ export interface TodoWriteDeps {
 }
 
 /**
- * Cria a tool com o plano do run em memória. Não escreve arquivo: por isso o
- * manifesto não entra em `.astro/`, não pede aprovação de escrita e o
- * confinamento de caminho (I-11) não tem o que restringir.
+ * Cria a tool com o plano do run em memória. A tool não escreve arquivo: o
+ * manifesto não pede aprovação de escrita e o confinamento de caminho (I-11)
+ * não tem o que restringir. `sideEffects: "none"` descreve a tool, não o
+ * executor: saída acima do cap ainda pode virar artefato em `.astro/outputs`
+ * pelo caminho comum de toda tool (CMP-10/ADR-0015), já redigida.
  */
 export function createTodoWriteTool(deps: TodoWriteDeps): Tool {
   const store = deps.store ?? new TodoPlanStore();
@@ -181,16 +194,19 @@ export function createTodoWriteTool(deps: TodoWriteDeps): Tool {
       timeoutMs: 5_000,
       retryable: true,
       idempotent: true,
+      // Efeito medido é o da tool (estado do run); o artefato de saída é do executor (CMP-10).
       sideEffects: "none",
     },
 
     async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
       try {
         const items = parsePlan(input);
-        store.set(ctx.run, items);
         // Só contagens: o texto do item é saída do modelo e não vai para o audit.
         const counts = countByStatus(items);
+        // Audit antes de mudar o estado: se o append falhar (fail-closed do
+        // lock), o plano continua o anterior e nada muda sem registro.
         deps.audit.append({ run: ctx.run, agent: ctx.agent, tipo: "todo.updated", payload: { ...counts } });
+        store.set(ctx.run, items);
         return { output: JSON.stringify({ ...counts, items }) };
       } catch (error) {
         // Só a validação é `invalid_input`; falha inesperada não se disfarça de entrada ruim.
