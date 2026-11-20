@@ -118,32 +118,24 @@ describe("glob tool (#534, F-13)", () => {
     expect(included.files).toContain("node_modules/pkg/index.js");
   });
 
-  test("padrão absoluto é recusado em qualquer plataforma", async () => {
+  test("entradas fora do cwd são recusadas: absoluto e `..` (I-11)", async () => {
     const cwd = setupTree();
-    const patterns = [
-      join(cwd, "**", "*.ts"), // absoluto nativo do SO
-      "/etc/**",
-      "C:\\Windows\\**", // drive absoluto: `isAbsolute` é false no POSIX
-      "C:foo", // drive relativo: não é relativo ao cwd
-      "\\\\server\\share\\**", // UNC
+    const refused: Array<{ input: Record<string, unknown>; message: string }> = [
+      { input: { pattern: join(cwd, "**", "*.ts") }, message: "absoluto" }, // absoluto nativo do SO
+      { input: { pattern: "/etc/**" }, message: "absoluto" },
+      { input: { pattern: "C:\\Windows\\**" }, message: "absoluto" }, // `isAbsolute` é false no POSIX
+      { input: { pattern: "C:foo" }, message: "absoluto" }, // drive relativo
+      { input: { pattern: "\\\\server\\share\\**" }, message: "absoluto" }, // UNC
+      { input: { pattern: "../**/*.ts" }, message: "fora" },
+      { input: { pattern: ".." }, message: "fora" },
+      { input: { pattern: "src/../../*.ts" }, message: "fora" },
+      { input: { pattern: "**/*.ts", path: ".." }, message: "fora" },
     ];
-    for (const pattern of patterns) {
-      const result = await globTool.execute({ pattern }, ctx(cwd));
+    for (const { input, message } of refused) {
+      const result = await globTool.execute(input, ctx(cwd));
       expect(result.isError).toBe(true);
-      expect(result.output).toContain("absoluto");
+      expect(result.output).toContain(message);
     }
-  });
-
-  test("padrão e path com `..` para fora do cwd são recusados (I-11)", async () => {
-    const cwd = setupTree();
-    for (const pattern of ["../**/*.ts", "..", "src/../../*.ts"]) {
-      const result = await globTool.execute({ pattern }, ctx(cwd));
-      expect(result.isError).toBe(true);
-      expect(result.output).toContain("fora");
-    }
-    const outside = await globTool.execute({ pattern: "**/*.ts", path: ".." }, ctx(cwd));
-    expect(outside.isError).toBe(true);
-    expect(outside.output).toContain("fora");
   });
 
   test.skipIf(!SYMLINK_SUPPORTED)("link para fora do cwd não é seguido", async () => {

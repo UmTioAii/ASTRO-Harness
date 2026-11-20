@@ -13,12 +13,6 @@ function failure(message: string): ToolResult {
   return { output: message, isError: true };
 }
 
-interface GlobInput {
-  pattern: string;
-  path: string;
-  includeIgnored: boolean;
-}
-
 /**
  * `..` que subiria acima da raiz é recusado; `a/../b` continua válido. A
  * checagem é léxica, para o erro ser claro: o percurso nunca sai da raiz (I-11).
@@ -37,7 +31,14 @@ function escapesRoot(pattern: string): boolean {
   return false;
 }
 
-function parseInput(input: unknown): GlobInput {
+/**
+ * Prefixo absoluto no formato Windows (drive `C:\`/`C:x` e UNC `\\host\`).
+ * `isAbsolute` depende da plataforma: no POSIX `C:\Windows\**` viraria padrão
+ * relativo literal e escaparia da recusa (CI ubuntu, #573).
+ */
+const WINDOWS_ABSOLUTE = /^[A-Za-z]:|^\\\\/;
+
+function parseInput(input: unknown): { pattern: string; path: string; includeIgnored: boolean } {
   if (typeof input !== "object" || input === null) {
     throw new ToolError("entrada inválida: esperado objeto com { pattern }");
   }
@@ -45,7 +46,7 @@ function parseInput(input: unknown): GlobInput {
   if (typeof raw.pattern !== "string" || raw.pattern.length === 0) {
     throw new ToolError('"pattern" deve ser uma string não vazia');
   }
-  if (isAbsolute(raw.pattern)) {
+  if (isAbsolute(raw.pattern) || WINDOWS_ABSOLUTE.test(raw.pattern)) {
     throw new ToolError(`padrão absoluto não é permitido: ${raw.pattern}`);
   }
   if (raw.pattern.startsWith("~") || escapesRoot(raw.pattern)) {
@@ -72,10 +73,6 @@ function literalPrefix(pattern: string): string {
 /** Caminho relativo à raiz, com separador `/` (formato do padrão e da saída). */
 function relativePosix(root: string, target: string): string {
   return relative(root, target).split(sep).join("/");
-}
-
-function isSkipped(relativePath: string): boolean {
-  return relativePath.split("/").some((segment) => SKIP_DIRS.has(segment));
 }
 
 /**
@@ -172,7 +169,7 @@ export const globTool: Tool = {
       const start = prefix.length === 0 ? root : resolve(root, prefix);
       const startRel = relativePosix(root, start);
       // Diretório excluído por default não é varrido nem quando o padrão o nomeia.
-      if (!includeIgnored && isSkipped(startRel)) {
+      if (!includeIgnored && startRel.split("/").some((segment) => SKIP_DIRS.has(segment))) {
         return { output: JSON.stringify({ files: [], total: 0, truncated: false }) };
       }
       // Um prefixo literal pode atravessar um link para fora do cwd
