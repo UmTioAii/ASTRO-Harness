@@ -108,7 +108,7 @@ test("ASTRO_PROVIDER desconhecido é erro", () => {
     project: project(),
     store: store(),
     env: { ASTRO_PROVIDER: "nao-existe" },
-  })).toThrow(/ASTRO_PROVIDER="nao-existe".*conhecidos: p/);
+  })).toThrow(/ASTRO_PROVIDER="nao-existe".*conhecidos: .*\bp\b/);
 });
 
 test("activeProfileId inexistente avisa e cai no projeto", () => {
