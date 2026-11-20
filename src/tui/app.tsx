@@ -19,7 +19,7 @@ import { runCommand, type CommandState, type Entry } from "./commands";
 import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
 import type { ShellRunner } from "./shell";
-import { COMMANDS, applyCompletion, commandDescription, completionItems, suggestionWindow } from "./editor";
+import { COMMANDS, applyCompletion, commandDescription, completionItems, enterAction, suggestionWindow } from "./editor";
 import { Header, budgetColor, footerBase, modeColor, packageVersion } from "./banner";
 import { appendLog, sessionHeaderLine, tailLog } from "./log";
 import { LogScreen } from "./log-screen";
@@ -625,6 +625,14 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       return;
     }
     if (key.return) {
+      // #471 (S5 revisado): com o menu de comandos aberto o primeiro Enter só
+      // completa a linha; o segundo Enter roda. Tab continua completando sem rodar.
+      const decision = enterAction(inputRef.current, suggestions, selectedIndex);
+      if (decision.action === "complete") {
+        setInput(() => decision.line);
+        setSelected(0);
+        return;
+      }
       void submit();
       return;
     }

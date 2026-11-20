@@ -70,3 +70,32 @@ export function applyCompletion(line: string, choice: string): string {
   if (at < 0) return line;
   return `${line.slice(0, at)}${choice} `;
 }
+
+/** O que o Enter faz na linha atual (#471): `run` envia, `complete` só preenche. */
+export interface EnterDecision {
+  readonly action: "run" | "complete";
+  /** Linha resultante: igual à entrada em `run`, comando completo em `complete`. */
+  readonly line: string;
+}
+
+/**
+ * Estado do Enter com o menu de completions (S5 revisado, #471): Tab só completa;
+ * um prefixo completa a linha e precisa do segundo Enter; a linha já igual ao
+ * comando destacado roda na primeira. Argumento depois do comando, `@arquivo`
+ * (fora do escopo) e buffer multi-linha (prompt, #63) seguem o envio normal.
+ */
+export function enterAction(
+  line: string,
+  suggestions: readonly string[],
+  selected: number,
+): EnterDecision {
+  const commandMenu = suggestions.length > 0
+    && line.startsWith("/")
+    && !line.includes(" ")
+    && !line.includes("\n");
+  if (!commandMenu) return { action: "run", line };
+  // seleção de um frame anterior pode estar fora da faixa atual (#276)
+  const highlighted = suggestions[Math.max(0, Math.min(selected, suggestions.length - 1))];
+  if (highlighted === undefined || line === highlighted) return { action: "run", line };
+  return { action: "complete", line: applyCompletion(line, highlighted) };
+}
