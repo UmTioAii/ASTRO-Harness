@@ -5,6 +5,7 @@ import { limitToolOutput } from "../output-limit";
 import { redactSecrets } from "../sanitize-external";
 import {
   actionClassOf,
+  approvalDetailOf,
   permissionDecision,
   permissionAllows,
   requiredPermission,
@@ -434,10 +435,14 @@ export class ToolExecutor {
     } else if (decision === "ask") {
       try {
         const annex = editDiffAnnex(call, input);
+        // #536: comando/path da chamada, já redacted e truncado, para a decisão
+        // ser informada. Só o argumento material; conteúdo e env nunca entram.
+        const detail = approvalDetailOf({ name: call.name, input });
         const outcome = await this.awaitApproval(ctx, {
           name: call.name,
           action,
           mode: this.mode,
+          ...(detail === undefined ? {} : { detail }),
           ...(annex === undefined ? {} : { diff: annex }),
         });
         // Espera sem resposta morre no teto (#526): recusa como deny, audita e o run segue.

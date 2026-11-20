@@ -31,6 +31,12 @@ describe("buffer de log da sessão em memória (#514, docs/tui-layout.md §/log)
     expect(line).not.toContain("\u001b");
   });
 
+  test("log usa a mesma regra canônica do prompt: C1, bidi, ZWSP e surrogate solto fora (#536)", () => {
+    const [line] = appendLog([], "ok\u009b2J \u202Egnp.exe a\u200Bb \ud800");
+    expect(line).not.toMatch(/[\p{Cc}\p{Cf}\p{Cs}]/u);
+    expect(line).toContain("gnp.exe");
+  });
+
   test("tailLog: sem n devolve tudo; com n devolve as últimas n; n fora de 1..∞ devolve vazio", () => {
     const lines = ["1", "2", "3", "4"];
     expect(tailLog(lines)).toEqual(lines);

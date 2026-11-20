@@ -43,6 +43,10 @@ const REDACT_PREFIX = new RegExp(
 // Cofre (ADR-0019, #311): par `"secret": "..."` do vault.json é redacted inteiro (espaços, aspas escapadas).
 const REDACT_VAULT_SECRET = /("secret"\s*:\s*")((?:[^"\\]|\\.)*)(")/gi;
 
+// Userinfo de URL (#536): `git clone https://user:senha@host` — a senha sai, o
+// usuário e o host ficam. Sem senha (`ssh://git@host`) não casa.
+const REDACT_URL_USERINFO = /(\/\/[^\s/:@]*:)([^\s/@]+)(@)/g;
+
 // JSON `"apiKey":"..."`, env `TOKEN=...`/`x-api-key: ...` (aspas normais ou escapadas)
 const SECRET_KEY = "(?:[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?key|secret|password|token(?!s))[A-Za-z0-9_-]*)";
 const QUOTE = `(?:\\\\"|")`;
@@ -92,6 +96,7 @@ export function redactSecrets(text: string, opts: RedactSecretsOptions = {}): st
   }
   return redacted
     .replace(REDACT_VAULT_SECRET, `$1${REDACTED}$3`)
+    .replace(REDACT_URL_USERINFO, `$1${REDACTED}$3`)
     .replace(REDACT_VALUE, REDACTED)
     .replace(REDACT_BEARER, `${BEARER_WORD} ${REDACTED}`)
     .replace(REDACT_NV, REDACTED)
@@ -121,4 +126,22 @@ export function sanitizeExternal(
   const returnedTokens = estimateTokens(content);
 
   return { content, truncated, originalTokens, returnedTokens };
+}
+
+/**
+ * Marcas invisíveis que forjam linha/OSC, invertem texto ou quebram a largura
+ * da UI: C0/C1 (`\p{Cc}`), format chars (`\p{Cf}`: bidi RLO/LRO, ZWSP, BOM,
+ * soft hyphen), separadores de linha/parágrafo e surrogate solto. Com a flag
+ * `u`, `\p{Cs}` só casa surrogate solto — par válido (emoji) é um code point.
+ */
+const PROMPT_INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/gu;
+
+/**
+ * Texto seguro para uma linha de interface (prompt de aprovação e log da TUI,
+ * uma regra só): remove as marcas invisíveis ANTES da redação — um controle
+ * embutido quebraria o padrão de segredo (`sk-abc<ESC>defghijklmnop`) — e de
+ * novo depois, como defesa em profundidade (I-03).
+ */
+export function sanitizePromptText(text: string): string {
+  return redactSecrets(text.replace(PROMPT_INVISIBLE, "")).replace(PROMPT_INVISIBLE, "");
 }

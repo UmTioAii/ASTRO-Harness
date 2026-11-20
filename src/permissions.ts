@@ -12,6 +12,7 @@
  */
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { sanitizePromptText } from "./sanitize-external";
 import { ToolError, isToolClass, type SideEffects, type Tool, type ToolClass, type ToolManifest } from "./tools/types";
 
 export type PermissionMode = "bypass" | "allow-edits" | "ask";
@@ -128,11 +129,129 @@ export class PermissionGrants {
   }
 }
 
+/**
+ * Argumento material de uma chamada para o pedido de aprovação (#536): o que a
+ * chamada vai de fato fazer — `run_command` executa um comando, as tools de
+ * arquivo tocam um path (ou `from -> to`). Sempre chega ao prompt já redacted
+ * e truncado (I-03/I-04).
+ */
+export interface ApprovalDetail {
+  /** `command` (comando de shell) ou `path` (caminho de arquivo); define o rótulo no prompt. */
+  kind: "command" | "path";
+  value: string;
+}
+
+/** Teto do valor exibido no prompt de aprovação (#536); acima disso entra o marcador `...`. */
+export const APPROVAL_DETAIL_MAX_CHARS = 200;
+const APPROVAL_DETAIL_ELLIPSIS = "...";
+/** Fração do orçamento reservada à cabeça; a cauda mostra o fim do comando (`| sh`). */
+const APPROVAL_DETAIL_HEAD_RATIO = 0.7;
+/** Separador do `move_path` no prompt (#536). */
+const MOVE_ARROW = " -> ";
+
+/** Tools cujo argumento material é um path (#536). `move_path` soma dois paths. */
+const DETAIL_PATH_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit", "delete_path"]);
+/** Tools cujo argumento material é o comando (#536). */
+const DETAIL_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command"]);
+
+/**
+ * Todos os nomes com argumento material mapeado (#536). O teste de contrato
+ * confere cada um contra o registry (`BUILTIN_TOOLS`), com exceção explícita
+ * para `delete_path`/`move_path` enquanto não existirem.
+ */
+export const APPROVAL_DETAIL_TOOLS: ReadonlySet<string> = new Set([
+  ...DETAIL_COMMAND_TOOLS,
+  ...DETAIL_PATH_TOOLS,
+  "move_path",
+]);
+
+/** Quebra de linha/tab é separador real do comando: vira espaço antes da regra canônica. */
+const COMMAND_LINE_BREAK = /[\r\n\t]+/g;
+
+/** Surrogate alto/baixo: corte de string não pode partir um par (emoji) ao meio. */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/**
+ * Normaliza o valor para uma linha do prompt e o deixa exibível: quebra de
+ * linha vira espaço (uma linha só na TUI/REPL) e `sanitizePromptText` remove as
+ * marcas invisíveis (C0/C1, bidi/Cf, surrogate solto) ANTES de redigir — um
+ * controle embutido abriria o padrão de segredo — e trunca depois (I-03).
+ */
+function detailValue(raw: string): string | undefined {
+  const oneLine = raw.replace(COMMAND_LINE_BREAK, " ").trim();
+  if (oneLine.length === 0) return undefined;
+  const clean = sanitizePromptText(oneLine);
+  return clean.length === 0 ? undefined : clean;
+}
+
+/**
+ * Corta `value` em `budget` caracteres mantendo cabeça E cauda, com o marcador
+ * `...` no meio: o fim do comando (`| sh`, `rm -rf`) continua visível. Nunca
+ * parte par surrogate (emoji na borda viraria caractere inválido na TUI).
+ */
+function elideDetailValue(value: string, budget: number): string {
+  if (value.length <= budget) return value;
+  const room = budget - APPROVAL_DETAIL_ELLIPSIS.length;
+  let head = Math.ceil(room * APPROVAL_DETAIL_HEAD_RATIO);
+  let tail = room - head;
+  if (isHighSurrogate(value.charCodeAt(head - 1))) head -= 1;
+  if (isLowSurrogate(value.charCodeAt(value.length - tail))) tail -= 1;
+  return `${value.slice(0, head)}${APPROVAL_DETAIL_ELLIPSIS}${value.slice(value.length - tail)}`;
+}
+
+/**
+ * Detalhe do pedido de aprovação (#536): só o campo material de tools com
+ * forma conhecida. Tool fora do vocabulário — ou input sem o campo — devolve
+ * `undefined` e o prompt volta ao formato antigo. Nunca lê conteúdo de
+ * arquivo nem valores de ambiente (I-03).
+ */
+export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined {
+  if (typeof call.input !== "object" || call.input === null) return undefined;
+  const input = call.input as Record<string, unknown>;
+  if (DETAIL_COMMAND_TOOLS.has(call.name)) {
+    if (typeof input.command !== "string") return undefined;
+    const command = detailValue(input.command);
+    return command === undefined
+      ? undefined
+      : { kind: "command", value: elideDetailValue(command, APPROVAL_DETAIL_MAX_CHARS) };
+  }
+  if (call.name === "move_path") {
+    if (typeof input.from !== "string" || typeof input.to !== "string") return undefined;
+    const from = detailValue(input.from);
+    const to = detailValue(input.to);
+    if (from === undefined || to === undefined) return undefined;
+    // Orçamento por lado: um `from` longo não pode esconder o destino.
+    const sideBudget = Math.floor((APPROVAL_DETAIL_MAX_CHARS - MOVE_ARROW.length) / 2);
+    return {
+      kind: "path",
+      value: `${elideDetailValue(from, sideBudget)}${MOVE_ARROW}${elideDetailValue(to, sideBudget)}`,
+    };
+  }
+  if (DETAIL_PATH_TOOLS.has(call.name)) {
+    if (typeof input.path !== "string") return undefined;
+    const path = detailValue(input.path);
+    return path === undefined
+      ? undefined
+      : { kind: "path", value: elideDetailValue(path, APPROVAL_DETAIL_MAX_CHARS) };
+  }
+  return undefined;
+}
+
 /** Pedido de aprovação entregue ao prompt (PERM-04). */
 export interface ToolPermissionRequest {
   name: string;
   action: ActionClass;
   mode: PermissionMode;
+  /**
+   * Argumento material do pedido (#536): comando ou path, já redacted e
+   * truncado. REPL e TUI renderizam o mesmo detalhe via `toolPrompt`.
+   */
+  detail?: ApprovalDetail;
   /**
    * Anexo estruturado para a UI revisar antes de aprovar (ex.: diff da tool
    * `edit`, #64). Deve chegar aqui JÁ redacted (I-03) e nunca é auditado.

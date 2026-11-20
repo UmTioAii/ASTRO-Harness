@@ -3,20 +3,18 @@
  * linhas anexado pelos mesmos caminhos que antes imprimiam inline. Só memória —
  * a fonte durável continua sendo audit/ledger. Puro, sem I/O e sem React.
  */
-import { redactSecrets } from "../sanitize-external";
+import { sanitizePromptText } from "../sanitize-external";
 
 /** Teto do buffer em linhas; acima disso as mais antigas são descartadas. */
 export const LOG_CAP = 1000;
 
-/** C0/C1 e marcas de direção não podem entrar no log (forja de linha/OSC). */
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
-
-/** Linha pronta para o buffer: sem segredo (I-03) e sem caractere de controle. */
+/**
+ * Linha pronta para o buffer: sem segredo (I-03) e sem caractere invisível.
+ * Usa a mesma regra canônica do prompt de aprovação (#536): C0/C1, bidi/Cf,
+ * separadores e surrogate solto, com o strip antes da redação.
+ */
 export function sanitizeLogLine(line: string): string {
-  // redact roda no texto SEM controle: um segredo com controle embutido
-  // (ex.: sk-<ESC>...) não pode quebrar o padrão de redação; o strip final no
-  // resultado é defesa em depth
-  return redactSecrets(line.replace(CONTROL, "")).replace(CONTROL, " ");
+  return sanitizePromptText(line);
 }
 
 /**
