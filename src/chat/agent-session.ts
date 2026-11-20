@@ -77,6 +77,8 @@ export interface AgentSessionOptions {
 export interface SendTurnOptions {
   attachments?: readonly LoadedAttachment[];
   approveAttachment?: AttachmentApprover;
+  /** Progresso do loop (#508): passo e teto efetivo, antes de cada chamada ao provider. */
+  onStep?: (step: number, maxSteps: number) => void;
 }
 
 export interface ProviderInfo {
@@ -795,6 +797,7 @@ export class AgentSession {
           ...(metas === undefined ? {} : { attachments: metas }),
           ...(images === undefined ? {} : { images }),
           ...(onToken === undefined ? {} : { onToken }),
+          ...(turn?.onStep === undefined ? {} : { onStep: turn.onStep }),
           ...(this.#approveSwap === undefined ? {} : { approveSwap: this.#approveSwap }),
           ...(this.#budgetDecider === undefined ? {} : { onBudgetExceeded: this.#budgetDecider }),
           ...(this.#approveTool === undefined ? {} : { approveTool: this.#approveTool }),

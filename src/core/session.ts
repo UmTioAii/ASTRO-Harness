@@ -128,6 +128,8 @@ export interface SessionOptions {
   compaction?: CompactionConfig;
   /** Recebe deltas de texto quando o provider suporta streaming (T3). */
   onToken?: (text: string) => void;
+  /** Progresso do loop (#508): passo e teto efetivo, antes de cada chamada ao provider. */
+  onStep?: (step: number, maxSteps: number) => void;
   executor: ToolExecutor;
   ledger: Ledger;
   audit: Auditor;
@@ -530,6 +532,9 @@ export async function runSession(
           opts.ledger.recordBudgetReleased({ run: opts.run, agent: opts.agent, released: reserveUsd });
         }
       };
+      // Progresso (#508): o mesmo contador do loop e o teto já efetivo (budget pode
+      // ter baixado o esforço); só números, nunca prompt nem tool.
+      opts.onStep?.(step, effectiveMaxSteps);
       const stepSpan = tracer?.start("step", { step, agent: redactSecrets(opts.agent) }, rootSpan);
       const providerSpan = tracer?.start(
         "provider.complete",
@@ -936,6 +941,8 @@ export interface MultiAgentSessionOptions {
   tracer?: TracerLike;
   /** Recebe deltas de texto quando o provider suporta streaming (T3). */
   onToken?: (text: string) => void;
+  /** Progresso do loop (#508): passo do agente ativo e teto efetivo, antes de cada chamada ao provider. */
+  onStep?: (step: number, maxSteps: number) => void;
   /** Limites de quota por domínio (F6-3); ausente = sem enforcement. */
   quotaLimits?: Record<string, QuotaLimit>;
   /** Limites de time (F7-5): orçamentos por janela (#552) e quotas por agent. */
@@ -1336,6 +1343,10 @@ export async function runMultiAgentSession(
           opts.ledger.recordBudgetReleased({ run: opts.run, agent: currentAgentName, released: reserveUsd });
         }
       };
+      // Progresso (#508): contador do agente ativo, limitado pelo teto global
+      // ainda disponível (o loop para em `step == effectiveBaseMaxSteps`).
+      const stepCeiling = Math.min(currentMaxSteps, Math.max(agentSteps, agentSteps + effectiveBaseMaxSteps - step));
+      opts.onStep?.(agentSteps, stepCeiling);
 
       // Atualizar executor com tools do agent atual
       const executor = new ToolExecutor({
