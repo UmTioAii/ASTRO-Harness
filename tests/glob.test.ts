@@ -126,6 +126,7 @@ describe("glob tool (#534, F-13)", () => {
       { input: { pattern: "C:\\Windows\\**" }, message: "absoluto" }, // `isAbsolute` é false no POSIX
       { input: { pattern: "C:foo" }, message: "absoluto" }, // drive relativo
       { input: { pattern: "\\\\server\\share\\**" }, message: "absoluto" }, // UNC
+      { input: { pattern: "\\src\\*.ts" }, message: "absoluto" }, // barra invertida inicial
       { input: { pattern: "../**/*.ts" }, message: "fora" },
       { input: { pattern: ".." }, message: "fora" },
       { input: { pattern: "src/../../*.ts" }, message: "fora" },
@@ -159,6 +160,86 @@ describe("glob tool (#534, F-13)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  test("normaliza `./`, `\\`, `/` final e `literal/..` antes do matcher (#573 review A)", async () => {
+    const cwd = setupTree();
+    const cases: Array<[string, string[]]> = [
+      ["./src/*.ts", ["src/app.ts"]],
+      ["src\\tools\\*.ts", ["src/tools/glob.ts"]],
+      ["src/../docs/*.md", ["docs/guia.md"]],
+      ["**/", ["docs/guia.md", "root.ts", "src/app.ts", "src/tools/glob.ts"]],
+    ];
+    for (const [pattern, expected] of cases) {
+      const result = await globTool.execute({ pattern }, ctx(cwd));
+      expect(result.isError).toBeFalsy();
+      expect(output(result).files).toEqual(expected);
+    }
+  });
+
+  test("ordena entre diretórios irmãos", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-glob-sort-"));
+    mkdirSync(join(cwd, "m"));
+    mkdirSync(join(cwd, "a"));
+    writeFileSync(join(cwd, "m", "x.ts"), "");
+    writeFileSync(join(cwd, "a", "y.ts"), "");
+    const parsed = output(await globTool.execute({ pattern: "**/*.ts" }, ctx(cwd)));
+    expect(parsed.files).toEqual(["a/y.ts", "m/x.ts"]);
+  });
+
+  test("`path` excluído por padrão também exige includeIgnored (#573 review A)", async () => {
+    const cwd = setupTree();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    mkdirSync(join(cwd, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(cwd, ".git", "config"), "");
+    writeFileSync(join(cwd, "node_modules", "pkg", "index.js"), "");
+
+    // Nem por `path` nem pelo prefixo literal do padrão o diretório excluído entra.
+    for (const ignored of [".git", "node_modules"]) {
+      for (const input of [
+        { pattern: "**/*", path: ignored },
+        { pattern: `${ignored}/**` },
+      ]) {
+        const refused = await globTool.execute(input, ctx(cwd));
+        expect(refused.isError).toBe(true);
+        expect(refused.output).toContain("includeIgnored");
+      }
+    }
+
+    const viaPath = output(await globTool.execute(
+      { pattern: "**/*", path: ".git", includeIgnored: true }, ctx(cwd),
+    ));
+    expect(viaPath.files).toEqual([".git/config"]);
+    const viaPattern = output(await globTool.execute({ pattern: ".git/**", includeIgnored: true }, ctx(cwd)));
+    expect(viaPattern.files).toEqual([".git/config"]);
+  });
+
+  test("arquivo com nome de diretório excluído também fica fora (worktree tem `.git` arquivo)", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-glob-gitfile-"));
+    writeFileSync(join(cwd, ".git"), "gitdir: /fora\n");
+    writeFileSync(join(cwd, "a.ts"), "");
+    expect(output(await globTool.execute({ pattern: "**" }, ctx(cwd))).files).toEqual(["a.ts"]);
+    expect(output(await globTool.execute({ pattern: "**", includeIgnored: true }, ctx(cwd))).files)
+      .toEqual([".git", "a.ts"]);
+  });
+
+  test("orçamento de saída: caminhos longos não estouram o cap do executor (#573 review A)", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-glob-budget-"));
+    const deep = join(cwd, ...Array.from({ length: 6 }, (_, i) => `pacote-${i}-com-nome-longo`));
+    mkdirSync(deep, { recursive: true });
+    for (let i = 0; i < 40; i++) {
+      writeFileSync(join(deep, `arquivo-${String(i).padStart(2, "0")}-sufixo-longo.ts`), "");
+    }
+    const result = await globTool.execute({ pattern: "**/*.ts" }, { ...ctx(cwd), outputLimitTokens: 200 });
+    expect(result.isError).toBeFalsy();
+    const parsed = output(result);
+    expect(parsed.total).toBe(40);
+    expect(parsed.files.length).toBeGreaterThan(0);
+    expect(parsed.files.length).toBeLessThan(40);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.notice).toContain(`${parsed.files.length} de 40`);
+    // O JSON inteiro, com notice, cabe no cap de 200 tokens (4 chars/token).
+    expect(Math.ceil(result.output.length / 4)).toBeLessThanOrEqual(200);
   });
 
   test("sem resultado devolve lista vazia; entrada inválida vira erro", async () => {
