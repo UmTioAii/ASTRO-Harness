@@ -59,9 +59,10 @@ const waitDead = async (pid: number): Promise<boolean> => {
  * Morte confirmada + entrega do `exit` ao transport. A chamada seguinte precisa ver o cliente
  * fechado: sem essa entrega o write cai em EPIPE e o erro não é /indisponível/ (#540).
  */
-const waitObservedDeath = async (pid: number): Promise<boolean> => {
+const waitObservedDeath = async (pid: number, closed: () => boolean): Promise<boolean> => {
   if (!(await waitDead(pid))) return false;
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  // Sinal real: o transport já processou o exit do filho (senão o write seguinte cai em EPIPE).
+  await waitFor(closed, "transporte observou a morte do filho");
   return true;
 };
 /** Espera o sinal real (arquivo de pid, morte do processo) em vez de dormir um tempo fixo. */
@@ -143,7 +144,7 @@ test("chamadas concorrentes em cliente morto: MCPError e uma reconexão", async 
   const dead = pids(pidFile)[0];
   expect(dead).toBeDefined();
   process.kill(dead!); // morte fora do registry
-  await expect(waitObservedDeath(dead!)).resolves.toBe(true); // morte real + entrega do exit
+  await expect(waitObservedDeath(dead!, () => registry.isClosed("fs"))).resolves.toBe(true); // morte real + entrega do exit
 
   const results = await Promise.allSettled([
     registry.call("fs", "echo", {}),
@@ -166,7 +167,7 @@ test("close durante reconexão não deixa órfão e classifica o erro", async ()
   const dead = pids(pidFile)[0];
   expect(dead).toBeDefined();
   process.kill(dead!);
-  await expect(waitObservedDeath(dead!)).resolves.toBe(true);
+  await expect(waitObservedDeath(dead!, () => registry.isClosed("fs"))).resolves.toBe(true);
 
   const inFlight = registry.call("fs", "echo", {});
   await waitFor(() => pids(pidFile).length === 2, "reconexão spawnou (initialize lento em voo)");
@@ -216,7 +217,7 @@ test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e res
     writeFileSync(failFile, "x");
     const pid = pids(pidFile)[0]!;
     process.kill(pid);
-    await expect(waitObservedDeath(pid)).resolves.toBe(true); // morte real + entrega do exit
+    await expect(waitObservedDeath(pid, () => registry.isClosed("fs"))).resolves.toBe(true); // morte real + entrega do exit
     expect(await failure(registry.call("fs", "echo", {}))).toMatch(/indisponível/);
     expect(attempts()).toBe(2);
 
@@ -241,7 +242,7 @@ test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e res
     writeFileSync(failFile, "x");
     const alive = pids(pidFile)[1]!;
     process.kill(alive);
-    await expect(waitObservedDeath(alive)).resolves.toBe(true);
+    await expect(waitObservedDeath(alive, () => registry.isClosed("fs"))).resolves.toBe(true);
     expect(await failure(registry.call("fs", "echo", {}))).toMatch(/indisponível/);
     expect(attempts()).toBe(5);
     expect(await failure(registry.call("fs", "echo", {}))).toMatch(/nova tentativa em 100ms/);
