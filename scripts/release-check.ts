@@ -117,7 +117,8 @@ O pacote sob teste é local; dependências de runtime vêm do registry.
   --json        imprime só o resumo JSON ao final
   --help        mostra esta ajuda
 
-Passos manuais fora do gate (TUI e provider não são automatizáveis headless):
+Passos manuais fora do gate (wizard de provider e telas da TUI):
+  bun run smoke:packed   cobre o boot da TUI com provider mock (docs/release.md §5)
   1. npm install -g @umtioai/astro-harness@alpha
   2. astro`;
 
