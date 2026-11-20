@@ -51,6 +51,15 @@ export class MCPRegistry {
   readonly #reconnecting = new Map<string, Promise<void>>();
   #closed = false;
 
+  /**
+   * O transporte do servidor já observou o fechamento (#540). O teste de
+   * morte do filho espera este sinal em vez de dormir, porque o write antes
+   * dele cai em EPIPE. Read-only: não muda comportamento.
+   */
+  isClosed(server: string): boolean {
+    return this.#states.get(server)?.client?.closed ?? true;
+  }
+
   constructor(opts: MCPRegistryOptions) {
     this.#servers = opts.servers;
     this.#warn = opts.warn ?? ((message: string) => console.warn(`mcp: ${message}`));

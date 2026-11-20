@@ -49,14 +49,17 @@ function setup(mcpServers: (dir: string) => Record<string, unknown>, configName 
   return { dir, configPath: join(dir, configName), out: (line: string) => { captured.push(line); }, lines: () => captured.join("\n") };
 }
 
+// `process.execPath` é o próprio binário bun: o spawn não passa pelo shim `.cmd` do PATH (um processo
+// menos por servidor). O timeout cobre spawn + handshake de um processo real; 3000ms estourava sob
+// a carga da suíte completa no Windows (#540).
 const stdio = (dir: string, overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
-  transport: "stdio", command: "bun", args: [join(dir, "server.js")], timeoutMs: 3000, enabled: true,
+  transport: "stdio", command: process.execPath, args: [join(dir, "server.js")], timeoutMs: 15_000, enabled: true,
   env: { PID_FILE: join(dir, "pids") }, ...overrides,
 });
 
 async function waitDead(pid: number): Promise<boolean> {
-  for (let attempt = 0; attempt < 25; attempt++) {
-    try { process.kill(pid, 0); await new Promise((resolve) => setTimeout(resolve, 100)); } catch { return true; }
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { process.kill(pid, 0); await new Promise((resolve) => setTimeout(resolve, 50)); } catch { return true; }
   }
   return false;
 }
@@ -79,7 +82,7 @@ test("mcp list mostra servidor, estado e tools descobertas; close mata o process
   expect(text).toContain("Ecoa o texto");
   expect(await waitDead(pidOf(dir)!)).toBe(true);
   expect(existsSync(join(dir, "audit.jsonl"))).toBe(false); // list não executa tool: nada a auditar
-});
+}, 20_000); // spawn real do stub + handshake no win32
 
 test("mcp list sem servidores (com --config) avisa e sai 0", async () => {
   const { dir, out, lines } = setup(() => ({}), "vazia.json");
@@ -116,7 +119,7 @@ test("mcp test executa a tool, imprime o texto e audita mcp.call sem argumentos"
   expect(audit).toContain("\"tipo\":\"mcp.call\"");
   expect(audit).toContain("\"server\":\"mock\"");
   expect(audit).not.toContain("eco:"); // argumento/resposta nunca no audit (I-03)
-});
+}, 20_000); // spawn real do stub + handshake no win32
 
 test("mcp test com tool inexistente sai 1 e ainda fecha o servidor", async () => {
   const { dir, out, lines } = setup((d) => ({ mock: stdio(d) }));
@@ -124,7 +127,7 @@ test("mcp test com tool inexistente sai 1 e ainda fecha o servidor", async () =>
   expect(await runMcpCommand(["test", "mock", "ghost"], { cwd: dir, out })).toBe(1);
   expect(lines()).toContain("tool \"mcp__mock__ghost\" não encontrada");
   expect(await waitDead(pidOf(dir)!)).toBe(true);
-});
+}, 20_000); // spawn real do stub + handshake no win32
 
 test("mcp test rejeita --args que não é objeto JSON, sem conectar", async () => {
   const { dir, out, lines } = setup((d) => ({ mock: stdio(d) }));
@@ -173,7 +176,8 @@ test("mcp list rejeita --args, que só é válido em test", async () => {
 test("bun src/cli.ts mcp list executa o wiring real do comando", async () => {
   const { dir, configPath } = setup((d) => ({ mock: stdio(d) }));
 
-  const proc = Bun.spawn(["bun", "src/cli.ts", "mcp", "list", "--config", configPath], {
+  // `process.execPath`: sem o shim `.cmd`. Boot da CLI + spawn do stub não cabe em 5s sob carga (#540).
+  const proc = Bun.spawn([process.execPath, "src/cli.ts", "mcp", "list", "--config", configPath], {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",
@@ -186,4 +190,4 @@ test("bun src/cli.ts mcp list executa o wiring real do comando", async () => {
   expect(stdout).toContain("Servidor: mock");
   expect(stdout).toContain("mcp__mock__echo");
   expect(await waitDead(pidOf(dir)!)).toBe(true);
-});
+}, 30_000);

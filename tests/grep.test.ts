@@ -106,7 +106,7 @@ describe("grep tool (F4-1)", () => {
     expect(elapsed).toBeLessThan(500);
     const matches = (JSON.parse(result.output) as { results: unknown[] }).results;
     expect(matches).toHaveLength(100); // limitado a 100
-  });
+  }, 30_000); // 1000 arquivos criados na fixture; o teto de 500ms mede só a busca, não a fixture (#540)
 
   // Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
   const GREP_SECRET = ["s", "k", "-"].join("") + "slice3a-grep-synthetic-112233";

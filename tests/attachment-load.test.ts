@@ -344,6 +344,9 @@ describe("loadAttachment", () => {
     });
   });
 
+  // 501 criações de arquivo + 501 realpath/stat dentro de listDirectory: no Windows o filtro de FS
+  // deixa isso em ~0,8s ocioso e ~6,1s sob a carga paralela da suíte completa (medido no #540).
+  // O teto é do contrato (MAX_DIRECTORY_ENTRIES) e a fixture não pode encolher sem enfraquecer o caso.
   test("diretório lista e rejeita acima de 500 entradas", async () => {
     const { cwd, astroHome } = sandbox();
     mkdirSync(join(cwd, "dir"));
@@ -358,7 +361,7 @@ describe("loadAttachment", () => {
     await expect(loadAttachment({ ...base(cwd, astroHome), path: "big" })).rejects.toMatchObject({
       code: "attachment_directory_too_large",
     });
-  });
+  }, 20_000);
 
   test("diretório omite ocultos sem showHidden", async () => {
     const { cwd, astroHome } = sandbox();

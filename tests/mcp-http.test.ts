@@ -4,8 +4,12 @@ import { HttpTransport } from "../src/mcp/transport/http";
 import { SseTransport } from "../src/mcp/transport/sse";
 
 /** Servidor MCP streamable HTTP de mentira: POST JSON-RPC responde JSON simples. */
-function httpServer(opts: { delayMs?: number; stream?: boolean; non2xx?: boolean; badData?: boolean; utf8Stream?: boolean; errorNull?: boolean } = {}) {
+function httpServer(opts: { holdToolsList?: boolean; stream?: boolean; non2xx?: boolean; badData?: boolean; utf8Stream?: boolean; errorNull?: boolean } = {}) {
   const posts: { method: string; id: number }[] = [];
+  // Gate explícito: `tools/list` só responde depois de release(); nenhum teste depende de
+  // uma corrida entre sleep do servidor e timeout do cliente (que estourava sob carga, #540).
+  let releaseToolsList: () => void = () => {};
+  const toolsListHeld = new Promise<void>((resolve) => { releaseToolsList = resolve; });
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
@@ -17,7 +21,7 @@ function httpServer(opts: { delayMs?: number; stream?: boolean; non2xx?: boolean
       if (opts.non2xx === true) return new Response(null, { status: 500 });
       if (req.headers.get("mcp-session-id") !== "sess-1") return Response.json({ jsonrpc: "2.0", id: body.id, error: { message: "sessão inválida" } }, { status: 404 });
       if (body.method === "tools/list") {
-        if (opts.delayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, opts.delayMs));
+        if (opts.holdToolsList === true) await toolsListHeld;
         return Response.json({ jsonrpc: "2.0", id: body.id, result: { tools: [{ name: "echo", description: "Eco HTTP" }] } });
       }
       if (opts.errorNull === true) {
@@ -50,7 +54,7 @@ function httpServer(opts: { delayMs?: number; stream?: boolean; non2xx?: boolean
       return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: `http:${body.id}` }] } });
     },
   });
-  return { server, posts };
+  return { server, posts, release: () => releaseToolsList() };
 }
 
 /** Servidor MCP SSE legacy: GET abre o stream e envia o endpoint; POST recebe 202; respostas vêm pelo stream. */
@@ -138,11 +142,14 @@ test("transport http conecta, mantém sessão e chama tools", async () => {
 });
 
 test("transport http sobrevive a timeout de requisição sem matar o transport", async () => {
-  const { server } = httpServer({ delayMs: 600 });
+  const { server, release } = httpServer({ holdToolsList: true });
   try {
-    const client = await http(server, 200);
+    // 1000ms cobre o handshake de loopback (o timeout é do POST, não do gate); o timeout de
+    // tools/list é decidido pelo gate que nunca responde, não por uma corrida de sleeps (#540).
+    const client = await http(server, 1000);
     try {
       await expect(client.listTools()).rejects.toThrow(/timeout/);
+      release();
       expect((await client.callTool("echo", {})).content[0]!.text).toBe("http:3"); // recupera após o timeout
       client.close(); await expect(client.callTool("echo", {})).rejects.toThrow(/fechado/);
     } finally { client.close(); }
@@ -314,7 +321,8 @@ test("transport sse trata error null como sucesso", async () => {
         (error: Error) => `erro: ${error.message}`,
       );
       respond({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "sse-ok" }] }, error: null });
-      expect(await Promise.race([outcome, new Promise<string>((resolve) => setTimeout(() => resolve("pendurou"), 500))])).toBe("sse-ok");
+      // Guarda de "não pendurou" (não é asserção de velocidade): a asserção é o texto recebido.
+      expect(await Promise.race([outcome, new Promise<string>((resolve) => setTimeout(() => resolve("pendurou"), 5_000))])).toBe("sse-ok");
     } finally { client.close(); }
   } finally { server.stop(true); }
 });
@@ -445,7 +453,8 @@ test("transport sse recusa redirect no POST e não reenvia header", async () => 
         () => "enviou",
         (error: Error) => error.message,
       );
-      const message = await Promise.race([outcome, new Promise<string>((resolve) => setTimeout(() => resolve("pendurou"), 900))]);
+      // Guarda de "não pendurou" (não é asserção de velocidade): a asserção é a mensagem de erro.
+      const message = await Promise.race([outcome, new Promise<string>((resolve) => setTimeout(() => resolve("pendurou"), 5_000))]);
       expect(message).toMatch(/falha ao enviar no MCP initialize/);
       expect(message).not.toContain(token);
       expect(hits).toEqual([]);
