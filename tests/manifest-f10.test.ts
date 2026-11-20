@@ -7,11 +7,13 @@ import { CallJournal, callId } from "../src/call-id";
 import { ToolExecutor } from "../src/tools/executor";
 import { validateManifest } from "../src/sdk/tool";
 import { editTool } from "../src/tools/edit";
+import { deletePathTool } from "../src/tools/delete-path";
 import { grepTool } from "../src/tools/grep";
 import { gitDiffTool, gitStatusTool } from "../src/tools/git";
 import { handoffTool } from "../src/tools/handoff";
 import { listDirTool } from "../src/tools/list-dir";
 import { lspTool } from "../src/tools/lsp";
+import { movePathTool } from "../src/tools/move-path";
 import { pipelineTool } from "../src/tools/pipeline";
 import { readFileTool } from "../src/tools/read-file";
 import { runCommandTool } from "../src/tools/run-command";
@@ -60,10 +62,10 @@ describe("validateManifest com idempotent e sideEffects (F-10)", () => {
   });
 });
 
-describe("declarações das 11 tools builtin (F-10, I-12)", () => {
+describe("declarações das tools builtin (F-10, I-12)", () => {
   const tools: Tool[] = [
     readFileTool, writeFileTool, editTool, grepTool, listDirTool, gitStatusTool, gitDiffTool,
-    lspTool, runCommandTool, pipelineTool, handoffTool,
+    lspTool, runCommandTool, pipelineTool, handoffTool, movePathTool, deletePathTool,
   ];
 
   test("todas declaram idempotent booleano e sideEffects do vocabulário", () => {

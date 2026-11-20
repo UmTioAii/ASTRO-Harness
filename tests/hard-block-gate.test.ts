@@ -19,6 +19,10 @@ describe("helpers do gate de hard-block (ADR-0027, #391 slice 1)", () => {
 
   test("pathCandidatesOf: input.path e tokens path-like de run_command", () => {
     expect(pathCandidatesOf({ name: "read_file", input: { path: ".env" } })).toEqual([".env"]);
+    // move_path declara dois paths (#535): gate e classe crítica veem from e to
+    expect(pathCandidatesOf({ name: "move_path", input: { from: "a.txt", to: "keys/b.txt" } }))
+      .toEqual(["a.txt", "keys/b.txt"]);
+    expect(pathCandidatesOf({ name: "delete_path", input: { path: ".env" } })).toEqual([".env"]);
     // content nunca é tratado como path
     expect(pathCandidatesOf({ name: "write_file", input: { path: "a.txt", content: ".env" } })).toEqual(["a.txt"]);
     expect(pathCandidatesOf({ name: "grep", input: { pattern: ".env", path: "src" } })).toEqual(["src"]);

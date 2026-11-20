@@ -795,6 +795,9 @@ describe("argumento material no pedido de aprovação (#536)", () => {
       .toEqual({ kind: "path", value: "src/a.ts" });
     expect(approvalDetailOf(call("delete_path", { path: "tmp/a.txt" })))
       .toEqual({ kind: "path", value: "tmp/a.txt" });
+    // remoção de diretório: o prompt precisa mostrar que é recursiva (#535)
+    expect(approvalDetailOf(call("delete_path", { path: "tmp/a.txt", recursive: true })))
+      .toEqual({ kind: "path", value: "tmp/a.txt (recursivo)" });
   });
 
   test("move mostra os dois caminhos (from -> to)", () => {
@@ -824,16 +827,11 @@ describe("argumento material no pedido de aprovação (#536)", () => {
     expect(approvalDetailOf(call("write_file", { path: 42 }))).toBeUndefined();
   });
 
-  test("todo nome mapeado em DETAIL_* existe no registry, exceto os ainda não implementados (#536)", () => {
-    // Exceção explícita: quando `delete_path`/`move_path` entrarem no registry
-    // este teste falha e obriga a remover o nome daqui.
-    const NOT_YET: ReadonlySet<string> = new Set(["delete_path", "move_path"]);
+  test("todo nome mapeado em DETAIL_* existe no registry (#536)", () => {
+    // `delete_path`/`move_path` entraram no registry em #535: o mapeamento do
+    // prompt e o registry não podem divergir.
     const registry = new Set(BUILTIN_TOOLS.map((tool) => tool.manifest.name));
-    for (const name of NOT_YET) {
-      expect({ name, registered: registry.has(name) }).toEqual({ name, registered: false });
-    }
     for (const name of APPROVAL_DETAIL_TOOLS) {
-      if (NOT_YET.has(name)) continue;
       expect({ name, registered: registry.has(name) }).toEqual({ name, registered: true });
     }
   });
