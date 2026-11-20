@@ -35,7 +35,7 @@ O check offline `config` valida a camada de projeto e a config efetiva (global +
 
 A ausência é determinada pelas camadas, não pela resolução de provider: `NoProviderError` não vale como config ausente. Quando não há provider, o doctor injeta um provider sintético de diagnóstico, sem persistência nem rede, para validar a config efetiva completa com o schema do runtime. Assim uma camada global presente e inválida (por exemplo, `permissions.mode`, `attachments.artifactTtlDays` ou uma tool desconhecida de agent nomeado) reprova com exit 1 em vez de virar `TTL 7d`/`1.0 GiB` (#523). O schema recusa tool desconhecida em agent nomeado; a allowlist nominal do agent principal depende do registry e continua validada no runtime.
 
-A coleta aceita `projectCwd`, `configPath`, `projectSkillsRoot` e `userSkillsRoot` para testes isolarem o projeto e as skills. Na CLI, os defaults permanecem o cwd do processo, `<cwd>/astro.config.json`, `<cwd>/.astro/skills` e `~/.astro/skills` (#523). Caminho relativo de `configPath` e `projectSkillsRoot` resolve contra `projectCwd`; `userSkillsRoot` resolve contra o cwd do processo (mesma base do loader de skills).
+A coleta aceita `projectCwd`, `configPath`, `projectSkillsRoot` e `userSkillsRoot` para testes isolarem o projeto e as skills. Na CLI, os defaults permanecem o cwd do processo, `<cwd>/astro.config.json` e as raízes de skills do runtime (`$ASTRO_HOME/projects/<chave>/skills` e `$ASTRO_HOME/skills`, #468). Caminho relativo de `configPath` e `projectSkillsRoot` resolve contra `projectCwd`; `userSkillsRoot` resolve contra o cwd do processo (mesma base do loader de skills).
 
 ## `--online`
 

@@ -1,6 +1,5 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { Auditor } from "../audit";
+import { projectSkillsRoot, skillsUserRoot } from "../home-layout";
 import { loadSkillsFromRoot } from "./loader";
 import { SkillRegistry } from "./registry";
 import { SkillError, type Skill, type SkillSource } from "./types";
@@ -63,8 +62,12 @@ export function resolveSkillCommand(task: string, opts: ResolveSkillOptions): Sk
 
 export interface SkillTaskOptions {
   cwd: string;
-  /** Raiz de skills do usuário; default `~/.astro/skills` (injetável para teste). */
+  /** Raiz de skills do projeto; default `$ASTRO_HOME/projects/<chave>/skills` (injetável para teste/eval). */
+  projectRoot?: string;
+  /** Raiz de skills do usuário; default `$ASTRO_HOME/skills` (injetável para teste). */
   userRoot?: string;
+  /** `$ASTRO_HOME` efetivo; default `process.env` (injetável para teste). */
+  env?: NodeJS.ProcessEnv;
   allow: readonly string[];
   audit: Auditor;
   run: string;
@@ -74,9 +77,10 @@ export interface SkillTaskOptions {
 /** Task vista pelo modelo: `/nome` vira o prompt da skill; audit `skill.loaded`; nada persistido (I-04). */
 export function resolveTaskSkill(task: string, opts: SkillTaskOptions): string {
   if (!isSkillCommand(task)) return task;
+  const env = opts.env ?? process.env;
   const registry = buildSkillRegistry({
-    projectRoot: join(opts.cwd, ".astro", "skills"),
-    userRoot: opts.userRoot ?? join(homedir(), ".astro", "skills"),
+    projectRoot: opts.projectRoot ?? projectSkillsRoot(opts.cwd, env),
+    userRoot: opts.userRoot ?? skillsUserRoot(env),
   });
   const invocation = resolveSkillCommand(task, { registry, allow: opts.allow });
   if (invocation === undefined) return task;

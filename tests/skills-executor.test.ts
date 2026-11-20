@@ -6,6 +6,7 @@ import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
 import { buildSkillRegistry, isSkillCommand, resolveSkillCommand, resolveTaskSkill } from "../src/skills/executor";
 import { loadSkillsFromRoot } from "../src/skills/loader";
+import { projectSkillsRoot } from "../src/home-layout";
 import { testEnv } from "./setup";
 
 const SKILL = `---\nname: commit\ndescription: Cria um commit com a mudança atual\nversion: 1.0.0\npermissions:\n  tools: [read_file, run_command]\n---\nRevise o diff e crie o commit. Argumentos: $ARGUMENTS\n`;
@@ -83,7 +84,7 @@ test("loadSkillsFromRoot não segue links de diretório e avisa", () => {
 
 test("resolveTaskSkill audita skill.loaded e devolve a task normal quando não é comando", () => {
   const { projectRoot, userRoot } = newRoots();
-  skillDir(join(projectRoot, ".astro", "skills"), "commit", SKILL_SCRIPTS);
+  skillDir(projectSkillsRoot(projectRoot, testEnv()), "commit", SKILL_SCRIPTS);
   const auditDir = mkdtempSync(join(tmpdir(), "astro-skexec-a-"));
   const audit = new Auditor(join(auditDir, "audit.jsonl"));
   const opts = { cwd: projectRoot, userRoot, allow: ["read_file", "run_command"], audit, run: "r1", agent: "default" };
@@ -120,7 +121,7 @@ test("run via /commit injeta o prompt da skill, audita skill.loaded e não persi
   });
   try {
     const dir = mkdtempSync(join(tmpdir(), "astro-skexec-run-"));
-    skillDir(join(dir, ".astro", "skills"), "commit", SKILL_SCRIPTS);
+    skillDir(projectSkillsRoot(dir, testEnv()), "commit", SKILL_SCRIPTS);
     const cfgPath = writeRunConfig(dir, up.port!, ["read_file", "run_command"]);
     const report = await runTask({ approveTool: () => true,
       configPath: cfgPath, task: "/commit revisar o diff", cwd: dir,
@@ -162,7 +163,7 @@ test("run dirigido por skill executa read_file e run_command no loop de tools", 
   });
   try {
     const dir = mkdtempSync(join(tmpdir(), "astro-sktool-"));
-    skillDir(join(dir, ".astro", "skills"), "commit", SKILL_SCRIPTS);
+    skillDir(projectSkillsRoot(dir, testEnv()), "commit", SKILL_SCRIPTS);
     writeFileSync(join(dir, "notes.txt"), "nota do diff");
     const cfgPath = writeRunConfig(dir, up.port!, ["read_file", "run_command"]);
     const report = await runTask({ approveTool: () => true,
@@ -186,7 +187,7 @@ test("run dirigido por skill executa read_file e run_command no loop de tools", 
 
 test("run com skill pedindo tool fora da allowlist falha fechado", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-skexec-deny-"));
-  skillDir(join(dir, ".astro", "skills"), "deploy", SKILL.replace("name: commit", "name: deploy").replace("tools: [read_file, run_command]", "tools: [write_file]"));
+  skillDir(projectSkillsRoot(dir, testEnv()), "deploy", SKILL.replace("name: commit", "name: deploy").replace("tools: [read_file, run_command]", "tools: [write_file]"));
   const cfgPath = writeRunConfig(dir, 1, ["read_file"]);
   await expect(runTask({ approveTool: () => true,
     configPath: cfgPath, task: "/deploy agora", cwd: dir,

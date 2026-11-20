@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { render } from "ink-testing-library";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { TuiApp } from "../src/tui/app";
@@ -9,7 +9,7 @@ import { SessionApi } from "../src/chat/session-api";
 import type { ChatSession } from "../src/chat/repl";
 import type { ModelInfo, SendTurnOptions, SessionSnapshot, TurnResult } from "../src/chat/agent-session";
 import { ProfileManager } from "../src/providers/profile-manager";
-import { projectTuiConfigPath } from "../src/home-layout";
+import { projectKey, projectTuiConfigPath } from "../src/home-layout";
 import { validateConfig } from "../src/core/config";
 import type { ConfigSummary } from "../src/chat/config-summary";
 import { BudgetExceededError, type BudgetStatus } from "../src/budget";
@@ -236,9 +236,11 @@ test("comandos /help, /model e /clear aparecem no painel", async () => {
   }
 });
 
-test("falha ao gravar a config não derruba a TUI", async () => {
+test("falha ao gravar o estado da TUI não derruba a TUI", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-bad-config-"));
-  writeFileSync(join(cwd, ".astro"), "não é diretório", "utf8");
+  // a chave do projeto é um arquivo: o estado da TUI não pode ser criado
+  mkdirSync(join(process.env.ASTRO_HOME!, "projects"), { recursive: true });
+  writeFileSync(join(process.env.ASTRO_HOME!, "projects", projectKey(cwd)), "não é diretório", "utf8");
   const instance = render(<TuiApp session={new FakeSession()} cwd={cwd} />);
   try {
     instance.stdin.write("/model p/m2");

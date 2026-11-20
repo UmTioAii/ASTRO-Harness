@@ -1,25 +1,26 @@
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../audit";
+import { projectSkillsRoot, skillsUserRoot } from "../home-layout";
 import { installSkill, removeSkill, verifySkill } from "./installer";
 import { loadSkillsFromRoot } from "./loader";
 import { SkillRegistry } from "./registry";
 import type { SkillSource } from "./types";
 
 const USAGE_SKILLS = `uso: skills <subcomando> [--user] [--force]
-  list                  lista skills do projeto (.astro/skills) e do usuário (~/.astro/skills)
+  list                  lista skills do projeto ($ASTRO_HOME/projects/<chave>/skills) e do usuário ($ASTRO_HOME/skills)
   show <nome>           mostra manifesto e prompt; aceita fonte/nome (project/commit)
   validate <nome>       valida manifesto da skill; aceita fonte/nome
-  install <url|caminho> instala na raiz do projeto; --user instala em ~/.astro/skills
+  install <url|caminho> instala na raiz do projeto; --user instala em $ASTRO_HOME/skills
   remove <nome>         remove da raiz do projeto; --user remove da do usuário
   verify <nome>         confere o sha256 do sidecar da instalação`;
 
-/** Raízes e saída injetáveis para teste; defaults seguem o convênio do ASTRO. */
+/** Raízes, ambiente e saída injetáveis para teste; defaults seguem o layout de `$ASTRO_HOME`. */
 export interface SkillsCliOptions {
   cwd?: string;
   projectRoot?: string;
   userRoot?: string;
+  env?: NodeJS.ProcessEnv;
   auditPath?: string;
   fetchFn?: (url: string) => Promise<Response>;
   out?: (line: string) => void;
@@ -28,8 +29,9 @@ export interface SkillsCliOptions {
 /** CLI de skills (C1b): list | show | validate | install | remove | verify. */
 export async function runSkillsCommand(argv: string[], opts: SkillsCliOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const projectRoot = opts.projectRoot ?? join(cwd, ".astro", "skills");
-  const userRoot = opts.userRoot ?? join(homedir(), ".astro", "skills");
+  const env = opts.env ?? process.env;
+  const projectRoot = opts.projectRoot ?? projectSkillsRoot(cwd, env);
+  const userRoot = opts.userRoot ?? skillsUserRoot(env);
   const out = opts.out ?? ((line: string) => console.log(line));
   const [sub, ...rest] = argv;
 

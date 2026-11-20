@@ -104,8 +104,10 @@ export interface RunOptions {
   ignoreStoredSelection?: boolean;
   /** Registro de métricas Prometheus (F6-1); quando presente, alimentado pelo run. */
   metrics?: Metrics;
-  /** Raiz de skills do usuário (C1c); default `~/.astro/skills`. Injetável para teste. */
+  /** Raiz de skills do usuário (C1c); default `$ASTRO_HOME/skills`. Injetável para teste. */
   skillsUserRoot?: string;
+  /** Raiz de skills do projeto; default `$ASTRO_HOME/projects/<chave>/skills` (#468). Injetável para teste/eval. */
+  skillsProjectRoot?: string;
   /** Sinal de cancelamento do run (F-06); aborta a chamada em voo e para em estado seguro. */
   signal?: AbortSignal;
   /** Gate de aprovação de troca (F-19, I-08); sem ele o runtime nega (pending). Injetável para teste. */
@@ -1184,7 +1186,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   try {
     // Skills (C1c): /<nome> vira o prompt da skill; tools da skill ⊆ allowlist (I-01); falha fecha o run
     const task = resolveTaskSkill(opts.task, { cwd, allow: config.agent.tools, audit, run, agent: AGENT_NAME,
-      ...(opts.skillsUserRoot === undefined ? {} : { userRoot: opts.skillsUserRoot }) });
+      ...(opts.skillsUserRoot === undefined ? {} : { userRoot: opts.skillsUserRoot }),
+      ...(opts.skillsProjectRoot === undefined ? {} : { projectRoot: opts.skillsProjectRoot }) });
     // Se há agents configurados, usa multi-agent session (chat/histórico e
     // override de modelo são single-agent)
     if (multiAgentRun) {

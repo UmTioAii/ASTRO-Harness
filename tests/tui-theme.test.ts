@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { projectDataDir, projectTuiConfigPath } from "../src/home-layout";
 import { THEMES, getThemeColors, isTheme, loadTuiConfig, nextTheme, saveTuiConfig } from "../src/tui/theme";
 
 /** Cada caso tem home e cwd próprios: o estado da TUI mora em `$ASTRO_HOME`. */
+function writeProject(cwd: string, env: Record<string, string>, text: string): void {
+  const file = projectTuiConfigPath(cwd, env);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, text, "utf8");
+}
+
 function envs(): { cwd: string; env: Record<string, string> } {
   return {
     cwd: mkdtempSync(join(tmpdir(), "astro-tui-theme-")),
@@ -18,7 +24,7 @@ describe("configuração da TUI (T2, #197)", () => {
     const first = envs();
     expect(loadTuiConfig(first.cwd, first.env)).toEqual({ theme: "dark" });
     const broken = envs();
-    writeFileSync(projectTuiConfigPath(broken.cwd, broken.env), "{", "utf8");
+    writeProject(broken.cwd, broken.env, "{");
     expect(loadTuiConfig(broken.cwd, broken.env)).toEqual({ theme: "dark" });
   });
 
@@ -36,11 +42,7 @@ describe("configuração da TUI (T2, #197)", () => {
     saveTuiConfig(cwd, { favoriteModels: ["p/a", "p/a", ""], recentModels: ["p/c", "p/c"] }, env);
     expect(loadTuiConfig(cwd, env)).toEqual({ theme: "dark", favoriteModels: ["p/a"], recentModels: ["p/c"] });
     const broken = envs();
-    writeFileSync(
-      projectTuiConfigPath(broken.cwd, broken.env),
-      JSON.stringify({ theme: "light", favoriteModels: ["p/a", 1, ""] }),
-      "utf8",
-    );
+    writeProject(broken.cwd, broken.env, JSON.stringify({ theme: "light", favoriteModels: ["p/a", 1, ""] }));
     expect(loadTuiConfig(broken.cwd, broken.env)).toEqual({ theme: "light", favoriteModels: ["p/a"] });
   });
 
@@ -70,7 +72,7 @@ describe("/theme e alto contraste (#64)", () => {
     saveTuiConfig(cwd, { theme: "contrast" }, env);
     expect(loadTuiConfig(cwd, env)).toEqual({ theme: "contrast" });
     const bad = envs();
-    writeFileSync(projectTuiConfigPath(bad.cwd, bad.env), JSON.stringify({ theme: "neon" }), "utf8");
+    writeProject(bad.cwd, bad.env, JSON.stringify({ theme: "neon" }));
     expect(loadTuiConfig(bad.cwd, bad.env)).toEqual({ theme: "dark" });
   });
 

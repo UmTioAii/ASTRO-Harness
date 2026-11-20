@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runTask } from "../../src/core/app";
+import { projectSkillsRoot } from "../../src/home-layout";
 import { testEnv } from "../setup";
 import { newWorkspace, readAudit, removeWorkspace, requestMessages, startMockProvider, writeConfig } from "./helpers";
 
@@ -19,7 +20,7 @@ Leia notes.txt e registre o relatório em out/report.txt. Argumentos: $ARGUMENTS
 `;
 
 function installSkill(dir: string, name: string, content: string): void {
-  const skillDir = join(dir, ".astro", "skills", name);
+  const skillDir = join(projectSkillsRoot(dir, testEnv()), name);
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(join(skillDir, "SKILL.md"), content, "utf8");
 }

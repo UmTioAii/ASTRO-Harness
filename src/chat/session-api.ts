@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs
 import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "../sanitize-external";
+import { projectDataDir } from "../home-layout";
 import { MAX_SESSION_BYTES, sanitizeSessionName, SessionStore, sanitizeSessionRecord, type SessionRecord } from "./store";
 
 const DATABASE_SCHEMA_VERSION = 3;
@@ -66,15 +67,16 @@ export function openSessionApi(astroDir: string): SessionApi | undefined {
   }
 }
 
-/** CRUD e migração do store de sessões sanitizado para `.astro/sessions.db`. */
+/** CRUD e migração do store de sessões sanitizado; a raiz padrão vem de `$ASTRO_HOME` (#468). */
 export class SessionApi {
   readonly databasePath: string;
   readonly migrationResult: SessionMigrationResult;
   readonly #db: Database;
   #jsonFiles = new Map<string, JsonSessionCacheEntry>();
 
-  constructor(readonly astroDir: string = join(process.cwd(), ".astro")) {
-    mkdirSync(astroDir, { recursive: true });
+  constructor(readonly astroDir: string = projectDataDir(process.cwd())) {
+    // estado privado: a raiz do projeto nasce 0700 (o banco é 0600 abaixo)
+    mkdirSync(astroDir, { recursive: true, mode: 0o700 });
     this.databasePath = join(astroDir, "sessions.db");
     this.#db = new Database(this.databasePath, { create: true });
     try {

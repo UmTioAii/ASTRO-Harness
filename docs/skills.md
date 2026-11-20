@@ -6,7 +6,7 @@ Skills reutilizáveis no formato `SKILL.md` (C1, #55): carregamento, instalaçã
 
 ## Raízes, manifesto e runtime
 
-- Raízes: `project` = `<cwd>/.astro/skills/`, `user` = `~/.astro/skills/`. Cada skill é `<raiz>/<nome>/SKILL.md`, com chave `fonte/nome` (`project/commit`); nome puro só resolve quando único. Links (symlink/junction) de diretório ou de `SKILL.md` não são seguidos (I-03).
+- Raízes (#468): `project` = `$ASTRO_HOME/projects/<chave>/skills/`, `user` = `$ASTRO_HOME/skills/` — o cwd e o `homedir()` não decidem a raiz, só a chave do projeto (`docs/astro-home-layout.md`). Cada skill é `<raiz>/<nome>/SKILL.md`, com chave `fonte/nome` (`project/commit`); nome puro só resolve quando único. Links (symlink/junction) de diretório ou de `SKILL.md` não são seguidos (I-03).
 - Frontmatter: `name` (`^[a-z0-9][a-z0-9_-]*$`), `description`, `version` e o prompt (após `---`) obrigatórios; `permissions` com defaults deny (`tools: []`, `network: false`, `filesystem: none`); `scripts` opcional. Teto de 1MB por SKILL.md na leitura e na instalação; download remoto corta o stream ao passar do teto (não bufferiza o corpo inteiro); a origem e cada hop de redirect (máximo 5, `redirect: manual`) passam por `outboundUrlProblem` e pelo DNS resolvido, então um 302 para loopback/metadados é recusado antes do request (#256).
 - Parser: mapas, listas em bloco (ambos estilos), escalares e arrays inline, sem dependência. Limitações: sem block scalar/escapes; chave duplicada usa a última; primeira chave de item com valor em bloco é rejeitada; sequência de sequências vira escalar; chave ou item over-indentado (indent maior que o primeiro filho do frame e divergente) é rejeitado com `frontmatter inválido: indentação inconsistente` (#112); nomes reservados do Windows (`con`, `nul`) passam no regex; fonte-arquivo dentro do destino não toca a guarda de sobreposição.
 
@@ -33,5 +33,5 @@ Prompt da skill. Argumentos: $ARGUMENTS
 
 ## Exemplo e referências
 
-- `examples/skills/commit/SKILL.md` — copie para `<projeto>/.astro/skills/commit/` e invoque `/commit`.
-- #55 (C1), PR #111 (C1a), PR #113 (C1b), issue #112; I-01/I-03/I-04/I-11/I-14 em `docs/invariants.md`; código em `src/skills/`.
+- `examples/skills/commit/SKILL.md` — `astro skills install examples/skills/commit` (ou copie para `$ASTRO_HOME/skills/commit/`) e invoque `/commit`.
+- #55 (C1), PR #111 (C1a), PR #113 (C1b), issue #112, #468 (raízes em `$ASTRO_HOME`); I-01/I-03/I-04/I-11/I-14 em `docs/invariants.md`; código em `src/skills/`.

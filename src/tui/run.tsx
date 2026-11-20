@@ -12,6 +12,7 @@ import { createSecretHandlers } from "./vault-secret";
 import { createApprovalBridge } from "./approvals";
 import { createShellRunner, type ShellRunner } from "./shell";
 import { getThemeColors, loadTuiConfig } from "./theme";
+import { projectDataDir } from "../home-layout";
 
 export interface RunTuiOptions {
   configPath: string;
@@ -253,7 +254,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
     let instance: ReturnType<typeof render> | undefined;
     const branch = gitBranch(cwd);
     try {
-      sessionApi = openSessionApi(resolve(cwd, ".astro"));
+      sessionApi = openSessionApi(projectDataDir(cwd));
       instance = render(
         <TuiApp
           session={session}
