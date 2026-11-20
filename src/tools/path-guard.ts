@@ -19,8 +19,6 @@ export function isSamePath(a: string, b: string): boolean {
 export interface PathGuardContext {
   cwd: string;
   protectedPaths?: readonly string[];
-  /** `allow-critical` da CLI (ADR-0027): único override do tier configurável. */
-  allowCritical?: readonly string[];
 }
 
 /**
@@ -30,6 +28,11 @@ export interface PathGuardContext {
  * `.env`/`protectedPaths`. Roda antes de qualquer mutação, então a recusa
  * deixa a árvore intacta. Symlink não é seguido: `Dirent.isDirectory()` é falso
  * para link, e o walk nunca sai do cwd (I-11).
+ *
+ * A raiz é SEMPRE classificada, sem o prefilter: o prefilter é léxico e não
+ * conhece a forma ADS do NTFS (`.env::$DATA`), que o `stripAds` do classifier
+ * reduz a `.env`. `allowCritical` não entra aqui de propósito: o flag autoriza
+ * leitura/escrita pontual, nunca remoção/renomeação de caminho crítico.
  */
 export function assertNoHardBlocked(target: string, ctx: PathGuardContext): void {
   const astroHome = resolveAstroHome();
@@ -39,17 +42,18 @@ export function assertNoHardBlocked(target: string, ctx: PathGuardContext): void
     astroHome,
     protectedPaths,
     artifactRoot: resolveArtifactRoot(),
-    ...(ctx.allowCritical === undefined ? {} : { allowCritical: ctx.allowCritical }),
   });
   const prefilter = createLexicalHardBlockPrefilter({ cwd: ctx.cwd, astroHome, protectedPaths });
-  const check = (abs: string): void => {
-    if (!prefilter(abs)) return; // sem candidato léxico, a classe não muda
-    if (classifier(abs) === "hard-block") {
-      throw new ToolError(`operação recusada: caminho bloqueado (hard-block): ${relativePath(ctx.cwd, abs)}`);
-    }
+  const reject = (abs: string): never => {
+    throw new ToolError(`operação recusada: caminho bloqueado (hard-block): ${relativePath(ctx.cwd, abs)}`);
+  };
+  /** Descendente: o prefilter barato só decide se vale pagar a classificação. */
+  const checkDescendant = (abs: string): void => {
+    if (!prefilter(abs)) return;
+    if (classifier(abs) === "hard-block") reject(abs);
   };
 
-  check(target);
+  if (classifier(target) === "hard-block") reject(target);
   // Destino de `move_path` pode não existir ainda: só há árvore para varrer se for diretório.
   let isDirectory = false;
   try {
@@ -67,7 +71,7 @@ export function assertNoHardBlocked(target: string, ctx: PathGuardContext): void
     }
     for (const entry of entries) {
       const abs = join(dir, entry.name);
-      check(abs);
+      checkDescendant(abs);
       if (entry.isDirectory()) walk(abs);
     }
   };

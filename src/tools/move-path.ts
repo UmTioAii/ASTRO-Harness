@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { assertNoHardBlocked, isSamePath, relativePath } from "./path-guard";
 import { canonicalize, isWithin, resolveWritableWithin } from "./paths";
@@ -85,9 +85,8 @@ export const movePathTool: Tool = {
         throw new ToolError("recusado: o diretório de trabalho não pode ser movido");
       }
 
-      let sourceDir: boolean;
       try {
-        sourceDir = lstatSync(source).isDirectory();
+        lstatSync(source);
       } catch {
         return failure(`origem não existe: ${from}`);
       }
@@ -97,7 +96,10 @@ export const movePathTool: Tool = {
       if (isSamePath(realSource, realDestination)) {
         return failure(`nenhuma mudança: origem e destino são o mesmo caminho: ${from}`);
       }
-      if (sourceDir && isWithin(realSource, realDestination)) {
+      // Sem guard de `isDirectory()`: junction/symlink como origem reporta
+      // `isDirectory() === false`, mas `realSource` já é o alvo real — mover
+      // `link` para `link/sub` criaria um laço dentro do próprio alvo (#535).
+      if (isWithin(realSource, realDestination)) {
         return failure(`recusado: destino dentro da própria origem: ${to}`);
       }
 
@@ -114,6 +116,7 @@ export const movePathTool: Tool = {
       } catch {
         destinationExists = false;
       }
+      let backup: string | undefined;
       if (destinationExists) {
         if (!overwrite) {
           return failure(`destino já existe: ${to} (use overwrite: true para substituir um arquivo)`);
@@ -121,13 +124,21 @@ export const movePathTool: Tool = {
         if (destinationDir) {
           return failure(`destino é um diretório; overwrite só substitui arquivo: ${to}`);
         }
+        // Mesma convenção de backup do `edit` (#535): o destino sobrescrito
+        // fica recuperável; `allow-edits` aprova a sobrescrita como critical_write.
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        backup = `${destination}.${timestamp}.bak`;
+        copyFileSync(destination, backup);
         rmSync(destination);
       }
 
       mkdirSync(dirname(destination), { recursive: true });
       renameSync(source, destination);
+      const moved = `movido: ${relativePath(ctx.cwd, source)} -> ${relativePath(ctx.cwd, destination)}`;
       return {
-        output: `movido: ${relativePath(ctx.cwd, source)} -> ${relativePath(ctx.cwd, destination)}`,
+        output: backup === undefined
+          ? moved
+          : `${moved} (destino anterior em ${relativePath(ctx.cwd, backup)})`,
       };
     } catch (error) {
       if (error instanceof ToolError) return failure(error.message);

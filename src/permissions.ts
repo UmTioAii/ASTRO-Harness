@@ -150,6 +150,8 @@ const APPROVAL_DETAIL_HEAD_RATIO = 0.7;
 const MOVE_ARROW = " -> ";
 /** Marca da remoção recursiva no prompt (#535): o usuário aprova o que a tool faz. */
 const RECURSIVE_SUFFIX = " (recursivo)";
+/** Marca do `move_path` com `overwrite: true` (#535): o destino existente será apagado. */
+const OVERWRITE_SUFFIX = " (sobrescreve)";
 
 /** Tools cujo argumento material é um path (#536). `move_path` soma dois paths. */
 const DETAIL_PATH_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit", "delete_path"]);
@@ -227,11 +229,13 @@ export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined
     const from = detailValue(input.from);
     const to = detailValue(input.to);
     if (from === undefined || to === undefined) return undefined;
+    // #535: `overwrite: true` apaga o destino existente; o prompt precisa dizer isso.
+    const suffix = input.overwrite === true ? OVERWRITE_SUFFIX : "";
     // Orçamento por lado: um `from` longo não pode esconder o destino.
-    const sideBudget = Math.floor((APPROVAL_DETAIL_MAX_CHARS - MOVE_ARROW.length) / 2);
+    const sideBudget = Math.floor((APPROVAL_DETAIL_MAX_CHARS - MOVE_ARROW.length - suffix.length) / 2);
     return {
       kind: "path",
-      value: `${elideDetailValue(from, sideBudget)}${MOVE_ARROW}${elideDetailValue(to, sideBudget)}`,
+      value: `${elideDetailValue(from, sideBudget)}${MOVE_ARROW}${elideDetailValue(to, sideBudget)}${suffix}`,
     };
   }
   if (DETAIL_PATH_TOOLS.has(call.name)) {
@@ -358,6 +362,16 @@ export interface ToolCallLike {
   input: unknown;
 }
 
+/**
+ * `move_path` com `overwrite: true` remove um arquivo existente (#535): é
+ * escrita destrutiva, não o `edit` comum que `allow-edits` libera sem prompt.
+ */
+function isDestructiveOverwrite(call: ToolCallLike): boolean {
+  if (call.name !== "move_path") return false;
+  if (typeof call.input !== "object" || call.input === null) return false;
+  return (call.input as { overwrite?: unknown }).overwrite === true;
+}
+
 /** Classe da ação: manifesto (`class`) refinado por caminho crítico (PERM-02/#264); `sensitive` eleva escrita. */
 export function actionClassOf(
   tool: Tool,
@@ -378,6 +392,9 @@ export function actionClassOf(
     return declared === "read_critical" || critical ? "read_critical" : "read_common";
   }
   if (declared === "edit") {
+    // #535: sobrescrever o destino apaga o arquivo anterior — mesma classe do
+    // write em caminho crítico (ask mesmo em `allow-edits`).
+    if (isDestructiveOverwrite(call)) return "critical_write";
     const sensitive = pathClassOf !== undefined && candidates.some((path) => pathClassOf(path) === "sensitive");
     return critical || sensitive ? "critical_write" : "edit";
   }
