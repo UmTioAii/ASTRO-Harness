@@ -3,11 +3,11 @@
 - Status: aceita
 - Data: 2026-11-20
 - Issue: #478
-- Decisões relacionadas: D-07, D-28, ADR-0007, ADR-0014, ADR-0029
+- Decisões relacionadas: D-07, D-24, D-28, D-31, ADR-0007, ADR-0014, ADR-0029
 
 ## Contexto
 
-`profile` e `preset` nomeavam coisas diferentes sem fronteira registrada: o ADR-0007 usa `profile` para o pool declarativo de modelos por agent, e `preset` entrou em #515 para a forma da config sem ADR próprio. Sem essa fronteira, "perfil" também é lido como o perfil de provider (D-21) e como o perfil de chamada (ADR-0012), e o limite de trabalho já mudou de nome uma vez (`run.maxTurns`, removido em #545).
+`profile` e `preset` nomeavam coisas diferentes sem fronteira registrada: o ADR-0007 usa `profile` para o pool declarativo de modelos por agent, e `preset` entrou em #515 para a forma da config sem ADR próprio. Sem essa fronteira, "perfil" também é lido como o perfil de provider (D-21) e como o perfil de chamada (ADR-0012), e o limite de trabalho foi unificado: `run.maxTurns` foi removido e `agent.maxSteps` passou a ser o único limite (#545).
 
 ## Decisão
 
@@ -28,14 +28,14 @@ O preset não altera a superfície de tools (D-07) nem o perfil de permissão do
 
 Turno não é limite: `run.maxTurns` não existe (#545, ADR-0014); turno é a unidade de interação da interface e do `/usage`, e o trabalho é limitado por `agent.maxSteps`.
 
-No `/config`, `simple` deixa os knobs de controle read-only (`agent.maxSteps`, `team.sessionBudgetUsd` e `team.weekBudgetUsd`): a gravação é recusada com a instrução de usar `"preset": "control"` (`src/core/config-edit.ts`), e um teto mais restritivo que venha da camada global continua valendo (ADR-0029). `permissions.mode` segue editável nos dois presets.
+No `/config`, `simple` deixa os knobs de controle read-only (`agent.maxSteps`, `team.sessionBudgetUsd` e `team.weekBudgetUsd`): a gravação é recusada com a instrução de usar `"preset": "control"` (`src/core/config-edit.ts`, D-31). O teto global de passos continua valendo e o projeto só estreita (ADR-0029). `team.sessionBudgetUsd` e `team.weekBudgetUsd` declarados em qualquer camada exigem `control`: com `simple`, o valor mesclado falha no load. Um `agent.maxSteps` global acima de 500 também falha em `simple`; o projeto reafirma um valor de até 500 ou usa `control`. `permissions.mode` segue editável nos dois presets.
 
 ## Consequências
 
 - Ganho: um nome por conceito e um dono por knob; o projeto reduz o teto, mas não amplia a política global (ADR-0029).
-- Custo: `simple` não serve para subir limites; quem precisa disso declara `control` e assume os knobs (#515/#552).
+- Custo: `simple` não sobe o teto; acima de 500 exige `control` no projeto e o teto declarado na camada global, porque o projeto só estreita (ADR-0029).
 - Follow-up de vocabulário, sem mudança de código: `docs/providers.md` e `docs/config-parity.md` chamam de "perfil" a entrada do store de provider (D-21) e o ADR-0012 chama de "call profile" o esforço/thinking do modelo. São conceitos distintos do `profile` do pool; os nomes ficam, a distinção passa a ser esta.
-- Invariantes afetados: I-01 (allowlist e escopo por agent), I-06 (escolha determinística).
+- Invariantes afetados: nenhum. O preset só decide o teto de passos; não toca a allowlist (I-01), o confinamento de caminho (I-11), o custo (I-17), o modo/aprovação (D-24) nem o perfil de permissão do agent (D-28).
 
 ## Alternativas descartadas
 
