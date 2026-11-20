@@ -11,13 +11,21 @@
  * `npm install` do tarball, que baixa `ink`/`react`/`bun` do registry como o
  * §4 de `docs/release.md`; dentro da árvore só `dist/` é reescrito (build).
  *
- * Uso: bun scripts/packed-smoke.ts [--json]
+ * O boot da TUI é o ponto do #542: etapa obrigatória. Um `skipped` numa etapa
+ * obrigatória fecha o run como falha; `--allow-skip-tui` é a única tolerância.
+ *
+ * Uso: bun scripts/packed-smoke.ts [--json] [--allow-skip-tui]
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { saveHomeState, type AstroHomeState } from "../src/home-state";
+import { resolveBun } from "../src/launcher";
 import { redactSecrets } from "../src/sanitize-external";
+import { canonicalFolder } from "../src/trust";
 import {
+  cleanupOnSignal,
   installedAstroBin,
   readPackageMeta,
   stepEnv,
@@ -68,9 +76,88 @@ function removeTempDir(dir: string): void {
   rmSync(absolute, { recursive: true, force: true });
 }
 
+/**
+ * `redactSecrets` casa por formato (`apiKey|token|password`…); a chave de
+ * fixture do smoke não tem esse formato, então sai por identidade (`I-03`).
+ */
+export function redactSmokeText(text: string): string {
+  return redactSecrets(text).replaceAll(SMOKE_KEY_VALUE, "[redigido]");
+}
+
+/** Últimas linhas da saída, redigidas pelo padrão e pela chave da fixture. */
+function failureTail(text: string): string {
+  return redactSmokeText(tailForFailure(text));
+}
+
+/**
+ * Ctrl-C/SIGTERM no meio do `npm install` não deixa temporário com
+ * `node_modules`: cada diretório criado é limpo pelo `cleanupOnSignal` do
+ * `release:check` e o processo sai uma vez só, no fim (130/143).
+ */
+function installCleanupHandlers(dirs: readonly string[]): () => void {
+  const tempRoot = tmpdir();
+  const onSignal = (signal: "SIGINT" | "SIGTERM"): void => {
+    for (const dir of dirs) {
+      // `exit` vira no-op: o handler limpa todos e sai depois do laço.
+      cleanupOnSignal(tempRoot, dir, signal, {
+        remove: (_root, target) => removeTempDir(target),
+        exit: () => {},
+      });
+    }
+    process.exit(signal === "SIGINT" ? 130 : 143);
+  };
+  const onSigint = (): void => onSignal("SIGINT");
+  const onSigterm = (): void => onSignal("SIGTERM");
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  return () => {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+  };
+}
+
+export interface BunLookupDeps {
+  /** Default: `createRequire` ancorado no `package.json` do pacote instalado. */
+  resolve?: (id: string) => string;
+  exists?: (path: string) => boolean;
+  /** `stat` do candidato; descarta o placeholder de ~450 bytes do pacote `bun`. */
+  stat?: (path: string) => { size: number };
+  platform?: NodeJS.Platform;
+  arch?: string;
+  /** PATH do host; default nunca acha nada — o smoke prova o pacote, não a máquina. */
+  which?: (name: string) => string | undefined;
+}
+
+/**
+ * Bun do pacote instalado com a mesma ordem do launcher (`resolveBun`): pacote
+ * de plataforma (binário real, sem postinstall) e depois `bun/bin` quando o
+ * postinstall rodou. Sem `ASTRO_BUN_PATH` e sem PATH do host: com
+ * `ignore-scripts=true` ou instalação parcial o erro é explícito, não um
+ * `spawn` opaco dentro da TUI.
+ */
+export function packagedBun(pkgDir: string, deps: BunLookupDeps = {}): string {
+  try {
+    return resolveBun({
+      env: {},
+      runningUnderBun: false,
+      platform: deps.platform ?? process.platform,
+      arch: deps.arch ?? process.arch,
+      resolve: deps.resolve ?? ((id: string) => createRequire(join(pkgDir, "package.json")).resolve(id)),
+      exists: deps.exists ?? existsSync,
+      stat: deps.stat ?? statSync,
+      which: deps.which ?? (() => undefined),
+    });
+  } catch (error) {
+    const message = redactSmokeText(error instanceof Error ? error.message : String(error));
+    throw new SmokeError(`Bun do pacote instalado indisponível:\n${message}`);
+  }
+}
+
 export interface CliOptions {
   json: boolean;
   help: boolean;
+  /** Tolerância explícita: sem terminal, a etapa TUI sai pulada em vez de falhar. */
+  allowSkipTui: boolean;
 }
 
 export interface RecordedRequest {
@@ -92,13 +179,15 @@ export class SmokeError extends Error {
   override name = "SmokeError";
 }
 
-const USAGE = `Uso: bun scripts/packed-smoke.ts [--json]
+const USAGE = `Uso: bun scripts/packed-smoke.ts [--json] [--allow-skip-tui]
 
 Empacota e instala o tarball local, exercita a CLI instalada e abre a TUI com
 um provider mock em loopback. Não publica nada e não usa credencial real.
-  --json  imprime só o resumo JSON ao final
-  --help  mostra esta ajuda
+  --json            imprime só o resumo JSON ao final
+  --allow-skip-tui  sem terminal, marca a etapa TUI como pulada (default: falha)
+  --help            mostra esta ajuda
 
+A etapa TUI é obrigatória: etapa obrigatória pulada fecha o run como falha.
 O wizard de provider e a navegação (/providers, /log, /model) seguem
 manuais: docs/release.md §5.`;
 
@@ -118,7 +207,7 @@ export function smokeConfig(port: number): Record<string, unknown> {
 }
 
 /** `$ASTRO_HOME/state.json`: o diretório do smoke já confiável (sem prompt). */
-export function trustState(folder: string): Record<string, unknown> {
+export function trustState(folder: string): AstroHomeState {
   return { version: 1, trust: { folders: [folder] }, migrations: { providers: true, trust: true } };
 }
 
@@ -167,9 +256,10 @@ export function completionProblem(
 }
 
 export function parseArgs(argv: readonly string[]): CliOptions {
-  const options: CliOptions = { json: false, help: false };
+  const options: CliOptions = { json: false, help: false, allowSkipTui: false };
   for (const arg of argv) {
     if (arg === "--json") options.json = true;
+    else if (arg === "--allow-skip-tui") options.allowSkipTui = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`argumento desconhecido: ${arg}`);
   }
@@ -192,7 +282,7 @@ function run(cmd: string[], cwd: string, env: Record<string, string>, timeout: n
 }
 
 function outputOf(result: RunResult): string {
-  return tailForFailure(`${result.out}\n${result.err}`);
+  return failureTail(`${result.out}\n${result.err}`);
 }
 
 /** Ambiente sem segredos do host; o smoke só acrescenta as variáveis dele. */
@@ -246,6 +336,8 @@ interface TuiContext {
   home: string;
   pkgDir: string;
   version: string;
+  /** Só com `--allow-skip-tui`: sem terminal, a etapa sai pulada em vez de falhar. */
+  allowSkipTui: boolean;
 }
 
 interface TuiOutcome {
@@ -253,18 +345,21 @@ interface TuiOutcome {
   detail: string;
 }
 
-/** Boot da TUI instalada contra o mock; falha com mensagem clara se não houver TTY nem frame. */
+/** Boot da TUI instalada contra o mock; etapa obrigatória, falha sem frame ou sem TTY. */
 async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
   const shim = join(resolve(import.meta.dir), "packed-smoke-tty.ts");
   const cli = join(ctx.pkgDir, "dist", "cli.js");
-  const bun = join(ctx.projectDir, "node_modules", "bun", "bin", process.platform === "win32" ? "bun.exe" : "bun");
-  for (const file of [shim, cli, bun]) {
+  const bun = packagedBun(ctx.pkgDir);
+  for (const file of [shim, cli]) {
     if (!existsSync(file)) throw new SmokeError(`arquivo ausente no pacote instalado: ${file}`);
   }
 
   const mock = startMock();
   writeFileSync(join(ctx.projectDir, "astro.config.json"), `${JSON.stringify(smokeConfig(mock.port), null, 2)}\n`);
-  writeFileSync(join(ctx.home, "state.json"), `${JSON.stringify(trustState(ctx.projectDir), null, 2)}\n`);
+  // `ensureTrustedCwd` compara realpath: sem canonicalizar, macOS (/var) e o
+  // TEMP 8.3 do Windows abrem o modal de trust e o prompt cai dentro dele.
+  // `saveHomeState` valida o schema aqui, não 45 s depois dentro da TUI.
+  saveHomeState(trustState(canonicalFolder(ctx.projectDir)), join(ctx.home, "state.json"));
 
   const child = Bun.spawn({
     cmd: [bun, "--preload", shim, cli],
@@ -287,7 +382,7 @@ async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
   void (async () => { for await (const chunk of child.stdout) out += decoder.decode(chunk); })();
   void (async () => { for await (const chunk of child.stderr) err += decoder.decode(chunk); })();
 
-  const tail = (): string => tailForFailure(`${out}\n${err}`);
+  const tail = (): string => failureTail(`${out}\n${err}`);
   const waitUntil = async (check: () => boolean, timeoutMs: number): Promise<boolean> => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -306,7 +401,15 @@ async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
     const frame = firstFrame(out, ctx.version);
     if (frame === undefined) {
       if (NEEDS_TTY.test(`${out}\n${err}`)) {
-        return { status: "skipped", detail: "precisa de TTY: o pacote reportou falta de terminal interativo" };
+        if (ctx.allowSkipTui) {
+          // Tolerância explícita (--allow-skip-tui): runPlan ainda exige `required: false`.
+          return { status: "skipped", detail: "precisa de TTY: o pacote reportou falta de terminal interativo" };
+        }
+        throw new SmokeError(
+          "o pacote reportou falta de terminal interativo; a etapa TUI é obrigatória "
+          + "(use --allow-skip-tui só em plataforma sem TTY):\n"
+          + tail(),
+        );
       }
       if (!booted) child.kill();
       throw new SmokeError(
@@ -351,14 +454,21 @@ async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
   }
 }
 
-interface PlanStep {
+interface StepOutcome {
+  status: "passed" | "skipped";
+  detail: string;
+}
+
+export interface PlanStep {
   id: string;
   label: string;
-  body: () => Promise<{ status: "passed" | "skipped"; detail: string }> | { status: "passed" | "skipped"; detail: string };
+  /** Sem esta etapa o gate não prova o que promete: `skipped` fecha o run como falha. */
+  required: boolean;
+  body: () => Promise<StepOutcome> | StepOutcome;
 }
 
 /** Executa o plano em ordem, para na primeira falha e marca o resto como não rodado. */
-async function runPlan(
+export async function runPlan(
   steps: readonly PlanStep[],
   emit: (line: string) => void,
 ): Promise<{ results: StepResult[]; failure: string | null }> {
@@ -373,10 +483,17 @@ async function runPlan(
     emit(`[${index + 1}/${steps.length}] ${step.label}`);
     try {
       const outcome = await step.body();
+      if (outcome.status === "skipped" && step.required) {
+        const message = `etapa obrigatória pulada: ${redactSmokeText(outcome.detail)}`;
+        results.push({ id: step.id, status: "failed", detail: message });
+        failure = `${step.id}: ${message}`;
+        emit(`  falhou: ${message}`);
+        continue;
+      }
       results.push({ id: step.id, status: outcome.status, detail: outcome.detail });
       emit(`  ${outcome.status === "passed" ? "ok" : "pulado"}: ${outcome.detail}`);
     } catch (error) {
-      const message = redactSecrets(error instanceof Error ? error.message : String(error));
+      const message = redactSmokeText(error instanceof Error ? error.message : String(error));
       results.push({ id: step.id, status: "failed", detail: message });
       failure = `${step.id}: ${message}`;
       emit(`  falhou: ${message}`);
@@ -418,6 +535,7 @@ async function main(): Promise<number> {
     {
       id: "build",
       label: "build do repo",
+      required: true,
       body: () => {
         const result = run([process.execPath, "run", "build"], root, smokeEnv(), STEP_TIMEOUT_MS);
         if (result.code !== 0) throw new SmokeError(`bun run build falhou (exit ${result.code}):\n${outputOf(result)}`);
@@ -427,6 +545,7 @@ async function main(): Promise<number> {
     {
       id: "pack",
       label: "npm pack",
+      required: true,
       body: () => {
         const npm = npmBinary();
         const result = run([npm, "pack", "--pack-destination", packDir], root, smokeEnv(), STEP_TIMEOUT_MS);
@@ -442,6 +561,7 @@ async function main(): Promise<number> {
     {
       id: "install",
       label: "instalação limpa do tarball",
+      required: true,
       body: () => {
         const npm = npmBinary();
         const result = run(
@@ -464,6 +584,7 @@ async function main(): Promise<number> {
     {
       id: "version",
       label: "astro --version no pacote instalado",
+      required: true,
       body: () => {
         const node = nodeBinary();
         const result = run([node, join(pkgDir, "dist", "launcher.js"), "--version"], projectDir, smokeEnv(), STEP_TIMEOUT_MS);
@@ -477,6 +598,7 @@ async function main(): Promise<number> {
     {
       id: "help",
       label: "astro --help no pacote instalado",
+      required: true,
       body: () => {
         const node = nodeBinary();
         const result = run([node, join(pkgDir, "dist", "launcher.js"), "--help"], projectDir, smokeEnv(), STEP_TIMEOUT_MS);
@@ -491,6 +613,7 @@ async function main(): Promise<number> {
     {
       id: "doctor",
       label: "astro doctor com ASTRO_HOME isolado",
+      required: true,
       body: () => {
         const node = nodeBinary();
         const result = run(
@@ -508,7 +631,9 @@ async function main(): Promise<number> {
     {
       id: "tui",
       label: "TUI instalada com provider mock em loopback",
-      body: () => runTui({ projectDir, home, pkgDir, version: meta.version }),
+      // Única porta de tolerância: `--allow-skip-tui`; sem ela, `skipped` falha.
+      required: !options.allowSkipTui,
+      body: () => runTui({ projectDir, home, pkgDir, version: meta.version, allowSkipTui: options.allowSkipTui }),
     },
   ];
 
@@ -517,17 +642,31 @@ async function main(): Promise<number> {
     console.log(`smoke:packed: temporário ${projectDir}`);
   }
 
-  const { results, failure: planFailure } = await runPlan(steps, emit);
-  let failure = planFailure;
-  const skipped = results.filter((result) => result.status === "skipped").length;
+  const created = [projectDir, home, packDir];
+  const clearSignalHandlers = installCleanupHandlers(created);
+  let results: StepResult[] = [];
+  let failure: string | null = null;
 
   try {
-    for (const dir of [projectDir, home, packDir]) removeTempDir(dir);
-  } catch (error) {
-    const message = redactSecrets(error instanceof Error ? error.message : String(error));
-    if (failure === null) failure = `cleanup: ${message}`;
-    else emit(`  aviso: falha ao limpar temporários: ${message}`);
+    const plan = await runPlan(steps, emit);
+    results = plan.results;
+    failure = plan.failure;
+  } finally {
+    clearSignalHandlers();
+    // Cada diretório tem o seu `try`: um rm que falha não aborta os outros dois
+    // e o primeiro erro é preservado como falha do run.
+    for (const dir of created) {
+      try {
+        removeTempDir(dir);
+      } catch (error) {
+        const message = redactSmokeText(error instanceof Error ? error.message : String(error));
+        if (failure === null) failure = `cleanup: ${message}`;
+        else emit(`  aviso: falha ao limpar ${dir}: ${message}`);
+      }
+    }
   }
+
+  const skipped = results.filter((result) => result.status === "skipped").length;
 
   if (options.json) {
     console.log(JSON.stringify({

@@ -76,7 +76,7 @@ npm install "$TARBALL"
 O gate tem duas partes: automática (`bun run smoke:packed`, #542) e manual (wizard e telas), as duas sem credencial real.
 
 ```bash
-bun run smoke:packed          # --json: resumo de máquina
+bun run smoke:packed          # --json: resumo de máquina; --allow-skip-tui: só sem TTY
 ```
 
 | Etapa | Prova |
@@ -85,8 +85,9 @@ bun run smoke:packed          # --json: resumo de máquina
 | `--version` / `--help` / `doctor` | `astro <versão>`; `astro run` e `astro chat`; `0 fail` com `ASTRO_HOME` temporário |
 | TUI | primeiro frame `ASTRO v<versão> · mock/mock-model`, 1 turno, mock com exatamente 1 `POST /chat/completions` (modelo, prompt, `Authorization`) e ctrl+c em exit 0 |
 
-- A TUI roda `dist/cli.js` instalado com o Bun do pacote mais `--preload scripts/packed-smoke-tty.ts`, que faz o pipe passar por TTY (Ink e `runTui` só olham `isTTY`). Sem frame em 30 s o processo é morto e a etapa falha; se o pacote reportar falta de terminal, a etapa sai como `pulado` no resumo.
-- Hermético: mock em `127.0.0.1` com porta efêmera, chave falsa por `credentialRef` (`ASTRO_PACKED_SMOKE_KEY`), `ASTRO_HOME`/projeto/trust/tarball em temporário removido no fim. Rede só no `npm install` (§4).
+- A TUI roda `dist/cli.js` instalado com o Bun do pacote (mesma ordem do `dist/launcher.js`: pacote de plataforma, depois `bun/bin` sem o placeholder de ~450 bytes; nunca o PATH do host) mais `--preload scripts/packed-smoke-tty.ts`, que faz o pipe passar por TTY (Ink e `runTui` só olham `isTTY`). A etapa é obrigatória: sem frame em 30 s, ou com o pacote reportando falta de terminal, o run falha. `--allow-skip-tui` é a única tolerância (plataforma sem TTY) e deixa a etapa como `pulado`; etapa obrigatória pulada fecha o run como falha, então o resumo nunca sai `ok` sem boot da TUI.
+- O TTY falso não prova sinais nem termios: `\u0003` no pipe é keypress do Ink (não SIGINT), o tamanho é fixo em 100x40 e `setRawMode` é no-op; ctrl+c real continua no smoke manual.
+- Hermético: mock em `127.0.0.1` com porta efêmera, chave falsa por `credentialRef` (`ASTRO_PACKED_SMOKE_KEY`), `ASTRO_HOME`/projeto/trust/tarball em temporário removido no fim (o trust é semeado com o caminho canônico que `ensureTrustedCwd` compara). Rede só no `npm install` (§4).
 
 Manual — o que o script não cobre (wizard e telas), no diretório limpo do §4 em terminal interativo:
 
