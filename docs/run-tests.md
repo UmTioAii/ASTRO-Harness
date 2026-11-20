@@ -31,10 +31,11 @@ Resumo: `run_tests` executa o comando de teste declarado em `run.tests.command` 
 
 | Aspecto | Comportamento |
 |---|---|
-| Sandbox | Mesmo caminho do `run_command` (ADR-0027): `docker run` efêmero, `--network none`, rootfs read-only, máscaras `:ro` de `.git`/hard-block, cwd bindado |
+| Sandbox | Sempre Docker, regra própria do `run_tests` (#474): o `auto` do `run_command` não vale aqui. `docker run` efêmero, `--network none`, rootfs read-only, máscaras `:ro` de `.git`/hard-block, cwd bindado |
 | Shell | Nenhum: o argv configurado vira o `cmd` do container, item a item (`dockerArgvNoShell`) |
 | `sandbox: false` | Recusa `sandbox_required_for_shell` sem tocar o host (I-19), igual ao `run_command` |
-| Sem Docker | Recusa explícita, sem downgrade para o host |
+| `sandbox` ausente/`"auto"` | Recusa `sandbox_required_for_shell` citando `run_tests` e Docker; o fallback host do ADR-0031 vale só para `run_command` |
+| `sandbox: true`/`"docker"` | Habilita o caminho Docker; sem daemon a recusa é explícita, sem downgrade para o host |
 | Env | Host não entra no container (env mínima do docker CLI), como no `run_command` (I-03) |
 
 ## Saída
@@ -54,7 +55,7 @@ Caractere de controle escapa para 2–6 caracteres no JSON; por isso o envelope 
 ## Aprovação e auditoria
 
 - Manifesto: `class: "shell"`, `permission: "execute"`, `sideEffects: "process"`, `retryable: false`, `idempotent: false`. A classe é `shell` porque executa um processo do projeto: a matriz (PERM-01) pede aprovação em `ask` e `allow-edits` e libera em `bypass`; perfil de agente `read-only`/`write` é negado antes da execução.
-- Prompt: a tool implementa `Tool.approvalDetail` e entrega o comando da config (com o `filter`, quando válido) como detalhe material; o executor normaliza (uma linha, redigido, até 200 caracteres). Sem essa seção, o prompt diria só `run_tests`.
+- Prompt: a tool implementa `Tool.approvalDetail` e entrega o comando da config (com o `filter`, quando válido) como detalhe material; o executor normaliza (uma linha, redigido; comando inteiro, sem elisão). Sem essa seção, o prompt diria só `run_tests`.
 - Executa só com `run_tests` em `agent.tools` (I-01); não entra em `DEFAULT_AGENT_TOOLS`.
 - Audit: evento `tests.result` com `{ command, exitCode, durationMs, truncated, isError }` — comando redigido e **nunca** a saída dos testes. `tool.call`/`tool.result` continuam sem conteúdo.
 - Cenário de eval (`src/eval/scenario.ts`) recusa `run_tests` na allowlist e `run.tests` na config: o golden é hermético e não declara comando de teste do projeto.

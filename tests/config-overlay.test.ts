@@ -87,10 +87,32 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), acme: { baseUrl: "https://outro.example/v1" } } }), /redireciona a credencial global/],
     // Nem reaproveitar a mesma referência em outro provider.
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), evil: { kind: "openai-compat", baseUrl: "https://evil.example/v1", credentialRef: "ACME_KEY" } } }), /redireciona a credencial global/],
+    // Global força Docker: o projeto não reabre o host (#474).
+    [{ tools: { run_command: { sandbox: true } } }, project({ tools: { run_command: { sandbox: "auto" } } }), /amplia o sandbox global/],
+    // Global desligado: o projeto não reabre nem para Docker nem para o host.
+    [{ tools: { run_command: { sandbox: false } } }, project({ tools: { run_command: { sandbox: true } } }), /reabre o shell desligado/],
   ];
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);
   }
+});
+
+test("projeto pode endurecer o sandbox global (auto → Docker/desligado), mas auto herdado fica auto (#474)", () => {
+  const hardened = effective(
+    { tools: { run_command: { sandbox: "auto" } } },
+    project({ tools: { run_command: { sandbox: true } } }),
+  ).config;
+  expect(hardened.tools?.run_command?.sandbox).toBe(true);
+  const disabled = effective(
+    { tools: { run_command: { sandbox: "auto" } } },
+    project({ tools: { run_command: { sandbox: false } } }),
+  ).config;
+  expect(disabled.tools?.run_command?.sandbox).toBe(false);
+  // Global ausente = auto (default); o projeto pode declarar Docker e herda auto sem declarar.
+  const fromDefault = effective(undefined, project({ tools: { run_command: { sandbox: "docker" } } })).config;
+  expect(fromDefault.tools?.run_command?.sandbox).toBe("docker");
+  const inherited = effective({ tools: { run_command: { sandbox: "auto" } } }, project({})).config;
+  expect(inherited.tools?.run_command?.sandbox).toBe("auto");
 });
 
 test("agent nomeado só no projeto herda o teto global do agent principal (#548)", () => {

@@ -1,5 +1,5 @@
 /** REPL mínimo do chat (T1): I/O injetável e comandos; a UI só fala com a sessão. */
-import { HELP_TEXT, modeListText, parseCommand, resolveModeCommand, unknownCommandMessage } from "./commands";
+import { HELP_TEXT, modeListText, parseCommand, resolveModeCommand, resolveShellCommand, unknownCommandMessage } from "./commands";
 import { runProviderWizard } from "./provider-wizard";
 import { configLines, type ConfigSummary } from "./config-summary";
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, resolveAstroHome, type PermissionMode } from "../permissions";
@@ -28,6 +28,7 @@ import { isFatalSessionError } from "./session-errors";
 import { redactSecrets } from "../sanitize-external";
 import { usageLines } from "./usage";
 import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryReport } from "../memory";
+import { detectHostShells } from "../tools/host-shell";
 import type { BudgetStatus } from "../budget";
 import type { QuotaStatus } from "../quota";
 
@@ -492,6 +493,29 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         } else {
           try {
             io.write(`modo: ${session.setPermissionMode!(action.mode)}`);
+          } catch (error) {
+            io.write(`erro: ${messageOf(error)}`);
+          }
+        }
+        continue;
+      }
+      if (command.kind === "shell") {
+        const available = detectHostShells();
+        const action = resolveShellCommand(command, available, session.applyConfigEdits !== undefined);
+        if (action.kind === "list") {
+          io.write(available.length === 0
+            ? "nenhum shell suportado encontrado no PATH (pwsh, powershell, cmd, bash, zsh, sh)"
+            : `shells do host: ${available.join(", ")}\nuso: /shell <shell> confirm (grava shell.default)`);
+        } else if (action.kind === "invalid") {
+          io.write(`shell indisponível: ${action.shell} (presentes: ${action.shells.join(", ") || "nenhum"})`);
+        } else if (action.kind === "needs-confirm") {
+          io.write(`shell.default não alterado: confirme com /shell ${action.shell} confirm`);
+        } else if (action.kind === "unsupported") {
+          io.write("esta sessão não aceita editar a config");
+        } else {
+          try {
+            session.applyConfigEdits!({ "shell.default": action.shell });
+            io.write(`shell.default: ${action.shell} (gravado na config)`);
           } catch (error) {
             io.write(`erro: ${messageOf(error)}`);
           }

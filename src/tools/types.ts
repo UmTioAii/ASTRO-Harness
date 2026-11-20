@@ -1,5 +1,5 @@
 import type { CallJournal } from "../call-id";
-import type { AgentPermission, ApprovalDetail } from "../permissions";
+import type { AgentPermission, ApprovalDetail, PermissionMode } from "../permissions";
 
 /** Efeitos externos que a tool pode causar (F-10, I-12): vocabulário fechado. */
 export type SideEffects = "none" | "filesystem" | "network" | "process";
@@ -90,6 +90,11 @@ export interface ToolExecutorLike {
   defs(): { name: string; description: string; parameters: object }[];
   /** Auditoria da sessão, para tools de composição logarem eventos próprios. */
   audit: AuditLike;
+  /**
+   * Modo de permissão resolvido do executor (#474). O host lê daqui - nunca de
+   * estado global - para decidir a confirmação extra de `bypass`.
+   */
+  readonly permissionMode?: PermissionMode;
 }
 
 /** Superfície do Auditor para tools de composição. */

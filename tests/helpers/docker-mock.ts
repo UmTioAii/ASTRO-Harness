@@ -11,6 +11,8 @@ export type DockerRunReply = string | { code?: number; stdout?: string; stderr?:
 export interface DockerMock {
   readonly calls: string[][]; // todo cmd passado a `Bun.spawn`, de qualquer origem
   readonly runCalls: string[][]; // só os argv de `docker run`
+  /** Env passado aos spawns que não são `docker` (shell do host, #474). */
+  readonly hostEnvs: Record<string, string>[];
   restore(): void;
 }
 
@@ -62,6 +64,7 @@ export function installDockerSpawnMock(run?: (argv: string[]) => DockerRunReply)
   const origSpawnSync = Bun.spawnSync as unknown as (arg: unknown, opts?: unknown) => unknown;
   const calls: string[][] = [];
   const runCalls: string[][] = [];
+  const hostEnvs: Record<string, string>[] = [];
 
   const passthrough = (argv: string[], opts: Record<string, unknown> | undefined): unknown => {
     const at = argv.indexOf("-c");
@@ -76,7 +79,10 @@ export function installDockerSpawnMock(run?: (argv: string[]) => DockerRunReply)
   const spawnMock = (arg: unknown, maybeOpts?: unknown): unknown => {
     const { cmd, opts } = cmdOf(arg, maybeOpts);
     calls.push(cmd);
-    if (cmd[0] !== "docker") return origSpawn(arg, maybeOpts);
+    if (cmd[0] !== "docker") {
+      hostEnvs.push((opts?.env ?? {}) as Record<string, string>);
+      return origSpawn(arg, maybeOpts);
+    }
     if (cmd.includes("info")) return fakeProc({ code: 0, stdout: "27.3.1|linux\n", stderr: "" });
     if (cmd.includes("run")) {
       runCalls.push(cmd);
@@ -99,7 +105,46 @@ export function installDockerSpawnMock(run?: (argv: string[]) => DockerRunReply)
 
   (Bun as { spawn: unknown }).spawn = spawnMock;
   (Bun as { spawnSync: unknown }).spawnSync = spawnSyncMock;
-  return { calls, runCalls, restore() {
+  return { calls, runCalls, hostEnvs, restore() {
+    (Bun as { spawn: unknown }).spawn = origSpawn;
+    (Bun as { spawnSync: unknown }).spawnSync = origSpawnSync;
+  } };
+}
+
+/**
+ * Mock de host sem Docker (#474): `docker info` falha (daemon ausente) e
+ * qualquer outro comando é o shell do host, respondido por `reply` e registrado
+ * em `calls`. Nada executa de verdade.
+ */
+export function installNoDockerSpawnMock(reply: DockerRunReply = {}): DockerMock {
+  const origSpawn = Bun.spawn as unknown as (arg: unknown, opts?: unknown) => unknown;
+  const origSpawnSync = Bun.spawnSync as unknown as (arg: unknown, opts?: unknown) => unknown;
+  const calls: string[][] = [];
+  const runCalls: string[][] = [];
+  const hostEnvs: Record<string, string>[] = [];
+  const r = typeof reply === "string"
+    ? { code: 0, stdout: reply, stderr: "", hang: false }
+    : { code: reply.code ?? 0, stdout: reply.stdout ?? "", stderr: reply.stderr ?? "", hang: reply.hang === true };
+
+  const spawnMock = (arg: unknown, maybeOpts?: unknown): unknown => {
+    const { cmd, opts } = cmdOf(arg, maybeOpts);
+    calls.push(cmd);
+    if (cmd[0] === "docker") {
+      if (cmd.includes("run")) runCalls.push(cmd);
+      return fakeProc({ code: 1, stdout: "", stderr: "Cannot connect to the Docker daemon" });
+    }
+    hostEnvs.push((opts?.env ?? {}) as Record<string, string>);
+    return fakeProc(r);
+  };
+  const spawnSyncMock = (arg: unknown): unknown => {
+    const { cmd } = cmdOf(arg);
+    calls.push(cmd);
+    return { exitCode: 1, success: false, pid: 424_242, stdout: new Uint8Array(0), stderr: new Uint8Array(0) };
+  };
+
+  (Bun as { spawn: unknown }).spawn = spawnMock;
+  (Bun as { spawnSync: unknown }).spawnSync = spawnSyncMock;
+  return { calls, runCalls, hostEnvs, restore() {
     (Bun as { spawn: unknown }).spawn = origSpawn;
     (Bun as { spawnSync: unknown }).spawnSync = origSpawnSync;
   } };

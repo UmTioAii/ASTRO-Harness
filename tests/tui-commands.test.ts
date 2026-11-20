@@ -453,3 +453,53 @@ describe("/theme na TUI (#64)", () => {
     expect(out.entries[0]!.text).toBe("erro: falha ao gravar .astro/tui.json");
   });
 });
+
+describe("/shell lista só o que existe e grava após confirmar (#474)", () => {
+  class ShellSession extends FakeSession {
+    edits: Record<string, string>[] = [];
+    applyConfigEdits(edits: Record<string, string>): unknown {
+      this.edits.push(edits);
+      return edits;
+    }
+  }
+
+  const options = { availableShells: ["pwsh", "cmd"] };
+
+  test("sem argumento lista os shells presentes", async () => {
+    const out = await runCommand({ kind: "shell" }, new ShellSession(), {}, options);
+    expect(out.entries[0]!.kind).toBe("info");
+    expect(out.entries[0]!.text).toContain("pwsh");
+    expect(out.entries[0]!.text).toContain("cmd");
+    expect(out.entries[0]!.text).not.toContain("bash");
+  });
+
+  test("shell ausente é recusado e nada é gravado", async () => {
+    const session = new ShellSession();
+    const out = await runCommand({ kind: "shell", shell: "bash" }, session, {}, options);
+    expect(out.entries[0]!.kind).toBe("error");
+    expect(out.entries[0]!.text).toContain("bash");
+    expect(session.edits).toHaveLength(0);
+  });
+
+  test("sem confirm não grava shell.default", async () => {
+    const session = new ShellSession();
+    const out = await runCommand({ kind: "shell", shell: "cmd" }, session, {}, options);
+    expect(out.entries[0]!.kind).toBe("error");
+    expect(out.entries[0]!.text).toContain("/shell cmd confirm");
+    expect(session.edits).toHaveLength(0);
+  });
+
+  test("com confirm grava shell.default na config", async () => {
+    const session = new ShellSession();
+    const out = await runCommand({ kind: "shell", shell: "cmd", confirm: true }, session, {}, options);
+    expect(out.entries[0]!.kind).toBe("info");
+    expect(out.entries[0]!.text).toContain("shell.default");
+    expect(session.edits).toEqual([{ "shell.default": "cmd" }]);
+  });
+
+  test("sessão sem applyConfigEdits não grava", async () => {
+    const out = await runCommand({ kind: "shell", shell: "cmd", confirm: true }, new FakeSession(), {}, options);
+    expect(out.entries[0]!.kind).toBe("error");
+    expect(out.entries[0]!.text).toContain("não aceita editar a config");
+  });
+});

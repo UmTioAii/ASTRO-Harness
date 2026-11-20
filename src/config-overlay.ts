@@ -9,6 +9,8 @@ import { isVaultRef } from "./secrets";
 
 /** Ranque de permissão: `ask` é o mais restrito, `bypass` o mais largo. */
 const MODE_RANK: Record<string, number> = { ask: 0, "allow-edits": 1, bypass: 2 };
+/** auto (default; pode cair no host) > Docker > desligado (#474): o projeto não reabre o host. */
+const SANDBOX_RANK: Record<string, number> = { false: 0, true: 1, docker: 1, auto: 2 };
 /** Ranque do perfil do agent: `read-only` é o mais restrito. */
 const PERMISSION_RANK: Record<string, number> = { "read-only": 0, write: 1, execute: 2, full: 3 };
 /** Janela do budget: `project` é a mais estreita (o teto do time entra nela). */
@@ -146,6 +148,24 @@ export function assertNarrowed(
   const globalMode = isPlainObject(global.permissions) ? global.permissions.mode : undefined;
   const mergedMode = isPlainObject(merged.permissions) ? merged.permissions.mode : undefined;
   assertNotWider(globalMode, mergedMode, MODE_RANK, "o modo de permissão global");
+  // Sandbox do shell (#474): auto (default, pode usar host) > Docker > desligado.
+  // Global Docker pode ser forçado; o projeto endurece para Docker/desligado,
+  // nunca reabre o host com `auto`.
+  const globalTools = isPlainObject(global.tools) ? global.tools : undefined;
+  const projectTools = isPlainObject(projectLayer?.tools) ? projectLayer.tools : undefined;
+  const globalRunCommand = isPlainObject(globalTools?.run_command) ? globalTools.run_command : undefined;
+  const projectRunCommand = isPlainObject(projectTools?.run_command) ? projectTools.run_command : undefined;
+  const fromSandbox = SANDBOX_RANK[String(globalRunCommand?.sandbox ?? "auto")];
+  const projectSandbox = projectRunCommand?.sandbox;
+  const toSandbox = projectSandbox === undefined ? undefined : SANDBOX_RANK[String(projectSandbox)];
+  if (fromSandbox !== undefined && toSandbox !== undefined && toSandbox > fromSandbox) {
+    const reason = fromSandbox === 0
+      ? "reabre o shell desligado no global"
+      : "reabre o host (auto) onde o global força Docker";
+    throw new ConfigError(
+      `config inválida: o projeto amplia o sandbox global (${reason}); use sandbox: true para endurecer`,
+    );
+  }
   // Teto da espera por aprovação (#526): `0` desliga o limite, então é
   // alargamento; valor maior que o global também. Sem valor global o teto
   // efetivo é o default do executor — a guarda não pode ficar em silêncio.

@@ -10,6 +10,7 @@ import { DEFAULT_OUTPUT_LIMIT, type OutputLimitConfig } from "../output-limit";
 import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "../compaction/engine";
 import type { ModelRouting } from "../providers/model-routing";
 import { DEFAULT_RUN_TESTS_TIMEOUT_MS, MAX_RUN_TESTS_TIMEOUT_MS, type RunTestsConfig } from "../tools/run-command";
+import { HOST_SHELLS, isHostShell } from "../tools/host-shell";
 import type { WebSearchConfig, WebSearchProvider } from "../tools/web-search";
 import { isPermissionMode, DEFAULT_PERMISSION_MODE, isAgentPermission, type AgentPermission, type PermissionMode } from "../permissions";
 import { isAuthHeader, isEnvName, isVaultCredentialRef, looksLikeSecret, mcpSecretProblem } from "../secrets";
@@ -228,8 +229,17 @@ export interface ToolsConfig {
 }
 
 export interface RunCommandToolConfig {
-  /** Executar comandos em container Docker efêmero isolado (default: true; opt-out explícito com `false`). */
-  sandbox?: boolean;
+  /**
+   * Modo do shell (#474): ausente e `"auto"` = Docker quando disponível, senão
+   * host com aprovação por comando (default); `true`/`"docker"` = só container
+   * Docker; `false` = shell desligado (I-19).
+   */
+  sandbox?: boolean | "auto" | "docker";
+}
+
+/** Shell do host (#474): `shell.default` escolhido por `/shell`, só se presente. */
+export interface ShellConfig {
+  default?: string;
 }
 
 /** Telemetria opt-in (F5-5): métricas anônimas por run; off por default. */
@@ -428,6 +438,8 @@ export interface AstroConfig {
   /** Teto declarado de agentes ativos (A2); v1 aplica no máximo 2. */
   maxActive?: number;
   tools?: ToolsConfig;
+  /** Shell do host (#474): `default` é gravado por `/shell` depois do confirm. */
+  shell?: ShellConfig;
   telemetry?: TelemetryConfig;
   /** Limites por quotaDomain (F6-3). */
   quota?: Record<string, QuotaLimitConfig>;
@@ -1566,10 +1578,32 @@ function validateTools(value: unknown): ToolsConfig {
 
   if (raw.run_command !== undefined) {
     const rcRaw = expectObject(raw.run_command, "tools.run_command");
-    const sandbox = rcRaw.sandbox === undefined ? true : expectBoolean(rcRaw.sandbox, "tools.run_command.sandbox");
-    result.run_command = { sandbox };
+    // #474: ausente/`"auto"` = auto (Docker quando disponível, senão host);
+    // `true`/`"docker"` = Docker; `false` = desligado.
+    let sandbox: boolean | "auto" | "docker" | undefined;
+    if (rcRaw.sandbox === undefined) sandbox = undefined;
+    else if (rcRaw.sandbox === "auto" || rcRaw.sandbox === "docker") sandbox = rcRaw.sandbox;
+    else sandbox = expectBoolean(rcRaw.sandbox, "tools.run_command.sandbox");
+    result.run_command = sandbox === undefined ? {} : { sandbox };
   }
 
+  return result;
+}
+
+/** Valida `shell` (#474): só o vocabulário de `host-shell.ts` entra; ausente é válido. */
+function validateShell(value: unknown): ShellConfig {
+  const raw = expectObject(value, "shell");
+  const result: ShellConfig = Object.create(null);
+  for (const key of Object.keys(raw)) {
+    if (key !== "default") fail(`config inválida: "shell.${key}" desconhecido`);
+  }
+  if (raw.default !== undefined) {
+    const shell = expectString(raw.default, "shell.default");
+    if (!isHostShell(shell)) {
+      fail(`config inválida: "shell.default" deve ser ${HOST_SHELLS.join(", ")} (recebido: "${shell}")`);
+    }
+    result.default = shell;
+  }
   return result;
 }
 
@@ -1784,6 +1818,8 @@ export function validateConfig(raw: unknown): AstroConfig {
 
   // Validar seção tools (F4-6)
   const tools = root.tools === undefined ? undefined : validateTools(root.tools);
+  // Shell do host (#474): só o vocabulário; ausente = ordem da plataforma.
+  const shell = root.shell === undefined ? undefined : validateShell(root.shell);
 
   // Validar telemetria (F5-5)
   const telemetry = root.telemetry === undefined ? undefined : validateTelemetry(root.telemetry);
@@ -1834,7 +1870,7 @@ export function validateConfig(raw: unknown): AstroConfig {
   const security = root.security === undefined ? undefined : validateSecurity(root.security);
   const effort = root.effort === undefined ? undefined : validateEffort(root.effort);
 
-  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
 }
 
 /** Lê o JSON cru de um config, sem validar (o merge por camadas vem antes). */

@@ -62,7 +62,7 @@ import { deletePathTool } from "../tools/delete-path";
 import { movePathTool } from "../tools/move-path";
 import { lspTool } from "../tools/lsp";
 import { pipelineTool } from "../tools/pipeline";
-import { configureRunCommand, resolveSandboxSetting, sandboxWarning } from "../tools/run-command";
+import { configureRunCommand, resolveRunCommandMode, sandboxWarning } from "../tools/run-command";
 import { allowlistLoadEvents } from "../allowlists";
 import type { Tool } from "../tools/types";
 import { resolvePermissionMode, mostRestrictive, type ActionClass, type PermissionMode } from "../permissions";
@@ -613,10 +613,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   /** Limite único de trabalho (P4): passos por tarefa/agente, sem cap de turnos. */
   const sessionMaxSteps = config.agent.maxSteps;
 
-  // Sandbox do run_command (F4-6): configurado antes de qualquer execução
-  const sandboxEnabled = resolveSandboxSetting(config.tools?.run_command?.sandbox);
-  configureRunCommand({ sandbox: sandboxEnabled });
-  const sandboxNotice = sandboxWarning(sandboxEnabled);
+  // Sandbox do run_command (F4-6): modo resolvido antes de qualquer execução
+  // (#474: `true`/ausente = Docker; `"auto"` = Docker → host com aprovação).
+  const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
+  const sandboxNotice = runCommandMode === "disabled" ? sandboxWarning(false) : undefined;
   if (sandboxNotice !== undefined && opts.suppressRunEvents !== true) console.warn(`aviso: ${sandboxNotice}`);
 
   const ledgerPath = resolveFrom(cwd, config.paths.ledger);
@@ -1156,6 +1156,12 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     config.permissions.mode,
   );
   taskPermissionMode = permissionMode;
+  // #474: o host depende do modo resolvido (bypass exige confirmação extra);
+  // `sandbox: true` continua sem tocar no caminho Docker.
+  configureRunCommand({
+    mode: runCommandMode,
+    ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
+  });
   // `bypass` é perigoso: avisa uma vez e deixa a ativação no audit sanitizado (I-04, #268).
   audit.append({ run, agent: AGENT_NAME, tipo: "mode.changed", payload: { mode: permissionMode } });
   if (permissionMode === "bypass") {

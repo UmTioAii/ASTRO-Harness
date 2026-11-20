@@ -14,6 +14,7 @@ import {
   dockerInfoSupportsLinuxContainers,
   releaseDockerArgv,
   resolveDockerImage,
+  resolveRunCommandMode,
   resolveSandboxSetting,
   sandboxWarning,
   sanitizedEnv,
@@ -29,17 +30,19 @@ const baseConfig = {
   paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
 };
 
-describe("config tools.run_command.sandbox (F4-6)", () => {
-  test("sem tools: sandbox efetivo ligado (fail-closed)", () => {
+describe("config tools.run_command.sandbox (F4-6, #474)", () => {
+  test("sem tools: modo auto por padrão (Docker quando disponível)", () => {
     const cfg = validateConfig(structuredClone(baseConfig));
     expect(resolveSandboxSetting(cfg.tools?.run_command?.sandbox)).toBe(true);
+    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("auto");
   });
 
-  test("tools.run_command sem sandbox → ligado (opt-out precisa ser explícito)", () => {
+  test("tools.run_command sem sandbox também é auto", () => {
     const raw = structuredClone(baseConfig) as Record<string, unknown>;
     raw.tools = { run_command: {} };
     const cfg = validateConfig(raw);
-    expect(cfg.tools?.run_command?.sandbox).toBe(true);
+    expect(cfg.tools?.run_command?.sandbox).toBeUndefined();
+    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("auto");
   });
 
   test("tools.run_command.sandbox: false é opt-out explícito", () => {
@@ -50,11 +53,12 @@ describe("config tools.run_command.sandbox (F4-6)", () => {
     expect(resolveSandboxSetting(cfg.tools?.run_command?.sandbox)).toBe(false);
   });
 
-  test("tools.run_command.sandbox: true aceito", () => {
+  test("tools.run_command.sandbox: true força Docker", () => {
     const raw = structuredClone(baseConfig) as Record<string, unknown>;
     raw.tools = { run_command: { sandbox: true } };
     const cfg = validateConfig(raw);
     expect(cfg.tools?.run_command?.sandbox).toBe(true);
+    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("docker");
   });
 
   test("tools.run_command.sandbox inválido → ConfigError", () => {

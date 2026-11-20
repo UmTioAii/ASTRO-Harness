@@ -3,7 +3,8 @@
 - Status: aceita
 - Data: 2026-11-05
 - Issue: #384
-- Decisões relacionadas: ADR-0019, ADR-0023, ADR-0026, I-01, I-03, I-11
+- Decisões relacionadas: ADR-0019, ADR-0023, ADR-0026, ADR-0031, I-01, I-03, I-11
+- Emenda: `tools.run_command.sandbox: "auto"` (#474, ADR-0031) é o default - Docker quando disponível, senão host com aprovação por comando; `true`/`"docker"` força Docker e `false` continua desligando.
 
 ## Contexto
 

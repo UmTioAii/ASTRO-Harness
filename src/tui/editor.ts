@@ -11,6 +11,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   { name: "/help", description: "mostra esta ajuda" },
   { name: "/model", description: "lista ou troca o modelo" },
   { name: "/mode", description: "lista ou troca o modo de permissão (bypass pede confirm)" },
+  { name: "/shell", description: "lista os shells do host; grava shell.default com confirm" },
   { name: "/config", description: "abre a tela de configuração do harness" },
   { name: "/providers", description: "lista os providers configurados" },
   { name: "/provider", description: "gerencia perfis (add/edit/remove/use); na tela, → lista modelos e enter troca o modelo" },

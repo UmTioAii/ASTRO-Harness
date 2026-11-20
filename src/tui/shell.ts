@@ -9,7 +9,7 @@ import { resolvePermissionMode, type PermissionMode } from "../permissions";
 import { loadEffectiveConfig } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { ToolExecutor, type ToolApprover } from "../tools/executor";
-import { configureRunCommand, resolveSandboxSetting, runCommandTool } from "../tools/run-command";
+import { configureRunCommand, resolveRunCommandMode, runCommandTool } from "../tools/run-command";
 import { webSearchSecretEnvNames } from "../tools/web-search";
 
 export interface ShellResult {
@@ -62,8 +62,13 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       run: async () => ({ output: "run_command não está na allowlist de agent.tools", isError: true }),
     };
   }
-  // Fail-closed igual ao caminho do app (I-11): sandbox ligado salvo opt-out explícito.
-  configureRunCommand({ sandbox: resolveSandboxSetting(config.tools?.run_command?.sandbox) });
+  // Fail-closed igual ao caminho do app (I-11): Docker por padrão; `auto` (#474)
+  // cai no host com aprovação por comando quando o Docker não existe.
+  const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
+  configureRunCommand({
+    mode: runCommandMode,
+    ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
+  });
   const auditPath = resolve(opts.cwd, config.paths.audit);
   const secretEnvNames: string[] = [];
   for (const provider of Object.values(config.providers)) {
@@ -96,16 +101,22 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
           audit.append({ run: runId, agent: "default", tipo: "security.allowlist_applied", payload: { ...event } });
         }
       }
+      const currentMode = resolvePermissionMode(
+        opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
+        config.permissions.mode,
+      );
+      // #474: o modo do executor decide a confirmação extra do host em `bypass`.
+      configureRunCommand({
+        mode: runCommandMode,
+        ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
+      });
       const executor = new ToolExecutor({
         tools: [runCommandTool],
         allow: ["run_command"],
         audit,
-        // #557: o `!cmd` segue o mesmo modo resolvido do run (D-24) — bypass
+        // #557: o `!cmd` segue o mesmo modo resolvido do run (D-24) - bypass
         // não pergunta, ask/allow-edits perguntam por comando (ação shell).
-        permissionMode: resolvePermissionMode(
-          opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
-          config.permissions.mode,
-        ),
+        permissionMode: currentMode,
         // `!` segue o mesmo teto de aprovação da sessão (#526).
         ...(config.permissions.approvalTimeoutMs === undefined
           ? {}
