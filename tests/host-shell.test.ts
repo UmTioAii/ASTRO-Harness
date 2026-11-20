@@ -268,7 +268,8 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
     });
     expect(denied.isError).toBe(true);
     expect(denied.code).toBe("host_shell_confirmation_required");
-    expect(mock.calls).toHaveLength(0);
+    expect(mock.runCalls).toHaveLength(0);
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
     const denyEvent = auditEvents(auditPath).find((event) => event.tipo === "host_shell.decision");
     expect(denyEvent?.payload).toMatchObject({ decision: "deny", reason: "bypass_confirmation_required" });
 
@@ -335,7 +336,8 @@ describe("limites do host (#474)", () => {
     mod.configureRunCommand({ permissionMode: "ask" });
     const result = await mod.runCommandTool.execute({ command: "echo x" }, ctxOf(cwd()));
     expect(result.code).toBe("host_shell_requires_gate");
-    expect(mock.calls).toHaveLength(0);
+    expect(mock.runCalls).toHaveLength(0);
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
   });
 
   test("run_tests continua exigindo Docker explícito, mesmo com auto no default", async () => {

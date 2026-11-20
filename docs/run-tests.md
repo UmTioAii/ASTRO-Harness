@@ -31,10 +31,10 @@ Resumo: `run_tests` executa o comando de teste declarado em `run.tests.command` 
 
 | Aspecto | Comportamento |
 |---|---|
-| Sandbox | Sempre Docker, regra própria do `run_tests` (#474): o host default do `run_command` não vale aqui. `docker run` efêmero, `--network none`, rootfs read-only, máscaras `:ro` de `.git`/hard-block, cwd bindado |
+| Sandbox | Sempre Docker, regra própria do `run_tests` (#474): o `auto` do `run_command` não vale aqui. `docker run` efêmero, `--network none`, rootfs read-only, máscaras `:ro` de `.git`/hard-block, cwd bindado |
 | Shell | Nenhum: o argv configurado vira o `cmd` do container, item a item (`dockerArgvNoShell`) |
 | `sandbox: false` | Recusa `sandbox_required_for_shell` sem tocar o host (I-19), igual ao `run_command` |
-| `sandbox` ausente/`"auto"` (host) | Recusa `sandbox_required_for_shell` citando `run_tests` e Docker; o host do ADR-0031 vale só para `run_command` |
+| `sandbox` ausente/`"auto"` | Recusa `sandbox_required_for_shell` citando `run_tests` e Docker; o fallback host do ADR-0031 vale só para `run_command` |
 | `sandbox: true`/`"docker"` | Habilita o caminho Docker; sem daemon a recusa é explícita, sem downgrade para o host |
 | Env | Host não entra no container (env mínima do docker CLI), como no `run_command` (I-03) |
 

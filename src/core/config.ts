@@ -230,9 +230,9 @@ export interface ToolsConfig {
 
 export interface RunCommandToolConfig {
   /**
-   * Modo do shell (#474): ausente e `"auto"` = host com aprovação por comando
-   * (default); `true`/`"docker"` = container Docker (hardening recomendado para
-   * repositório não confiável); `false` = shell desligado (I-19).
+   * Modo do shell (#474): ausente e `"auto"` = Docker quando disponível, senão
+   * host com aprovação por comando (default); `true`/`"docker"` = só container
+   * Docker; `false` = shell desligado (I-19).
    */
   sandbox?: boolean | "auto" | "docker";
 }
@@ -1578,7 +1578,8 @@ function validateTools(value: unknown): ToolsConfig {
 
   if (raw.run_command !== undefined) {
     const rcRaw = expectObject(raw.run_command, "tools.run_command");
-    // #474: ausente/`"auto"` = host (default); `true`/`"docker"` = Docker; `false` = desligado.
+    // #474: ausente/`"auto"` = auto (Docker quando disponível, senão host);
+    // `true`/`"docker"` = Docker; `false` = desligado.
     let sandbox: boolean | "auto" | "docker" | undefined;
     if (rcRaw.sandbox === undefined) sandbox = undefined;
     else if (rcRaw.sandbox === "auto" || rcRaw.sandbox === "docker") sandbox = rcRaw.sandbox;
