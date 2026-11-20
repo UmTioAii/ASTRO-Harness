@@ -1740,7 +1740,7 @@ const CONFIG_SCHEMA_MAJOR = Number(CONFIG_SCHEMA_VERSION.split(".")[0]);
 const CONFIG_KEYS_V1: readonly string[] = [
   "$schema", "provenance", "activeProfileId", "migratedFrom",
   "preset", "providers", "models", "modelPool", "agent", "agents", "maxActive",
-  "tools", "telemetry", "quota", "budget", "run", "attachments", "cache",
+  "tools", "shell", "telemetry", "quota", "budget", "run", "attachments", "cache",
   "plugins", "version", "team", "handoff", "spawn", "permissions", "security",
   "effort", "pricing", "mcpServers", "outputLimit", "compaction", "webSearch",
   "memory", "paths",
@@ -1816,6 +1816,7 @@ const CONFIG_SHAPE: ConfigShape = {
       values: { keys: NAMED_AGENT_KEYS, children: { modelRouting: { keys: ["cheapModel", "strongModel"] } } },
     },
     tools: { keys: ["run_command"], children: { run_command: { keys: ["sandbox"] } } },
+    shell: { keys: ["default"] },
     telemetry: { keys: ["enabled", "endpoint", "sampleRate"] },
     quota: { values: { keys: QUOTA_KEYS } },
     budget: { keys: ["scope", "limitUsd", "warnAt", "onExceed", "hardCeilingUsd"] },
