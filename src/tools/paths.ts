@@ -88,6 +88,31 @@ export function resolveWithin(cwd: string, p: string): string {
 }
 
 /**
+ * Confinamento de um alvo derivado (I-11, #532): ao contrário de
+ * `resolveWithin`, o caminho não vem do input do modelo - já foi calculado sob
+ * `root` (cwd para a memória do projeto, `$ASTRO_HOME` para a global). A
+ * checagem existe porque o realpath ainda pode sair da raiz por symlink ou
+ * junction, e porque `protectedPaths` (ledger/audit) nunca são sobrescritos.
+ * Lança `ToolError` sem citar conteúdo (I-03).
+ */
+export function assertConfinedPath(
+  root: string,
+  target: string,
+  protectedPaths: readonly string[] = [],
+): string {
+  const canonicalRoot = canonicalize(root);
+  const canonicalTarget = canonicalize(target);
+  if (!isWithin(canonicalRoot, canonicalTarget)) {
+    throw new ToolError("caminho reservado do harness: alvo fora da raiz permitida");
+  }
+  const protectedTargets = protectedPaths.map((path) => canonicalize(resolve(root, path)));
+  if (protectedTargets.some((path) => isWithin(path, canonicalTarget))) {
+    throw new ToolError("caminho reservado do harness: Auditoria/ledger não são memória");
+  }
+  return target;
+}
+
+/**
  * Como `resolveWithin`, mas também recusa o diretório de estado do harness.
  * O agente pode ler o workspace, porém não pode sobrescrever auditoria/ledger.
  */

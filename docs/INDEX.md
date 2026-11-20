@@ -35,6 +35,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/web-tools.md` | Ao configurar `webSearch` ou usar `web_search`/`web_fetch` | ~50 |
 | `docs/todo-write.md` | Ao usar ou alterar `todo_write` (plano do run, F-17) | ~40 |
 | `docs/run-tests.md` | Ao configurar `run.tests` ou usar/alterar `run_tests` (F-15, #538) | ~55 |
+| `docs/memory.md` | Ao usar ou alterar a memória persistida e `memory_write` (#532) | ~70 |
 
 Referências usadas nos documentos:
 

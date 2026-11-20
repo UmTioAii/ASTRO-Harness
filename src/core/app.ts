@@ -44,6 +44,8 @@ import { ToolExecutor, type ToolApprover } from "../tools/executor";
 import { readFileTool } from "../tools/read-file";
 import { createRunTestsTool, runCommandTool } from "../tools/run-command";
 import { writeFileTool } from "../tools/write-file";
+import { createMemoryWriteTool } from "../tools/memory-write";
+import { loadMemory, memoryPrompt } from "../memory";
 import { handoffTool } from "../tools/handoff";
 import { createListModelCandidatesTool } from "../tools/list-model-candidates";
 import { createTaskTool } from "../tools/task";
@@ -582,8 +584,8 @@ function resolveTools(
  * instancia provider e tools, roda a sessão e devolve um relatório do run.
  */
 /** AGENTS.md do projeto entra no system prompt e sobrevive à compactação (CMP-8). */
-function projectSystemPrompt(config: AstroConfig, cwd: string): string | undefined {
-  const parts = [config.agent.systemPrompt, readAgentsMd(cwd)]
+function projectSystemPrompt(config: AstroConfig, cwd: string, memory?: string): string | undefined {
+  const parts = [config.agent.systemPrompt, readAgentsMd(cwd), memory]
     .filter((part): part is string => part !== undefined && part.length > 0);
   return parts.length === 0 ? undefined : parts.join("\n\n");
 }
@@ -747,6 +749,21 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   });
 
   const { credentialRef, quotaDomain } = providerIdentity(config, model.provider);
+  // Memória persistida (#532): lida no início do run, redigida e limitada por
+  // `memory.maxChars`; o corte na fronteira de seção é auditado por bytes.
+  const memoryState = loadMemory({
+    cwd,
+    env,
+    ...(config.memory === undefined ? {} : { maxChars: config.memory.maxChars }),
+    // Sem a tool na allowlist, o prompt não ensina uma chamada que vai negar (I-01).
+    memoryWriteAllowed: config.agent.tools.includes("memory_write"),
+    warn: (message) => console.warn(`aviso: ${message}`),
+    audit,
+    run,
+    agent: AGENT_NAME,
+  });
+  const memorySection = memoryPrompt(memoryState);
+  const systemPromptBase = projectSystemPrompt(config, cwd, memorySection);
   assertProviderKind(config, model, loaded.providerFactories);
   const resolveIdentity = identityResolver(config, registry);
   /** Preço curado por identidade efetiva, a mesma fonte do ledger (D-10). */
@@ -988,6 +1005,9 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     audit,
     ...(runTestsConfig === undefined ? {} : { config: runTestsConfig }),
   }));
+  // memory_write (#532): única porta de escrita da memória; `edit` no gate e
+  // alvo derivado do scope (nenhum path vem do modelo).
+  toolsByName.set("memory_write", createMemoryWriteTool({ audit, env }));
   // #552: teto de spawns por run vem de spawn.maxActive (clamp em DEFAULT_MAX_SPAWNS_PER_RUN).
   const spawns = new SpawnRegistry({ limit: spawnLimitFromConfig(config) });
   // Preenchidos depois de resolver a allowlist/modo; a closure da task lê no call.
@@ -1078,9 +1098,9 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ledger,
         audit,
         maxSteps: Math.min(target.maxSteps ?? config.agent.maxSteps, maxSteps ?? config.agent.maxSteps),
-        ...(target.systemPrompt === undefined && projectSystemPrompt(config, cwd) === undefined
+        ...(target.systemPrompt === undefined && systemPromptBase === undefined
           ? {}
-          : { systemPrompt: target.systemPrompt ?? projectSystemPrompt(config, cwd) }),
+          : { systemPrompt: target.systemPrompt ?? systemPromptBase }),
         env,
         protectedPaths: [ledgerPath, auditPath],
         secretEnvNames,
@@ -1184,7 +1204,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ledger,
         audit,
         baseMaxSteps: sessionMaxSteps,
-        baseSystemPrompt: projectSystemPrompt(config, cwd),
+        baseSystemPrompt: systemPromptBase,
+        ...(memorySection === undefined ? {} : { memorySection }),
         entryAgent,
         taskHash: shortTaskHash(opts.task),
         ...(config.run === undefined
@@ -1265,7 +1286,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
           ...(opts.onStep === undefined ? {} : { onStep: opts.onStep }),
           ...(baseProfile === undefined ? {} : { agentProfile: baseProfile }),
-          ...(projectSystemPrompt(config, cwd) === undefined ? {} : { systemPrompt: projectSystemPrompt(config, cwd) }),
+          ...(systemPromptBase === undefined ? {} : { systemPrompt: systemPromptBase }),
           ...(tracer === undefined ? {} : { tracer }),
           resolveIdentity,
           ...(budget === undefined ? {} : { budget }),
