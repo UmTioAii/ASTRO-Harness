@@ -46,6 +46,9 @@ describe("!cmd da TUI (T2, #63)", () => {
     expect(shell.enabled).toBe(true);
     expect(isRunCommandSandboxEnabled()).toBe(false); // `auto` ainda não é "Docker-only"
     expect(resolveRunCommandMode(undefined)).toBe("auto");
+    // Docker do mock responde sem spawn real: o teste não depende do daemon.
+    mock.restore();
+    mock = installDockerSpawnMock(() => "astro-shell-default");
     const result = await shell.run("echo astro-shell-default");
     expect(mock.runCalls.length).toBeGreaterThan(0); // Docker do mock foi usado
     expect(result.isError).toBeFalsy();
