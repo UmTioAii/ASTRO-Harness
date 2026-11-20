@@ -6,6 +6,7 @@ import { redactSecrets } from "../sanitize-external";
 import {
   actionClassOf,
   approvalDetailOf,
+  normalizeApprovalDetail,
   permissionDecision,
   permissionAllows,
   requiredPermission,
@@ -444,7 +445,12 @@ export class ToolExecutor {
         const annex = editDiffAnnex(call, input);
         // #536: comando/path da chamada, já redacted e truncado, para a decisão
         // ser informada. Só o argumento material; conteúdo e env nunca entram.
-        const detail = approvalDetailOf({ name: call.name, input });
+        // #578: a tool que conhece o comando fora do input (`run_tests`) fornece
+        // o próprio detalhe, normalizado aqui antes de chegar ao prompt.
+        const supplied = tool.approvalDetail?.(input);
+        const detail = supplied === undefined
+          ? approvalDetailOf({ name: call.name, input })
+          : normalizeApprovalDetail(supplied);
         const outcome = await this.awaitApproval(ctx, {
           name: call.name,
           action,

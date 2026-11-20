@@ -3,13 +3,14 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, write
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
-import { resolveArtifactRoot, resolveAstroHome } from "../permissions";
+import { resolveArtifactRoot, resolveAstroHome, type ApprovalDetail } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
 import { realpathPreservingDots } from "./paths";
-import { ToolError, type Tool, type ToolResult } from "./types";
+import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolResult } from "./types";
 
-const MAX_OUTPUT = 10_000;
+/** Teto da saída devolvida ao modelo (run_command e run_tests). */
+export const MAX_OUTPUT = 10_000;
 
 /**
  * Nomes de variáveis que podem carregar segredos vivem em `secrets.ts`
@@ -173,8 +174,8 @@ export const SANDBOX_DISABLED_WARNING =
 /** Erro tipado da recusa de shell sem sandbox (ADR-0027): não ecoa o comando (I-03). */
 export class SandboxRequiredForShellError extends Error {
   readonly code = "sandbox_required_for_shell";
-  constructor(readonly mode = "sandbox:false") {
-    super(`sandbox_required_for_shell: run_command não executa no host (modo ${mode}); ative tools.run_command.sandbox com Docker`);
+  constructor(readonly mode = "sandbox:false", readonly tool = "run_command") {
+    super(`sandbox_required_for_shell: ${tool} não executa no host (modo ${mode}); ative tools.run_command.sandbox com Docker`);
     this.name = "SandboxRequiredForShellError";
   }
 }
@@ -317,10 +318,11 @@ function maskMounts(ctx: DockerSandboxContext, env: NodeJS.ProcessEnv): { mounts
 }
 
 /**
- * Argv do docker run isolado (ADR-0027, I-11): rede off, rootfs read-only,
+ * Base do `docker run` isolado (ADR-0027, I-11): rede off, rootfs read-only,
  * `/tmp` tmpfs, cwd rw, git neutralizado e máscaras `:ro` dos hard-blocks.
+ * `cmd` é o programa executado no container, item a item (sem shell).
  */
-export function dockerArgv(containerName: string, ctx: DockerSandboxContext, command: string): string[] {
+function dockerArgvWith(containerName: string, ctx: DockerSandboxContext, cmd: readonly string[]): string[] {
   const workdir = resolve(ctx.cwd);
   const env = ctx.env ?? process.env;
   const { mounts, maskRoot } = maskMounts(ctx, env);
@@ -347,12 +349,27 @@ export function dockerArgv(containerName: string, ctx: DockerSandboxContext, com
     "--workdir",
     workdir,
     resolveDockerImage(env),
-    "sh",
-    "-c",
-    command,
+    ...cmd,
   ];
   if (maskRoot !== undefined) maskRoots.set(argv, maskRoot);
   return argv;
+}
+
+/**
+ * Argv do sandbox do `run_command`: o comando do modelo é uma string, então o
+ * shell é parte desse contrato (`sh -c`).
+ */
+export function dockerArgv(containerName: string, ctx: DockerSandboxContext, command: string): string[] {
+  return dockerArgvWith(containerName, ctx, ["sh", "-c", command]);
+}
+
+/**
+ * Argv do sandbox SEM shell (F-15, #538): cada item é um argumento literal do
+ * programa — `;`, `|`, `$` e espaço não têm significado. Usado por `run_tests`,
+ * cujo argv vem da config (nunca do modelo).
+ */
+export function dockerArgvNoShell(containerName: string, ctx: DockerSandboxContext, command: readonly string[]): string[] {
+  return dockerArgvWith(containerName, ctx, command);
 }
 
 /** Executa um comando dentro do container Docker efêmero e libera as máscaras. */
@@ -366,13 +383,30 @@ async function runInDocker(command: string, ctx: { cwd: string; signal?: AbortSi
   }
 }
 
-/** Roda o argv já montado; o chamador é dono da limpeza das fontes de máscara. */
-async function runDockerProcess(
+/** Como o processo do container terminou: código, timeout do harness ou cancelamento. */
+type DockerExit = { kind: "exit"; code: number } | { kind: "timeout" } | { kind: "cancelled" };
+
+/** Resultado cru do container: saída combinada, ainda sem redação nem cap. */
+interface DockerOutcome {
+  exit: DockerExit;
+  output: string;
+}
+
+/** stdout + stderr combinados, com trim nas pontas e sem redação (o caller redige). */
+async function combinedOutput(proc: { stdout: ReadableStream<Uint8Array> | number; stderr: ReadableStream<Uint8Array> | number }): Promise<string> {
+  const streamText = async (stream: ReadableStream<Uint8Array> | number): Promise<string> =>
+    typeof stream === "number" ? "" : new Response(stream).text();
+  const [stdout, stderr] = await Promise.all([streamText(proc.stdout), streamText(proc.stderr)]);
+  return [stdout.trimEnd(), stderr.trimEnd()].filter((part) => part.length > 0).join("\n");
+}
+
+/** Roda o argv já montado e devolve saída crua + como terminou; limpeza é do chamador. */
+async function runDockerOutcome(
   containerName: string,
   argv: string[],
   ctx: { cwd: string; signal?: AbortSignal },
   timeoutMs: number,
-): Promise<ToolResult> {
+): Promise<DockerOutcome> {
   const proc = Bun.spawn({
     cmd: argv,
     cwd: ctx.cwd,
@@ -426,30 +460,38 @@ async function runDockerProcess(
 
   if (exited === aborted) {
     removeContainer();
-    return { output: "comando cancelado no sandbox", isError: true };
+    return { exit: { kind: "cancelled" }, output: "" };
   }
 
   if (exited === timedOut) {
     // docker run morto não para o container: limpeza forçada best-effort
     removeContainer();
+    return { exit: { kind: "timeout" }, output: await combinedOutput(proc) };
   }
 
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const chunks = [stdout.trimEnd(), stderr.trimEnd()].filter((part) => part.length > 0);
-  let output = chunks.join("\n");
+  return { exit: { kind: "exit", code: exited }, output: await combinedOutput(proc) };
+}
 
-  if (exited === timedOut) {
+/** Formata o resultado do sandbox para o `run_command` (texto + nota de erro). */
+async function runDockerProcess(
+  containerName: string,
+  argv: string[],
+  ctx: { cwd: string; signal?: AbortSignal },
+  timeoutMs: number,
+): Promise<ToolResult> {
+  const { exit, output } = await runDockerOutcome(containerName, argv, ctx, timeoutMs);
+
+  if (exit.kind === "cancelled") {
+    return { output: "comando cancelado no sandbox", isError: true };
+  }
+
+  if (exit.kind === "timeout") {
     const note = `timeout de ${timeoutMs}ms excedido no sandbox; container interrompido`;
-    output = output.length > 0 ? `${output}\n${note}` : note;
-    return { output: redactThenTruncate(output), isError: true };
+    return { output: redactThenTruncate(output.length > 0 ? `${output}\n${note}` : note), isError: true };
   }
-  if (exited !== 0) {
-    const note = `comando terminou com código ${exited} (sandbox docker)`;
-    output = output.length > 0 ? `${output}\n${note}` : note;
-    return { output: redactThenTruncate(output), isError: true };
+  if (exit.code !== 0) {
+    const note = `comando terminou com código ${exit.code} (sandbox docker)`;
+    return { output: redactThenTruncate(output.length > 0 ? `${output}\n${note}` : note), isError: true };
   }
   return { output: redactThenTruncate(output) };
 }
@@ -510,3 +552,274 @@ export const runCommandTool: Tool = {
     }
   },
 };
+
+// --- run_tests (F-15, #538) ---
+
+/** Default do teto de execução de `run.tests.timeoutMs` (F-15, #538). */
+export const DEFAULT_RUN_TESTS_TIMEOUT_MS = 120_000;
+
+/**
+ * Teto de `run.tests.timeoutMs` (1h). Acima disso o valor deixa de ser um teto
+ * útil e alguns motores de timer saturam: `setTimeout(3e9)` dispara em ~1ms e
+ * todo run falharia por timeout.
+ */
+export const MAX_RUN_TESTS_TIMEOUT_MS = 3_600_000;
+
+/** Seção `run.tests` (F-15, #538): comando de teste do projeto, sempre argv. */
+export interface RunTestsConfig {
+  /** Executável + argumentos, um item por argumento: nunca uma string de shell. */
+  command: readonly string[];
+  /** Teto de execução em ms; default `DEFAULT_RUN_TESTS_TIMEOUT_MS`. */
+  timeoutMs?: number;
+}
+
+/** Código estável do comando de teste ausente (F-15, #538): não há auto-detecção. */
+export const TESTS_NOT_CONFIGURED = "tests_not_configured";
+/** Código estável de entrada inválida na tool (D-18). */
+export const TESTS_INVALID_INPUT = "invalid_input";
+/** Teto do `filter`: é um pattern, nunca uma lista de flags do modelo. */
+export const MAX_TEST_FILTER_LENGTH = 200;
+/** Folga do timeout da tool sobre o do comando: quem formata o timeout é o sandbox. */
+const TOOL_TIMEOUT_GRACE_MS = 5_000;
+
+export interface RunTestsDeps {
+  /** Seção `run.tests` da config; ausente = `tests_not_configured`. */
+  config?: RunTestsConfig;
+  audit: AuditLike;
+}
+
+/**
+ * Input de `run_tests` (F-15, #538): só `filter`. O comando vem da config, então
+ * campo a mais é recusado — o modelo não escolhe binário, argumento nem flag.
+ * Caractere de controle é recusado no valor CRU: `trim()` esconderia `\n`/`\0`
+ * nas pontas e o item chegaria ao argv do programa.
+ */
+function testsFilter(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new ToolError("entrada inválida: esperado objeto com { filter? }");
+  }
+  const raw = input as Record<string, unknown>;
+  if (Object.keys(raw).some((key) => key !== "filter")) {
+    throw new ToolError('entrada inválida: campo desconhecido (o comando vem de "run.tests.command", nunca do modelo)');
+  }
+  if (raw.filter === undefined) return undefined;
+  if (typeof raw.filter !== "string") throw new ToolError('entrada inválida: "filter" deve ser uma string');
+  if (/[\u0000-\u001f\u007f]/.test(raw.filter)) {
+    throw new ToolError('entrada inválida: "filter" contém caractere de controle');
+  }
+  const filter = raw.filter.trim();
+  if (filter.length === 0) throw new ToolError('entrada inválida: "filter" não pode ser vazio');
+  if (filter.startsWith("-")) {
+    throw new ToolError('entrada inválida: "filter" não pode começar com "-" (flag não vem do modelo)');
+  }
+  if (filter.length > MAX_TEST_FILTER_LENGTH) {
+    throw new ToolError(`entrada inválida: "filter" excede ${MAX_TEST_FILTER_LENGTH} caracteres`);
+  }
+  return filter;
+}
+
+/** Resultado estruturado de `run_tests` (JSON compacto devolvido ao modelo). */
+export interface RunTestsResult {
+  command: readonly string[];
+  exitCode: number | null;
+  durationMs: number;
+  truncated: boolean;
+  timedOut?: boolean;
+  cancelled?: boolean;
+  output: string;
+}
+
+/**
+ * Redige ANTES de cortar (ADR-0027) e escolhe a ponta: sucesso fica com a
+ * cabeça, falha fica com a cauda (onde mora o relatório dos testes).
+ */
+function capTestsOutput(text: string, keep: "head" | "tail"): { output: string; truncated: boolean } {
+  const redacted = redactSecrets(text);
+  if (redacted.length <= MAX_OUTPUT) return { output: redacted, truncated: false };
+  return {
+    output: keep === "head" ? redacted.slice(0, MAX_OUTPUT) : redacted.slice(redacted.length - MAX_OUTPUT),
+    truncated: true,
+  };
+}
+
+/** Tamanho do texto já escapado dentro de um JSON (`\n` e `\u0001` contam mais). */
+function jsonEscapedLength(text: string): number {
+  return JSON.stringify(text).length - 2;
+}
+
+/**
+ * Corta o texto por code point até o JSON escapar dentro do orçamento. Caractere
+ * de controle escapa para 2–6 caracteres, então um cap em code units deixaria o
+ * envelope passar do teto (e cortar a string serializada daria JSON inválido).
+ */
+function fitEscapedBudget(text: string, keep: "head" | "tail", budget: number): string {
+  if (jsonEscapedLength(text) <= budget) return text;
+  const points = Array.from(text);
+  let fits = 0;
+  let fails = points.length;
+  while (fits < fails) {
+    const middle = Math.ceil((fits + fails) / 2);
+    const slice = keep === "head" ? points.slice(0, middle) : points.slice(points.length - middle);
+    if (jsonEscapedLength(slice.join("")) <= budget) fits = middle;
+    else fails = middle - 1;
+  }
+  return keep === "head" ? points.slice(0, fits).join("") : points.slice(points.length - fits).join("");
+}
+
+/**
+ * Serializa o resultado dentro de `MAX_OUTPUT`: o teto vale para o JSON inteiro
+ * que o modelo recebe, não só para `output`. Se precisar cortar mais, mantém a
+ * mesma ponta do cap (cabeça no sucesso, cauda na falha) e marca `truncated`.
+ */
+function serializeTestsResult(
+  result: RunTestsResult,
+  keep: "head" | "tail",
+): { json: string; truncated: boolean } {
+  const direct = JSON.stringify(result);
+  if (direct.length <= MAX_OUTPUT) return { json: direct, truncated: result.truncated };
+  const skeleton = JSON.stringify({ ...result, truncated: true, output: "" });
+  const budget = Math.max(0, MAX_OUTPUT - skeleton.length);
+  const output = fitEscapedBudget(result.output, keep, budget);
+  return { json: JSON.stringify({ ...result, truncated: true, output }), truncated: true };
+}
+
+/**
+ * Tool `run_tests` (F-15, #538): executa o comando de teste DO PROJETO pelo
+ * mesmo sandbox do `run_command`, com a mesma recusa sem sandbox (I-19). O argv
+ * vem de `run.tests.command` e vai item a item para o container — sem shell,
+ * sem interpolação e sem flag escolhida pelo modelo. `filter`, quando presente,
+ * é um único argumento extra.
+ */
+export function createRunTestsTool(deps: RunTestsDeps): Tool {
+  // Teto duro mesmo se a tool for criada sem passar pelo `validateConfig`.
+  const timeoutMs = Math.min(deps.config?.timeoutMs ?? DEFAULT_RUN_TESTS_TIMEOUT_MS, MAX_RUN_TESTS_TIMEOUT_MS);
+
+  /** Comando que o prompt de aprovação mostra: o da config, com o filter se válido. */
+  const materialCommand = (input: unknown): ApprovalDetail | undefined => {
+    const command = deps.config?.command;
+    if (command === undefined || command.length === 0) return undefined;
+    let filter: string | undefined;
+    // Input inválido não pode derrubar o prompt: o comando da config já informa a decisão.
+    try {
+      filter = testsFilter(input);
+    } catch {
+      filter = undefined;
+    }
+    const argv = filter === undefined ? [...command] : [...command, filter];
+    return { kind: "command", value: redactSecrets(argv.join(" ")) };
+  };
+
+  return {
+    manifest: {
+      name: "run_tests",
+      description:
+        "Executa o comando de teste do projeto (run.tests.command, argv) no mesmo sandbox Docker do run_command, " +
+        "sem shell: `filter` vira um único argumento extra. Sem run.tests.command devolve tests_not_configured.",
+      parameters: {
+        type: "object",
+        properties: {
+          filter: {
+            type: "string",
+            maxLength: MAX_TEST_FILTER_LENGTH,
+            description:
+              'Pattern passado como um único argumento ao comando (ex.: caminho de um teste). Sem caractere de controle e não pode começar com "-".',
+          },
+        },
+        additionalProperties: false,
+      },
+      risk: "high",
+      permission: "execute",
+      class: "shell",
+      timeoutMs: timeoutMs + TOOL_TIMEOUT_GRACE_MS,
+      retryable: false,
+      idempotent: false,
+      sideEffects: "process",
+    },
+
+    // #578: o comando executado vem da config, não do input — sem isto o prompt
+    // pediria aprovação de shell sem mostrar o que roda (cwd é rw no sandbox).
+    approvalDetail: materialCommand,
+
+    async execute(input, ctx: ToolContext): Promise<ToolResult> {
+      let filter: string | undefined;
+      try {
+        filter = testsFilter(input);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { output: redactSecrets(message), isError: true, code: TESTS_INVALID_INPUT };
+      }
+
+      const command = deps.config?.command ?? [];
+      if (command.length === 0) {
+        return {
+          output:
+            `run_tests: comando de teste do projeto não configurado (${TESTS_NOT_CONFIGURED}); ` +
+            'defina "run.tests.command" no astro.config.json como argv, ex.: "run": { "tests": { "command": ["bun", "test"] } }',
+          isError: true,
+          code: TESTS_NOT_CONFIGURED,
+        };
+      }
+
+      // Mesma recusa do run_command (I-19): `sandbox: false` não executa no host.
+      if (!sandboxEnabled) {
+        const error = new SandboxRequiredForShellError("sandbox:false", "run_tests");
+        return { ...failure(error.message), code: error.code };
+      }
+      if (!(await detectDockerAvailable())) {
+        return failure(
+          "sandbox ativo (tools.run_command.sandbox) mas Docker não está disponível; instale e inicie o Docker",
+        );
+      }
+
+      const argv = filter === undefined ? [...command] : [...command, filter];
+      const containerName = `astro-sb-${randomUUID().slice(0, 12)}`;
+      const startedAt = Date.now();
+      let docker: string[] | undefined;
+      let outcome: DockerOutcome;
+      try {
+        docker = dockerArgvNoShell(containerName, ctx, argv);
+        outcome = await runDockerOutcome(containerName, docker, ctx, timeoutMs);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return failure(`erro no sandbox docker: ${message}`);
+      } finally {
+        if (docker !== undefined) releaseDockerArgv(docker);
+      }
+
+      const durationMs = Date.now() - startedAt;
+      const failed = outcome.exit.kind !== "exit" || outcome.exit.code !== 0;
+      const keep = failed ? "tail" : "head";
+      const capped = capTestsOutput(outcome.output, keep);
+      const exitCode = outcome.exit.kind === "exit" ? outcome.exit.code : null;
+      const result: RunTestsResult = {
+        // Mesma redação do audit: o argv vem da config e pode carregar segredo (I-03).
+        command: argv.map((item) => redactSecrets(item)),
+        exitCode,
+        durationMs,
+        truncated: capped.truncated,
+        ...(outcome.exit.kind === "timeout" ? { timedOut: true } : {}),
+        ...(outcome.exit.kind === "cancelled" ? { cancelled: true } : {}),
+        output: capped.output,
+      };
+      const serialized = serializeTestsResult(result, keep);
+
+      // Audit só com o comando e o código: a saída dos testes nunca vai para o log (I-03).
+      deps.audit.append({
+        run: ctx.run,
+        agent: ctx.agent,
+        tipo: "tests.result",
+        payload: {
+          command: redactSecrets(argv.join(" ")),
+          exitCode,
+          durationMs,
+          truncated: serialized.truncated,
+          isError: failed,
+        },
+      });
+
+      return failed
+        ? { output: serialized.json, isError: true }
+        : { output: serialized.json };
+    },
+  };
+}

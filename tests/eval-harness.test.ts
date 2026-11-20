@@ -509,6 +509,37 @@ describe("eval harness (F5-2)", () => {
     )).rejects.toThrow(/run_command/);
   });
 
+  test("runCase recusa run_tests e run.tests (hermético)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-run-tests-"));
+    // Tool na allowlist basta: o comando configurado executaria no sandbox.
+    const toolDir = writeScenarioCase(root, "01-tool", {
+      schema: 1,
+      kind: "app",
+      config: { agent: { model: "mock/mock-1", maxSteps: 2, tools: ["run_tests"] } },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const toolCwd = mkdtempSync(join(tmpdir(), "astro-run-tests-cwd-"));
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(toolDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd: toolCwd, caseDir: toolDir, task: "tarefa" },
+    )).rejects.toThrow(/run_tests/);
+
+    // Só a seção de config, sem a tool: ainda é comando de shell declarado.
+    const configDir = writeScenarioCase(root, "02-config", {
+      schema: 1,
+      kind: "app",
+      config: { run: { tests: { command: ["bun", "test"] } } },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const configCwd = mkdtempSync(join(tmpdir(), "astro-run-tests-cfg-cwd-"));
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(configDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd: configCwd, caseDir: configDir, task: "tarefa" },
+    )).rejects.toThrow(/run_tests/);
+  });
+
   test("runCase recusa symlink aninhado em diretório de seed", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-seed-tree-"));
     const caseDir = join(root, "case");

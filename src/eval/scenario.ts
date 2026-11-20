@@ -559,8 +559,13 @@ function assertEffectiveLoopback(config: AstroConfig): void {
     assertLoopbackUrl(config.telemetry.endpoint, "telemetry.endpoint");
   }
   const toolLists = [config.agent.tools, ...Object.values(config.agents ?? {}).map((agent) => agent.tools ?? [])];
-  if (config.tools?.run_command !== undefined || toolLists.some((tools) => tools.includes("run_command"))) {
-    throw new Error("cenário não permite run_command");
+  const declaresTests = config.run?.tests !== undefined
+    || toolLists.some((tools) => tools.includes("run_tests"));
+  // Hermético (#578): `run_tests` executa o comando de teste da config no
+  // sandbox; o golden não declara shell nem comando de teste do projeto.
+  if (config.tools?.run_command !== undefined || declaresTests
+    || toolLists.some((tools) => tools.includes("run_command"))) {
+    throw new Error("cenário não permite run_command nem run_tests");
   }
 }
 

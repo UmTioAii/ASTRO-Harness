@@ -251,6 +251,18 @@ export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined
   return undefined;
 }
 
+/**
+ * Normaliza o detalhe material fornecido pela própria tool (#578): uma linha,
+ * sem invisíveis, redigido e truncado — as mesmas regras do detalhe derivado do
+ * input (#536). O executor aplica isto antes de entregar ao prompt.
+ */
+export function normalizeApprovalDetail(detail: ApprovalDetail): ApprovalDetail | undefined {
+  const value = detailValue(detail.value);
+  return value === undefined
+    ? undefined
+    : { kind: detail.kind, value: elideDetailValue(value, APPROVAL_DETAIL_MAX_CHARS) };
+}
+
 /** Pedido de aprovação entregue ao prompt (PERM-04). */
 export interface ToolPermissionRequest {
   name: string;

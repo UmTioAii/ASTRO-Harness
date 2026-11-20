@@ -27,13 +27,27 @@ function streamOf(text: string): ReadableStream<Uint8Array> {
   });
 }
 
-/** Processo fake com a superfície que `runInDocker` usa. */
+/**
+ * Processo fake com a superfície que `runInDocker` usa.
+ *
+ * `kill()` imita SIGKILL de processo real: `exited` só resolve no próximo tick.
+ * Resolver em microtask faria o exit 137 vencer a corrida de timeout/cancelamento
+ * no POSIX, onde `killProcessTree` cai em `proc.kill()` — o run reportaria
+ * failure em vez de `timedOut`/`cancelled` (falha que só aparecia no Linux).
+ */
 function fakeProc(reply: { code: number; stdout: string; stderr: string; hang?: boolean }) {
   let resolveExited!: (code: number) => void;
   const exited = new Promise<number>((resolve) => { resolveExited = resolve; });
   if (!reply.hang) queueMicrotask(() => resolveExited(reply.code));
-  return { pid: 424_242, exited, stdout: streamOf(reply.stdout), stderr: streamOf(reply.stderr),
-    kill() { resolveExited(137); } };
+  return {
+    // PID impossível: no POSIX `killProcessTree` testa o grupo com `process.kill(-pid)`
+    // antes do fallback; um pid real poderia atingir um grupo alheio.
+    pid: 2_000_000_000,
+    exited,
+    stdout: streamOf(reply.stdout),
+    stderr: streamOf(reply.stderr),
+    kill() { setTimeout(() => resolveExited(137), 0); },
+  };
 }
 
 const cmdOf = (arg: unknown, maybeOpts?: unknown): { cmd: string[]; opts: Record<string, unknown> | undefined } => {

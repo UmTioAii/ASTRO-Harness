@@ -1,5 +1,5 @@
 import type { CallJournal } from "../call-id";
-import type { AgentPermission } from "../permissions";
+import type { AgentPermission, ApprovalDetail } from "../permissions";
 
 /** Efeitos externos que a tool pode causar (F-10, I-12): vocabulário fechado. */
 export type SideEffects = "none" | "filesystem" | "network" | "process";
@@ -109,6 +109,13 @@ export interface ToolResult {
 export interface Tool {
   manifest: ToolManifest;
   execute(input: unknown, ctx: ToolContext): Promise<ToolResult>;
+  /**
+   * Detalhe material da chamada para o prompt de aprovação (#536, #578) quando
+   * ele não está no input — `run_tests` executa o comando da config, não do
+   * modelo. O executor normaliza (uma linha, redigido, truncado) antes do
+   * prompt; devolver `undefined` volta ao mapeamento por nome.
+   */
+  approvalDetail?(input: unknown): ApprovalDetail | undefined;
 }
 
 /** Erro de validação ou de política de uma tool. */
