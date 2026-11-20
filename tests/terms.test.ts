@@ -28,8 +28,11 @@ function stateFile(): string {
 /** Linhas numeradas da seção dona do texto em `docs/terms.md`, sem o número. */
 function docTermsLines(): Array<{ number: number; text: string }> {
   const doc = readFileSync(join(import.meta.dir, "..", "docs", "terms.md"), "utf8");
-  const section = doc.split(/^## /m).find((part) => part.startsWith("Texto (versão 1)"));
-  if (section === undefined) throw new Error("docs/terms.md sem a seção `Texto (versão 1)`");
+  // Cabeçalho derivado da versão: um bump de `TERMS_VERSION` aponta para o doc
+  // (seção ausente) em vez de deixar um título fixo passar despercebido.
+  const header = `Texto (versão ${TERMS_VERSION})`;
+  const section = doc.split(/^## /m).find((part) => part.startsWith(header));
+  if (section === undefined) throw new Error(`docs/terms.md sem a seção \`${header}\``);
   const found: Array<{ number: number; text: string }> = [];
   // `\r?` porque no Windows o checkout do doc chega em CRLF (core.autocrlf).
   for (const line of section.split(/\r?\n/u)) {
@@ -178,6 +181,31 @@ describe("termos de uso (#479)", () => {
     // Fail-closed: nada foi criado e nenhum `.tmp` sobrou.
     expect(readFileSync(blocker, "utf8")).toBe("não é diretório\n");
     expect(readdirSync(root)).toEqual(["home"]);
+  });
+
+  test("estado existente mas não gravável: erro tipado citando só o diretório, sem tmp (#591)", () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-terms-"));
+    const dir = join(root, "home");
+    const path = join(dir, "state.json");
+    // O destino existe como diretório: o `.tmp` é gravado e o rename falha — o
+    // caminho que escapava do erro tipado com um EPERM cru citando o `.tmp`.
+    mkdirSync(path, { recursive: true });
+    let thrown: unknown;
+    try {
+      saveHomeState({ version: 1, trust: { folders: [] }, migrations: { providers: false, trust: false } }, path);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(HomeStateUnwritableError);
+    const error = thrown as HomeStateUnwritableError;
+    expect(error.code).toBe("state_unwritable");
+    // Só o diretório: nem `.tmp` (arquivo que o usuário nunca viu) nem jargão de errno.
+    expect(error.message).toContain(dir);
+    expect(error.message).not.toContain(".tmp");
+    expect(error.message).not.toMatch(/EPERM|EACCES|EISDIR|ENOTEMPTY|EEXIST|rename|mkdir/);
+    // Fail-closed: nenhum `.tmp` sobrou e o destino continua intacto.
+    expect(readdirSync(dir)).toEqual(["state.json"]);
+    expect(statSync(path).isDirectory()).toBe(true);
   });
 
   test("/terms: comando reconhecido e lido por inteiro na TUI", async () => {
