@@ -52,6 +52,7 @@ import { createWebFetchTool } from "../tools/web-fetch";
 import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, SpawnRegistry } from "../spawn";
 import { grepTool } from "../tools/grep";
 import { listDirTool } from "../tools/list-dir";
+import { gitDiffTool, gitStatusTool } from "../tools/git";
 import { editTool } from "../tools/edit";
 import { lspTool } from "../tools/lsp";
 import { pipelineTool } from "../tools/pipeline";
@@ -168,10 +169,9 @@ export interface RunReport {
 const AGENT_NAME = "default";
 const TASK_HASH_LENGTH = 16;
 
-/** Tools de primeira parte, na ordem exposta ao modelo; `apps`/plugins adicionam as suas. */
-export const BUILTIN_TOOLS: readonly Tool[] = [readFileTool, writeFileTool, runCommandTool, handoffTool, grepTool, listDirTool, editTool, lspTool, pipelineTool];
-const TOOLS_BY_NAME = new Map(BUILTIN_TOOLS.map((tool) => [tool.manifest.name, tool]));
+export const BUILTIN_TOOLS: readonly Tool[] = [readFileTool, writeFileTool, runCommandTool, handoffTool, grepTool, listDirTool, gitStatusTool, gitDiffTool, editTool, lspTool, pipelineTool];
 
+const TOOLS_BY_NAME = new Map(BUILTIN_TOOLS.map((tool) => [tool.manifest.name, tool]));
 /** Env de sistema que o shell precisa; não são segredos, mesmo se o servidor MCP os declarar. */
 const SYSTEM_ENV = /^(PATH|PATHEXT|HOME|USERPROFILE|SYSTEMROOT|WINDIR|TEMP|TMP|TMPDIR|SHELL|COMSPEC|LANG|LC_ALL|TERM)$/i;
 
