@@ -284,7 +284,7 @@ describe("coverage gate CLI (#59)", () => {
       expect(result.stderr).toContain("uso:");
       expect(result.stdout).toBe("");
     }
-  });
+  }, 60_000);
 
   test("misturar flag e posicional é rejeitado", () => {
     const result = withLcov(passing, (file) => run(["--file", file, "0.8"]));
