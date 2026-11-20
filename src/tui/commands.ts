@@ -9,6 +9,11 @@ import { exportSession } from "../chat/export";
 import { initAgents } from "../chat/init";
 import { usageLines } from "../chat/usage";
 import { THEMES, isTheme, type Theme } from "./theme";
+import {
+  EDITABLE_CONFIG_KEYS,
+  isEditableConfigKey,
+  parseConfigEditValue,
+} from "../core/config-edit";
 
 export type EntryKind = "user" | "assistant" | "info" | "error";
 
@@ -106,8 +111,30 @@ export async function runCommand(
         return { entries: [{ kind: "error", text: `erro: ${messageOf(error)}` }] };
       }
     }
-    case "config":
+    case "config": {
+      // /config <chave> <valor> na TUI aplica direto (paridade com o REPL, #558);
+      // sem argumentos abre a tela.
+      if (command.key !== undefined) {
+        if (session.applyConfigEdits === undefined) {
+          return { entries: [{ kind: "error", text: "esta sessão não aceita editar a config" }] };
+        }
+        if (!isEditableConfigKey(command.key)) {
+          return { entries: [{ kind: "error", text: `chave não editável via /config: "${command.key}" — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}` }] };
+        }
+        if ((command.rawValue ?? "").trim() === "") {
+          return { entries: [{ kind: "error", text: `uso: /config ${command.key} <valor> — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}` }] };
+        }
+        try {
+          const key = command.key;
+          const value = parseConfigEditValue(key, command.rawValue ?? "");
+          session.applyConfigEdits({ [key]: command.rawValue ?? "" });
+          return { entries: [{ kind: "info", text: `salvo: ${key} = ${value === null ? "null" : String(value)} (gravado na config)` }] };
+        } catch (error) {
+          return { entries: [{ kind: "error", text: `erro: ${messageOf(error)}` }] };
+        }
+      }
       return { entries: [], openConfig: true };
+    }
     case "theme": {
       const current = state.theme ?? "dark";
       if (command.theme === undefined) {

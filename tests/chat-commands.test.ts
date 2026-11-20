@@ -40,7 +40,8 @@ describe("comandos do chat (T1, #62)", () => {
   });
   test("/config é reconhecido e entra na ajuda e nos nomes (#273)", () => {
     expect(parseCommand("/config")).toEqual({ kind: "config" });
-    expect(parseCommand("/config extra")).toEqual({ kind: "config" });
+    // com argumento vira edição (#558): chave sem valor é rejeitada no handler com "uso:"
+    expect(parseCommand("/config extra")).toEqual({ kind: "config", key: "extra", rawValue: "" });
     expect(COMMAND_NAMES).toContain("config");
     expect(HELP_TEXT).toContain("/config");
   });

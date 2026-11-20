@@ -10,6 +10,12 @@ import { isYes } from "./approvers";
 import { dedupeKey, type AttachmentMeta, type LoadedAttachment } from "../attachments/model";
 import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
 import { loadTrustedStore, trustStatePath } from "../trust";
+import {
+  EDITABLE_CONFIG_KEYS,
+  isEditableConfigKey,
+  parseConfigEditValue,
+  type EditableConfigKey,
+} from "../core/config-edit";
 import type { ProfileManager, ProfileView } from "../providers/profile-manager";
 import type { ModelInfo, ProviderInfo, SendTurnOptions, SessionSnapshot, TurnResult } from "./agent-session";
 import type { HealthCheck, HealthReport } from "../health";
@@ -62,6 +68,8 @@ export interface ChatSession {
   attachmentProtectedPaths?(): readonly string[];
   /** Persiste `permissions.mode` no arquivo de config e aplica na sessão (#273). */
   savePermissionMode?(mode: PermissionMode): PermissionMode;
+  /** Aplica edições do `/config <chave> <valor>` e persiste no arquivo (#558); devolve a config nova. */
+  applyConfigEdits?(edits: Partial<Record<EditableConfigKey, string>>): unknown;
   /** Revoga uma pasta confiável do store global (#267); `false` se não estava na lista. */
   revokeTrustedFolder?(dir: string): boolean;
   /** Pastas confiáveis do mesmo store usado pela revogação (#267); ausente usa o fallback da UI. */
@@ -488,6 +496,30 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         continue;
       }
       if (command.kind === "config") {
+        if (command.key !== undefined) {
+          // /config <chave> <valor>: edita e persiste no arquivo (#558)
+          if (session.applyConfigEdits === undefined) {
+            io.write("esta sessão não aceita editar a config");
+            continue;
+          }
+          if (!isEditableConfigKey(command.key)) {
+            io.write(`chave não editável via /config: "${command.key}" — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
+            continue;
+          }
+          if ((command.rawValue ?? "").trim() === "") {
+            io.write(`uso: /config ${command.key} <valor> — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
+            continue;
+          }
+          try {
+            const key = command.key;
+            const value = parseConfigEditValue(key, command.rawValue ?? "");
+            session.applyConfigEdits({ [key]: command.rawValue ?? "" });
+            io.write(`salvo: ${key} = ${value === null ? "null" : String(value)} (gravado na config)`);
+          } catch (error) {
+            io.write(`erro: ${messageOf(error)}`); // valor inválido não altera o arquivo
+          }
+          continue;
+        }
         const summary = session.configSummary?.();
         if (summary === undefined) {
           io.write("config indisponível nesta sessão");

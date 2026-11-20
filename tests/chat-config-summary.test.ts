@@ -52,6 +52,7 @@ describe("configSummaryOf / configLines (#273)", () => {
       approvalTimeoutMs: "300000 (default)",
       costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
       budget: "sem budget",
+      knobs: [{ key: "agent.maxSteps", value: "5" }, { key: "permissions.mode", value: "ask" }],
     };
     expect(configLines(summary, []).join("\n")).toBe(
       "config: /cfg/astro.config.json\n"

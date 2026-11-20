@@ -18,6 +18,7 @@ const summary: ConfigSummary = {
   approvalTimeoutMs: "300000 (default)",
   costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
   budget: "day · limite US$ 5.00 · aviso em 80% · ao exceder: ask",
+  knobs: [{ key: "agent.maxSteps", value: "12" }, { key: "permissions.mode", value: "ask" }],
 };
 
 async function waitFor(check: () => boolean): Promise<void> {

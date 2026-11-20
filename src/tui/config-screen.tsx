@@ -3,6 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { useState, type ReactElement } from "react";
 import { PERMISSION_MODES, type PermissionMode } from "../permissions";
 import { configLines, type ConfigSummary } from "../chat/config-summary";
+import type { EditableConfigKey } from "../core/config-edit";
 import { redactSecrets } from "../sanitize-external";
 import type { ThemeColors } from "./theme";
 
@@ -15,16 +16,20 @@ export interface ConfigScreenProps {
   onSaveMode: (mode: PermissionMode) => void;
   /** Revoga uma pasta confiável (#267); `false` = não estava na lista; pode jogar. */
   onRevokeTrust?: (dir: string) => boolean;
+  /** Grava um knob editável e persiste (#558); pode jogar — a tela mostra o erro. */
+  onSaveKnob?: (key: EditableConfigKey, rawValue: string) => void;
 }
 
-type View = "main" | "pick" | "confirm" | "revoke" | "revoke-confirm";
+type View = "main" | "pick" | "confirm" | "revoke" | "revoke-confirm" | "edit" | "edit-value";
 
-export function ConfigScreen({ colors, summary, trustedFolders, onClose, onSaveMode, onRevokeTrust }: ConfigScreenProps): ReactElement {
+export function ConfigScreen({ colors, summary, trustedFolders, onClose, onSaveMode, onRevokeTrust, onSaveKnob }: ConfigScreenProps): ReactElement {
   const [view, setView] = useState<View>("main");
   const [mode, setMode] = useState<PermissionMode>(summary.permissionMode);
   const [cursor, setCursor] = useState(() => Math.max(0, PERMISSION_MODES.indexOf(summary.permissionMode)));
   const [folders, setFolders] = useState<readonly string[]>(trustedFolders);
   const [revokeCursor, setRevokeCursor] = useState(0);
+  const [knobCursor, setKnobCursor] = useState(0);
+  const [knobDraft, setKnobDraft] = useState("");
   const [message, setMessage] = useState<{ text: string; ok: boolean } | undefined>(undefined);
 
   const save = (next: PermissionMode): void => {
@@ -32,6 +37,17 @@ export function ConfigScreen({ colors, summary, trustedFolders, onClose, onSaveM
       onSaveMode(next);
       setMode(next);
       setMessage({ text: `modo salvo: ${next} (gravado na config)`, ok: true });
+    } catch (error) {
+      setMessage({ text: `erro: ${redactSecrets(error instanceof Error ? error.message : String(error))}`, ok: false });
+    }
+    setView("main");
+  };
+
+  const saveKnob = (key: EditableConfigKey, rawValue: string): void => {
+    try {
+      if (onSaveKnob === undefined) throw new Error("esta tela não aceita editar knobs");
+      onSaveKnob(key, rawValue);
+      setMessage({ text: `salvo: ${key} = ${rawValue} (gravado na config)`, ok: true });
     } catch (error) {
       setMessage({ text: `erro: ${redactSecrets(error instanceof Error ? error.message : String(error))}`, ok: false });
     }
@@ -75,7 +91,31 @@ export function ConfigScreen({ colors, summary, trustedFolders, onClose, onSaveM
           setRevokeCursor(0);
           setView("revoke");
         }
+      } else if (value === "e") {
+        setMessage(undefined);
+        if (onSaveKnob === undefined || summary.knobs.length === 0) setMessage({ text: "nenhum knob editável nesta sessão", ok: false });
+        else {
+          setKnobCursor(0);
+          setView("edit");
+        }
       }
+      return;
+    }
+    if (view === "edit") {
+      if (key.upArrow) setKnobCursor((current) => Math.max(0, current - 1));
+      else if (key.downArrow) setKnobCursor((current) => Math.min(summary.knobs.length - 1, current + 1));
+      else if (key.return) {
+        setKnobDraft(summary.knobs[knobCursor]?.value ?? "");
+        setView("edit-value");
+      }
+      return;
+    }
+    if (view === "edit-value") {
+      const knob = summary.knobs[knobCursor];
+      if (key.backspace) setKnobDraft((current) => current.slice(0, -1));
+      else if (key.return) {
+        if (knob !== undefined) saveKnob(knob.key, knobDraft);
+      } else if (!key.ctrl && !key.meta && value !== "") setKnobDraft((current) => current + value);
       return;
     }
     if (view === "pick") {
@@ -122,7 +162,7 @@ export function ConfigScreen({ colors, summary, trustedFolders, onClose, onSaveM
           {message === undefined ? null : (
             <Text color={message.ok ? colors.accent : colors.error}>{message.text}</Text>
           )}
-          <Text dimColor>enter/m: trocar permissions.mode · r: revogar trust · esc: fechar</Text>
+          <Text dimColor>enter/m: trocar permissions.mode · e: editar knob · r: revogar trust · esc: fechar</Text>
         </>
       ) : null}
       {view === "pick" ? (
@@ -151,6 +191,24 @@ export function ConfigScreen({ colors, summary, trustedFolders, onClose, onSaveM
             </Text>
           ))}
           <Text dimColor>↑/↓: escolher · enter: pedir confirmação · esc: voltar</Text>
+        </>
+      ) : null}
+      {view === "edit" ? (
+        <>
+          <Text>knob editável (valor atual):</Text>
+          {summary.knobs.map((knob, index) => (
+            <Text key={knob.key} color={index === knobCursor ? colors.accent : undefined}>
+              {index === knobCursor ? "→" : " "} {knob.key}: {knob.value}
+            </Text>
+          ))}
+          <Text dimColor>↑/↓: escolher · enter: editar valor · esc: voltar</Text>
+        </>
+      ) : null}
+      {view === "edit-value" ? (
+        <>
+          <Text>{summary.knobs[knobCursor]?.key} (atual: {summary.knobs[knobCursor]?.value}):</Text>
+          <Text color={colors.accent}>{knobDraft}</Text>
+          <Text dimColor>digite o valor · enter: salvar e gravar · esc: voltar</Text>
         </>
       ) : null}
       {view === "revoke-confirm" ? (

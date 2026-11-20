@@ -502,13 +502,17 @@ export function loadGlobalConfig(env: NodeJS.ProcessEnv = process.env): Record<s
   return loadConfigRaw(path);
 }
 
-/** Config do projeto mesclada com a camada global (validada); ausente = undefined.
- * `chat`/`tui` não validam o projeto isolado: ele pode depender do global. */
-export function loadProjectConfig(configPath: string, opts: { env?: NodeJS.ProcessEnv } = {}): AstroConfig | undefined {
-  if (!existsSync(configPath)) return undefined;
-  const homeEnv = { ...process.env, ...opts.env };
+/**
+ * Valida uma camada de projeto crua contra global+store (ADR-0029) e devolve a
+ * config mesclada; sem gravar nada. Usada por `loadProjectConfig` e pela
+ * pré-validação do `/config` antes de gravar (#558).
+ */
+export function validateProjectLayer(
+  projectLayer: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): AstroConfig {
+  const homeEnv = { ...process.env, ...env };
   const global = homeEnv.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(homeEnv);
-  const projectLayer = loadConfigRaw(configPath);
   // O schema de cada camada crua: `model` e `profile` não convivem e `models`
   // não se repete (a mescla entre camadas resolve o XOR, o conflito dentro da
   // camada é erro).
@@ -523,6 +527,13 @@ export function loadProjectConfig(configPath: string, opts: { env?: NodeJS.Proce
   const storeProviders = Object.fromEntries(store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));
   assertNarrowed(global ?? {}, declared, storeProviders, projectLayer);
   return validateConfig(declared);
+}
+
+/** Config do projeto mesclada com a camada global (validada); ausente = undefined.
+ * `chat`/`tui` não validam o projeto isolado: ele pode depender do global. */
+export function loadProjectConfig(configPath: string, opts: { env?: NodeJS.ProcessEnv } = {}): AstroConfig | undefined {
+  if (!existsSync(configPath)) return undefined;
+  return validateProjectLayer(loadConfigRaw(configPath), opts.env ?? process.env);
 }
 
 export type ProviderSource = "project" | "global" | "env";

@@ -36,6 +36,7 @@ import { ProviderScreen } from "./provider-screen";
 import { SessionPicker } from "./session-picker";
 import { ConfigScreen } from "./config-screen";
 import { loadTrustedStore, trustStatePath } from "../trust";
+import { parseConfigEditValue } from "../core/config-edit";
 import type { ProfileManager } from "../providers/profile-manager";
 import { budgetSegment, quotaSegment } from "../chat/usage";
 import { createThrottledSink, STREAM_THROTTLE_MS } from "./stream";
@@ -841,6 +842,13 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           const removed = session.revokeTrustedFolder(dir); // remove do store global + audita (#267)
           if (removed) setEntries((current) => [...current, { kind: "info", text: `trust revogado: ${dir}` }]);
           return removed;
+        }}
+        onSaveKnob={(key, rawValue) => {
+          // valida o valor, grava no arquivo e recarrega na sessão (#558)
+          if (session.applyConfigEdits === undefined) throw new Error("esta sessão não aceita editar a config");
+          parseConfigEditValue(key, rawValue); // parse primeiro: erro aqui não grava nada
+          session.applyConfigEdits({ [key]: rawValue });
+          setEntries((current) => [...current, { kind: "info", text: `salvo: ${key} = ${rawValue} (gravado na config)` }]);
         }}
       />
     );
