@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,12 +9,17 @@ import {
   SMOKE_PROMPT,
   SmokeError,
   USAGE,
+  bootOutcome,
   completionProblem,
+  createSignalCleanup,
+  createSmokeDirs,
   doctorClean,
   exitCodeFor,
   firstFrame,
   hasClosedTurn,
   logHeaderShown,
+  npmInstallEnv,
+  okLine,
   packagedBun,
   parseArgs,
   planSteps,
@@ -23,12 +28,19 @@ import {
   providerOkLine,
   providerTestPrompt,
   redactSmokeText,
+  releaseResources,
+  removeTempDirWithRetry,
+  requirePort,
+  requiredProviderOkLine,
   runPlan,
   smokeConfig,
+  smokeDirs,
+  startMock,
   summaryFor,
   trustState,
   tuiBootError,
   turnLogged,
+  type CleanupRegistry,
   type PlanStep,
   type RecordedRequest,
 } from "../scripts/packed-smoke";
@@ -318,6 +330,182 @@ test("packagedBun recusa o placeholder de 450 bytes em vez de deixar o spawn fal
     exists: () => true,
     stat: () => ({ size: 450 }),
   })).toThrow(/Bun do pacote instalado/);
+});
+
+test("requiredProviderOkLine não inventa \"ok\" quando a linha não existe", () => {
+  expect(requiredProviderOkLine("│ mock: ok · 12ms │")).toBe("mock: ok · 12ms");
+  expect(() => requiredProviderOkLine("│ mock: down (outage) · 3ms │")).toThrow(SmokeError);
+  expect(() => requiredProviderOkLine("│ mock: ok · 12ms │", "outro")).toThrow(/outro: ok/);
+  expect(() => requiredProviderOkLine("")).toThrow(/ok/);
+});
+
+test("bootOutcome só passa com o primeiro frame; não existe boot pulado", () => {
+  const frame = `ASTRO v${version} · mock/${SMOKE_MODEL} · n/d`;
+  expect(bootOutcome(frame, null, version)).toEqual({ status: "passed", frame });
+  expect(bootOutcome(`\u001b[2K${frame}`, 0, version)).toEqual({ status: "passed", frame });
+  expect(() => bootOutcome("│ > \n", 0, version)).toThrow(SmokeError);
+  expect(() => bootOutcome("", null, version)).toThrow(/primeiro frame/);
+  expect(() => bootOutcome("astro: precisa de um terminal interativo", 3, version)).toThrow(/preload/);
+});
+
+test("requirePort recusa porta que apontaria a config para :0", () => {
+  expect(requirePort(43117)).toBe(43117);
+  expect(() => requirePort(0)).toThrow(SmokeError);
+  expect(() => requirePort(-1)).toThrow(/porta/);
+  expect(() => requirePort(1.5)).toThrow(/porta/);
+  expect(() => requirePort(Number.NaN)).toThrow(/porta/);
+  expect(() => smokeConfig(0)).toThrow(/porta/);
+});
+
+test("mock exige o Bearer no health para provar a resolução do credentialRef", async () => {
+  const mock = startMock();
+  try {
+    expect(mock.port).toBeGreaterThan(0);
+    const url = `http://127.0.0.1:${mock.port}/v1/models`;
+    const anonymous = await fetch(url);
+    expect(anonymous.status).toBe(401);
+    const wrongKey = await fetch(url, { headers: { authorization: "Bearer outra-chave" } });
+    expect(wrongKey.status).toBe(401);
+    const authorized = await fetch(url, { headers: { authorization: `Bearer ${SMOKE_KEY_VALUE}` } });
+    expect(authorized.status).toBe(200);
+    expect(((await authorized.json()) as { data: Array<{ id: string }> }).data[0]!.id).toBe(SMOKE_MODEL);
+    expect(mock.requests.at(-1)).toMatchObject({ method: "GET", path: "/v1/models" });
+  } finally {
+    mock.stop();
+  }
+});
+
+test("npmInstallEnv põe o cache do npm dentro do temporário quando não herdado", () => {
+  const packDir = join("/tmp", "astro-packed-smoke-x", "pack");
+  expect(npmInstallEnv(packDir, { PATH: "/bin" })).toMatchObject({
+    NPM_CONFIG_CACHE: join(packDir, "npm-cache"),
+  });
+  expect(npmInstallEnv(packDir, { NPM_CONFIG_CACHE: "/cache/do/host" })).toMatchObject({
+    NPM_CONFIG_CACHE: "/cache/do/host",
+  });
+});
+
+test("os três diretórios do smoke ficam sob uma raiz removida de uma vez", () => {
+  const layout = smokeDirs(join("/tmp", "astro-packed-smoke-raiz"));
+  expect(layout).toEqual({
+    root: join("/tmp", "astro-packed-smoke-raiz"),
+    packDir: join("/tmp", "astro-packed-smoke-raiz", "pack"),
+    projectDir: join("/tmp", "astro-packed-smoke-raiz", "project"),
+    home: join("/tmp", "astro-packed-smoke-raiz", "home"),
+  });
+
+  const dirs = createSmokeDirs();
+  try {
+    expect(dirs.packDir.startsWith(dirs.root)).toBe(true);
+    for (const dir of [dirs.packDir, dirs.projectDir, dirs.home]) expect(existsSync(dir)).toBe(true);
+    removeTempDirWithRetry(dirs.root);
+    expect(existsSync(dirs.root)).toBe(false);
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+  }
+});
+
+test("summaryFor carrega avisos de limpeza sem esconder a falha principal", () => {
+  const comFalha = summaryFor(
+    "pkg",
+    version,
+    [{ id: "tui", status: "passed", detail: "ok" }],
+    "build: x",
+    ["falha ao limpar /tmp/a"],
+  );
+  expect(comFalha.failure).toBe("build: x");
+  expect(comFalha.cleanupWarnings).toEqual(["falha ao limpar /tmp/a"]);
+  expect(summaryFor("pkg", version, [], null).cleanupWarnings).toEqual([]);
+});
+
+/** Filho falso: `exits` morre no primeiro kill, `ignores` só morre no SIGKILL. */
+function fakeChild(mode: "exits" | "ignores"): {
+  child: NonNullable<CleanupRegistry["child"]>;
+  kills: Array<NodeJS.Signals | undefined>;
+} {
+  const kills: Array<NodeJS.Signals | undefined> = [];
+  let done!: (code: number) => void;
+  const exited = new Promise<number>((resolveExit) => { done = resolveExit; });
+  return {
+    kills,
+    child: {
+      exitCode: null,
+      exited,
+      kill: (signal?: NodeJS.Signals) => {
+        kills.push(signal);
+        if (mode === "exits" || signal === "SIGKILL") done(-1);
+      },
+    },
+  };
+}
+
+test("releaseResources memoiza a limpeza para todo chamador", async () => {
+  const { child, kills } = fakeChild("exits");
+  let stops = 0;
+  const registry: CleanupRegistry = { child, mock: { stop: () => { stops++; } } };
+
+  const first = releaseResources(registry);
+  const second = releaseResources(registry);
+  expect(second).toBe(first);
+  await Promise.all([first, second]);
+
+  expect(kills).toEqual([undefined]);
+  expect(stops).toBe(1);
+});
+
+test("releaseResources escala para SIGKILL quando o filho não sai na carência", async () => {
+  const { child, kills } = fakeChild("ignores");
+  await releaseResources({ child }, 5);
+  expect(kills).toEqual([undefined, "SIGKILL"]);
+});
+
+test("createSignalCleanup mata o filho, remove os três diretórios e sai uma vez", async () => {
+  const { child, kills } = fakeChild("exits");
+  let stops = 0;
+  const removed: string[] = [];
+  const exits: number[] = [];
+  const warnings: string[] = [];
+  const cleanup = createSignalCleanup(["/tmp/a", "/tmp/b", "/tmp/c"], { child, mock: { stop: () => { stops++; } } }, {
+    remove: (dir) => removed.push(dir),
+    exit: (code) => exits.push(code),
+    warn: (message) => warnings.push(message),
+    onSignal: () => () => {},
+  });
+
+  await Promise.all([cleanup("SIGINT"), cleanup("SIGTERM")]);
+
+  expect(kills).toEqual([undefined]);
+  expect(stops).toBe(1);
+  expect(removed).toEqual(["/tmp/a", "/tmp/b", "/tmp/c"]);
+  expect(exits).toEqual([130]);
+  expect(warnings).toEqual([]);
+});
+
+test("createSignalCleanup segue removendo e avisa quando um diretório não sai", async () => {
+  const { child } = fakeChild("exits");
+  const removed: string[] = [];
+  const exits: number[] = [];
+  const warnings: string[] = [];
+  const cleanup = createSignalCleanup(["/tmp/a", "/tmp/b", "/tmp/c"], { child }, {
+    remove: (dir) => {
+      if (dir === "/tmp/b") throw new Error("preso pelo Windows");
+      removed.push(dir);
+    },
+    exit: (code) => exits.push(code),
+    warn: (message) => warnings.push(message),
+    onSignal: () => () => {},
+  });
+
+  await cleanup("SIGTERM");
+
+  expect(removed).toEqual(["/tmp/a", "/tmp/c"]);
+  expect(exits).toEqual([143]);
+  expect(warnings.join("\n")).toContain("/tmp/b");
+});
+
+test("okLine não contabiliza etapa pulada: nenhuma etapa pode ser pulada", () => {
+  expect(okLine(7)).toBe("smoke:packed ok (7 etapas, nenhuma etapa pode ser pulada)");
+  expect(okLine(7)).not.toContain("pulada(s)");
 });
 
 test("trustState gravado por saveHomeState passa no realpath do TrustedFolders", () => {
