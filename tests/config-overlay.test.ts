@@ -169,16 +169,23 @@ test("o principal pode declarar tools quando o global é silencioso, e o nomeado
   }))).toThrow(/fora da allowlist do agent principal \(/m);
 });
 
-test("o `agent.permission` global não vira teto do nomeado: o campo não existe no schema (#548)", () => {
-  // `agent.permission` é descartado pelo schema; o projeto não deve ser
-  // recusado por um teto que o runtime nunca aplica (D-28).
+test("`agent.permission` não existe no schema: é rejeitado como chave desconhecida (#548, ADR-0028)", () => {
+  // `agent.permission` nunca foi um teto do nomeado (D-28); desde o ADR-0028 o
+  // campo em seção de forma fixa falha alto em vez de ser descartado em silêncio.
   const global = {
     providers: { p: provider("p"), q: provider("q") }, models: [model("p", "m"), model("q", "n")],
     agent: { model: "p/m", maxSteps: 10, tools: ["read_file"], permission: "read-only" },
   };
-  expect(effective(global, project({
-    agents: { coder: { model: "p/m", maxSteps: 5, tools: ["read_file"], permission: "full" } },
-  })).config.agents?.coder?.permission).toBe("full");
+  let caught: unknown;
+  try {
+    effective(global, project({
+      agents: { coder: { model: "p/m", maxSteps: 5, tools: ["read_file"], permission: "full" } },
+    }));
+  } catch (error) {
+    caught = error;
+  }
+  expect((caught as { code?: string }).code).toBe("config_unknown_key");
+  expect((caught as Error).message).toContain("agent.permission");
 });
 
 test("projeto pode estreitar o teto de aprovação (#526)", () => {

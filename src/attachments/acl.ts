@@ -104,10 +104,11 @@ export function inspectWindowsAcl(path: string): WindowsAcl | undefined {
 }
 
 /**
- * Script de endurecimento: monta uma DACL nova, protegida (sem herança) e com
- * controle total só para o usuário atual, SYSTEM e Administrators, e a instala
- * com `Set-Acl`. Uma DACL nova descarta ACEs herdadas *e* explícitas; `icacls
- * /inheritance:r` só remove as herdadas e deixaria uma ACE explícita da raiz.
+ * Script de endurecimento da raiz: monta uma DACL nova, protegida (sem herança)
+ * e com controle total só para o usuário atual, SYSTEM e Administrators, e a
+ * instala com `Set-Acl`. Uma DACL nova descarta ACEs herdadas *e* explícitas;
+ * `icacls /inheritance:r` só remove as herdadas e deixaria uma ACE explícita da
+ * raiz. Só a raiz de artefatos usa este caminho (uma vez por raiz validada).
  */
 const HARDEN_SCRIPT = [
   "$ErrorActionPreference='Stop'",
@@ -131,10 +132,38 @@ const HARDEN_SCRIPT = [
  * `powershell.exe` absoluto, cwd do sistema, env mínimo. Qualquer falha lança.
  */
 export function hardenWindowsAcl(path: string): WindowsAcl {
+  return runHardenScript(HARDEN_SCRIPT, path);
+}
+
+/**
+ * Mesma garantia para um arquivo regular (ex.: config temporário, ADR-0028), mas
+ * pelo `icacls` nativo: o temporário é criado por nós, então a DACL só tem ACEs
+ * herdadas e `/inheritance:r` + `/grant:r` fixa owner/SY/BA sem herança. O
+ * PowerShell 5.1 custava 20–40 s por spawn no runner do CI e o `Set-Acl` com
+ * `FileSecurity` falhava lá; aqui a gravação de config não depende dele (#589).
+ * Qualquer saída não-zero lança (falha fechado).
+ */
+export function hardenWindowsAclFile(path: string): void {
+  const root = windowsRoot();
+  const exe = join(root, "System32", "icacls.exe");
+  if (!existsSync(exe)) throw new Error("icacls.exe não encontrado");
+  const account =
+    process.env.USERDOMAIN !== undefined && process.env.USERNAME !== undefined
+      ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`
+      : (process.env.USERNAME ?? "");
+  if (account === "") throw new Error("usuário atual desconhecido");
+  execFileSync(
+    exe,
+    [path, "/inheritance:r", "/grant:r", `${account}:(F)`, "/grant:r", "*S-1-5-18:(F)", "/grant:r", "*S-1-5-32-544:(F)"],
+    { timeout: 30_000, windowsHide: true, stdio: ["ignore", "ignore", "ignore"], maxBuffer: 1 << 20 },
+  );
+}
+
+function runHardenScript(script: string, path: string): WindowsAcl {
   const root = windowsRoot();
   const exe = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   if (!existsSync(exe)) throw new Error("powershell.exe não encontrado");
-  const output = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", HARDEN_SCRIPT], {
+  const output = execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
     timeout: 60_000, // runner windows-latest: o cold start do PowerShell passa de 15 s
     windowsHide: true,
