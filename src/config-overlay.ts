@@ -96,9 +96,10 @@ function assertExclusiveModel(agent: unknown, field: string): void {
 }
 
 /**
- * O projeto estreita a camada global, nunca amplia (ADR-0029): tools e perfil de
- * permissão ficam dentro do global, `permissions.mode` fica mais restrito, o
- * budget não passa do teto global e a credencial global não muda de endpoint.
+ * O projeto estreita a camada global, nunca amplia (ADR-0029): tools do agent
+ * principal e dos nomeados ficam dentro do global, `permissions.mode` fica mais
+ * restrito, o budget não passa do teto global e a credencial global não muda de
+ * endpoint.
  */
 export function assertNarrowed(
   global: Record<string, unknown>,
@@ -120,19 +121,22 @@ export function assertNarrowed(
   // ficam dentro do global do próprio nomeado; sem ele, dentro da allowlist do
   // agent principal (o schema já a aplica; aqui falhamos cedo com a regra de
   // política); sem tools em nenhum dos dois, dentro do default de D-07. O
-  // `permission` só existe no nomeado (D-28), então só é comparado quando a
-  // camada global declara esse nomeado. Teto de passos idem.
+  // `permission` é comparado só com o global do próprio nomeado, o único lugar
+  // onde o schema define esse campo (D-28); o agent principal não o declara.
   for (const [name, after] of Object.entries(namedAfter)) {
     if (!isPlainObject(after)) continue;
     const globalAgent = isPlainObject(named[name]) ? named[name] : undefined;
     if (globalAgent !== undefined) {
       assertNotWider(globalAgent.permission, after.permission, PERMISSION_RANK, `a permissão global do agent "${name}"`);
     }
-    const fromGlobal = Array.isArray(globalAgent?.tools);
+    const tools = globalAgent?.tools;
+    const fromGlobal = Array.isArray(tools);
     const ceilingTools = fromGlobal
-      ? (globalAgent?.tools as unknown[])
+      ? tools
       : Array.isArray(mainAfter?.tools) ? mainAfter.tools : [...DEFAULT_AGENT_TOOLS];
     assertToolsWithin(ceilingTools, after.tools, name, fromGlobal);
+    // Teto de passos: o global do nomeado, senão o teto do principal
+    // (`BASELINE_MAX_STEPS` quando o global não declara).
     const stepsCeiling = globalAgent !== undefined && typeof globalAgent.maxSteps === "number"
       ? globalAgent.maxSteps
       : mainCeiling;

@@ -147,6 +147,18 @@ test("o principal pode declarar tools quando o global é silencioso, e o nomeado
   }))).toThrow(/fora da allowlist do agent principal \(/m);
 });
 
+test("o `agent.permission` global não vira teto do nomeado: o campo não existe no schema (#548)", () => {
+  // `agent.permission` é descartado pelo schema; o projeto não deve ser
+  // recusado por um teto que o runtime nunca aplica (D-28).
+  const global = {
+    providers: { p: provider("p"), q: provider("q") }, models: [model("p", "m"), model("q", "n")],
+    agent: { model: "p/m", maxSteps: 10, tools: ["read_file"], permission: "read-only" },
+  };
+  expect(effective(global, project({
+    agents: { coder: { model: "p/m", maxSteps: 5, tools: ["read_file"], permission: "full" } },
+  })).config.agents?.coder?.permission).toBe("full");
+});
+
 test("projeto pode estreitar o teto de aprovação (#526)", () => {
   const merged = effective(
     { permissions: { mode: "ask", approvalTimeoutMs: 60_000 } },
