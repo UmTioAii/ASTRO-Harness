@@ -11,7 +11,12 @@ import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
 import { ConfigError, validateConfig } from "../src/core/config";
-import { actionClassOf, permissionDecision, requiredPermission } from "../src/permissions";
+import {
+  actionClassOf,
+  permissionDecision,
+  requiredPermission,
+  type ToolPermissionRequest,
+} from "../src/permissions";
 import { ToolExecutor } from "../src/tools/executor";
 import type { ToolResult } from "../src/tools/types";
 import {
@@ -106,6 +111,16 @@ describe("config run.tests.command (F-15, #538)", () => {
     expect(custom.run?.tests).toEqual({ command: ["bun", "test", "--run"], timeoutMs: 45_000 });
   });
 
+  test("timeoutMs tem teto de 1h: 3600000 aceito, acima falha no load", () => {
+    expect(configWithRun({ tests: { command: ["bun", "test"], timeoutMs: 3_600_000 } }).run?.tests?.timeoutMs)
+      .toBe(3_600_000);
+    expect(() => configWithRun({ tests: { command: ["bun", "test"], timeoutMs: 3_600_001 } }))
+      .toThrow(/run\.tests\.timeoutMs/);
+    // Acima de 2^31-1 o setTimeout dispara em ~1ms e todo run falharia.
+    expect(() => configWithRun({ tests: { command: ["bun", "test"], timeoutMs: 3_000_000_000 } }))
+      .toThrow(ConfigError);
+  });
+
   test("string de shell, lista vazia, chave desconhecida e timeout inválido falham no load", () => {
     expect(() => configWithRun({ tests: { command: "bun test" } })).toThrow(ConfigError);
     // Item único com espaço é a string de shell disfarçada de argv.
@@ -133,6 +148,11 @@ describe("run_tests manifesto", () => {
     };
     expect(Object.keys(params.properties)).toEqual(["filter"]);
     expect(params.additionalProperties).toBe(false);
+  });
+
+  test("timeoutMs absurdo passado direto à tool fica limitado antes do setTimeout", async () => {
+    const { tool } = await setup({ config: { command: ["bun", "test"], timeoutMs: 3_000_000_000 } });
+    expect(tool.manifest.timeoutMs).toBeLessThanOrEqual(3_605_000);
   });
 });
 
@@ -201,6 +221,28 @@ describe("run_tests execução no sandbox", () => {
     expect(mock.runCalls).toHaveLength(0);
   });
 
+  test("filter de 200 caracteres entra como item; 201 é invalid_input sem spawnar", async () => {
+    const { mod, tool, mock, cwd } = await setup({ config: { command: ["bun", "test"] }, reply: () => "" });
+    const limit = mod.MAX_TEST_FILTER_LENGTH;
+    const accepted = "x".repeat(limit);
+    await tool.execute({ filter: accepted }, ctx(cwd));
+    expect(containerCmd(mock.runCalls.at(-1)!)).toEqual(["bun", "test", accepted]);
+    const rejected = await tool.execute({ filter: `${accepted}y` }, ctx(cwd));
+    expect(rejected.isError).toBe(true);
+    expect(rejected.code).toBe("invalid_input");
+    expect(mock.runCalls).toHaveLength(1);
+  });
+
+  test("filter com caractere de controle (\\n, \\0) é invalid_input sem spawnar", async () => {
+    const { tool, mock, cwd } = await setup({ config: { command: ["bun", "test"] }, reply: () => "" });
+    for (const filter of ["math\n", "a\u0000b", "\u0007bell"]) {
+      const result = await tool.execute({ filter }, ctx(cwd));
+      expect(result.isError).toBe(true);
+      expect(result.code).toBe("invalid_input");
+    }
+    expect(mock.runCalls).toHaveLength(0);
+  });
+
   test("timeout de run.tests.timeoutMs interrompe o container e volta tipado", async () => {
     const { tool, mock, cwd } = await setup({
       config: { command: ["bun", "test"], timeoutMs: 40 },
@@ -212,6 +254,24 @@ describe("run_tests execução no sandbox", () => {
     expect(out.timedOut).toBe(true);
     expect(out.exitCode).toBeNull();
     // docker run morto não para o container: limpeza forçada.
+    expect(mock.calls.some((cmd) => cmd[0] === "docker" && cmd[1] === "rm")).toBe(true);
+  });
+
+  test("cancellation: devolve cancelled e remove o container (tool direta)", async () => {
+    const controller = new AbortController();
+    const { tool, mock, cwd } = await setup({
+      config: { command: ["bun", "test"] },
+      // Aborta com o container já criado: o run fica pendurado até o kill.
+      reply: () => {
+        controller.abort();
+        return { hang: true };
+      },
+    });
+    const result = await tool.execute({}, { ...ctx(cwd), signal: controller.signal });
+    expect(result.isError).toBe(true);
+    const out = resultOf(result);
+    expect(out.cancelled).toBe(true);
+    expect(out.exitCode).toBeNull();
     expect(mock.calls.some((cmd) => cmd[0] === "docker" && cmd[1] === "rm")).toBe(true);
   });
 
@@ -235,9 +295,12 @@ describe("run_tests cap e redação da saída", () => {
       config: { command: ["bun", "test"] },
       reply: () => bigOutput("caso"),
     });
-    const out = resultOf(await tool.execute({}, ctx(cwd)));
+    const result = await tool.execute({}, ctx(cwd));
+    const out = resultOf(result);
     expect(out.truncated).toBe(true);
-    expect(out.output).toHaveLength(CAP);
+    expect(out.output.length).toBeLessThanOrEqual(CAP);
+    // O teto vale para o JSON inteiro, não só para o campo `output`.
+    expect(result.output.length).toBeLessThanOrEqual(CAP);
   });
 
   test("falha acima do cap mantém a cauda, onde mora o resumo", async () => {
@@ -251,6 +314,21 @@ describe("run_tests cap e redação da saída", () => {
     expect(out.output.startsWith("inicio")).toBe(false);
   });
 
+  test("JSON devolvido cabe no cap e faz round-trip com caracteres de controle", async () => {
+    // Cada `\u0001` vira 6 caracteres no JSON: sem teto do envelope o modelo receberia 30k.
+    const { tool, cwd } = await setup({
+      config: { command: ["bun", "test"] },
+      reply: () => "\u0001".repeat(5_000),
+    });
+    const result = await tool.execute({}, ctx(cwd));
+    expect(result.output.length).toBeLessThanOrEqual(CAP);
+    expect(() => JSON.parse(result.output)).not.toThrow();
+    const out = resultOf(result);
+    expect(out.truncated).toBe(true);
+    expect(out.output.length).toBeGreaterThan(0);
+    expect(out.output).toMatch(/^\u0001+$/);
+  });
+
   test("segredo na saída é redigido antes do truncamento e não chega ao audit (I-03)", async () => {
     const { tool, audit, cwd } = await setup({
       config: { command: ["bun", "test"] },
@@ -261,6 +339,16 @@ describe("run_tests cap e redação da saída", () => {
     expect(result.output).toContain("[REDACTED]");
     expect(readFileSync(join(cwd, "audit.jsonl"), "utf8")).not.toContain(SECRET);
     expect(JSON.stringify(audit.readAll())).not.toContain(SECRET);
+  });
+
+  test("argv do resultado é redigido item a item, como no audit", async () => {
+    const { tool, cwd } = await setup({
+      config: { command: ["bun", "test", SECRET] },
+      reply: () => "ok",
+    });
+    const result = await tool.execute({}, ctx(cwd));
+    expect(result.output).not.toContain(SECRET);
+    expect(resultOf(result).command).toEqual(["bun", "test", "[REDACTED]"]);
   });
 });
 
@@ -274,23 +362,59 @@ describe("run_tests aprovação (classe shell)", () => {
     expect(permissionDecision("bypass", "shell")).toBe("allow");
   });
 
-  test("no executor: ask consulta o aprovador com ação shell e nega sem executar", async () => {
+  test("detalhe material vem da config, com o filter; input inválido não quebra o prompt", async () => {
+    const { tool } = await setup({ config: { command: ["bun", "test"] } });
+    expect(tool.approvalDetail?.({})).toEqual({ kind: "command", value: "bun test" });
+    expect(tool.approvalDetail?.({ filter: "math" })).toEqual({ kind: "command", value: "bun test math" });
+    expect(tool.approvalDetail?.({ filter: 7 })).toEqual({ kind: "command", value: "bun test" });
+  });
+
+  test("sem run.tests não há detalhe de aprovação para mostrar", async () => {
+    const { tool } = await setup({});
+    expect(tool.approvalDetail?.({})).toBeUndefined();
+  });
+
+  test("no executor: o prompt mostra o comando configurado e o filter", async () => {
     const { tool, mock, audit, cwd } = await setup({ config: { command: ["bun", "test"] }, reply: () => "ok" });
-    const asked: string[] = [];
+    const requests: ToolPermissionRequest[] = [];
     const executor = new ToolExecutor({
       tools: [tool],
       allow: ["run_tests"],
       audit,
       permissionMode: "ask",
       approveTool: (request) => {
-        asked.push(request.action);
+        requests.push(request);
         return false;
       },
     });
-    const result = await executor.run(ctx(cwd), { id: "c1", name: "run_tests", arguments: "{}" });
-    expect(asked).toEqual(["shell"]);
+    const result = await executor.run(
+      ctx(cwd),
+      { id: "c1", name: "run_tests", arguments: JSON.stringify({ filter: "math" }) },
+    );
+    expect(requests[0]?.action).toBe("shell");
+    expect(requests[0]?.detail).toEqual({ kind: "command", value: "bun test math" });
     expect(result.isError).toBe(true);
     expect(mock.runCalls).toHaveLength(0);
+  });
+
+  test("o prompt redige segredo do comando configurado (I-03)", async () => {
+    const { tool, audit, cwd } = await setup({ config: { command: ["bun", "test", SECRET] }, reply: () => "ok" });
+    const requests: ToolPermissionRequest[] = [];
+    const executor = new ToolExecutor({
+      tools: [tool],
+      allow: ["run_tests"],
+      audit,
+      permissionMode: "ask",
+      approveTool: (request) => {
+        requests.push(request);
+        return false;
+      },
+    });
+    await executor.run(ctx(cwd), { id: "c1", name: "run_tests", arguments: "{}" });
+    const detail = requests[0]?.detail;
+    expect(detail?.value).toContain("bun test");
+    expect(detail?.value).toContain("[REDACTED]");
+    expect(JSON.stringify(detail)).not.toContain(SECRET);
   });
 
   test("I-01: fora da allowlist o executor nega mesmo em bypass", async () => {
