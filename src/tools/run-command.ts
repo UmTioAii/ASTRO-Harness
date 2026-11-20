@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, write
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
-import { resolveArtifactRoot, resolveAstroHome } from "../permissions";
+import { resolveArtifactRoot, resolveAstroHome, type ApprovalDetail } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
 import { realpathPreservingDots } from "./paths";
@@ -558,6 +558,13 @@ export const runCommandTool: Tool = {
 /** Default do teto de execução de `run.tests.timeoutMs` (F-15, #538). */
 export const DEFAULT_RUN_TESTS_TIMEOUT_MS = 120_000;
 
+/**
+ * Teto de `run.tests.timeoutMs` (1h). Acima disso o valor deixa de ser um teto
+ * útil e alguns motores de timer saturam: `setTimeout(3e9)` dispara em ~1ms e
+ * todo run falharia por timeout.
+ */
+export const MAX_RUN_TESTS_TIMEOUT_MS = 3_600_000;
+
 /** Seção `run.tests` (F-15, #538): comando de teste do projeto, sempre argv. */
 export interface RunTestsConfig {
   /** Executável + argumentos, um item por argumento: nunca uma string de shell. */
@@ -584,6 +591,8 @@ export interface RunTestsDeps {
 /**
  * Input de `run_tests` (F-15, #538): só `filter`. O comando vem da config, então
  * campo a mais é recusado — o modelo não escolhe binário, argumento nem flag.
+ * Caractere de controle é recusado no valor CRU: `trim()` esconderia `\n`/`\0`
+ * nas pontas e o item chegaria ao argv do programa.
  */
 function testsFilter(input: unknown): string | undefined {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
@@ -595,6 +604,9 @@ function testsFilter(input: unknown): string | undefined {
   }
   if (raw.filter === undefined) return undefined;
   if (typeof raw.filter !== "string") throw new ToolError('entrada inválida: "filter" deve ser uma string');
+  if (/[\u0000-\u001f\u007f]/.test(raw.filter)) {
+    throw new ToolError('entrada inválida: "filter" contém caractere de controle');
+  }
   const filter = raw.filter.trim();
   if (filter.length === 0) throw new ToolError('entrada inválida: "filter" não pode ser vazio');
   if (filter.startsWith("-")) {
@@ -602,9 +614,6 @@ function testsFilter(input: unknown): string | undefined {
   }
   if (filter.length > MAX_TEST_FILTER_LENGTH) {
     throw new ToolError(`entrada inválida: "filter" excede ${MAX_TEST_FILTER_LENGTH} caracteres`);
-  }
-  if (/[\u0000-\u001f\u007f]/.test(filter)) {
-    throw new ToolError('entrada inválida: "filter" contém caractere de controle');
   }
   return filter;
 }
@@ -633,6 +642,47 @@ function capTestsOutput(text: string, keep: "head" | "tail"): { output: string; 
   };
 }
 
+/** Tamanho do texto já escapado dentro de um JSON (`\n` e `\u0001` contam mais). */
+function jsonEscapedLength(text: string): number {
+  return JSON.stringify(text).length - 2;
+}
+
+/**
+ * Corta o texto por code point até o JSON escapar dentro do orçamento. Caractere
+ * de controle escapa para 2–6 caracteres, então um cap em code units deixaria o
+ * envelope passar do teto (e cortar a string serializada daria JSON inválido).
+ */
+function fitEscapedBudget(text: string, keep: "head" | "tail", budget: number): string {
+  if (jsonEscapedLength(text) <= budget) return text;
+  const points = Array.from(text);
+  let fits = 0;
+  let fails = points.length;
+  while (fits < fails) {
+    const middle = Math.ceil((fits + fails) / 2);
+    const slice = keep === "head" ? points.slice(0, middle) : points.slice(points.length - middle);
+    if (jsonEscapedLength(slice.join("")) <= budget) fits = middle;
+    else fails = middle - 1;
+  }
+  return keep === "head" ? points.slice(0, fits).join("") : points.slice(points.length - fits).join("");
+}
+
+/**
+ * Serializa o resultado dentro de `MAX_OUTPUT`: o teto vale para o JSON inteiro
+ * que o modelo recebe, não só para `output`. Se precisar cortar mais, mantém a
+ * mesma ponta do cap (cabeça no sucesso, cauda na falha) e marca `truncated`.
+ */
+function serializeTestsResult(
+  result: RunTestsResult,
+  keep: "head" | "tail",
+): { json: string; truncated: boolean } {
+  const direct = JSON.stringify(result);
+  if (direct.length <= MAX_OUTPUT) return { json: direct, truncated: result.truncated };
+  const skeleton = JSON.stringify({ ...result, truncated: true, output: "" });
+  const budget = Math.max(0, MAX_OUTPUT - skeleton.length);
+  const output = fitEscapedBudget(result.output, keep, budget);
+  return { json: JSON.stringify({ ...result, truncated: true, output }), truncated: true };
+}
+
 /**
  * Tool `run_tests` (F-15, #538): executa o comando de teste DO PROJETO pelo
  * mesmo sandbox do `run_command`, com a mesma recusa sem sandbox (I-19). O argv
@@ -641,7 +691,23 @@ function capTestsOutput(text: string, keep: "head" | "tail"): { output: string; 
  * é um único argumento extra.
  */
 export function createRunTestsTool(deps: RunTestsDeps): Tool {
-  const timeoutMs = deps.config?.timeoutMs ?? DEFAULT_RUN_TESTS_TIMEOUT_MS;
+  // Teto duro mesmo se a tool for criada sem passar pelo `validateConfig`.
+  const timeoutMs = Math.min(deps.config?.timeoutMs ?? DEFAULT_RUN_TESTS_TIMEOUT_MS, MAX_RUN_TESTS_TIMEOUT_MS);
+
+  /** Comando que o prompt de aprovação mostra: o da config, com o filter se válido. */
+  const materialCommand = (input: unknown): ApprovalDetail | undefined => {
+    const command = deps.config?.command;
+    if (command === undefined || command.length === 0) return undefined;
+    let filter: string | undefined;
+    // Input inválido não pode derrubar o prompt: o comando da config já informa a decisão.
+    try {
+      filter = testsFilter(input);
+    } catch {
+      filter = undefined;
+    }
+    const argv = filter === undefined ? [...command] : [...command, filter];
+    return { kind: "command", value: redactSecrets(argv.join(" ")) };
+  };
 
   return {
     manifest: {
@@ -656,7 +722,7 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
             type: "string",
             maxLength: MAX_TEST_FILTER_LENGTH,
             description:
-              'Pattern passado como um único argumento ao comando (ex.: caminho de um teste). Não pode começar com "-".',
+              'Pattern passado como um único argumento ao comando (ex.: caminho de um teste). Sem caractere de controle e não pode começar com "-".',
           },
         },
         additionalProperties: false,
@@ -669,6 +735,10 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
       idempotent: false,
       sideEffects: "process",
     },
+
+    // #578: o comando executado vem da config, não do input — sem isto o prompt
+    // pediria aprovação de shell sem mostrar o que roda (cwd é rw no sandbox).
+    approvalDetail: materialCommand,
 
     async execute(input, ctx: ToolContext): Promise<ToolResult> {
       let filter: string | undefined;
@@ -718,17 +788,20 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
 
       const durationMs = Date.now() - startedAt;
       const failed = outcome.exit.kind !== "exit" || outcome.exit.code !== 0;
-      const { output, truncated } = capTestsOutput(outcome.output, failed ? "tail" : "head");
+      const keep = failed ? "tail" : "head";
+      const capped = capTestsOutput(outcome.output, keep);
       const exitCode = outcome.exit.kind === "exit" ? outcome.exit.code : null;
       const result: RunTestsResult = {
-        command: argv,
+        // Mesma redação do audit: o argv vem da config e pode carregar segredo (I-03).
+        command: argv.map((item) => redactSecrets(item)),
         exitCode,
         durationMs,
-        truncated,
+        truncated: capped.truncated,
         ...(outcome.exit.kind === "timeout" ? { timedOut: true } : {}),
         ...(outcome.exit.kind === "cancelled" ? { cancelled: true } : {}),
-        output,
+        output: capped.output,
       };
+      const serialized = serializeTestsResult(result, keep);
 
       // Audit só com o comando e o código: a saída dos testes nunca vai para o log (I-03).
       deps.audit.append({
@@ -739,14 +812,14 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
           command: redactSecrets(argv.join(" ")),
           exitCode,
           durationMs,
-          truncated,
+          truncated: serialized.truncated,
           isError: failed,
         },
       });
 
       return failed
-        ? { output: JSON.stringify(result), isError: true }
-        : { output: JSON.stringify(result) };
+        ? { output: serialized.json, isError: true }
+        : { output: serialized.json };
     },
   };
 }

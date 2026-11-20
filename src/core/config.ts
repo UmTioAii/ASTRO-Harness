@@ -9,7 +9,7 @@ import { PROTECTED_FORBIDDEN_ROOTS, DEFAULT_EFFORT_ESCALATION, MAX_AUTO_JUMP, MA
 import { DEFAULT_OUTPUT_LIMIT, type OutputLimitConfig } from "../output-limit";
 import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "../compaction/engine";
 import type { ModelRouting } from "../providers/model-routing";
-import { DEFAULT_RUN_TESTS_TIMEOUT_MS, type RunTestsConfig } from "../tools/run-command";
+import { DEFAULT_RUN_TESTS_TIMEOUT_MS, MAX_RUN_TESTS_TIMEOUT_MS, type RunTestsConfig } from "../tools/run-command";
 import type { WebSearchConfig, WebSearchProvider } from "../tools/web-search";
 import { isPermissionMode, DEFAULT_PERMISSION_MODE, isAgentPermission, type AgentPermission, type PermissionMode } from "../permissions";
 import { isAuthHeader, isEnvName, isVaultCredentialRef, looksLikeSecret, mcpSecretProblem } from "../secrets";
@@ -1288,12 +1288,16 @@ function validateRunTests(value: unknown): RunTestsConfig {
         'separe executável e argumentos (ex.: ["bun", "test"], nunca ["bun test"])',
     );
   }
-  return {
-    command,
-    timeoutMs: raw.timeoutMs === undefined
-      ? DEFAULT_RUN_TESTS_TIMEOUT_MS
-      : expectPositiveInteger(raw.timeoutMs, "run.tests.timeoutMs"),
-  };
+  const timeoutMs = raw.timeoutMs === undefined
+    ? DEFAULT_RUN_TESTS_TIMEOUT_MS
+    : expectPositiveInteger(raw.timeoutMs, "run.tests.timeoutMs");
+  if (timeoutMs > MAX_RUN_TESTS_TIMEOUT_MS) {
+    fail(
+      `config inválida: "run.tests.timeoutMs" deve ser no máximo ${MAX_RUN_TESTS_TIMEOUT_MS} (1h); ` +
+        'acima disso o timer satura e o run falha por timeout em ~1ms',
+    );
+  }
+  return { command, timeoutMs };
 }
 
 /** Valida a seção opcional `run` (Q-01/L1, ADR-0014): guardas do loop. `maxTurns` foi removido (P4). */
