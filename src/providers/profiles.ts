@@ -582,6 +582,95 @@ export function providerIdentityFor(
 /** Sem config, expõe file tools + shell; a allowlist segue I-01 e o gate `ask` (D-24). */
 const ENV_MODEL_CONTEXT = 128_000;
 
+/** Conjunto de variáveis por provider builtin (S6, #472): `ASTRO_PROVIDER` é o único seletor. */
+interface EnvProviderSpec {
+  /** Id do perfil efêmero; é o nome aceito por `ASTRO_PROVIDER`. */
+  id: string;
+  label: string;
+  /** Prefixo das variáveis, só para mensagens — nunca o valor. */
+  prefix: string;
+  keyVar: string;
+  modelVar: string;
+  baseUrlVar: string;
+  defaultBaseUrl: string;
+}
+
+const ENV_PROVIDERS: readonly EnvProviderSpec[] = [
+  { id: "openai", label: "OpenAI (env)", prefix: "OPENAI", keyVar: "OPENAI_API_KEY", modelVar: "OPENAI_MODEL", baseUrlVar: "OPENAI_BASE_URL", defaultBaseUrl: "https://api.openai.com/v1" },
+  { id: "nvidia", label: "NVIDIA NIM (env)", prefix: "NVIDIA", keyVar: "NVIDIA_API_KEY", modelVar: "NVIDIA_MODEL", baseUrlVar: "NVIDIA_BASE_URL", defaultBaseUrl: "https://integrate.api.nvidia.com/v1" },
+  { id: "openrouter", label: "OpenRouter (env)", prefix: "OPENROUTER", keyVar: "OPENROUTER_API_KEY", modelVar: "OPENROUTER_MODEL", baseUrlVar: "OPENROUTER_BASE_URL", defaultBaseUrl: "https://openrouter.ai/api/v1" },
+];
+
+/** Variável vazia (ou só espaços) é ausente. */
+function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const raw = env[name];
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/** Variáveis que faltam para o conjunto ficar completo (chave + modelo). */
+function missingEnvVars(spec: EnvProviderSpec, env: NodeJS.ProcessEnv): string[] {
+  return [spec.keyVar, spec.modelVar].filter((name) => envValue(env, name) === undefined);
+}
+
+/** Seletor único do ambiente; sem ele, nenhum conjunto é escolhido implicitamente. */
+export function envProviderSelector(env: NodeJS.ProcessEnv): string | undefined {
+  return envValue(env, "ASTRO_PROVIDER");
+}
+
+/** Seleção por ambiente inválida (#472). Configuração, não falha de provider (D-18). */
+export type ProviderEnvErrorCode =
+  | "provider_env_ambiguous"
+  | "provider_env_incomplete"
+  | "provider_env_insecure_url"
+  | "provider_env_collision"
+  | "provider_unknown";
+
+export class ProviderEnvError extends Error {
+  override name = "ProviderEnvError";
+  constructor(readonly code: ProviderEnvErrorCode, message: string) {
+    super(message);
+  }
+}
+
+/** Ids reservados para o perfil efêmero: `add`/`edit` não podem criá-los (#472). */
+export const ENV_PROVIDER_IDS: readonly string[] = ENV_PROVIDERS.map((spec) => spec.id);
+
+/** O conjunto do ambiente para `id` está em uso (chave ou modelo presente). */
+export function envProviderClaimed(id: string, env: NodeJS.ProcessEnv): boolean {
+  const spec = envProviderSpec(id);
+  return spec !== undefined && (envValue(env, spec.keyVar) !== undefined || envValue(env, spec.modelVar) !== undefined);
+}
+
+/** Modelo `provider/id` escolhido pelas camadas (`agent.model` ou o do `agent.profile`). */
+function layerModelRef(layers: Record<string, unknown>): string | undefined {
+  const agent = isPlainObject(layers.agent) ? layers.agent : {};
+  if (typeof agent.model === "string") return agent.model;
+  const profileName = typeof agent.profile === "string" ? agent.profile : undefined;
+  const pool = profileName === undefined || !isPlainObject(layers.modelPool) ? undefined : layers.modelPool[profileName];
+  return isPlainObject(pool) && typeof pool.model === "string" ? pool.model : undefined;
+}
+
+/**
+ * O ambiente só é fonte quando nem as camadas nem o store escolhem provider +
+ * modelo (#472). Sem isso, variáveis exportadas na máquina quebrariam um
+ * projeto que já resolve o próprio provider (`provider_env_ambiguous`).
+ */
+export function envProviderAllowed(input: {
+  project?: unknown;
+  global?: unknown;
+  store: ProviderStore;
+}): boolean {
+  const project = isPlainObject(input.project) ? input.project : {};
+  const global = isPlainObject(input.global) ? input.global : {};
+  const declared = mergeConfigLayers(global, project);
+  const providers = isPlainObject(declared.providers) ? declared.providers : {};
+  const modelRef = layerModelRef(declared);
+  if (modelRef !== undefined && providerOfModel(modelRef, providers) !== undefined) return false;
+  return input.store.profiles.length === 0;
+}
+
 /** Defaults de código: a camada mais baixa (defaults < global < projeto, ADR-0029). */
 const BASELINE_LAYER: Record<string, unknown> = {
   agent: { maxSteps: BASELINE_MAX_STEPS, tools: [...DEFAULT_AGENT_TOOLS] },
@@ -590,21 +679,71 @@ const BASELINE_LAYER: Record<string, unknown> = {
   paths: { ...DEFAULT_PATHS },
 };
 
-/** Perfil efêmero a partir de OPENAI_*; nunca é gravado. */
+/**
+ * Perfil efêmero do ambiente; nunca é gravado (#472).
+ *
+ * Regra: `ASTRO_PROVIDER` escolhe o conjunto (`openai`, `nvidia`, `openrouter`);
+ * sem ele, exatamente um conjunto completo (chave + modelo) é usado e mais de um
+ * é erro de ambiguidade. Conjunto parcial nunca seleciona e as variáveis de um
+ * provider nunca selecionam outro. O chamador decide antes se o ambiente entra
+ * (`envProviderAllowed`): o erro de ambiguidade só vale quando ele é a fonte.
+ */
 export function profileFromEnv(env: NodeJS.ProcessEnv): ProviderProfile | undefined {
-  const apiKey = env.OPENAI_API_KEY;
-  const model = env.OPENAI_MODEL ?? env.ASTRO_MODEL;
-  if (apiKey === undefined || apiKey === "" || model === undefined || model === "") return undefined;
+  const complete = ENV_PROVIDERS.filter((spec) => missingEnvVars(spec, env).length === 0);
+  const selector = envProviderSelector(env);
+  let spec: EnvProviderSpec | undefined;
+  if (selector === undefined) {
+    if (complete.length > 1) {
+      const sets = complete.map((item) => `${item.prefix}_* (${item.id})`).join(" e ");
+      throw new ProviderEnvError(
+        "provider_env_ambiguous",
+        `ambiente ambíguo: ${sets} definem providers completos; defina ASTRO_PROVIDER para escolher`,
+      );
+    }
+    spec = complete[0];
+  } else {
+    // Seleção explícita: conjunto incompleto não é substituído pelo vizinho.
+    spec = complete.find((item) => item.id === selector);
+  }
+  if (spec === undefined) return undefined;
   const profile: ProviderProfile = {
-    id: "env",
-    name: "OpenAI (env)",
+    id: spec.id,
+    name: spec.label,
     kind: "openai-compat",
-    baseUrl: env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
-    credentialRef: "OPENAI_API_KEY",
-    models: [{ id: model, tags: [], context: ENV_MODEL_CONTEXT }],
+    baseUrl: envValue(env, spec.baseUrlVar) ?? spec.defaultBaseUrl,
+    credentialRef: spec.keyVar,
+    models: [{ id: envValue(env, spec.modelVar)!, tags: [], context: ENV_MODEL_CONTEXT }],
   };
   // Mesmo validador do store: rejeita URL com credencial embutida, etc.
-  return validateProfileStore({ version: 1, profiles: [profile] }).profiles[0];
+  const valid = validateProfileStore({ version: 1, profiles: [profile] }).profiles[0]!;
+  // http:// só depois de confirmação explícita; https:// passa direto.
+  if (new URL(valid.baseUrl!).protocol === "http:" && envValue(env, "ASTRO_ALLOW_INSECURE_BASE_URL") !== "1") {
+    throw new ProviderEnvError(
+      "provider_env_insecure_url",
+      `${spec.baseUrlVar} usa http:// (sem TLS); confirme com ASTRO_ALLOW_INSECURE_BASE_URL=1 ou use https://`,
+    );
+  }
+  return valid;
+}
+
+/** `ASTRO_PROVIDER` sem provider correspondente: erro tipado com os nomes conhecidos. */
+function unknownEnvProvider(requested: string, known: string[]): ProviderEnvError {
+  const names = [...new Set(known)].sort();
+  return new ProviderEnvError(
+    "provider_unknown",
+    `ASTRO_PROVIDER="${requested}" não corresponde a nenhum provider conhecido; conhecidos: ${names.length === 0 ? "nenhum" : names.join(", ")} · defina OPENAI_*, NVIDIA_* ou OPENROUTER_* no ambiente ou use /provider add`,
+  );
+}
+
+/** Conjunto completo nomeado pelo seletor: seleção explícita mesmo com config resolvida. */
+function envProviderSpec(id: string): EnvProviderSpec | undefined {
+  return ENV_PROVIDERS.find((item) => item.id === id);
+}
+
+function selectorSetComplete(selector: string | undefined, env: NodeJS.ProcessEnv): boolean {
+  if (selector === undefined) return false;
+  const spec = envProviderSpec(selector);
+  return spec !== undefined && missingEnvVars(spec, env).length === 0;
 }
 
 function profileToProvider(profile: ProviderProfile): ProviderConfig {
@@ -642,7 +781,7 @@ export class NoProviderError extends Error {
 }
 
 export const NO_PROVIDER_MESSAGE =
-  "nenhum provider configurado: rode /provider add ou defina OPENAI_API_KEY e OPENAI_MODEL";
+  "nenhum provider configurado: rode /provider add ou defina um conjunto de ambiente (OPENAI_*, NVIDIA_* ou OPENROUTER_*, com a chave e o modelo)";
 
 /**
  * Provider sintético do diagnóstico (#523): quando não há provider, ele permite
@@ -689,12 +828,35 @@ export function resolveEffectiveConfig(input: {
   // ADR-0029: defaults < global < projeto; a validação do merge decide o que é seguro.
   const declared = mergeConfigLayers(global ?? {}, project ?? {});
   const base = project === undefined ? mergeConfigLayers(BASELINE_LAYER, declared) : declared;
+  const selector = envProviderSelector(env);
+  const layerProviders = isPlainObject(base.providers) ? base.providers : {};
+  // #472: o ambiente é fallback. Só entra quando nem as camadas nem o store
+  // resolvem provider + modelo, ou quando `ASTRO_PROVIDER` nomeia um conjunto completo.
+  const envProfile = input.envProfile ?? (
+    envProviderAllowed({ project: declared, store: input.store }) || selectorSetComplete(selector, env)
+      ? profileFromEnv(env)
+      : undefined
+  );
   const profiles = new Map(input.store.profiles.map((profile) => [profile.id, profile]));
-  if (input.envProfile !== undefined) {
-    if (profiles.has(input.envProfile.id)) {
-      warnings.push('perfil salvo "env" foi ignorado nesta sessão; renomeie-o para não colidir');
+  let envInjected = false;
+  if (envProfile !== undefined) {
+    const id = envProfile.id;
+    if (profiles.has(id)) {
+      // O ambiente preenche só id ausente; perfil salvo vence (#472, revisão).
+      warnings.push(`perfil salvo "${id}" foi ignorado nesta sessão; conjunto de ambiente não foi aplicado`);
+    } else if (Object.hasOwn(layerProviders, id)) {
+      // Provider declarado numa camada vence; injetar o modelo do ambiente
+      // mandaria um modelo para o endpoint/credencial de outro provider (#472).
+      if (selector === id) {
+        throw new ProviderEnvError(
+          "provider_env_collision",
+          `ASTRO_PROVIDER="${id}" conflita com o provider "${id}" declarado na configuração; remova o conjunto ${envProviderSpec(id)?.prefix ?? id}_* ou o provider declarado`,
+        );
+      }
+    } else {
+      profiles.set(id, envProfile);
+      envInjected = true;
     }
-    profiles.set(input.envProfile.id, input.envProfile);
   }
 
   const globalProviders: Record<string, ProviderConfig> = {};
@@ -724,9 +886,31 @@ export function resolveEffectiveConfig(input: {
 
   let requested: string | undefined;
   let requestKind: ProviderSelection | undefined;
+  // `ASTRO_PROVIDER` é validado sempre, inclusive com `--provider` (#472, revisão).
+  if (selector !== undefined) {
+    const spec = envProviderSpec(selector);
+    const missing = spec === undefined ? [] : missingEnvVars(spec, env);
+    if (spec === undefined) {
+      if (!Object.hasOwn(providers, selector)) {
+        throw unknownEnvProvider(selector, [...Object.keys(providers), ...ENV_PROVIDER_IDS]);
+      }
+    } else if (missing.length > 0) {
+      if (Object.hasOwn(providers, selector)) {
+        // Conjunto incompleto não é erro quando há provider configurado com o nome.
+        warnings.push(
+          `ASTRO_PROVIDER="${selector}" aponta para o conjunto ${spec.prefix}_* incompleto (falta ${missing.join(", ")}); usando o provider configurado "${selector}"`,
+        );
+      } else {
+        throw new ProviderEnvError(
+          "provider_env_incomplete",
+          `ASTRO_PROVIDER="${selector}" aponta para o conjunto ${spec.prefix}_* incompleto: falta ${missing.join(", ")}`,
+        );
+      }
+    }
+  }
   if (input.providerFlag !== undefined) { requested = input.providerFlag; requestKind = "flag"; }
-  else if (!input.ignoreStoredSelection && env.ASTRO_PROVIDER !== undefined && env.ASTRO_PROVIDER !== "") {
-    requested = env.ASTRO_PROVIDER;
+  else if (!input.ignoreStoredSelection && selector !== undefined) {
+    requested = selector;
     requestKind = "env";
   } else if (!input.ignoreStoredSelection && input.store.activeProfileId !== undefined) {
     requested = input.store.activeProfileId;
@@ -753,13 +937,16 @@ export function resolveEffectiveConfig(input: {
       selection = requestKind ?? "project";
     } else if (requestKind === "store") {
       warnings.push(`activeProfileId "${requested}" não corresponde a nenhum perfil; seleção ignorada`);
+    } else if (requestKind === "env") {
+      // #472: seletor desconhecido é erro tipado, nunca fallback silencioso.
+      throw unknownEnvProvider(requested, Object.keys(providers));
     } else {
       throw new Error(`provider "${requested}" não está configurado`);
     }
   }
   if (activeProvider === undefined) {
     if (projectProvider !== undefined) { activeProvider = projectProvider; selection = "project"; }
-    else if (input.envProfile !== undefined) { activeProvider = input.envProfile.id; selection = "env"; }
+    else if (envProfile !== undefined) { activeProvider = envProfile.id; selection = "env"; }
     else if (input.store.profiles[0] !== undefined) { activeProvider = input.store.profiles[0].id; selection = "store"; }
     else {
       // Sem provider em lugar nenhum: o erro de schema vem primeiro (como em
@@ -822,7 +1009,7 @@ export function resolveEffectiveConfig(input: {
   const projectProviders = project === undefined ? [] : Object.keys(isPlainObject(project.providers) ? project.providers : {});
   const providerSource: ProviderSource = projectProviders.includes(activeProvider)
     ? "project"
-    : input.envProfile !== undefined && activeProvider === input.envProfile.id
+    : envInjected && activeProvider === envProfile?.id
       ? "env"
       : "global";
 
@@ -832,7 +1019,7 @@ export function resolveEffectiveConfig(input: {
     providerSource,
     providerSelection: selection,
     projectProviders,
-    ...(input.envProfile === undefined ? {} : { envProviderId: input.envProfile.id }),
+    ...(envInjected && envProfile !== undefined ? { envProviderId: envProfile.id } : {}),
     warnings,
   };
 }
@@ -892,12 +1079,12 @@ export function loadEffectiveConfig(
     : useGlobal
       ? loadGlobalProfileStore(homeEnv)
       : readGlobalProfileStore({ ...homeEnv, ASTRO_NO_GLOBAL_CONFIG: "1" });
-  const envProfile = profileFromEnv(env);
+  // O perfil de ambiente é resolvido lá dentro (#472): só entra quando as
+  // camadas e o store não resolvem provider + modelo, ou por seleção explícita.
   return resolveEffectiveConfig({
     ...(project === undefined ? {} : { project }),
     ...(global === undefined ? {} : { global }),
     store,
-    ...(envProfile === undefined ? {} : { envProfile }),
     ...(opts.provider === undefined ? {} : { providerFlag: opts.provider }),
     ...(opts.ignoreStoredSelection === true ? { ignoreStoredSelection: true } : {}),
     ...(opts.diagnosticFallbackProvider === true ? { diagnosticFallback: DIAGNOSTIC_FALLBACK_PROFILE } : {}),

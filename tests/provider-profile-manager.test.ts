@@ -181,7 +181,7 @@ test("use persiste o ativo e rejeita projeto", () => {
   expect(() => m.use("p")).toThrow(/astro\.config\.json/);
 });
 
-test("list mescla projeto, global e env com precedência do projeto", () => {
+test("list mescla projeto e global; ambiente que não é a fonte fica de fora", () => {
   const home = mkdtempSync(join(tmpdir(), "astro-mgr-list-"));
   saveProfileStore({
     version: 1,
@@ -215,7 +215,8 @@ test("list mescla projeto, global e env com precedência do projeto", () => {
   expect(p?.baseUrl).toBe("https://p.example/v1");
   expect(list.find((item) => item.id === "openai-work")?.source).toBe("global");
   expect(list.find((item) => item.id === "openai-work")?.active).toBe(true);
-  expect(list.find((item) => item.id === "env")?.source).toBe("env");
+  // #472: projeto + store resolvem provider/modelo; o conjunto do ambiente é ignorado.
+  expect(list.find((item) => item.id === "openai")).toBeUndefined();
 });
 
 test("list segue ASTRO_PROVIDER, não o activeProfileId", () => {
@@ -284,11 +285,11 @@ test("add rejeita colisão com provider do projeto em qualquer caixa", () => {
 
 test("list não cria arquivo com perfil de env", () => {
   const home = mkdtempSync(join(tmpdir(), "astro-mgr-nowrite-"));
+  // Sem projeto e sem store, o ambiente é a fonte e entra na lista sem gravar nada.
   const m = new ProfileManager({
-    project: project(),
     env: { ASTRO_HOME: home, OPENAI_API_KEY: "k", OPENAI_MODEL: "gpt-4o" },
   });
-  expect(m.list().some((item) => item.id === "env")).toBe(true);
+  expect(m.list().find((item) => item.id === "openai")?.source).toBe("env");
   expect(existsSync(join(home, "providers.json"))).toBe(false);
 });
 
@@ -324,12 +325,11 @@ test("remove recusa perfil referenciado pelo projeto", () => {
 test("env não é gravado por add/edit", () => {
   const home = mkdtempSync(join(tmpdir(), "astro-mgr-env-"));
   const m = new ProfileManager({
-    project: project(),
     env: { ASTRO_HOME: home, OPENAI_API_KEY: "k", OPENAI_MODEL: "gpt-4o" },
   });
-  expect(m.list().some((item) => item.id === "env")).toBe(true);
+  expect(m.list().find((item) => item.id === "openai")?.source).toBe("env");
   m.add(draft());
   expect(existsSync(join(home, "config.json"))).toBe(true); // #492: escrita na camada global
   expect(existsSync(join(home, "providers.json"))).toBe(false); // legado nunca é escrito
-  expect(storeAt(home).profiles.some((item) => item.id === "env")).toBe(false);
+  expect(storeAt(home).profiles.some((item) => item.id === "openai")).toBe(false);
 });

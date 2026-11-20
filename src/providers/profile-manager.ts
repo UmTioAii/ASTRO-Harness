@@ -2,6 +2,9 @@
 import { isPlainObject, type AstroConfig, type ProviderConfig } from "../core/config";
 import { globalConfigPath } from "../astro-home";
 import {
+  envProviderAllowed,
+  envProviderClaimed,
+  envProviderSelector,
   loadGlobalConfig,
   loadGlobalProfileStore,
   loadProfileStore,
@@ -49,6 +52,13 @@ export interface ProfileManagerOptions {
   env?: NodeJS.ProcessEnv;
   /** Flag `--provider` da execução: alinha o marcador ativo com o loader. */
   provider?: string;
+}
+
+/** Id reservado ao perfil efêmero de ambiente (#472). */
+function reservedEnvId(id: string, env: NodeJS.ProcessEnv): boolean {
+  // `env` é o id legado, sempre reservado. Os três conjuntos só reservam o id
+  // quando estão em uso no ambiente; sem as variáveis, o perfil salvo não colide.
+  return id === "env" || envProviderClaimed(id, env);
 }
 
 function slug(name: string): string {
@@ -115,7 +125,7 @@ export class ProfileManager {
 
   list(): ProfileView[] {
     this.#reload();
-    const envProfile = profileFromEnv(this.#env);
+    const envProfile = this.#envProfile();
     const activeId = this.#activeProvider();
     const view = (profile: ProviderProfile, source: ProviderSource): ProfileView => ({
       ...profile,
@@ -142,7 +152,7 @@ export class ProfileManager {
     this.#reload();
     const name = draft.name.trim();
     const id = slug(name);
-    if (id === "env") throw new Error('"env" é reservado para o perfil efêmero');
+    if (reservedEnvId(id, this.#env)) throw new Error(`"${id}" é reservado para o perfil efêmero de ambiente`);
     this.#assertNoConfigCollision(name);
     if (this.#store.profiles.some((profile) => profile.id === id)) {
       throw new Error(`já existe um provider com esse nome: "${name}"`);
@@ -158,7 +168,11 @@ export class ProfileManager {
     const index = this.#store.profiles.findIndex((profile) => profile.id === id);
     if (index < 0) throw new Error(`provider "${id}" não existe no store`);
     const name = draft.name.trim();
-    if (slug(name) === "env") throw new Error('"env" é reservado para o perfil efêmero');
+    // Renomear para o próprio id de um perfil salvo é permitido; criar um id
+    // reservado pelo ambiente não é (#472).
+    if (slug(name) !== id && reservedEnvId(slug(name), this.#env)) {
+      throw new Error(`"${slug(name)}" é reservado para o perfil efêmero de ambiente`);
+    }
     this.#assertNoConfigCollision(name);
     const profile: ProviderProfile = { ...draft, id, name };
     const profiles = [...this.#store.profiles];
@@ -213,7 +227,7 @@ export class ProfileManager {
   }
 
   #activeProvider(): string | undefined {
-    const envProfile = profileFromEnv(this.#env);
+    const envProfile = this.#envProfile();
     try {
       return resolveEffectiveConfig({
         ...(this.#project === undefined ? {} : { project: this.#project }),
@@ -247,6 +261,17 @@ export class ProfileManager {
     return value !== undefined && value.trim() !== "";
   }
 
+  /**
+   * Perfil efêmero que a resolução usaria (#472). As camadas e o store que já
+   * resolvem provider + modelo o dispensam; `ASTRO_PROVIDER` explícito ainda vale.
+   */
+  #envProfile(): ProviderProfile | undefined {
+    if (!envProviderAllowed({ project: this.#project, store: this.#store }) && envProviderSelector(this.#env) === undefined) {
+      return undefined;
+    }
+    return profileFromEnv(this.#env);
+  }
+
   #requireEditable(id: string): void {
     if (this.#projectRefs.providers.includes(id)) {
       throw new Error(`provider "${id}" está definido no astro.config.json; edite o arquivo`);
@@ -254,7 +279,9 @@ export class ProfileManager {
     if (this.#globalProviders.includes(id)) {
       throw new Error(`provider "${id}" está definido em "${globalConfigPath(this.#env)}"; edite o arquivo`);
     }
-    if (profileFromEnv(this.#env)?.id === id) {
+    // Perfil salvo com o mesmo id do conjunto de ambiente continua editável; o
+    // ambiente só ocupa id ausente (#472, revisão).
+    if (this.#envProfile()?.id === id && !this.#store.profiles.some((profile) => profile.id === id)) {
       throw new Error(`perfil "${id}" é efêmero (env) e não pode ser editado`);
     }
   }

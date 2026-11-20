@@ -16,7 +16,12 @@ interface RunResult {
 
 async function runCli(args: string[], opts: { cwd: string; env: Record<string, string | undefined>; stdin?: string }): Promise<RunResult> {
   const baseEnv: Record<string, string | undefined> = { ...process.env };
-  for (const key of ["ASTRO_PROVIDER", "ASTRO_MODEL", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"]) {
+  for (const key of [
+    "ASTRO_PROVIDER", "ASTRO_MODEL", "ASTRO_BASE_URL",
+    "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL",
+    "NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL",
+    "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_BASE_URL",
+  ]) {
     delete baseEnv[key];
   }
   const home = opts.env.ASTRO_HOME ?? mkdtempSync(join(tmpdir(), "astro-wire-home-"));
@@ -144,6 +149,7 @@ test("sem config, write_file pede aprovação antes de gravar", async () => {
       task: "crie hello.txt",
       env: {
         ASTRO_HOME: home,
+        ASTRO_ALLOW_INSECURE_BASE_URL: "1",
         OPENAI_API_KEY: "k",
         OPENAI_MODEL: "gpt-4o",
         OPENAI_BASE_URL: `http://127.0.0.1:${server.port}/v1`,
