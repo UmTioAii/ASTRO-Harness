@@ -202,16 +202,23 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       ...(opts.artifactRoot === undefined ? {} : { artifactRoot: opts.artifactRoot }),
       ...(model === undefined ? {} : { model }),
     });
+    // #557: o `!cmd` segue o aprovador e o modo corrente da sessão (/mode em runtime).
+    let currentSession: ReturnType<typeof createSession> | undefined;
     // `--provider` explícito e `agent.model` declarado vencem o último modelo salvo (#497).
     const boot = await bootstrapTui({
-      createSession: () => bootSession(createSession, cwd, {
-        declaredModel: declaredModelFor(configPath, { env: opts.env }),
-        ...(opts.provider === undefined ? {} : { provider: opts.provider }),
-      }),
+      createSession: () => {
+        currentSession = bootSession(createSession, cwd, {
+          declaredModel: declaredModelFor(configPath, { env: opts.env }),
+          ...(opts.provider === undefined ? {} : { provider: opts.provider }),
+        });
+        return currentSession;
+      },
       setup: () => setupProvider(manager, cwd, saveSecret, discardSecret),
       createShell: () => createShellRunner({
         configPath, cwd, env: opts.env ?? process.env,
         allowMissingConfig: opts.allowMissingConfig === true,
+        approveTool: approvals.approveTool,
+        permissionMode: () => currentSession?.permissionMode(),
         ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
         ...(opts.allowSensitive === undefined ? {} : { allowSensitive: opts.allowSensitive }),
       }),

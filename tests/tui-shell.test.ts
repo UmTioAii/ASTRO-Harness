@@ -18,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => mock.restore());
 
-function config(tools: string[], credentialRef = "KEY", sandbox = true, withTools = true) {
+function config(tools: string[], credentialRef = "KEY", sandbox = true, withTools = true, mode?: "bypass" | "allow-edits" | "ask") {
   const cwd = mkdtempSync(join(tmpdir(), "astro-shell-"));
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
@@ -26,6 +26,7 @@ function config(tools: string[], credentialRef = "KEY", sandbox = true, withTool
     models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 4096 }],
     agent: { model: "p/m1", maxSteps: 2, tools },
     ...(withTools ? { tools: { run_command: { sandbox } } } : {}),
+    ...(mode === undefined ? {} : { permissions: { mode } }),
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
   return { cwd, configPath };
@@ -116,6 +117,86 @@ describe("!cmd da TUI (T2, #63)", () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain("cancelado");
     expect(Date.now() - started).toBeLessThan(4000);
+  });
+});
+
+describe("!cmd segue o modo de permissão resolvido, por comando (#557)", () => {
+  afterEach(() => {
+    configureRunCommand({ sandbox: false });
+    delete process.env.ASTRO_PERMISSION_MODE;
+  });
+
+  test("modo bypass da config: executa sem aprovador e sem perguntar", async () => {
+    const { cwd, configPath } = config(["run_command"], "KEY", true, true, "bypass");
+    // Sem approveTool algum: em bypass o gate não pode cair no fail-closed de ask.
+    const shell = createShellRunner({ configPath, cwd, env: process.env });
+    const result = await shell.run("echo astro-bypass-557");
+    expect(result.isError).toBe(false);
+    expect(result.output).toContain("astro-bypass-557");
+    expect(result.output).not.toContain("permissão negada");
+  });
+
+  test("ASTRO_PERMISSION_MODE=bypass no env vence a config ask (D-24)", async () => {
+    const { cwd, configPath } = config(["run_command"], "KEY", true, true, "ask");
+    const shell = createShellRunner({
+      configPath, cwd, env: { ...process.env, ASTRO_PERMISSION_MODE: "bypass" },
+    });
+    const result = await shell.run("echo astro-env-bypass-557");
+    expect(result.isError).toBe(false);
+    expect(result.output).toContain("astro-env-bypass-557");
+  });
+
+  test("modo ask da config: pergunta por comando (ação shell) e negar bloqueia", async () => {
+    const { cwd, configPath } = config(["run_command"], "KEY", true, true, "ask");
+    const seen: string[] = [];
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: (request) => {
+        seen.push(`${request.name}:${request.action}:${request.mode}`);
+        return false;
+      },
+    });
+    const denied = await shell.run("echo astro-deny-557");
+    expect(seen).toEqual(["run_command:shell:ask"]);
+    expect(denied.isError).toBe(true);
+    expect(denied.output).toContain("permissão negada");
+    // Aprovando, o mesmo comando executa:
+    const shellOk = createShellRunner({ configPath, cwd, env: process.env, approveTool: () => true });
+    const ok = await shellOk.run("echo astro-ask-557");
+    expect(ok.isError).toBe(false);
+    expect(ok.output).toContain("astro-ask-557");
+  });
+
+  test("modo allow-edits da config: shell continua pedindo aprovação (MATRIX)", async () => {
+    const { cwd, configPath } = config(["run_command"], "KEY", true, true, "allow-edits");
+    let asked = 0;
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: () => { asked += 1; return true; },
+    });
+    const result = await shell.run("echo astro-edits-557");
+    expect(asked).toBe(1); // allow-edits não cobre a ação shell
+    expect(result.isError).toBe(false);
+    expect(result.output).toContain("astro-edits-557");
+  });
+
+  test("permissionMode explícito (runtime /mode) vence a config e é reavaliado por run", async () => {
+    const { cwd, configPath } = config(["run_command"], "KEY", true, true, "ask");
+    let asked = 0;
+    let mode: "ask" | "bypass" = "ask";
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: () => { asked += 1; return true; },
+      permissionMode: () => mode,
+    });
+    const denied = await shell.run("echo astro-mode-ask-557");
+    expect(asked).toBe(1); // ask perguntou
+    expect(denied.isError).toBe(false);
+    mode = "bypass"; // /mode bypass em runtime
+    const bypassed = await shell.run("echo astro-mode-bypass-557");
+    expect(asked).toBe(1); // bypass não perguntou de novo
+    expect(bypassed.isError).toBe(false);
+    expect(bypassed.output).toContain("astro-mode-bypass-557");
   });
 });
 
