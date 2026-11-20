@@ -34,11 +34,11 @@ const SECRET = ["s", "k", "-"].join("") + "live-run-tests-987654";
 const CAP = 10_000;
 
 let seq = 0;
-let active: DockerMock | undefined;
+/** Mocks ativos; restaurados em LIFO (mock instalado depois captura o anterior como original). */
+const activeMocks: DockerMock[] = [];
 
 afterEach(() => {
-  active?.restore();
-  active = undefined;
+  while (activeMocks.length > 0) activeMocks.pop()!.restore();
 });
 
 interface SetupOptions {
@@ -57,7 +57,7 @@ async function setup(options: SetupOptions = {}): Promise<{
 }> {
   const cwd = mkdtempSync(join(tmpdir(), "astro-rt-"));
   const mock = installDockerSpawnMock(options.reply);
-  active = mock;
+  activeMocks.push(mock);
   const mod = await isolatedRunCommand(`rt-${seq++}`);
   mod.configureRunCommand({ sandbox: options.sandbox ?? true });
   const audit = new Auditor(join(cwd, "audit.jsonl"));
@@ -80,7 +80,34 @@ interface TestsResult {
   output: string;
 }
 
-const resultOf = (result: ToolResult): TestsResult => JSON.parse(result.output) as TestsResult;
+/**
+ * Faz o parse do resultado estruturado. Se a tool voltou com erro (sandbox
+ * indisponível, recusa, entrada inválida), falha mostrando código e saída em vez
+ * de um "Unexpected identifier" — foi assim que a diferença POSIX apareceu no CI.
+ */
+const resultOf = (result: ToolResult): TestsResult => {
+  try {
+    return JSON.parse(result.output) as TestsResult;
+  } catch {
+    throw new Error(
+      `run_tests devolveu erro em vez do JSON de resultado (code: ${result.code ?? "nenhum"}): ${result.output}`,
+    );
+  }
+};
+
+/**
+ * Roda `fn` com `process.platform` trocado (restaura sempre). Usado para exercitar
+ * o ramo POSIX de `killProcessTree` (kill de grupo → fallback `proc.kill()`) no Windows.
+ */
+async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const original = process.platform;
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, "platform", { value: original, configurable: true });
+  }
+}
 
 /** Args entregues ao `docker run` depois da imagem (o que o container executa). */
 const containerCmd = (argv: string[]): string[] =>
@@ -250,9 +277,10 @@ describe("run_tests execução no sandbox", () => {
     });
     const result = await tool.execute({}, ctx(cwd));
     expect(result.isError).toBe(true);
+    // O sandbox rodou de verdade: o erro não é "Docker indisponível".
+    expect(mock.runCalls).toHaveLength(1);
     const out = resultOf(result);
-    expect(out.timedOut).toBe(true);
-    expect(out.exitCode).toBeNull();
+    expect(out).toMatchObject({ timedOut: true, exitCode: null });
     // docker run morto não para o container: limpeza forçada.
     expect(mock.calls.some((cmd) => cmd[0] === "docker" && cmd[1] === "rm")).toBe(true);
   });
@@ -269,10 +297,42 @@ describe("run_tests execução no sandbox", () => {
     });
     const result = await tool.execute({}, { ...ctx(cwd), signal: controller.signal });
     expect(result.isError).toBe(true);
+    expect(mock.runCalls).toHaveLength(1);
     const out = resultOf(result);
-    expect(out.cancelled).toBe(true);
-    expect(out.exitCode).toBeNull();
+    expect(out).toMatchObject({ cancelled: true, exitCode: null });
     expect(mock.calls.some((cmd) => cmd[0] === "docker" && cmd[1] === "rm")).toBe(true);
+  });
+
+  test("POSIX (simulado): timeout e cancelamento vencem o exit do kill", async () => {
+    // No POSIX `killProcessTree` cai em `proc.kill()`; o processo real só resolve
+    // `exited` no tick seguinte. Se o fake resolver antes, o exit 137 vence o
+    // marcador e o run reporta failure sem `timedOut`/`cancelled` (falha do CI Linux).
+    const timeoutRun = await setup({
+      config: { command: ["bun", "test"], timeoutMs: 40 },
+      reply: () => ({ hang: true }),
+    });
+    const timeoutResult = await withPlatform("linux", () => timeoutRun.tool.execute({}, ctx(timeoutRun.cwd)));
+    expect(timeoutResult.isError).toBe(true);
+    expect(resultOf(timeoutResult)).toMatchObject({ timedOut: true, exitCode: null });
+    expect(timeoutRun.mock.calls.some((cmd) => cmd[0] === "docker" && cmd[1] === "rm")).toBe(true);
+    // Restaura antes de instalar o próximo mock (o novo captura o atual como original).
+    activeMocks.pop()!.restore();
+
+    const controller = new AbortController();
+    const cancelRun = await setup({
+      config: { command: ["bun", "test"] },
+      reply: () => {
+        controller.abort();
+        return { hang: true };
+      },
+    });
+    const cancelResult = await withPlatform(
+      "linux",
+      () => cancelRun.tool.execute({}, { ...ctx(cancelRun.cwd), signal: controller.signal }),
+    );
+    expect(cancelResult.isError).toBe(true);
+    expect(resultOf(cancelResult)).toMatchObject({ cancelled: true, exitCode: null });
+    expect(cancelRun.mock.calls.some((cmd) => cmd[0] === "docker" && cmd[1] === "rm")).toBe(true);
   });
 
   test("sandbox:false recusa sem tocar o host e sem spawn", async () => {
