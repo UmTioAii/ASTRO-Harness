@@ -12,8 +12,8 @@ O ADR-0017 empacotou o Bun em `optionalDependencies` de plataforma (`@oven/bun-<
 ## Decisão
 
 - O ASTRO depende de **`bun@1.4.2`** em `dependencies` (não `optionalDependencies`), mantendo a versão pinada pela release.
-- O launcher resolve, nesta ordem: `ASTRO_BUN_PATH` → Bun que está executando → binário de `bun/package.json` em `node_modules` → `bun` no `PATH`.
-- O `postinstall` do pacote `bun` roda no install para materializar o binário; `--ignore-scripts` deixa o passo sem efeito e o launcher cai no `PATH`/`ASTRO_BUN_PATH`.
+- O launcher resolve, nesta ordem: `ASTRO_BUN_PATH` → Bun que está executando → binário real no pacote de plataforma `@oven/bun-<os>-<cpu>` (dependência opcional pura, instalada sem `postinstall`) → binário de `bun/package.json` em `node_modules` → `bun` no `PATH` (#561).
+- O `bin/bun` do pacote `bun` é um placeholder (~450 bytes) até o `postinstall` materializar o binário; o launcher descarta candidatos com até 1 MiB (`PLACEHOLDER_MAX_BYTES`), então `allow-scripts` restrito/`--ignore-scripts` não quebra mais o runtime — o binário real vem do pacote de plataforma. Sem nenhum candidato válido, cai no `PATH`/`ASTRO_BUN_PATH`.
 - Instalar o ASTRO **não** cria nem sombreia `bun`/`bunx` globais: o `bin` de uma dependência aninhada não é linkado globalmente pelo npm. A objeção do ADR-0017 vale para `npm i -g bun`, não para este uso.
 - `--omit=optional` continua removendo os binários de plataforma (que são opcionais dentro do pacote `bun`); o runtime deixa de vir junto, como antes.
 
@@ -21,7 +21,7 @@ O ADR-0017 empacotou o Bun em `optionalDependencies` de plataforma (`@oven/bun-<
 
 - Uma única dependência e uma única matriz de plataformas, herdada do pacote oficial.
 - `npm i -g` segue funcionando sem Bun global; agora há `postinstall` no caminho (antes não havia).
-- `--ignore-scripts` e `--omit=optional` deixam de garantir runtime embutido; a mensagem de erro do launcher aponta `ASTRO_BUN_PATH` (ou um Bun no `PATH`).
+- `--ignore-scripts` continua funcionando (o binário real vem do pacote de plataforma, sem scripts); só `--omit=optional` (ou allow-scripts restrito **mais** `--omit=optional`) deixa de garantir runtime embutido — a mensagem de erro do launcher aponta `ASTRO_BUN_PATH` (ou um Bun no `PATH`).
 - D-02 passa a citar o ADR-0018 como exceção de dependência de runtime.
 - A decisão não muda o contrato do launcher (`bun dist/cli.js <args>`, `stdio` herdado, código/sinal propagados).
 

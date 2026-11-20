@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import * as editor from "../src/tui/editor";
-import { COMMANDS, applyCompletion, commandDescription, completionItems, suggestionWindow } from "../src/tui/editor";
+import { COMMANDS, applyCompletion, commandDescription, completionItems, enterAction, suggestionWindow } from "../src/tui/editor";
 
 const files = ["src/app.ts", "notas/ideias.md"];
 
@@ -54,31 +53,25 @@ describe("completions do editor (T2, #63)", () => {
 });
 
 describe("enterAction — semântica do Enter com o menu aberto (#471, #560)", () => {
-  // RED: enterAction ainda não existe; cast estrutural mantém o typecheck limpo.
-  const api = editor as unknown as { enterAction?: (line: string, suggestion?: string) => string };
-
   test("máquina de estado pura: prefixo aplica, exato roda, argumento roda", () => {
-    expect(api.enterAction).toBeTypeOf("function"); // RED: ainda não existe
-    const enter = api.enterAction!;
     // prefixo do comando destacado: 1º Enter aplica a completion, 2º roda
-    expect(enter("/re", "/resume")).toBe("apply-completion");
-    expect(enter("/mo", "/model")).toBe("apply-completion");
+    expect(enterAction("/re", "/resume")).toBe("apply-completion");
+    expect(enterAction("/mo", "/model")).toBe("apply-completion");
     // linha já igual ao destacado: 1º Enter roda direto
-    expect(enter("/resume", "/resume")).toBe("run");
+    expect(enterAction("/resume", "/resume")).toBe("run");
     // linha com argumento após o comando: Enter submete normal
-    expect(enter("/model p/m1", undefined)).toBe("run");
+    expect(enterAction("/model p/m1", undefined)).toBe("run");
     // sem menu aberto: run
-    expect(enter("texto qualquer", undefined)).toBe("run");
-    expect(enter("/re", undefined)).toBe("run");
+    expect(enterAction("texto qualquer", undefined)).toBe("run");
+    expect(enterAction("/re", undefined)).toBe("run");
     // completion de @arquivo está fora de escopo (#471): Enter submete
-    expect(enter("leia @app", "@src/app.ts")).toBe("run");
+    expect(enterAction("leia @app", "@src/app.ts")).toBe("run");
   });
 
   test("prefixo nunca executa sem o 2º Enter confirmando (#471)", () => {
-    const enter = api.enterAction!;
     // depois de aplicar, a linha fica exata e só então o próximo Enter roda
     const applied = applyCompletion("/re", "/resume");
-    expect(enter("/re", "/resume")).toBe("apply-completion");
-    expect(enter(applied, "/resume")).toBe("run");
+    expect(enterAction("/re", "/resume")).toBe("apply-completion");
+    expect(enterAction(applied, "/resume")).toBe("run");
   });
 });
