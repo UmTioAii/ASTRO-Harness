@@ -44,7 +44,7 @@ describe("resolveBun", () => {
       ...base,
       env: {},
       resolve: fakeResolve({ "bun/package.json": manifestPath }),
-      exists: (path) => path === bin,
+      exists: (path: string) => path === bin,
       which: () => undefined,
     };
     expect(resolveBun(deps)).toBe(bin);
@@ -78,6 +78,62 @@ describe("resolveBun", () => {
     expect((error as Error).message).toContain("Bun");
     expect((error as Error).message).toContain("ASTRO_BUN_PATH");
     expect((error as Error).message).toContain("npm install");
+  });
+});
+
+describe("resolveBun — pacote npm com postinstall bloqueado (npm allow-scripts, #561)", () => {
+  const base: ResolveDeps = { runningUnderBun: false, platform: "win32", arch: "x64" };
+  const realBin = { size: 100_000_000 };
+  const placeholder = { size: 450 }; // bin/bun.exe do pacote "bun" antes do postinstall
+
+  test("prefere o binário real do pacote de plataforma @oven/bun-* (não precisa de postinstall)", () => {
+    const ovenManifest = join("C:", "app", "node_modules", "@oven", "bun-windows-x64", "package.json");
+    const ovenBin = join("C:", "app", "node_modules", "@oven", "bun-windows-x64", "bin", "bun.exe");
+    const bunManifest = join("C:", "app", "node_modules", "bun", "package.json");
+    const bunBin = join("C:", "app", "node_modules", "bun", "bin", "bun.exe");
+    // RED: `stat` ainda não existe em ResolveDeps; cast estrutural mantém o typecheck limpo.
+    const deps = {
+      ...base,
+      env: {},
+      resolve: fakeResolve({
+        "@oven/bun-windows-x64/package.json": ovenManifest,
+        "bun/package.json": bunManifest,
+      }),
+      exists: (path: string) => path === ovenBin || path === bunBin,
+      stat: (path: string) => (path === ovenBin ? realBin : placeholder),
+      which: () => undefined,
+    } as unknown as ResolveDeps;
+    // RED: hoje devolve o placeholder bun/bin/bun.exe e o spawn quebra com UV_UNKNOWN
+    expect(resolveBun(deps)).toBe(ovenBin);
+  });
+
+  test("placeholder do pacote bun é ignorado e cai para o PATH", () => {
+    const bunManifest = join("C:", "app", "node_modules", "bun", "package.json");
+    const bunBin = join("C:", "app", "node_modules", "bun", "bin", "bun.exe");
+    const onPath = join("C:", "tools", "bun.exe");
+    const deps = {
+      ...base,
+      env: {},
+      resolve: fakeResolve({ "bun/package.json": bunManifest }),
+      exists: (path: string) => path === bunBin,
+      stat: () => placeholder,
+      which: () => onPath,
+    } as unknown as ResolveDeps;
+    expect(resolveBun(deps)).toBe(onPath); // RED: hoje devolve o placeholder
+  });
+
+  test("binário real do pacote bun (postinstall rodou) continua válido", () => {
+    const bunManifest = join("C:", "app", "node_modules", "bun", "package.json");
+    const bunBin = join("C:", "app", "node_modules", "bun", "bin", "bun.exe");
+    const deps = {
+      ...base,
+      env: {},
+      resolve: fakeResolve({ "bun/package.json": bunManifest }),
+      exists: (path: string) => path === bunBin,
+      stat: () => realBin,
+      which: () => undefined,
+    } as unknown as ResolveDeps;
+    expect(resolveBun(deps)).toBe(bunBin);
   });
 });
 
