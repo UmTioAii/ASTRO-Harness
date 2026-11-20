@@ -128,15 +128,14 @@ test("smokeConfig aponta para loopback com credentialRef e sem o valor da chave"
 
 test("trustState grava a pasta do projeto no estado global isolado", () => {
   const state = trustState("C:\\tmp\\astro-packed-smoke");
-  expect(state).toMatchObject({
+  expect(state).toEqual({
     version: 1,
     trust: { folders: ["C:\\tmp\\astro-packed-smoke"] },
     migrations: { providers: true, trust: true },
+    // O portão dos termos (#479) roda antes do primeiro frame: sem semear o
+    // aceite, a TUI para na tela dos termos e o smoke nunca desenha o header.
+    terms: { version: TERMS_VERSION, acceptedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) },
   });
-  // O portão dos termos (#479) roda antes do primeiro frame: sem semear o
-  // aceite, a TUI para na tela dos termos e o smoke nunca desenha o header.
-  expect(state.terms?.version).toBe(TERMS_VERSION);
-  expect(state.terms?.acceptedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });
 
 test("prepareHome grava config e semeia o trust com o realpath do projeto", () => {
