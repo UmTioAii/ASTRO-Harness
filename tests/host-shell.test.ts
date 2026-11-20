@@ -63,13 +63,13 @@ const ctxOf = (dir: string, extra: Partial<ToolContext> = {}): ToolContext => ({
   cwd: dir, run: "r1", agent: "coder", env: { ...process.env }, secretEnvNames: ["OPENAI_API_KEY"], ...extra,
 });
 
-describe("config do shell: host é o default, Docker é hardening (#474)", () => {
-  test("ausente e 'auto' = host; true e 'docker' = Docker; false desliga", () => {
+describe("config do shell: 'auto' é o default (Docker quando disponível) (#474)", () => {
+  test("ausente e 'auto' = auto; true e 'docker' = Docker; false desliga", () => {
     const cfg = validateConfig(structuredClone(baseConfig));
     expect(cfg.tools?.run_command?.sandbox).toBeUndefined();
-    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("host");
-    expect(resolveRunCommandMode(undefined)).toBe("host");
-    expect(resolveRunCommandMode("auto")).toBe("host");
+    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("auto");
+    expect(resolveRunCommandMode(undefined)).toBe("auto");
+    expect(resolveRunCommandMode("auto")).toBe("auto");
     expect(resolveRunCommandMode(true)).toBe("docker");
     expect(resolveRunCommandMode("docker")).toBe("docker");
     expect(resolveRunCommandMode(false)).toBe("disabled");
@@ -135,7 +135,7 @@ describe("detecção e argv de shell do host (#474)", () => {
 });
 
 describe("run_command no host por default, aprovado por comando (#474)", () => {
-  test("default (sandbox ausente) roda no host com aprovação e nem consulta o Docker", async () => {
+  test("default (auto) sem Docker cai no host depois da aprovação, com o comando no prompt", async () => {
     mock = installNoDockerSpawnMock({ stdout: "astro-host-default\n" });
     const mod = await isolatedRunCommand("host-default-approve");
     mod.configureRunCommand({ permissionMode: "ask" });
@@ -150,24 +150,39 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
     expect((requests[0] as { detail?: { kind: string; value: string } }).detail).toEqual({
       kind: "command", value: "echo astro-host-default",
     });
-    // Nenhum argv docker: o default é host, não "docker quando existir".
-    expect(mock.calls.filter((cmd) => cmd[0] === "docker")).toHaveLength(0);
+    // `auto` consulta o Docker e, sem daemon, nenhum `docker run` acontece.
+    expect(mock.calls.some((cmd) => cmd[0] === "docker" && cmd.includes("info"))).toBe(true);
+    expect(mock.runCalls).toHaveLength(0);
     const hostEvent = auditEvents(auditPath).find((event) => event.tipo === "host_shell.decision");
     expect(hostEvent?.payload).toMatchObject({ decision: "allow", permissionMode: "ask" });
     expect(JSON.stringify(hostEvent)).not.toContain("astro-host-default");
   });
 
-  test("'auto' é alias do host mesmo com Docker disponível", async () => {
+  test("auto com Docker disponível usa o Docker e NÃO vai ao host", async () => {
     mock = installDockerSpawnMock(() => "docker-ok");
-    const mod = await isolatedRunCommand("host-auto-alias");
-    mod.configureRunCommand({ mode: "host", permissionMode: "ask" });
+    const mod = await isolatedRunCommand("auto-docker-available");
+    // `sandbox` ausente = auto.
+    mod.configureRunCommand({ permissionMode: "ask" });
     const dir = cwd();
-    const { executor } = await hostExecutor(mod, { cwd: dir });
+    const { executor, requests } = await hostExecutor(mod, { cwd: dir });
     const result = await executor.run(ctxOf(dir), {
       id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo oi" }),
     });
     expect(result.isError).toBeFalsy();
-    expect(mock.runCalls).toHaveLength(0);
+    expect(result.output).toContain("docker-ok");
+    expect(requests).toHaveLength(1); // o gate continua perguntando por comando
+    expect(mock.runCalls.length).toBeGreaterThan(0);
+    expect(mock.calls.every((cmd) => cmd[0] === "docker")).toBe(true); // nada no host
+  });
+
+  test("'auto' explícito com Docker disponível também usa só o Docker", async () => {
+    mock = installDockerSpawnMock(() => "docker-ok");
+    const mod = await isolatedRunCommand("auto-explicit-docker");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "ask" });
+    const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
+    expect(result.output).toContain("docker-ok");
+    expect(mock.runCalls.length).toBeGreaterThan(0);
+    expect(mock.calls.every((cmd) => cmd[0] === "docker")).toBe(true);
   });
 
   test("sandbox:true segue no Docker e só spawna docker", async () => {
@@ -194,6 +209,16 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
     mock = installNoDockerSpawnMock();
     const mod = await isolatedRunCommand("host-docker-refuse");
     mod.configureRunCommand({ sandbox: true });
+    const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("Docker");
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
+  });
+
+  test("sandbox:'docker' sem Docker também recusa, sem fallback para o host", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("host-docker-string-refuse");
+    mod.configureRunCommand({ mode: "docker" });
     const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
     expect(result.isError).toBe(true);
     expect(result.output).toContain("Docker");
@@ -313,7 +338,7 @@ describe("limites do host (#474)", () => {
     expect(mock.calls).toHaveLength(0);
   });
 
-  test("run_tests continua exigindo Docker, mesmo com o host como default", async () => {
+  test("run_tests continua exigindo Docker explícito, mesmo com auto no default", async () => {
     mock = installNoDockerSpawnMock();
     const mod = await isolatedRunCommand("host-run-tests");
     mod.configureRunCommand({ permissionMode: "ask" });

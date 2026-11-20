@@ -95,15 +95,22 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
   }
 });
 
-test("projeto pode endurecer o sandbox global (host → Docker) e nada força o host (#474)", () => {
+test("projeto pode endurecer o sandbox global (auto → Docker/desligado), mas auto herdado fica auto (#474)", () => {
   const hardened = effective(
     { tools: { run_command: { sandbox: "auto" } } },
     project({ tools: { run_command: { sandbox: true } } }),
   ).config;
   expect(hardened.tools?.run_command?.sandbox).toBe(true);
-  // Global ausente = host (default); o projeto pode declarar Docker.
+  const disabled = effective(
+    { tools: { run_command: { sandbox: "auto" } } },
+    project({ tools: { run_command: { sandbox: false } } }),
+  ).config;
+  expect(disabled.tools?.run_command?.sandbox).toBe(false);
+  // Global ausente = auto (default); o projeto pode declarar Docker e herda auto sem declarar.
   const fromDefault = effective(undefined, project({ tools: { run_command: { sandbox: "docker" } } })).config;
   expect(fromDefault.tools?.run_command?.sandbox).toBe("docker");
+  const inherited = effective({ tools: { run_command: { sandbox: "auto" } } }, project({})).config;
+  expect(inherited.tools?.run_command?.sandbox).toBe("auto");
 });
 
 test("agent nomeado só no projeto herda o teto global do agent principal (#548)", () => {

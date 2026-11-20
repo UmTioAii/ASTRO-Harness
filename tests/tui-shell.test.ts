@@ -39,16 +39,17 @@ describe("!cmd da TUI (T2, #63)", () => {
     configureRunCommand({ sandbox: false });
   });
 
-  test("sem seção tools: host por padrão, Docker é opt-in (#474)", async () => {
+  test("sem seção tools: auto por padrão, Docker quando disponível (#474)", async () => {
     const { cwd, configPath } = config(["run_command"], "KEY", false, false);
-    // approveTool permite atravessar o gate fail-closed (#259) e exercitar o host
+    // approveTool permite atravessar o gate fail-closed (#259)
     const shell = createShellRunner({ approveTool: () => true, configPath, cwd, env: process.env });
     expect(shell.enabled).toBe(true);
-    expect(isRunCommandSandboxEnabled()).toBe(false);
-    expect(resolveRunCommandMode(undefined)).toBe("host");
+    expect(isRunCommandSandboxEnabled()).toBe(false); // `auto` ainda não é "Docker-only"
+    expect(resolveRunCommandMode(undefined)).toBe("auto");
     const result = await shell.run("echo astro-shell-default");
-    // O mock cobre só `docker`; o shell do host roda de verdade e termina sem erro.
+    expect(mock.runCalls.length).toBeGreaterThan(0); // Docker do mock foi usado
     expect(result.isError).toBeFalsy();
+    expect(result.output).toContain("astro-shell-default");
   });
 
   test("executa via run_command quando está na allowlist e audita", async () => {
