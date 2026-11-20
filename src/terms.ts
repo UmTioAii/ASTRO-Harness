@@ -42,9 +42,9 @@ export function termsPrompt(previous?: TermsAcceptance): string {
   ].join("\n");
 }
 
-/** Só Enter aceita; qualquer outra resposta — inclusive EOF (`null`) — recusa. */
+/** Só a linha vazia (Enter) aceita; espaço, outra resposta e EOF (`null`) recusam. */
 export function termsChoice(answer: string | null | undefined): boolean {
-  return answer != null && answer.trim() === "";
+  return answer === "";
 }
 
 /** Texto completo + estado do aceite, para o `/terms` da TUI e do REPL. */
@@ -52,7 +52,23 @@ export function formatTerms(record: TermsAcceptance | undefined): string {
   const status = record === undefined
     ? "ainda não aceito — o primeiro run interativo pede Enter"
     : `aceito em ${record.acceptedAt} (versão ${record.version})`;
+  return termsWithStatus(status);
+}
+
+function termsWithStatus(status: string): string {
   return [`Termos de uso (versão ${TERMS_VERSION})`, "", termsText(), "", status].join("\n");
+}
+
+/**
+ * `/terms` nunca lança (#591): estado ilegível vira aviso que cita só o caminho.
+ * A mensagem do erro pode carregar o conteúdo do arquivo, então não é impressa (I-03).
+ */
+export function termsReport(path: string = statePath()): string {
+  try {
+    return formatTerms(loadTermsAcceptance(path));
+  } catch {
+    return termsWithStatus(`estado global ilegível em ${path} — não foi possível ler o aceite; corrija o arquivo ou apague o campo "terms"`);
+  }
 }
 
 /** Registro aceito, ou `undefined` quando nunca houve aceite. Estado inválido é erro. */

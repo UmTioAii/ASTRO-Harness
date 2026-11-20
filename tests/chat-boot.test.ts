@@ -84,4 +84,11 @@ describe("boot do chat: portão dos termos antes do I/O (#479)", () => {
     expect(created).toBe(1);
     expect(existsSync(state)).toBe(false);
   });
+
+  test("o cli não cria readline próprio: o único I/O do chat nasce dentro de bootChat (#479)", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
+    // Um `nodeReplIO()` no cli voltaria a abrir o readline antes do portão dos termos.
+    expect(source).not.toContain("nodeReplIO(");
+    expect(source).toContain("bootChat({ ask: ttyTermsAsk() })");
+  });
 });

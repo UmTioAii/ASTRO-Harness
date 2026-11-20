@@ -48,7 +48,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | `shell.default` | camada 3 | lê | `/shell <shell> confirm` grava | `/shell <shell> confirm` grava | shell do fallback host no `auto` (ADR-0031); só vocabulário de `HOST_SHELLS` e só shell presente na máquina (#474) |
 | `permissions.approvalTimeoutMs` | camada 3 | lê | `/config` só imprime | lê | compartilhado; teto da espera por aprovação (#526) |
 | trust | `$ASTRO_HOME/state.json` | pergunta no TTY | pergunta; revoga no `/config` | pergunta | compartilhado; revogação TUI-only |
-| termos de uso | `$ASTRO_HOME/state.json` (`terms.version`/`terms.acceptedAt`, #479) | não lê | pergunta no boot; `/terms` lê | pergunta; `/terms` lê | estado: um aceite por versão, sem TTY prossegue com aviso |
+| termos de uso | `$ASTRO_HOME/state.json` (`terms.version`/`terms.acceptedAt`, #479) | `chat` pergunta no boot | pergunta no boot; `/terms` lê | pergunta no boot; `/terms` lê | estado: um aceite por versão, antes de qualquer escrita; sem TTY prossegue com aviso |
 | tema, `lastModel`, favoritos, recentes | estado de UI: global em `$ASTRO_HOME/tui.json`, override por projeto em `$ASTRO_HOME/projects/<chave>/tui.json` (#468) | não lê | lê/grava | não lê | TUI-only: preferência de terminal |
 | sessões | `$ASTRO_HOME/projects/<chave>/sessions.db` (SQLite; `sessions/` ao lado é o JSON v1 importado; #468) | sem comando | picker: lista/renomeia/exclui/retoma | lista/retoma/exclui (TTY) | compartilhado; renomear TUI-only |
 | `--allow-critical`/`--allow-sensitive`/`--i-understand` | invocação | entrada | herda | herda | CLI-only: allowlist é ato explícito (ADR-0027) |

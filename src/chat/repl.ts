@@ -28,7 +28,7 @@ import { isFatalSessionError } from "./session-errors";
 import { redactSecrets } from "../sanitize-external";
 import { usageLines } from "./usage";
 import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryReport } from "../memory";
-import { formatTerms, loadTermsAcceptance } from "../terms";
+import { termsReport } from "../terms";
 import { detectHostShells } from "../tools/host-shell";
 import type { BudgetStatus } from "../budget";
 import type { QuotaStatus } from "../quota";
@@ -584,7 +584,8 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
         continue;
       }
       if (command.kind === "terms") {
-        io.write(formatTerms(loadTermsAcceptance()));
+        // estado ilegível do state.json vira aviso; nunca derruba o REPL (#591)
+        io.write(termsReport());
         continue;
       }
       if (command.kind === "log") {

@@ -22,11 +22,13 @@ Sem rede: o texto vive no repositório e nunca é buscado. `TERMS_VERSION` sobe 
 
 | Superfície | Comportamento |
 |---|---|
-| `astro` (TUI) | primeiro run: mostra as cinco linhas e **Enter aceita**; qualquer outra resposta (ou EOF) recusa, imprime o motivo e sai 1 sem gravar config, sessão ou estado |
-| `astro chat` com TTY | mesma pergunta; recusa sai 1 sem abrir sessão |
-| `astro chat` sem TTY (stdin em pipe, CI) | não pergunta: um aviso no stderr e a sessão segue, sem registrar aceite |
+| `astro` (TUI) | primeiro run: mostra as cinco linhas e **só Enter (linha vazia) aceita**; qualquer outra resposta — inclusive espaço e EOF — recusa, imprime o motivo e sai 1 sem gravar config, sessão ou estado |
+| `astro chat` com TTY | mesma pergunta, antes de qualquer escrita e do readline do REPL (`bootChat` em `src/chat/boot.ts`); recusa sai 1 sem abrir sessão |
+| `astro chat` sem TTY (stdin em pipe, CI) | não pergunta: um aviso no stderr e a sessão segue, sem registrar aceite; o readline do REPL nasce depois do portão |
 | `astro run`, `eval`, `bench`, `serve` | nunca consultam os termos: run não interativo nunca é bloqueado |
-| `/terms` (TUI e REPL) | texto completo, versão corrente e a data do aceite, ou "ainda não aceito" |
+| `/terms` (TUI e REPL) | texto completo, versão corrente e a data do aceite, ou "ainda não aceito"; `state.json` ilegível vira aviso que cita só o caminho e a sessão continua |
+
+Um só readline por vez em `process.stdin`: o portão dos termos pergunta antes de o REPL/TUI criar o seu, porque dois `Interface` de terminal no mesmo stream disputam o mesmo chunk e o `close()` do portão pausa o stdin.
 
 Sem canal interativo a escolha é **prosseguir com aviso**, não recusar: os termos são um registro de leitura, e recusar quebraria todo `run`/CI sem oferecer como aceitar. O aceite fica pendente até a primeira sessão interativa; enquanto isso `/terms` mostra o estado e a TUI pergunta.
 
@@ -45,8 +47,9 @@ Sem canal interativo a escolha é **prosseguir com aviso**, não recusar: os ter
 
 - Só a versão e a data: nenhuma credencial, caminho, nome ou identificador de máquina.
 - Escrita atômica (tmp + rename) com `0600` e diretório `0700` no POSIX (vale a ACL do perfil no Windows); `state.json` ausente ou sem `terms` continua válido.
-- A mesma versão não pergunta de novo; a versão nova pergunta e substitui o registro. A recusa nunca escreve: um `state.json` existente fica byte a byte igual.
+- A mesma versão não pergunta de novo; a versão nova pergunta e substitui o registro. A recusa nunca escreve: um `state.json` existente fica byte a byte igual; o aceite preserva `trust` e `migrations`.
 - Registro inválido (campo desconhecido, versão vazia, data fora do ISO) é erro que cita só o caminho, nunca o conteúdo.
+- No boot, registro inválido encerra com erro (não dá para registrar um aceite confiável); no `/terms` o mesmo erro vira aviso e a sessão continua.
 
 ## Pendências
 

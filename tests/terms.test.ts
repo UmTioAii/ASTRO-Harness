@@ -154,9 +154,9 @@ describe("termos de uso (#479)", () => {
     expect(tui.entries[0]!.text).toContain("ilegível");
     expect(tui.entries[0]!.text).toContain(path);
     // A mensagem cita o caminho, nunca o conteúdo do arquivo (I-03).
-    writeFileSync(path, '{"apiKey":"sk-live-nao-pode-vazar"');
+    writeFileSync(path, '{"apiKey":"valor-ilegivel-nao-pode-vazar"');
     const redacted = await runCommand({ kind: "terms" }, {} as ChatSession, {}, { termsPath: path });
-    expect(redacted.entries[0]!.text).not.toContain("nao-pode-vazar");
+    expect(redacted.entries[0]!.text).not.toContain("valor-ilegivel-nao-pode-vazar");
 
     // Caminho que não é arquivo (home presente, estado ilegível) também não derruba.
     const notAFile = join(mkdtempSync(join(tmpdir(), "astro-terms-")), "state.json");
@@ -179,6 +179,6 @@ describe("termos de uso (#479)", () => {
       else process.env.ASTRO_HOME = previous;
     }
     expect(outputs.join("\n")).toContain("ilegível");
-    expect(outputs.join("\n")).not.toContain("nao-pode-vazar");
+    expect(outputs.join("\n")).not.toContain("valor-ilegivel-nao-pode-vazar");
   });
 });
