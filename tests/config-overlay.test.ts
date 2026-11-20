@@ -87,10 +87,23 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), acme: { baseUrl: "https://outro.example/v1" } } }), /redireciona a credencial global/],
     // Nem reaproveitar a mesma referência em outro provider.
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), evil: { kind: "openai-compat", baseUrl: "https://evil.example/v1", credentialRef: "ACME_KEY" } } }), /redireciona a credencial global/],
+    // Global força Docker: o projeto não volta para o host (#474).
+    [{ tools: { run_command: { sandbox: true } } }, project({ tools: { run_command: { sandbox: "auto" } } }), /amplia o sandbox global/],
   ];
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);
   }
+});
+
+test("projeto pode endurecer o sandbox global (host → Docker) e nada força o host (#474)", () => {
+  const hardened = effective(
+    { tools: { run_command: { sandbox: "auto" } } },
+    project({ tools: { run_command: { sandbox: true } } }),
+  ).config;
+  expect(hardened.tools?.run_command?.sandbox).toBe(true);
+  // Global ausente = host (default); o projeto pode declarar Docker.
+  const fromDefault = effective(undefined, project({ tools: { run_command: { sandbox: "docker" } } })).config;
+  expect(fromDefault.tools?.run_command?.sandbox).toBe("docker");
 });
 
 test("agent nomeado só no projeto herda o teto global do agent principal (#548)", () => {
