@@ -13,7 +13,7 @@ Comparado com o OpenCode: o núcleo descobre uma config única (`packages/core/s
 | Superfície OpenCode | Paridade | Decisão no ASTRO |
 |---|---|---|
 | config do núcleo (global/projeto/explicit) | mesma | `$ASTRO_HOME/config.json` + projeto (`astro.config.json`/`--config`), ADR-0029 |
-| preferências do cliente (tema, abas) | mesma | `.astro/tui.json`, estado de UI, descartável |
+| preferências do cliente (tema, abas) | mesma | `$ASTRO_HOME/tui.json` (global) e `$ASTRO_HOME/projects/<chave>/tui.json` (override), estado de UI, descartável (#468) |
 | app/desktop/web como clientes adicionais | não se aplica | ASTRO é local: CLI, TUI e REPL no mesmo processo e nas mesmas camadas |
 | flags de CLI | mesma | efêmeras; vencem a invocação, nunca gravam |
 | servidor/sync de config | não se aplica | só `config push/pull` explícito via registry |

@@ -37,6 +37,7 @@ import { runSkillsCommand } from "./skills/cli";
 import { runMcpCommand } from "./mcp/cli";
 import { cliErrorLine } from "./cli-error";
 import { projectDataDir } from "./home-layout";
+import { astroHomePath } from "./astro-home";
 import { resolve } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -1404,7 +1405,7 @@ async function main(argv: string[]): Promise<number> {
       });
       for (const warning of session.warnings) console.error(`aviso: ${warning}`);
       const { openSessionApi } = await import("./chat/session-api");
-      sessionApi = openSessionApi(projectDataDir(base));
+      sessionApi = openSessionApi(projectDataDir(base), { home: astroHomePath() });
       await runRepl(session, io, { sessionApi, signal: io.signal, style: interactive, cwd: base, manager, interactive });
       return 0;
     } catch (error) {

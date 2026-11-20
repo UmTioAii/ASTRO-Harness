@@ -1,10 +1,10 @@
 /** Estado da TUI (T2): tema global em `$ASTRO_HOME/tui.json`, override por projeto (#468). */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative } from "node:path";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { astroHomePath } from "../astro-home";
-import { ConfigError } from "../core/config";
-import { globalTuiConfigPath, projectTuiConfigPath } from "../home-layout";
+import { assertInsideHome, ensureAstroHome, ensureDirInside, globalTuiConfigPath, projectTuiConfigPath } from "../home-layout";
+import { mkdirSync as ensurePrivateDirForMutation } from "node:fs";
 
 export type Theme = "dark" | "light" | "contrast";
 
@@ -27,14 +27,6 @@ export type ThemeColors = { accent: string; warning: string; error: string };
 
 const DEFAULT_CONFIG: TuiConfig = { theme: "dark" };
 
-/** Garante que o alvo existente fica dentro do `$ASTRO_HOME` canônico, seguindo links (I-11). */
-function assertInsideHome(home: string, path: string): void {
-  const rel = relative(realpathSync(home), realpathSync(path));
-  if (rel !== "" && (rel.startsWith("..") || isAbsolute(rel))) {
-    throw new ConfigError("estado da TUI fora do $ASTRO_HOME");
-  }
-}
-
 function normalizeList(value: unknown, max = Number.POSITIVE_INFINITY): string[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -54,13 +46,14 @@ function parseLayer(parsed: unknown): Partial<TuiConfig> {
   const record = parsed as Record<string, unknown>;
   const theme = typeof record.theme === "string" && isTheme(record.theme) ? record.theme : undefined;
   const lastModel = typeof record.lastModel === "string" && record.lastModel !== "" ? record.lastModel : undefined;
-  const favoriteModels = normalizeList(record.favoriteModels);
-  const recentModels = normalizeList(record.recentModels, 10);
+  // lista presente (inclusive vazia) é decisão explícita: vence a camada de baixo
+  const favoriteModels = Array.isArray(record.favoriteModels) ? normalizeList(record.favoriteModels) : undefined;
+  const recentModels = Array.isArray(record.recentModels) ? normalizeList(record.recentModels, 10) : undefined;
   return {
     ...(theme === undefined ? {} : { theme }),
     ...(lastModel === undefined ? {} : { lastModel }),
-    ...(favoriteModels.length === 0 ? {} : { favoriteModels }),
-    ...(recentModels.length === 0 ? {} : { recentModels }),
+    ...(favoriteModels === undefined ? {} : { favoriteModels }),
+    ...(recentModels === undefined ? {} : { recentModels }),
   };
 }
 
@@ -81,7 +74,7 @@ export function loadTuiConfig(cwd: string, env: NodeJS.ProcessEnv = process.env)
   const global = readLayer(globalTuiConfigPath(env), home);
   const project = readLayer(projectTuiConfigPath(cwd, env), home);
   const lastModel = project.lastModel ?? global.lastModel;
-  const favoriteModels = project.favoriteModels ?? global.favoriteModels;
+  const favoriteModels = project.favoriteModels || global.favoriteModels;
   const recentModels = project.recentModels ?? global.recentModels;
   return {
     theme: project.theme ?? global.theme ?? "dark",
@@ -96,11 +89,11 @@ export function loadTuiConfig(cwd: string, env: NodeJS.ProcessEnv = process.env)
  * nunca é copiado para cá). Estado é privado: diretório 0700, arquivo 0600.
  */
 export function saveTuiConfig(cwd: string, config: Partial<TuiConfig>, env: NodeJS.ProcessEnv = process.env): void {
-  const home = astroHomePath(env);
+  const home = ensureAstroHome(env);
   const file = projectTuiConfigPath(cwd, env);
-  const dir = dirname(file);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  assertInsideHome(home, dir);
+  // a guarda vem antes de qualquer criação profunda: recusa não deixa diretório fora do home
+  assertInsideHome(home, dirname(file));
+  ensureDirInside(home, dirname(file));
   if (existsSync(file)) assertInsideHome(home, file);
   const current = readLayer(file, home);
   const lastModel = config.lastModel ?? current.lastModel;
@@ -113,8 +106,8 @@ export function saveTuiConfig(cwd: string, config: Partial<TuiConfig>, env: Node
   const merged: Partial<TuiConfig> = {
     theme: config.theme ?? current.theme,
     ...(lastModel === undefined ? {} : { lastModel }),
-    ...(favoriteModels === undefined || favoriteModels.length === 0 ? {} : { favoriteModels }),
-    ...(recentModels === undefined || recentModels.length === 0 ? {} : { recentModels }),
+    ...(favoriteModels === undefined ? {} : { favoriteModels }),
+    ...(recentModels === undefined ? {} : { recentModels }),
   };
   const temp = `${file}.${randomUUID()}.tmp`;
   try {

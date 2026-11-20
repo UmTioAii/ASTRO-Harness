@@ -51,9 +51,12 @@ interface FoldedContext {
 }
 
 /** Case-folding em win32/darwin (ADR-0027); demais plataformas preservam case. */
-function fold(path: string): string {
+export function foldPathCase(path: string): string {
   return process.platform === "win32" || process.platform === "darwin" ? path.toLowerCase() : path;
 }
+
+/** Alias interno do módulo. */
+const fold = foldPathCase;
 
 function expandTilde(path: string): string | null {
   const user = /^~([^\\/]*)([\\/][\s\S]*)?$/.exec(path);

@@ -25,26 +25,44 @@ Skills, sessões e estado da TUI vivem em `$ASTRO_HOME` (#468, S2 de #401); a ch
 
 ## Chave do projeto
 
-`projectKey(projectPath)` (`src/home-layout.ts`) é o caminho canônico — absoluto, com `/` e caixa dobrada no win32 (mesmo diretório, mesma chave) — escapado byte a byte:
+`projectKey(projectPath)` (`src/home-layout.ts`) é o caminho canônico, escapado byte a byte:
 
-| Entrada | Chave |
+| Etapa | Regra |
 |---|---|
+| absoluto | `resolve(path)` |
+| separador | `\` vira `/` só no win32 (onde `\` é separador); no POSIX `\` é caractere literal |
+| caixa | dobrada em `win32` e `darwin` (`foldPathCase`, a mesma regra de `src/path-class.ts`); preservada no resto |
 | `/` (separador) | `_s` |
 | `[A-Za-z0-9.-]` | o próprio caractere |
-| qualquer outro (inclusive `_`) | `_x<hex>` por byte UTF-8 |
+| qualquer outro (inclusive `_`) | `_x<hex>` por byte UTF-8, sempre com dois dígitos |
 
-O escape é injetivo, então `/a/b` e `/a_b` nunca caem na mesma chave: dois projetos nunca compartilham diretório.
+O escape é injetivo — `_s` e `_x..` nunca se confundem, e o hex tem largura fixa —, então `/a/b`, `/a_b`, `/\x01f` e `/\x1f` caem em chaves distintas: dois projetos nunca compartilham diretório. A dobra de caixa acompanha o filesystem: no APFS/NTFS o mesmo diretório digitado com outra caixa é o mesmo projeto (senão sessões e skills "sumiriam"); no Linux, `/A` e `/a` continuam projetos distintos.
 
 Acima de `PROJECT_KEY_MAX_BYTES` (120 bytes, abaixo do limite de 255 de um nome de diretório) a chave vira `sha256-<32 hex>` do caminho canônico. O corte é exato: no teto ainda é o caminho legível, um byte acima já é hash. Determinístico e estável entre execuções.
 
 ## Tema e precedência
 
-`loadTuiConfig(cwd)` mescla camadas: override do projeto > `$ASTRO_HOME/tui.json` > default (`dark`). Cada campo vence por si; lista do projeto substitui a global quando presente. Arquivo ausente, inválido ou que escapa do `$ASTRO_HOME` por link vale como vazio (leitura tolerante); na escrita, um alvo que escapa é recusado (`estado da TUI fora do $ASTRO_HOME`, I-11). A escrita grava só a camada do projeto, sem copiar valores globais.
+`loadTuiConfig(cwd)` mescla camadas: override do projeto > `$ASTRO_HOME/tui.json` > default (`dark`). Cada campo vence por si; uma lista presente no projeto — inclusive vazia — substitui a global, então dá para limpar favoritos num projeto. Arquivo ausente, inválido ou que escapa do `$ASTRO_HOME` por link vale como vazio (leitura tolerante); na escrita, a guarda roda antes de qualquer `mkdir` e um alvo que escapa é recusado (`caminho de estado fora do $ASTRO_HOME`, I-11) sem deixar diretório fora do home. A escrita grava só a camada do projeto, sem copiar valores globais.
+
+## Escopo e permissões
+
+- Toda raiz de estado é validada contra o `$ASTRO_HOME` canônico antes de criar qualquer coisa: `ensureDirInside` checa o ancestral existente mais profundo, cria com `0700` e checa de novo; um junction preexistente em `projects/<chave>` ou em `sessions/` é recusado (`isInsideHome`), e a purga de cópia legada não apaga nada fora do home.
+- `SessionApi`, `saveTuiConfig` e a instalação de skill compartilham os mesmos helpers (`ensureAstroHome`/`ensureDirInside`/`ensurePrivateDir`), então home, `projects/`, a chave do projeto e a raiz de skills nascem `0700` (arquivos de estado `0600` no POSIX).
 
 ## O que continua no `.astro/` do projeto
 
-O `.astro/` do cwd é a camada do projeto e não é movido nem lido como fallback: `ledger`/`audit` (defaults `paths.*`), `memory.md` do projeto, `compaction/`, `exports/`, `outputs/` e os checkpoints de `loop-guard` (ADR-0010). Nenhum deles passa a viver em `$ASTRO_HOME` nesta fatia.
+O `.astro/` do cwd é a camada do projeto e não é movido: `ledger`/`audit` (defaults `paths.*`), `memory.md` do projeto, `compaction/`, `exports/`, `outputs/` e os checkpoints de `loop-guard` (ADR-0010), que seguem em `<cwd>/.astro/sessions/<run>/<agent>/`. Nenhum deles passa a viver em `$ASTRO_HOME` nesta fatia.
 
 ## Migração
 
-Nada é migrado, copiado ou apagado (#468, fora de escopo): `~/.astro/skills`, `<cwd>/.astro/skills`, `<cwd>/.astro/sessions.db`, `<cwd>/.astro/sessions/` e `<cwd>/.astro/tui.json` ficam intactos byte a byte e deixam de ser lidos. Com o default `~/.astro` a raiz de skills do usuário não muda de lugar; o que muda é a raiz de skills do projeto, as sessões e o estado da TUI. A ausência de criação no primeiro run é #469.
+Nada é migrado, copiado ou apagado (#468, fora de escopo). Por caminho legado:
+
+| Local | Depois de #468 |
+|---|---|
+| `~/.astro/skills` | continua sendo a raiz de skills do usuário enquanto `ASTRO_HOME` não for definido (é o mesmo `$ASTRO_HOME/skills` do default); com `ASTRO_HOME` definido, a raiz passa a ser a do novo home e a antiga não é lida |
+| `<cwd>/.astro/skills` | não é mais lido (a raiz do projeto é a chave em `$ASTRO_HOME`); o diretório fica intacto |
+| `<cwd>/.astro/sessions.db` | não é mais lido nem gravado; o arquivo fica intacto |
+| `<cwd>/.astro/sessions/` | continua sendo o store de checkpoints do `loop-guard` (ADR-0010) e **não pode ser apagado**; o JSON v1 de sessões que ficava aqui não é mais importado |
+| `<cwd>/.astro/tui.json` | não é mais lido nem gravado; o arquivo fica intacto |
+
+A ausência de criação no primeiro run é #469.

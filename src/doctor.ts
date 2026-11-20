@@ -827,7 +827,11 @@ export function collectFacts(
   const env = options.env ?? process.env;
   const projectCwd = resolve(options.projectCwd ?? process.cwd());
   const configPath = resolve(projectCwd, options.configPath ?? "astro.config.json");
-  const projectSkillsRoot = resolve(projectCwd, options.projectSkillsRoot ?? projectSkillsRootFor(projectCwd, env));
+  // Sem opção explícita, a raiz é a do runtime, sem `resolve`: `$ASTRO_HOME` relativo é
+  // resolvido contra o cwd do processo pelo loader, não contra o projeto (#468).
+  const projectSkillsRoot = options.projectSkillsRoot === undefined
+    ? projectSkillsRootFor(projectCwd, env)
+    : resolve(projectCwd, options.projectSkillsRoot);
   // A raiz do usuário é global: caminho relativo resolve contra o cwd do processo
   // (mesma base do loader de skills), nunca contra o projeto.
   const userSkillsRoot = resolve(options.userSkillsRoot ?? skillsUserRoot(env));

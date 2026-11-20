@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "../sanitize-external";
-import { projectDataDir } from "../home-layout";
+import { ensureDirInside, ensurePrivateDir, isInsideHome, projectDataDir } from "../home-layout";
 import { MAX_SESSION_BYTES, sanitizeSessionName, SessionStore, sanitizeSessionRecord, type SessionRecord } from "./store";
 
 const DATABASE_SCHEMA_VERSION = 3;
@@ -54,10 +54,15 @@ function isMissingFile(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
+export interface SessionApiOptions {
+  /** `$ASTRO_HOME` dono da raiz; quando presente, nenhum caminho sai dele (I-11). */
+  home?: string;
+}
+
 /** Abre a persistência SQLite sem impedir o chat quando o banco está indisponível. */
-export function openSessionApi(astroDir: string): SessionApi | undefined {
+export function openSessionApi(astroDir: string, options: SessionApiOptions = {}): SessionApi | undefined {
   try {
-    return new SessionApi(astroDir);
+    return new SessionApi(astroDir, options);
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error));
     console.error(
@@ -72,11 +77,14 @@ export class SessionApi {
   readonly databasePath: string;
   readonly migrationResult: SessionMigrationResult;
   readonly #db: Database;
+  readonly #home: string | undefined;
   #jsonFiles = new Map<string, JsonSessionCacheEntry>();
 
-  constructor(readonly astroDir: string = projectDataDir(process.cwd())) {
-    // estado privado: a raiz do projeto nasce 0700 (o banco é 0600 abaixo)
-    mkdirSync(astroDir, { recursive: true, mode: 0o700 });
+  constructor(readonly astroDir: string = projectDataDir(process.cwd()), options: SessionApiOptions = {}) {
+    this.#home = options.home;
+    // estado privado: a guarda vem antes de criar (um junction não escapa) e a raiz nasce 0700
+    if (this.#home === undefined) ensurePrivateDir(astroDir);
+    else ensureDirInside(this.#home, astroDir);
     this.databasePath = join(astroDir, "sessions.db");
     this.#db = new Database(this.databasePath, { create: true });
     try {
@@ -205,9 +213,18 @@ export class SessionApi {
     return deleted;
   }
 
+  /** Raiz do JSON v1 do projeto; `undefined` quando um link a tira do `$ASTRO_HOME` (I-11). */
+  #legacyDir(): string | undefined {
+    const dir = join(this.astroDir, "sessions");
+    if (this.#home !== undefined && !isInsideHome(this.#home, dir)) return undefined;
+    return dir;
+  }
+
   /** Remove cópias legadas por id, inclusive as ilegíveis (nome carrega o id), e confirma o resultado. */
   #purgeLegacy(id: string): boolean {
-    const dir = join(this.astroDir, "sessions");
+    const dir = this.#legacyDir();
+    // fora do home não se apaga nada: o tombstone ainda segura enquanto o banco existir
+    if (dir === undefined) return false;
     try { new SessionStore(dir).deleteById(id); } catch { /* a varredura por nome abaixo cobre */ }
     const suffix = `-${id}.json`;
     try {
@@ -271,7 +288,8 @@ export class SessionApi {
   }
 
   #migrateJsonSessions(): SessionMigrationResult {
-    const legacyDir = join(this.astroDir, "sessions");
+    const legacyDir = this.#legacyDir();
+    if (legacyDir === undefined) return { migrated: 0, skipped: 0, existing: 0, diagnostics: [] };
     let files: Dirent[];
     try {
       files = readdirSync(legacyDir, { withFileTypes: true });

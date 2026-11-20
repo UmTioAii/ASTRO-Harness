@@ -1186,6 +1186,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   try {
     // Skills (C1c): /<nome> vira o prompt da skill; tools da skill ⊆ allowlist (I-01); falha fecha o run
     const task = resolveTaskSkill(opts.task, { cwd, allow: config.agent.tools, audit, run, agent: AGENT_NAME,
+      env: opts.env,
       ...(opts.skillsUserRoot === undefined ? {} : { userRoot: opts.skillsUserRoot }),
       ...(opts.skillsProjectRoot === undefined ? {} : { projectRoot: opts.skillsProjectRoot }) });
     // Se há agents configurados, usa multi-agent session (chat/histórico e
