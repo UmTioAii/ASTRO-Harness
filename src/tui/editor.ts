@@ -24,6 +24,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   { name: "/init", description: "cria AGENTS.md no diretório atual" },
   { name: "/usage", description: "uso da sessão (turnos, tokens, custo) e budget" },
   { name: "/log", description: "mostra o log da sessão (com /log <n>, só as últimas n linhas)" },
+  { name: "/terms", description: "termos de uso por inteiro e a versão aceita" },
   { name: "/theme", description: "lista ou troca o tema (dark, light, contrast)" },
   { name: "/compact", description: "resume o histórico em um sumário" },
   { name: "/summarize", description: "alias de /compact" },

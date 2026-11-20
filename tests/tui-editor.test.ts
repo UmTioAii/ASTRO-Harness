@@ -40,6 +40,9 @@ describe("completions do editor (T2, #63)", () => {
     }
     expect(commandDescription("/model")).toContain("modelo");
     expect(commandDescription("/sessions")).toContain("exclui");
+    // `/terms` é anunciado pelo /help; a sugestão da TUI não pode omiti-lo (#591).
+    expect(COMMANDS.map((command) => command.name)).toContain("/terms");
+    expect(commandDescription("/terms")).toContain("termos");
   });
 
   test("suggestionWindow rola mantendo o selecionado visível (#276)", () => {

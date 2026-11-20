@@ -39,6 +39,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/todo-write.md` | Ao usar ou alterar `todo_write` (plano do run, F-17) | ~40 |
 | `docs/run-tests.md` | Ao configurar `run.tests` ou usar/alterar `run_tests` (F-15, #538) | ~55 |
 | `docs/memory.md` | Ao usar ou alterar a memória persistida e `memory_write` (#532) | ~70 |
+| `docs/terms.md` | Ao mexer no texto dos termos, no aceite por versão ou no registro em `state.json` (#479) | ~45 |
 
 Referências usadas nos documentos:
 

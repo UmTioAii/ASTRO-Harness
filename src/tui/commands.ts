@@ -9,6 +9,7 @@ import { exportSession } from "../chat/export";
 import { initAgents } from "../chat/init";
 import { usageLines } from "../chat/usage";
 import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryReport } from "../memory";
+import { termsReport } from "../terms";
 import { THEMES, isTheme, type Theme } from "./theme";
 import { detectHostShells } from "../tools/host-shell";
 import {
@@ -58,6 +59,8 @@ export interface RunCommandOptions {
   resumeId?: string;
   /** Shells presentes na máquina (#474); default = `detectHostShells()` (injetável no teste). */
   availableShells?: readonly string[];
+  /** `state.json` lido pelo `/terms` (#479); default = `$ASTRO_HOME/state.json` (injetável no teste). */
+  termsPath?: string;
 }
 
 function messageOf(error: unknown): string {
@@ -221,6 +224,9 @@ export async function runCommand(
       }
       return { entries: [], openLog: n };
     }
+    case "terms":
+      // texto completo por inteiro na TUI, com a versão aceita; estado ilegível vira aviso (#479)
+      return { entries: [{ kind: "info", text: termsReport(options.termsPath) }] };
     case "providers":
       return { entries: [], openProviders: { mode: "list" } };
     case "provider": {

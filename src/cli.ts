@@ -28,7 +28,7 @@ import { replayRun } from "./replay";
 import { AgentSession } from "./chat/agent-session";
 import { runRepl } from "./chat/repl";
 import { chatApprovers } from "./chat/approvers";
-import { nodeReplIO } from "./chat/node-io";
+import type { NodeReplIO } from "./chat/node-io";
 import { runHealthCheck, runPoolHealthCheck, formatProvidersList, testProvider } from "./health";
 import { Vault, vaultPath } from "./vault";
 import { applyFixes, doctorJson, exitCode as doctorExitCode, renderReport, runDoctor } from "./doctor";
@@ -45,6 +45,8 @@ import { createInterface } from "node:readline";
 import type { SwapApprover } from "./approval";
 import type { BudgetChoice, BudgetDecider, BudgetStatus } from "./budget";
 import { trustChoice, trustPrompt, type TrustAsk } from "./trust";
+import { ttyTermsAsk, TERMS_UNATTENDED_NOTICE } from "./terms";
+import { bootChat } from "./chat/boot";
 import { continueTask, findCheckpointAgents, loadCheckpoint, type NoProgressDecider } from "./loop-guard";
 
 /** Aprovação interativa de troca (F-19); sem TTY retorna undefined (runtime nega/pending). */
@@ -1409,10 +1411,19 @@ async function main(argv: string[]): Promise<number> {
   if (parsed.kind === "chat") {
     const o = parsed.options;
     const base = o.cwd ?? process.cwd();
-    const io = nodeReplIO();
+    const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+    let io: NodeReplIO | undefined;
     let sessionApi: import("./chat/session-api").SessionApi | undefined;
     try {
-      const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+      // #479: o portão dos termos roda antes do readline do REPL — dois readlines
+      // de terminal no mesmo stdin disputam o mesmo chunk. Recusa sai sem gravar
+      // nada; sem TTY (stdin em pipe, CI) segue com um aviso e sem registrar aceite.
+      const boot = await bootChat({ ask: ttyTermsAsk() });
+      if (boot.kind === "declined") {
+        console.error("termos de uso não aceitos — saindo sem gravar nada");
+        return 1;
+      }
+      io = boot.io;
       const configPath = resolve(o.configPath);
       const project = loadProjectConfig(configPath, { env: process.env });
       const manager = new ProfileManager({
@@ -1432,6 +1443,9 @@ async function main(argv: string[]): Promise<number> {
       for (const warning of session.warnings) console.error(`aviso: ${warning}`);
       const { openSessionApi } = await import("./chat/session-api");
       sessionApi = openSessionApi(projectDataDir(base), { home: astroHomePath() });
+      // Sem TTY o aviso dos termos só faz sentido agora: antes da config carregada
+      // ele antecedia um erro de config que não o causava (#591).
+      if (boot.kind === "unattended") console.error(`aviso: ${TERMS_UNATTENDED_NOTICE}`);
       await runRepl(session, io, { sessionApi, signal: io.signal, style: interactive, cwd: base, manager, interactive });
       return 0;
     } catch (error) {
@@ -1439,7 +1453,7 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     } finally {
       sessionApi?.close();
-      io.close();
+      io?.close();
     }
   }
 

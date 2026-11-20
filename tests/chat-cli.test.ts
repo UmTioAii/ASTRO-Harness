@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Auditor } from "../src/audit";
 import { SessionApi } from "../src/chat/session-api";
 import { projectDataDir } from "../src/home-layout";
+import { TERMS_UNATTENDED_NOTICE } from "../src/terms";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -34,7 +35,8 @@ test("bun src/cli.ts chat roda um turno e encerra com /exit", async () => {
     const exit = await proc.exited;
     const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();
-    expect(stderr).toBe("");
+    // #479: sem TTY o chat não pergunta os termos; só avisa, sem gravar o aceite.
+    expect(stderr.split("\n").filter((line) => line !== "" && line !== `aviso: ${TERMS_UNATTENDED_NOTICE}`)).toEqual([]);
     expect(exit).toBe(0);
     expect(stdout).toContain("astro chat");
     expect(stdout).toContain("ok do mock");
@@ -125,6 +127,23 @@ test("chat sem --config inválido falha claro", async () => {
   proc.stdin.end();
   expect(await proc.exited).toBe(1);
   expect(await new Response(proc.stderr).text()).toContain("erro:");
+}, 20_000);
+
+test("chat com --config inválido não imprime o aviso dos termos antes do erro de config (#591)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "astro-chat-cli-terms-"));
+  const home = mkdtempSync(join(tmpdir(), "astro-chat-cli-terms-home-"));
+  const configPath = join(dir, "astro.config.json");
+  writeFileSync(configPath, "{ nope\n");
+  const proc = Bun.spawn(["bun", "src/cli.ts", "chat", "--config", configPath, "--cwd", dir], {
+    cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, ASTRO_HOME: home } as Record<string, string>,
+  });
+  proc.stdin.end();
+  expect(await proc.exited).toBe(1);
+  const stderr = await new Response(proc.stderr).text();
+  // O aviso não pode vir antes de um erro de config que ele não causa.
+  expect(stderr).not.toContain(TERMS_UNATTENDED_NOTICE);
+  expect(stderr).toContain("erro:");
 }, 20_000);
 
 /** `chat` sem TTY com mock que pede uma tool na 1ª chamada e responde texto na 2ª (#262). */
