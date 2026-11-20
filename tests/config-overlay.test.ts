@@ -81,7 +81,7 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     // `scope: "project"` também é mais estreito: o teto do time entra nele.
     [{ budget: { scope: "project", limitUsd: 500, warnAt: 0.8, onExceed: "ask" } }, project({ budget: { scope: "month", limitUsd: 500 } }), /amplia o budget global/],
     // Agent nomeado: tools e perfil de permissão também não podem ampliar.
-    [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }), twoAccounts({ coder: { tools: ["read_file", "write_file"] } }), /amplia a allowlist global do agent "coder"/],
+    [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }), twoAccounts({ coder: { tools: ["read_file", "write_file"] } }), /fora da allowlist global \(/m],
     [twoAccounts({ coder: { tools: ["read_file"], permission: "read-only" } }), twoAccounts({ coder: { permission: "full" } }), /amplia a permissão global do agent "coder"/],
     // O projeto não redireciona a credencial global para outro endpoint.
     [{ providers: { acme: { kind: "openai-compat", baseUrl: "https://acme.example/v1", credentialRef: "ACME_KEY" } } }, project({ providers: { p: provider("p"), acme: { baseUrl: "https://outro.example/v1" } } }), /redireciona a credencial global/],
@@ -91,6 +91,72 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);
   }
+});
+
+test("agent nomeado só no projeto herda o teto global do agent principal (#548)", () => {
+  const global = {
+    providers: { p: provider("p"), q: provider("q") }, models: [model("p", "m"), model("q", "n")],
+    agent: { model: "p/m", maxSteps: 10, tools: ["read_file"] },
+  };
+  // Ampliar tools de um nomeado que só existe no projeto é recusado.
+  expect(() => effective(global, project({
+    agents: { coder: { model: "p/m", maxSteps: 5, tools: ["read_file", "run_command"] } },
+  }))).toThrow(/fora da allowlist do agent principal \(/m);
+  // O `permission` só existe no nomeado (D-28): sem declaração global desse
+  // nomeado não há teto a comparar, e o default do runtime é full.
+  expect(effective(global, project({
+    agents: { coder: { model: "p/m", maxSteps: 5, tools: ["read_file"], permission: "full" } },
+  })).config.agents?.coder?.permission).toBe("full");
+  // Estreitar continua aceito, e omitir tools herda a lista do agent principal.
+  const narrowed = effective(global, project({
+    agents: { coder: { model: "p/m", maxSteps: 5, tools: ["read_file"] } },
+  })).config;
+  expect(narrowed.agents?.coder?.tools).toEqual(["read_file"]);
+  const inherited = effective(global, project({
+    agents: { coder: { model: "p/m", maxSteps: 5 } },
+  })).config;
+  expect(inherited.agents?.coder?.tools).toEqual(["read_file"]);
+});
+
+test("sem tools em nenhuma camada, o nomeado fica no default de D-07 (#548)", () => {
+  // Nem o global nem o projeto declaram `agent.tools`: o principal cai no
+  // default e é esse o teto do nomeado.
+  const global = { providers: { p: provider("p"), q: provider("q") }, models: [model("p", "m"), model("q", "n")] };
+  const withCoder = (tool: string) => project({
+    agent: { model: "p/m", maxSteps: 4 },
+    agents: { coder: { model: "p/m", maxSteps: 5, tools: [tool] } },
+  });
+  expect(effective(global, withCoder("read_file")).config.agents?.coder?.tools).toEqual(["read_file"]);
+  expect(() => effective(global, withCoder("handoff"))).toThrow(/fora da allowlist do agent principal \(/m);
+});
+
+test("o principal pode declarar tools quando o global é silencioso, e o nomeado as herda (#548)", () => {
+  // Global silencioso sobre tools: o projeto declara handoff para o principal e
+  // o nomeado usa handoff — o run inteiro já tem a tool, então não há escalada.
+  const global = { providers: { p: provider("p"), q: provider("q") }, models: [model("p", "m"), model("q", "n")] };
+  const merged = effective(global, project({
+    agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "handoff"] },
+    agents: { coder: { model: "p/m", maxSteps: 5, tools: ["handoff"] } },
+  })).config;
+  expect(merged.agent.tools).toEqual(["read_file", "handoff"]);
+  expect(merged.agents?.coder?.tools).toEqual(["handoff"]);
+  // E o nomeado não passa do principal: spawn_agent não está na lista dele.
+  expect(() => effective(global, project({
+    agent: { model: "p/m", maxSteps: 4, tools: ["read_file", "handoff"] },
+    agents: { coder: { model: "p/m", maxSteps: 5, tools: ["spawn_agent"] } },
+  }))).toThrow(/fora da allowlist do agent principal \(/m);
+});
+
+test("o `agent.permission` global não vira teto do nomeado: o campo não existe no schema (#548)", () => {
+  // `agent.permission` é descartado pelo schema; o projeto não deve ser
+  // recusado por um teto que o runtime nunca aplica (D-28).
+  const global = {
+    providers: { p: provider("p"), q: provider("q") }, models: [model("p", "m"), model("q", "n")],
+    agent: { model: "p/m", maxSteps: 10, tools: ["read_file"], permission: "read-only" },
+  };
+  expect(effective(global, project({
+    agents: { coder: { model: "p/m", maxSteps: 5, tools: ["read_file"], permission: "full" } },
+  })).config.agents?.coder?.permission).toBe("full");
 });
 
 test("projeto pode estreitar o teto de aprovação (#526)", () => {

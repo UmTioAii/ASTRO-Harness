@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, isPlainObject } from "./core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, isPlainObject } from "./core/config";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./permissions";
 import { isVaultRef } from "./secrets";
 
@@ -96,9 +96,10 @@ function assertExclusiveModel(agent: unknown, field: string): void {
 }
 
 /**
- * O projeto estreita a camada global, nunca amplia (ADR-0029): tools e perfil de
- * permissão ficam dentro do global, `permissions.mode` fica mais restrito, o
- * budget não passa do teto global e a credencial global não muda de endpoint.
+ * O projeto estreita a camada global, nunca amplia (ADR-0029): tools do agent
+ * principal e dos nomeados ficam dentro do global, `permissions.mode` fica mais
+ * restrito, o budget não passa do teto global e a credencial global não muda de
+ * endpoint.
  */
 export function assertNarrowed(
   global: Record<string, unknown>,
@@ -116,17 +117,30 @@ export function assertNarrowed(
   if (main !== undefined && mainAfter !== undefined) assertAgentNarrowed(main, mainAfter, "do agent principal");
   const named = isPlainObject(global.agents) ? global.agents : {};
   const namedAfter = isPlainObject(merged.agents) ? merged.agents : {};
-  for (const [name, agent] of Object.entries(named)) {
-    const after = namedAfter[name];
-    if (isPlainObject(agent) && isPlainObject(after)) assertAgentNarrowed(agent, after, `do agent "${name}"`);
-  }
-  // Teto de passos dos nomeados cobre também os declarados só no projeto: sem
-  // valor global do nomeado, vale o teto do agent principal (mainCeiling).
+  // Um nomeado declarado só no projeto não escapa do teto (#548): as tools
+  // ficam dentro do global do próprio nomeado; sem ele, dentro da allowlist do
+  // agent principal (o schema já a aplica; aqui falhamos cedo com a regra de
+  // política); sem tools em nenhum dos dois, dentro do default de D-07. O
+  // `permission` é comparado só com o global do próprio nomeado, o único lugar
+  // onde o schema define esse campo (D-28); o agent principal não o declara.
   for (const [name, after] of Object.entries(namedAfter)) {
     if (!isPlainObject(after)) continue;
     const globalAgent = isPlainObject(named[name]) ? named[name] : undefined;
-    const ceiling = globalAgent !== undefined && typeof globalAgent.maxSteps === "number" ? globalAgent.maxSteps : mainCeiling;
-    assertStepsCeiling(after.maxSteps, `agents.${name}.maxSteps`, ceiling);
+    if (globalAgent !== undefined) {
+      assertNotWider(globalAgent.permission, after.permission, PERMISSION_RANK, `a permissão global do agent "${name}"`);
+    }
+    const tools = globalAgent?.tools;
+    const fromGlobal = Array.isArray(tools);
+    const ceilingTools = fromGlobal
+      ? tools
+      : Array.isArray(mainAfter?.tools) ? mainAfter.tools : [...DEFAULT_AGENT_TOOLS];
+    assertToolsWithin(ceilingTools, after.tools, name, fromGlobal);
+    // Teto de passos: o global do nomeado, senão o teto do principal
+    // (`BASELINE_MAX_STEPS` quando o global não declara).
+    const stepsCeiling = globalAgent !== undefined && typeof globalAgent.maxSteps === "number"
+      ? globalAgent.maxSteps
+      : mainCeiling;
+    assertStepsCeiling(after.maxSteps, `agents.${name}.maxSteps`, stepsCeiling);
   }
   // Modo de permissão do gate: o projeto só pode ser mais restrito.
   const globalMode = isPlainObject(global.permissions) ? global.permissions.mode : undefined;
@@ -233,6 +247,15 @@ export function assertNarrowed(
 interface GlobalSource {
   id: string;
   provider: Record<string, unknown>;
+}
+
+/** Tools de um agent nomeado: o valor declarado nunca sai da allowlist do teto. */
+function assertToolsWithin(allowed: readonly unknown[], declared: unknown, name: string, fromGlobal: boolean): void {
+  if (!Array.isArray(declared)) return;
+  const extra = declared.filter((tool) => !allowed.map(String).includes(String(tool)));
+  if (extra.length === 0) return;
+  const source = fromGlobal ? "global" : "do agent principal";
+  throw new ConfigError(`config inválida: o agent "${name}" usa tools fora da allowlist ${source} (${extra.join(", ")})`);
 }
 
 /** Tools e perfil de permissão de um agent: só o que o global permite. */
