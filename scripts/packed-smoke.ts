@@ -11,10 +11,14 @@
  * `npm install` do tarball, que baixa `ink`/`react`/`bun` do registry como o
  * §4 de `docs/release.md`; dentro da árvore só `dist/` é reescrito (build).
  *
- * O boot da TUI é o ponto do #542: etapa obrigatória. Um `skipped` numa etapa
- * obrigatória fecha o run como falha; `--allow-skip-tui` é a única tolerância.
+ * O boot da TUI é o ponto do #542: etapa obrigatória, sem tolerância. O preload
+ * `packed-smoke-tty.ts` falsifica `isTTY` em toda plataforma, então a mensagem
+ * "precisa de um terminal" só aparece quando o preload NÃO rodou — exatamente
+ * quando o gate tem de falhar. A TUI também prova `/providers` (health `ok` com
+ * latência) e `/log` (header com endpoint + linha de turno), as duas provas do
+ * critério de aceite do #542.
  *
- * Uso: bun scripts/packed-smoke.ts [--json] [--allow-skip-tui]
+ * Uso: bun scripts/packed-smoke.ts [--json]
  */
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -25,7 +29,6 @@ import { resolveBun } from "../src/launcher";
 import { redactSecrets } from "../src/sanitize-external";
 import { canonicalFolder } from "../src/trust";
 import {
-  cleanupOnSignal,
   installedAstroBin,
   readPackageMeta,
   stepEnv,
@@ -39,16 +42,26 @@ export const SMOKE_PROMPT = "smoke: responda ok";
 /** Nome da env com a chave falsa: o provider guarda só o ref (`I-03`). */
 export const SMOKE_KEY_ENV = "ASTRO_PACKED_SMOKE_KEY";
 export const SMOKE_KEY_VALUE = "loopback-dummy-key";
+/** Etapa que prova o boot da TUI: sem ela o resumo não sai `ok`. */
+export const TUI_STEP_ID = "tui";
 
 const FIRST_FRAME_MS = 30_000;
 const TURN_MS = 45_000;
+/** Telas da TUI (`/providers`, `/log`) respondem em memória: folga curta. */
+const SCREEN_MS = 15_000;
 const EXIT_MS = 15_000;
 const STEP_TIMEOUT_MS = 15 * 60_000;
 const POLL_MS = 50;
+const REMOVE_ATTEMPTS = 6;
+const REMOVE_DELAY_MS = 150;
 /** Prefixo próprio: o temporário não se confunde com o do `release:check`. */
 const TEMP_PREFIX = "astro-packed-smoke-";
 /** Mensagem do `runTui` quando o processo não tem terminal. */
 const NEEDS_TTY = /precisa de um terminal interativo/i;
+
+export class SmokeError extends Error {
+  override name = "SmokeError";
+}
 
 /** Launcher do pacote é Node; ele resolve o Bun empacotado. */
 function nodeBinary(): string {
@@ -77,6 +90,24 @@ function removeTempDir(dir: string): void {
 }
 
 /**
+ * Windows só libera o `cwd` (e os arquivos dentro dele) um pouco depois do
+ * filho sair: tenta de novo em vez de falhar o `rm` de um diretório que já era.
+ */
+export function removeTempDirWithRetry(dir: string, attempts = REMOVE_ATTEMPTS, delayMs = REMOVE_DELAY_MS): void {
+  let last: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      removeTempDir(dir);
+      return;
+    } catch (error) {
+      last = error;
+      if (attempt < attempts - 1) Bun.sleepSync(delayMs);
+    }
+  }
+  throw last instanceof Error ? last : new Error(String(last));
+}
+
+/**
  * `redactSecrets` casa por formato (`apiKey|token|password`…); a chave de
  * fixture do smoke não tem esse formato, então sai por identidade (`I-03`).
  */
@@ -89,31 +120,22 @@ function failureTail(text: string): string {
   return redactSmokeText(tailForFailure(text));
 }
 
+/** Saída da TUI sem ANSI: os frames do Ink deixam só o texto comparável. */
+export function plainOutput(text: string): string {
+  return text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+}
+
 /**
- * Ctrl-C/SIGTERM no meio do `npm install` não deixa temporário com
- * `node_modules`: cada diretório criado é limpo pelo `cleanupOnSignal` do
- * `release:check` e o processo sai uma vez só, no fim (130/143).
+ * Linhas lógicas da TUI: sem ANSI, sem a borda `│ … │` dos painéis do Ink e sem
+ * o padding da caixa. Assim uma linha dentro de painel compara por igualdade.
  */
-function installCleanupHandlers(dirs: readonly string[]): () => void {
-  const tempRoot = tmpdir();
-  const onSignal = (signal: "SIGINT" | "SIGTERM"): void => {
-    for (const dir of dirs) {
-      // `exit` vira no-op: o handler limpa todos e sai depois do laço.
-      cleanupOnSignal(tempRoot, dir, signal, {
-        remove: (_root, target) => removeTempDir(target),
-        exit: () => {},
-      });
-    }
-    process.exit(signal === "SIGINT" ? 130 : 143);
-  };
-  const onSigint = (): void => onSignal("SIGINT");
-  const onSigterm = (): void => onSignal("SIGTERM");
-  process.on("SIGINT", onSigint);
-  process.on("SIGTERM", onSigterm);
-  return () => {
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-  };
+export function tuiLines(text: string): string[] {
+  return plainOutput(text)
+    .split(/\r?\n/)
+    .map((line) => line
+      .replace(/^\s*│\s?/, "")
+      .replace(/\s*│\s*$/, "")
+      .trim());
 }
 
 export interface BunLookupDeps {
@@ -156,8 +178,6 @@ export function packagedBun(pkgDir: string, deps: BunLookupDeps = {}): string {
 export interface CliOptions {
   json: boolean;
   help: boolean;
-  /** Tolerância explícita: sem terminal, a etapa TUI sai pulada em vez de falhar. */
-  allowSkipTui: boolean;
 }
 
 export interface RecordedRequest {
@@ -175,21 +195,22 @@ export interface StepResult {
   detail: string;
 }
 
-export class SmokeError extends Error {
-  override name = "SmokeError";
+export interface StepOutcome {
+  status: "passed" | "skipped";
+  detail: string;
 }
 
-const USAGE = `Uso: bun scripts/packed-smoke.ts [--json] [--allow-skip-tui]
+export const USAGE = `Uso: bun scripts/packed-smoke.ts [--json]
 
 Empacota e instala o tarball local, exercita a CLI instalada e abre a TUI com
 um provider mock em loopback. Não publica nada e não usa credencial real.
   --json            imprime só o resumo JSON ao final
-  --allow-skip-tui  sem terminal, marca a etapa TUI como pulada (default: falha)
   --help            mostra esta ajuda
 
-A etapa TUI é obrigatória: etapa obrigatória pulada fecha o run como falha.
-O wizard de provider e a navegação (/providers, /log, /model) seguem
-manuais: docs/release.md §5.`;
+Não há tolerância para a etapa TUI: ela é obrigatória em toda plataforma. O
+preload do smoke falsifica o TTY; "precisa de um terminal" significa que o
+preload não rodou e o run falha. O resumo só é "ok" com o boot da TUI.
+O wizard de provider segue manual: docs/release.md §5.`;
 
 /** Config do projeto temporário: provider local sem chave real, modelo fixo. */
 export function smokeConfig(port: number): Record<string, unknown> {
@@ -211,13 +232,32 @@ export function trustState(folder: string): AstroHomeState {
   return { version: 1, trust: { folders: [folder] }, migrations: { providers: true, trust: true } };
 }
 
+/**
+ * Config do projeto (base URL do mock) + `$ASTRO_HOME/state.json` já confiável.
+ * A pasta vai para o trust como `realpath`: `ensureTrustedCwd` compara com
+ * `canonicalFolder` e, sem isso, macOS (`/var`) e o TEMP 8.3 do Windows abrem
+ * o modal de trust e o prompt cai dentro dele. `saveHomeState` valida o schema
+ * aqui, não 45 s depois dentro da TUI.
+ */
+export function prepareHome(home: string, projectDir: string, port: number): void {
+  writeFileSync(join(projectDir, "astro.config.json"), `${JSON.stringify(smokeConfig(port), null, 2)}\n`);
+  saveHomeState(trustState(canonicalFolder(projectDir)), join(home, "state.json"));
+}
+
 /** Primeira linha do header (`ASTRO v<versão> · provider/modelo · saúde`). */
 export function firstFrame(output: string, version: string): string | undefined {
-  const plain = output.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
-  return plain
+  return plainOutput(output)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line.includes(`ASTRO v${version}`) && line.includes(`${SMOKE_PROVIDER}/${SMOKE_MODEL}`));
+}
+
+/**
+ * Requisições de turno: só `.../chat/completions`. O health (`GET /models`)
+ * usa o mesmo mock e não conta como POST do turno.
+ */
+export function chatRequests(requests: readonly RecordedRequest[]): RecordedRequest[] {
+  return requests.filter((request) => request.path.endsWith("/chat/completions"));
 }
 
 /**
@@ -229,9 +269,10 @@ export function completionProblem(
   requests: readonly RecordedRequest[],
   expect: { model: string; prompt: string; key: string },
 ): string | undefined {
-  if (requests.length !== 1) return `mock recebeu ${requests.length} requisição(ões); esperava 1`;
-  const request = requests[0]!;
-  if (request.method !== "POST" || !request.path.endsWith("/chat/completions")) {
+  const posts = chatRequests(requests);
+  if (posts.length !== 1) return `mock recebeu ${posts.length} chamada(s) de chat; esperava 1`;
+  const request = posts[0]!;
+  if (request.method !== "POST") {
     return `mock recebeu ${request.method} ${request.path}; esperava POST .../chat/completions`;
   }
   if (request.authorization !== `Bearer ${expect.key}`) {
@@ -255,13 +296,58 @@ export function completionProblem(
   return undefined;
 }
 
+/** Footer só mostra turnos concluídos (#480): `1 turno(s)` isolado, não `11`. */
+export function hasClosedTurn(output: string, turns = 1): boolean {
+  return new RegExp(`(?:^|\\D)${turns} turno\\(s\\)(?!\\d)`, "m").test(plainOutput(output));
+}
+
+/** `Resumo: … 0 fail` do doctor, sem aceitar `10 fail` como vizinho. */
+export function doctorClean(output: string): boolean {
+  return /(?:^|\D)0 fail(?!\d)/m.test(plainOutput(output));
+}
+
+/**
+ * Header da tela `/log` (#514): linha própria com versão, provider/modelo e
+ * endpoint. A linha da lane no buffer (`[sessão] …`) não serve: só a tela prova
+ * que o `/log` abriu com o endpoint certo.
+ */
+export function logHeaderShown(output: string, version: string, port: number): boolean {
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `^ASTRO v${escaped} · ${SMOKE_PROVIDER}/${SMOKE_MODEL} · endpoint http://127\\.0\\.0\\.1:${port}/v1\\r?$`,
+    "m",
+  ).test(plainOutput(output));
+}
+
+/** Linha de turno do `/log` (lane `[turno]`), na linha inteira. */
+export function turnLogged(output: string): boolean {
+  return /^\[turno\] turno concluído · \d+ step\(s\)\r?$/m.test(plainOutput(output));
+}
+
+/** Linha `ok` do health na tela de providers, quando existir. */
+export function providerOkLine(output: string, provider = SMOKE_PROVIDER): string | undefined {
+  const pattern = new RegExp(`^${provider}: ok · \\d+ms$`);
+  return tuiLines(output).find((line) => pattern.test(line));
+}
+
+/** Resultado do `/providers` → `t` → enter: `mock: ok · 12ms`. */
+export function providerOk(output: string, provider = SMOKE_PROVIDER): boolean {
+  return providerOkLine(output, provider) !== undefined;
+}
+
+/** Confirmação do `t` na tela de providers (`Testar mock?`). */
+export function providerTestPrompt(output: string): boolean {
+  return tuiLines(output).includes(`Testar ${SMOKE_PROVIDER}?`);
+}
+
 export function parseArgs(argv: readonly string[]): CliOptions {
-  const options: CliOptions = { json: false, help: false, allowSkipTui: false };
+  const options: CliOptions = { json: false, help: false };
   for (const arg of argv) {
     if (arg === "--json") options.json = true;
-    else if (arg === "--allow-skip-tui") options.allowSkipTui = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
-    else throw new Error(`argumento desconhecido: ${arg}`);
+    else if (arg === "--allow-skip-tui") {
+      throw new Error("--allow-skip-tui foi removido: a etapa TUI é obrigatória em toda plataforma");
+    } else throw new Error(`argumento desconhecido: ${arg}`);
   }
   return options;
 }
@@ -296,9 +382,15 @@ interface MockServer {
   stop: () => void;
 }
 
-/** Mock OpenAI-compatible: grava cada requisição e responde um turno fixo. */
+/**
+ * Mock OpenAI-compatible: grava cada requisição, responde o health
+ * (`GET /v1/models`, para `/providers` → `t` resolver `ok`) e um turno fixo.
+ */
 function startMock(): MockServer {
   const requests: RecordedRequest[] = [];
+  let stopped = false;
+  const json = (body: unknown, status = 200): Response =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -312,23 +404,51 @@ function startMock(): MockServer {
         authorization: authorizationHeader === null ? undefined : authorizationHeader,
         body,
       });
-      if (!path.endsWith("/chat/completions")) {
-        return new Response(JSON.stringify({ error: { message: "mock: rota inesperada" } }), {
-          status: 404,
-          headers: { "content-type": "application/json" },
-        });
+      if (request.method === "GET" && path.endsWith("/models")) {
+        return json({ object: "list", data: [{ id: SMOKE_MODEL, object: "model" }] });
       }
-      return new Response(JSON.stringify({
+      if (!path.endsWith("/chat/completions")) {
+        return json({ error: { message: "mock: rota inesperada" } }, 404);
+      }
+      return json({
         id: "chatcmpl-packed-smoke",
         object: "chat.completion",
         created: 0,
         model: SMOKE_MODEL,
         choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
         usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9 },
-      }), { headers: { "content-type": "application/json" } });
+      });
     },
   });
-  return { port: server.port ?? 0, requests, stop: () => void server.stop(true) };
+  return {
+    port: server.port ?? 0,
+    requests,
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      void server.stop(true);
+    },
+  };
+}
+
+/** Filho/mock vivos, para o handler de sinal encerrar antes de remover o temporário. */
+export interface CleanupRegistry {
+  child?: { kill: () => void; readonly exited: Promise<number>; readonly exitCode: number | null };
+  mock?: { stop: () => void };
+}
+
+/** Encerra filho e mock e espera o filho sair (Windows segura o `cwd` até lá). */
+export async function releaseResources(registry: CleanupRegistry): Promise<void> {
+  const mock = registry.mock;
+  registry.mock = undefined;
+  if (mock !== undefined) {
+    try { mock.stop(); } catch { /* já parado */ }
+  }
+  const child = registry.child;
+  registry.child = undefined;
+  if (child === undefined) return;
+  try { child.kill(); } catch { /* já morto */ }
+  await Promise.race([child.exited.catch(() => -1), Bun.sleep(EXIT_MS)]);
 }
 
 interface TuiContext {
@@ -336,17 +456,27 @@ interface TuiContext {
   home: string;
   pkgDir: string;
   version: string;
-  /** Só com `--allow-skip-tui`: sem terminal, a etapa sai pulada em vez de falhar. */
-  allowSkipTui: boolean;
 }
 
-interface TuiOutcome {
-  status: "passed" | "skipped";
-  detail: string;
+/**
+ * Erro do boot da TUI: `SmokeError` sempre — não existe resultado "pulado".
+ * Sem frame e com "precisa de um terminal", o preload não rodou: falha fechada.
+ */
+export function tuiBootError(output: string, exitCode: number | null): SmokeError {
+  if (NEEDS_TTY.test(output)) {
+    return new SmokeError(
+      "o pacote reportou falta de terminal interativo: o preload scripts/packed-smoke-tty.ts não rodou. "
+      + "A etapa TUI é obrigatória e fecha o run como falha:\n"
+      + failureTail(output),
+    );
+  }
+  return new SmokeError(
+    `a TUI não desenhou o primeiro frame em ${FIRST_FRAME_MS / 1000}s (exit ${exitCode ?? "n/a"}):\n${failureTail(output)}`,
+  );
 }
 
 /** Boot da TUI instalada contra o mock; etapa obrigatória, falha sem frame ou sem TTY. */
-async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
+async function runTui(ctx: TuiContext, registry: CleanupRegistry): Promise<StepOutcome> {
   const shim = join(resolve(import.meta.dir), "packed-smoke-tty.ts");
   const cli = join(ctx.pkgDir, "dist", "cli.js");
   const bun = packagedBun(ctx.pkgDir);
@@ -355,11 +485,8 @@ async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
   }
 
   const mock = startMock();
-  writeFileSync(join(ctx.projectDir, "astro.config.json"), `${JSON.stringify(smokeConfig(mock.port), null, 2)}\n`);
-  // `ensureTrustedCwd` compara realpath: sem canonicalizar, macOS (/var) e o
-  // TEMP 8.3 do Windows abrem o modal de trust e o prompt cai dentro dele.
-  // `saveHomeState` valida o schema aqui, não 45 s depois dentro da TUI.
-  saveHomeState(trustState(canonicalFolder(ctx.projectDir)), join(ctx.home, "state.json"));
+  registry.mock = mock;
+  prepareHome(ctx.home, ctx.projectDir, mock.port);
 
   const child = Bun.spawn({
     cmd: [bun, "--preload", shim, cli],
@@ -375,6 +502,7 @@ async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
     stdout: "pipe",
     stderr: "pipe",
   });
+  registry.child = child;
 
   const decoder = new TextDecoder();
   let out = "";
@@ -395,46 +523,78 @@ async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
     child.stdin.write(text);
     await child.stdin.flush();
   };
-
-  try {
-    const booted = await waitUntil(() => firstFrame(out, ctx.version) !== undefined, FIRST_FRAME_MS);
-    const frame = firstFrame(out, ctx.version);
-    if (frame === undefined) {
-      if (NEEDS_TTY.test(`${out}\n${err}`)) {
-        if (ctx.allowSkipTui) {
-          // Tolerância explícita (--allow-skip-tui): runPlan ainda exige `required: false`.
-          return { status: "skipped", detail: "precisa de TTY: o pacote reportou falta de terminal interativo" };
-        }
-        throw new SmokeError(
-          "o pacote reportou falta de terminal interativo; a etapa TUI é obrigatória "
-          + "(use --allow-skip-tui só em plataforma sem TTY):\n"
-          + tail(),
-        );
-      }
-      if (!booted) child.kill();
-      throw new SmokeError(
-        `a TUI não desenhou o primeiro frame em ${FIRST_FRAME_MS / 1000}s (exit ${child.exitCode ?? "n/a"}):\n${tail()}`,
-      );
-    }
-
-    await write(SMOKE_PROMPT);
-    // Enter em chunk separado: junto do texto, o turno não abre.
-    await Bun.sleep(100);
-    await write("\r");
-    if (!await waitUntil(() => mock.requests.length > 0, TURN_MS)) {
-      throw new SmokeError(`o mock não recebeu requisição em ${TURN_MS / 1000}s:\n${tail()}`);
-    }
+  const assertSingleChat = (when: string): void => {
     const problem = completionProblem(mock.requests, {
       model: SMOKE_MODEL,
       prompt: SMOKE_PROMPT,
       key: SMOKE_KEY_VALUE,
     });
-    if (problem !== undefined) throw new SmokeError(problem);
+    if (problem !== undefined) throw new SmokeError(`${when}: ${problem}`);
+  };
+  const tuiOutput = (): string => `${out}\n${err}`;
+
+  try {
+    // Falha rápido quando o filho morre (ex.: "precisa de um terminal"): o
+    // preload não rodou e esperar 30 s só atrasaria o mesmo erro.
+    const deadline = Date.now() + FIRST_FRAME_MS;
+    while (Date.now() < deadline && firstFrame(out, ctx.version) === undefined && child.exitCode === null) {
+      await Bun.sleep(POLL_MS);
+    }
+    if (firstFrame(out, ctx.version) === undefined) {
+      throw tuiBootError(tuiOutput(), child.exitCode);
+    }
+    const frame = firstFrame(out, ctx.version)!;
+
+    // `/providers` → `t` → enter: health real (GET /v1/models) até `ok` com latência.
+    await write("/providers");
+    await Bun.sleep(100);
+    await write("\r");
+    if (!await waitUntil(() => /t testar/.test(plainOutput(out)), SCREEN_MS)) {
+      throw new SmokeError(`/providers não abriu em ${SCREEN_MS / 1000}s:\n${tail()}`);
+    }
+    await write("t");
+    if (!await waitUntil(() => providerTestPrompt(out), SCREEN_MS)) {
+      throw new SmokeError(`/providers não pediu confirmação do teste em ${SCREEN_MS / 1000}s:\n${tail()}`);
+    }
+    await write("\r");
+    if (!await waitUntil(() => providerOk(out), SCREEN_MS)) {
+      throw new SmokeError(`/providers não mostrou "ok" com latência em ${SCREEN_MS / 1000}s:\n${tail()}`);
+    }
+    const healthLine = providerOkLine(out) ?? `${SMOKE_PROVIDER}: ok`;
+    // Volta para a conversa: esc fecha a tela de providers.
+    await write("\u001b");
+    await Bun.sleep(200);
+
+    await write(SMOKE_PROMPT);
+    // Enter em chunk separado: junto do texto, o turno não abre.
+    await Bun.sleep(100);
+    await write("\r");
+    if (!await waitUntil(() => chatRequests(mock.requests).length > 0, TURN_MS)) {
+      throw new SmokeError(`o mock não recebeu requisição de turno em ${TURN_MS / 1000}s:\n${tail()}`);
+    }
+    assertSingleChat("durante o turno");
     // Footer só mostra turnos concluídos (#480): prova que o turno fechou.
-    if (!await waitUntil(() => /1 turno\(s\)/.test(out), TURN_MS)) {
+    if (!await waitUntil(() => hasClosedTurn(out), TURN_MS)) {
       throw new SmokeError(`o turno não fechou em ${TURN_MS / 1000}s:\n${tail()}`);
     }
+    // Reavalia depois do footer: uma segunda chamada não pode entrar no meio.
+    assertSingleChat("depois do footer");
 
+    // `/log` (#514): header da sessão com endpoint + linhas de turno.
+    await write("/log");
+    await Bun.sleep(100);
+    await write("\r");
+    if (!await waitUntil(() => logHeaderShown(out, ctx.version, mock.port) && turnLogged(out), SCREEN_MS)) {
+      throw new SmokeError(`/log não mostrou o header com endpoint e a linha de turno em ${SCREEN_MS / 1000}s:\n${tail()}`);
+    }
+    // esc volta da tela de log para a conversa; ctrl+c no /log só fecharia a tela.
+    await write("\u001b");
+    await Bun.sleep(200);
+
+    // O filho já estar morto aqui invalidaria o "ctrl+c exit 0" abaixo.
+    if (child.exitCode !== null) {
+      throw new SmokeError(`a TUI já tinha saído (exit ${child.exitCode}) antes do ctrl+c:\n${tail()}`);
+    }
     await write("\u0003");
     const exit = await Promise.race([child.exited, Bun.sleep(EXIT_MS).then(() => undefined)]);
     if (exit === undefined) {
@@ -442,21 +602,17 @@ async function runTui(ctx: TuiContext): Promise<TuiOutcome> {
       throw new SmokeError(`a TUI não saiu em ${EXIT_MS / 1000}s após ctrl+c; processo encerrado`);
     }
     if (exit !== 0) throw new SmokeError(`a TUI saiu com código ${exit} após ctrl+c:\n${tail()}`);
+    // Última checagem: depois do ctrl+c, nenhuma segunda chamada pode ter entrado.
+    assertSingleChat("depois do ctrl+c");
+
+    const how = child.signalCode === null ? `exit ${exit}` : `exit ${exit} (${child.signalCode})`;
     return {
       status: "passed",
-      detail: `frame "${frame}" · 1 requisição no mock · exit 0`,
+      detail: `frame "${frame}" · ${healthLine} · /log com endpoint http://127.0.0.1:${mock.port}/v1 e turno · 1 POST no mock · ${how}`,
     };
   } finally {
-    if (child.exitCode === null) child.kill();
-    // Windows só libera o cwd (e o rm do temporário) depois que o filho saiu.
-    await Promise.race([child.exited, Bun.sleep(EXIT_MS)]);
-    mock.stop();
+    await releaseResources(registry);
   }
-}
-
-interface StepOutcome {
-  status: "passed" | "skipped";
-  detail: string;
 }
 
 export interface PlanStep {
@@ -502,6 +658,200 @@ export async function runPlan(
   return { results, failure };
 }
 
+export interface SmokePlanContext {
+  root: string;
+  name: string;
+  version: string;
+  packDir: string;
+  projectDir: string;
+  home: string;
+  pkgDir: string;
+}
+
+/**
+ * Plano do smoke, extraído para teste: toda etapa é obrigatória, inclusive a
+ * TUI. A única forma de o resumo sair `ok` é esta lista passar inteira.
+ */
+export function planSteps(ctx: SmokePlanContext, registry: CleanupRegistry = {}): PlanStep[] {
+  let tarball = "";
+  const tarballName = tarballFileName(ctx.name, ctx.version);
+  return [
+    {
+      id: "build",
+      label: "build do repo",
+      required: true,
+      body: () => {
+        const result = run([process.execPath, "run", "build"], ctx.root, smokeEnv(), STEP_TIMEOUT_MS);
+        if (result.code !== 0) throw new SmokeError(`bun run build falhou (exit ${result.code}):\n${outputOf(result)}`);
+        return { status: "passed", detail: "dist/cli.js e dist/launcher.js" };
+      },
+    },
+    {
+      id: "pack",
+      label: "npm pack",
+      required: true,
+      body: () => {
+        const npm = npmBinary();
+        const result = run([npm, "pack", "--pack-destination", ctx.packDir], ctx.root, smokeEnv(), STEP_TIMEOUT_MS);
+        if (result.code !== 0) throw new SmokeError(`npm pack falhou (exit ${result.code}):\n${outputOf(result)}`);
+        const tarballs = readdirSync(ctx.packDir).filter((file) => file.endsWith(".tgz"));
+        if (tarballs.length !== 1 || tarballs[0] !== tarballName) {
+          throw new SmokeError(`npm pack: esperava ${tarballName}; encontrei ${tarballs.join(", ") || "nada"}`);
+        }
+        tarball = join(ctx.packDir, tarballName);
+        return { status: "passed", detail: tarballName };
+      },
+    },
+    {
+      id: "install",
+      label: "instalação limpa do tarball",
+      required: true,
+      body: () => {
+        const npm = npmBinary();
+        const result = run(
+          [npm, "install", "--no-audit", "--no-fund", tarball],
+          ctx.projectDir,
+          smokeEnv(),
+          STEP_TIMEOUT_MS,
+        );
+        if (result.code !== 0) throw new SmokeError(`npm install falhou (exit ${result.code}):\n${outputOf(result)}`);
+        const manifest = JSON.parse(readFileSync(join(ctx.pkgDir, "package.json"), "utf8")) as { name?: unknown; version?: unknown };
+        if (manifest.name !== ctx.name || manifest.version !== ctx.version) {
+          throw new SmokeError(`pacote instalado diverge do repo: ${String(manifest.name)}@${String(manifest.version)}`);
+        }
+        if (!existsSync(installedAstroBin(ctx.projectDir))) {
+          throw new SmokeError("npm install não criou node_modules/.bin/astro");
+        }
+        return { status: "passed", detail: `${ctx.name}@${ctx.version}` };
+      },
+    },
+    {
+      id: "version",
+      label: "astro --version no pacote instalado",
+      required: true,
+      body: () => {
+        const node = nodeBinary();
+        const result = run([node, join(ctx.pkgDir, "dist", "launcher.js"), "--version"], ctx.projectDir, smokeEnv(), STEP_TIMEOUT_MS);
+        const expected = `astro ${ctx.version}`;
+        if (result.code !== 0 || result.out.trim() !== expected) {
+          throw new SmokeError(`esperava "${expected}" (exit 0); veio exit ${result.code}:\n${outputOf(result)}`);
+        }
+        return { status: "passed", detail: expected };
+      },
+    },
+    {
+      id: "help",
+      label: "astro --help no pacote instalado",
+      required: true,
+      body: () => {
+        const node = nodeBinary();
+        const result = run([node, join(ctx.pkgDir, "dist", "launcher.js"), "--help"], ctx.projectDir, smokeEnv(), STEP_TIMEOUT_MS);
+        for (const command of ["astro run", "astro chat"]) {
+          if (result.code !== 0 || !result.out.includes(command)) {
+            throw new SmokeError(`--help sem "${command}" (exit ${result.code}):\n${outputOf(result)}`);
+          }
+        }
+        return { status: "passed", detail: "astro run, astro chat" };
+      },
+    },
+    {
+      id: "doctor",
+      label: "astro doctor com ASTRO_HOME isolado",
+      required: true,
+      body: () => {
+        const node = nodeBinary();
+        const result = run(
+          [node, join(ctx.pkgDir, "dist", "launcher.js"), "doctor"],
+          ctx.projectDir,
+          smokeEnv({ ASTRO_HOME: ctx.home }),
+          STEP_TIMEOUT_MS,
+        );
+        if (result.code !== 0 || !doctorClean(result.out)) {
+          throw new SmokeError(`doctor com falha (exit ${result.code}):\n${outputOf(result)}`);
+        }
+        return { status: "passed", detail: "0 fail, home temporário" };
+      },
+    },
+    {
+      id: TUI_STEP_ID,
+      label: "TUI instalada com provider mock em loopback",
+      // Sem tolerância: o preload falsifica o TTY, então `skipped` nunca é legítimo.
+      required: true,
+      body: () => runTui(
+        { projectDir: ctx.projectDir, home: ctx.home, pkgDir: ctx.pkgDir, version: ctx.version },
+        registry,
+      ),
+    },
+  ];
+}
+
+export interface SmokeSummary {
+  ok: boolean;
+  packageName: string;
+  version: string;
+  tuiBooted: boolean;
+  steps: StepResult[];
+  failure: string | null;
+}
+
+/** A TUI só "bootou" se a etapa existe e passou. */
+export function tuiBooted(results: readonly StepResult[]): boolean {
+  return results.some((result) => result.id === TUI_STEP_ID && result.status === "passed");
+}
+
+/**
+ * Resumo do `--json`: `ok` exige a TUI bootada, não apenas ausência de falha.
+ * Etapa obrigatória pulada já falha o run; o campo explícito impede que um
+ * futuro atalho faça o resumo mentir sobre o boot.
+ */
+export function summaryFor(
+  name: string,
+  version: string,
+  results: readonly StepResult[],
+  failure: string | null,
+): SmokeSummary {
+  const booted = tuiBooted(results);
+  return { ok: failure === null && booted, packageName: name, version, tuiBooted: booted, steps: [...results], failure };
+}
+
+/** Código de saída do resumo: só zero sem falha. */
+export function exitCodeFor(failure: string | null): number {
+  return failure === null ? 0 : 1;
+}
+
+/**
+ * Ctrl-C/SIGTERM não pode deixar temporário com `node_modules` nem filho vivo.
+ * Filho e mock são encerrados e aguardados ANTES do `rm` (Windows segura o
+ * `cwd`), cada diretório é removido com retry e o processo sai uma vez só.
+ */
+export function installCleanupHandlers(dirs: readonly string[], registry: CleanupRegistry): () => void {
+  let stopping = false;
+  const onSignal = (signal: "SIGINT" | "SIGTERM"): void => {
+    if (stopping) return;
+    stopping = true;
+    void (async () => {
+      await releaseResources(registry);
+      for (const dir of dirs) {
+        try {
+          removeTempDirWithRetry(dir);
+        } catch (error) {
+          const message = redactSmokeText(error instanceof Error ? error.message : String(error));
+          process.stderr.write(`smoke:packed: falha ao limpar ${dir} no sinal: ${message}\n`);
+        }
+      }
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    })();
+  };
+  const onSigint = (): void => onSignal("SIGINT");
+  const onSigterm = (): void => onSignal("SIGTERM");
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  return () => {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+  };
+}
+
 async function main(): Promise<number> {
   let options: CliOptions;
   try {
@@ -526,116 +876,18 @@ async function main(): Promise<number> {
     `${JSON.stringify({ name: "astro-packed-smoke", private: true }, null, 2)}\n`,
   );
   const pkgDir = join(projectDir, "node_modules", ...meta.name.split("/"));
-  const tarballName = tarballFileName(meta.name, meta.version);
-
   const emit = options.json ? () => {} : (line: string) => console.log(line);
-  let tarball = "";
+  const registry: CleanupRegistry = {};
 
-  const steps: PlanStep[] = [
-    {
-      id: "build",
-      label: "build do repo",
-      required: true,
-      body: () => {
-        const result = run([process.execPath, "run", "build"], root, smokeEnv(), STEP_TIMEOUT_MS);
-        if (result.code !== 0) throw new SmokeError(`bun run build falhou (exit ${result.code}):\n${outputOf(result)}`);
-        return { status: "passed", detail: "dist/cli.js e dist/launcher.js" };
-      },
-    },
-    {
-      id: "pack",
-      label: "npm pack",
-      required: true,
-      body: () => {
-        const npm = npmBinary();
-        const result = run([npm, "pack", "--pack-destination", packDir], root, smokeEnv(), STEP_TIMEOUT_MS);
-        if (result.code !== 0) throw new SmokeError(`npm pack falhou (exit ${result.code}):\n${outputOf(result)}`);
-        const tarballs = readdirSync(packDir).filter((file) => file.endsWith(".tgz"));
-        if (tarballs.length !== 1 || tarballs[0] !== tarballName) {
-          throw new SmokeError(`npm pack: esperava ${tarballName}; encontrei ${tarballs.join(", ") || "nada"}`);
-        }
-        tarball = join(packDir, tarballName);
-        return { status: "passed", detail: tarballName };
-      },
-    },
-    {
-      id: "install",
-      label: "instalação limpa do tarball",
-      required: true,
-      body: () => {
-        const npm = npmBinary();
-        const result = run(
-          [npm, "install", "--no-audit", "--no-fund", tarball],
-          projectDir,
-          smokeEnv(),
-          STEP_TIMEOUT_MS,
-        );
-        if (result.code !== 0) throw new SmokeError(`npm install falhou (exit ${result.code}):\n${outputOf(result)}`);
-        const manifest = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")) as { name?: unknown; version?: unknown };
-        if (manifest.name !== meta.name || manifest.version !== meta.version) {
-          throw new SmokeError(`pacote instalado diverge do repo: ${String(manifest.name)}@${String(manifest.version)}`);
-        }
-        if (!existsSync(installedAstroBin(projectDir))) {
-          throw new SmokeError("npm install não criou node_modules/.bin/astro");
-        }
-        return { status: "passed", detail: `${meta.name}@${meta.version}` };
-      },
-    },
-    {
-      id: "version",
-      label: "astro --version no pacote instalado",
-      required: true,
-      body: () => {
-        const node = nodeBinary();
-        const result = run([node, join(pkgDir, "dist", "launcher.js"), "--version"], projectDir, smokeEnv(), STEP_TIMEOUT_MS);
-        const expected = `astro ${meta.version}`;
-        if (result.code !== 0 || result.out.trim() !== expected) {
-          throw new SmokeError(`esperava "${expected}" (exit 0); veio exit ${result.code}:\n${outputOf(result)}`);
-        }
-        return { status: "passed", detail: expected };
-      },
-    },
-    {
-      id: "help",
-      label: "astro --help no pacote instalado",
-      required: true,
-      body: () => {
-        const node = nodeBinary();
-        const result = run([node, join(pkgDir, "dist", "launcher.js"), "--help"], projectDir, smokeEnv(), STEP_TIMEOUT_MS);
-        for (const command of ["astro run", "astro chat"]) {
-          if (result.code !== 0 || !result.out.includes(command)) {
-            throw new SmokeError(`--help sem "${command}" (exit ${result.code}):\n${outputOf(result)}`);
-          }
-        }
-        return { status: "passed", detail: "astro run, astro chat" };
-      },
-    },
-    {
-      id: "doctor",
-      label: "astro doctor com ASTRO_HOME isolado",
-      required: true,
-      body: () => {
-        const node = nodeBinary();
-        const result = run(
-          [node, join(pkgDir, "dist", "launcher.js"), "doctor"],
-          projectDir,
-          smokeEnv({ ASTRO_HOME: home }),
-          STEP_TIMEOUT_MS,
-        );
-        if (result.code !== 0 || !result.out.includes("0 fail")) {
-          throw new SmokeError(`doctor com falha (exit ${result.code}):\n${outputOf(result)}`);
-        }
-        return { status: "passed", detail: "0 fail, home temporário" };
-      },
-    },
-    {
-      id: "tui",
-      label: "TUI instalada com provider mock em loopback",
-      // Única porta de tolerância: `--allow-skip-tui`; sem ela, `skipped` falha.
-      required: !options.allowSkipTui,
-      body: () => runTui({ projectDir, home, pkgDir, version: meta.version, allowSkipTui: options.allowSkipTui }),
-    },
-  ];
+  const steps = planSteps({
+    root,
+    name: meta.name,
+    version: meta.version,
+    packDir,
+    projectDir,
+    home,
+    pkgDir,
+  }, registry);
 
   if (!options.json) {
     console.log(`smoke:packed: ${meta.name}@${meta.version}`);
@@ -643,7 +895,7 @@ async function main(): Promise<number> {
   }
 
   const created = [projectDir, home, packDir];
-  const clearSignalHandlers = installCleanupHandlers(created);
+  const clearSignalHandlers = installCleanupHandlers(created, registry);
   let results: StepResult[] = [];
   let failure: string | null = null;
 
@@ -652,36 +904,36 @@ async function main(): Promise<number> {
     results = plan.results;
     failure = plan.failure;
   } finally {
-    clearSignalHandlers();
+    // Filho/mock primeiro: o `rm` do temporário só funciona com eles fora.
+    await releaseResources(registry);
     // Cada diretório tem o seu `try`: um rm que falha não aborta os outros dois
     // e o primeiro erro é preservado como falha do run.
     for (const dir of created) {
       try {
-        removeTempDir(dir);
+        removeTempDirWithRetry(dir);
       } catch (error) {
         const message = redactSmokeText(error instanceof Error ? error.message : String(error));
         if (failure === null) failure = `cleanup: ${message}`;
         else emit(`  aviso: falha ao limpar ${dir}: ${message}`);
       }
     }
+    // Handlers saem só depois do laço: um sinal no meio ainda limpa tudo.
+    clearSignalHandlers();
   }
 
+  const summary = summaryFor(meta.name, meta.version, results, failure);
   const skipped = results.filter((result) => result.status === "skipped").length;
+  // `ok` também exige o boot da TUI: sem ele o run não pode sair 0.
+  const effectiveFailure = summary.ok ? null : (failure ?? "a etapa TUI não bootou");
 
   if (options.json) {
-    console.log(JSON.stringify({
-      ok: failure === null,
-      packageName: meta.name,
-      version: meta.version,
-      steps: results,
-      failure,
-    }, null, 2));
-  } else if (failure === null) {
+    console.log(JSON.stringify(summary, null, 2));
+  } else if (effectiveFailure === null) {
     console.log(`smoke:packed ok (${results.length} etapas, ${skipped} pulada(s))`);
   } else {
-    console.error(`smoke:packed falhou: ${failure}`);
+    console.error(`smoke:packed falhou: ${effectiveFailure}`);
   }
-  return failure === null ? 0 : 1;
+  return exitCodeFor(effectiveFailure);
 }
 
 if (import.meta.main) process.exit(await main());

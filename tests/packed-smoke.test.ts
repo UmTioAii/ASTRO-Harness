@@ -20,6 +20,8 @@ import {
   planSteps,
   prepareHome,
   providerOk,
+  providerOkLine,
+  providerTestPrompt,
   redactSmokeText,
   runPlan,
   smokeConfig,
@@ -232,8 +234,15 @@ test("turnLogged e providerOk ancoram a linha inteira", () => {
   expect(turnLogged("[turno] turno concluído · muitos step(s)")).toBe(false);
 
   expect(providerOk("mock: ok · 12ms")).toBe(true);
+  expect(providerOk("│ mock: ok · 12ms                        │")).toBe(true);
+  expect(providerOkLine("│ mock: ok · 12ms                        │")).toBe("mock: ok · 12ms");
+  expect(providerOkLine("mock: down (outage) · 3ms")).toBeUndefined();
   expect(providerOk("mock: down (outage) · 3ms")).toBe(false);
+  expect(providerOk("mock: ok · 12ms e mais algo")).toBe(false);
   expect(providerOk("outro: ok · 12ms")).toBe(false);
+
+  expect(providerTestPrompt("│ Testar mock?                     │")).toBe(true);
+  expect(providerTestPrompt("Testar outro?")).toBe(false);
 });
 
 function step(overrides: Partial<PlanStep> & Pick<PlanStep, "id">): PlanStep {

@@ -73,19 +73,19 @@ npm install "$TARBALL"
 
 ## 5. TUI e provider mock
 
-O gate tem duas partes: automática (`bun run smoke:packed`, #542) e manual (wizard e telas), as duas sem credencial real.
+O gate tem duas partes: automática (`bun run smoke:packed`, #542) e manual (wizard, `/model` e aprovações), as duas sem credencial real.
 
 ```bash
-bun run smoke:packed          # --json: resumo de máquina; --allow-skip-tui: só sem TTY
+bun run smoke:packed          # --json: resumo de máquina
 ```
 
 | Etapa | Prova |
 |---|---|
 | build + `npm pack` + instalação | 1 `.tgz` com a versão do `package.json`; `npm i --no-audit --no-fund <tgz>` em temporário com identidade conferida |
 | `--version` / `--help` / `doctor` | `astro <versão>`; `astro run` e `astro chat`; `0 fail` com `ASTRO_HOME` temporário |
-| TUI | primeiro frame `ASTRO v<versão> · mock/mock-model`, 1 turno, mock com exatamente 1 `POST /chat/completions` (modelo, prompt, `Authorization`) e ctrl+c em exit 0 |
+| TUI | primeiro frame `ASTRO v<versão> · mock/mock-model`; `/providers` → `t` → enter mostra `mock: ok · <latência>`; 1 turno; `/log` abre com header (endpoint `http://127.0.0.1:<porta>/v1`) e linha `[turno]`; mock com exatamente 1 `POST /chat/completions` (modelo, prompt, `Authorization`); ctrl+c em exit 0 |
 
-- A TUI roda `dist/cli.js` instalado com o Bun do pacote (mesma ordem do `dist/launcher.js`: pacote de plataforma, depois `bun/bin` sem o placeholder de ~450 bytes; nunca o PATH do host) mais `--preload scripts/packed-smoke-tty.ts`, que faz o pipe passar por TTY (Ink e `runTui` só olham `isTTY`). A etapa é obrigatória: sem frame em 30 s, ou com o pacote reportando falta de terminal, o run falha. `--allow-skip-tui` é a única tolerância (plataforma sem TTY) e deixa a etapa como `pulado`; etapa obrigatória pulada fecha o run como falha, então o resumo nunca sai `ok` sem boot da TUI.
+- A TUI roda `dist/cli.js` instalado com o Bun do pacote (mesma ordem do `dist/launcher.js`: pacote de plataforma, depois `bun/bin` sem o placeholder de ~450 bytes; nunca o PATH do host) mais `--preload scripts/packed-smoke-tty.ts`, que faz o pipe passar por TTY (Ink e `runTui` só olham `isTTY`). A etapa é obrigatória em toda plataforma e não tem flag de tolerância: o preload falsifica `isTTY`, então a mensagem "precisa de um terminal interativo" significa que o preload não rodou e o run falha. Sem frame em 30 s também falha (com o filho morto, falha na hora). O resumo `--json` traz `tuiBooted` e `ok` só é `true` com a etapa TUI `passed`; qualquer outra combinação sai `ok: false` e exit 1.
 - O TTY falso não prova sinais nem termios: `\u0003` no pipe é keypress do Ink (não SIGINT), o tamanho é fixo em 100x40 e `setRawMode` é no-op; ctrl+c real continua no smoke manual.
 - Hermético: mock em `127.0.0.1` com porta efêmera, chave falsa por `credentialRef` (`ASTRO_PACKED_SMOKE_KEY`), `ASTRO_HOME`/projeto/trust/tarball em temporário removido no fim (o trust é semeado com o caminho canônico que `ensureTrustedCwd` compara). Rede só no `npm install` (§4).
 
@@ -101,7 +101,7 @@ ASTRO_ALLOW_PRIVATE_URLS=1 ./node_modules/.bin/astro    # opt-in só deste proce
 |---|---|
 | adicionar (`a`) | `custom`, nome `mock`, base URL `http://127.0.0.1:8787/v1` |
 | modelos / credencial / salvar | `mock-model` / vazio (provider local, sem chave); salvar ativa e abre a TUI |
-| na TUI | `/providers` → `t` → enter: `ok` com latência; um prompt; `/log` com header e linhas de turno; `/model` (#511) |
+| na TUI | `/model` (#511): card do modelo com rótulo de preço (`grátis`/`preço`/`n/d`) |
 
 - `ASTRO_ALLOW_PRIVATE_URLS` vale para o processo e os filhos e só afeta URLs de `outboundUrlProblem` (provider, `web_fetch`, webhook, MCP, telemetria, skill); contrato em `docs/web-tools.md`. Fora da TUI, `astro providers test mock` exige `astro.config.json`; `401/403` é credencial, timeout ou recusa viram `outage`; tela e `providers.json` nunca mostram segredo (`I-03`). Provider real: `docs/providers.md`.
 
