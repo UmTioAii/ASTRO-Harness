@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
 import { render } from "ink-testing-library";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionSnapshot, TurnResult } from "../src/chat/agent-session";
 import type { ChatSession } from "../src/chat/repl";
 import { validateConfig } from "../src/core/config";
+import { projectKey } from "../src/home-layout";
 import { ProfileManager } from "../src/providers/profile-manager";
 import { TuiApp } from "../src/tui/app";
 
@@ -63,7 +64,9 @@ function manager(): ProfileManager {
 
 test("falha ao persistir na ativação vira aviso e não desfaz a troca", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-activation-"));
-  writeFileSync(join(cwd, ".astro"), "não é diretório", "utf8"); // saveTuiConfig falha
+  // a chave do projeto é um arquivo: o estado da TUI não pode ser criado
+  mkdirSync(join(process.env.ASTRO_HOME!, "projects"), { recursive: true });
+  writeFileSync(join(process.env.ASTRO_HOME!, "projects", projectKey(cwd)), "não é diretório", "utf8");
   const session = new Session();
   const instance = render(<TuiApp session={session} cwd={cwd} manager={manager()} />);
   try {

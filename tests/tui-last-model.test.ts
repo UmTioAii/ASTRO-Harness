@@ -1,14 +1,16 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activateProvider } from "../src/tui/app";
+import { projectKey } from "../src/home-layout";
 import type { SessionSnapshot } from "../src/chat/agent-session";
 
 test("falha ao persistir o último modelo não desfaz a ativação", () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-last-model-"));
-  const file = join(dir, "arquivo"); // cwd é um arquivo: .astro/tui.json não pode ser criado
-  writeFileSync(file, "x");
+  // a chave do projeto é um arquivo: o estado da TUI não pode ser criado
+  mkdirSync(join(process.env.ASTRO_HOME!, "projects"), { recursive: true });
+  writeFileSync(join(process.env.ASTRO_HOME!, "projects", projectKey(dir)), "x");
   const calls: string[] = [];
   const warnings: string[] = [];
   const session = {
@@ -20,7 +22,7 @@ test("falha ao persistir o último modelo não desfaz a ativação", () => {
     snapshot: () => ({ model: "p/m1" } as SessionSnapshot),
   };
 
-  expect(() => activateProvider(session, file, "p", (text) => warnings.push(text))).not.toThrow();
+  expect(() => activateProvider(session, dir, "p", (text) => warnings.push(text))).not.toThrow();
   expect(calls).toEqual(["reload", "use:p"]);
   expect(warnings[0]).toContain("aviso");
   expect(warnings[0]).toContain("último modelo");

@@ -9,6 +9,7 @@ import { SessionApi } from "../src/chat/session-api";
 import type { ChatSession } from "../src/chat/repl";
 import type { ModelInfo, SendTurnOptions, SessionSnapshot, TurnResult } from "../src/chat/agent-session";
 import { ProfileManager } from "../src/providers/profile-manager";
+import { projectTuiConfigPath } from "../src/home-layout";
 import { validateConfig } from "../src/core/config";
 import type { ConfigSummary } from "../src/chat/config-summary";
 import { BudgetExceededError, type BudgetStatus } from "../src/budget";
@@ -589,7 +590,7 @@ test("/sessions abre o painel e /resume por id retoma a sessão vista (#64)", as
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("sessão retomada: xyz") === true);
     expect(session.resumed).toEqual(["xyz"]);
-    const config = JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")) as { lastModel?: string };
+    const config = JSON.parse(readFileSync(projectTuiConfigPath(cwd), "utf8")) as { lastModel?: string };
     expect(config.lastModel).toBe("p/m1");
 
     instance.stdin.write("/session");
@@ -676,21 +677,21 @@ test("ctrl+x c limpa o contexto e ctrl+x t alterna o tema persistido", async () 
     instance.stdin.write("\u0018");
     instance.stdin.write("t");
     await waitFor(() => instance.lastFrame()?.includes("tema: light") === true);
-    const config = JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")) as { theme?: string };
+    const config = JSON.parse(readFileSync(projectTuiConfigPath(cwd), "utf8")) as { theme?: string };
     expect(config.theme).toBe("light");
   } finally {
     instance.unmount();
   }
 });
 
-test("/model persiste o último modelo em .astro/tui.json", async () => {
+test("/model persiste o último modelo no estado do projeto em $ASTRO_HOME", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-model-"));
   const instance = render(<TuiApp session={new FakeSession()} cwd={cwd} />);
   try {
     instance.stdin.write("/model p/m2");
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("modelo: p/m2") === true);
-    const config = JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")) as { lastModel?: string };
+    const config = JSON.parse(readFileSync(projectTuiConfigPath(cwd), "utf8")) as { lastModel?: string };
     expect(config.lastModel).toBe("p/m2");
   } finally {
     instance.unmount();
@@ -1112,7 +1113,7 @@ test("toast de quota aparece quando o domínio entra em aviso (#64)", async () =
   }
 });
 
-test("/theme contrast troca o tema ao vivo e persiste em .astro/tui.json (#64)", async () => {
+test("/theme contrast troca o tema ao vivo e persiste no estado do projeto (#64)", async () => {
   const session = new FakeSession();
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-theme-cmd-"));
   const instance = render(<TuiApp session={session} cwd={cwd} />);
@@ -1121,7 +1122,7 @@ test("/theme contrast troca o tema ao vivo e persiste em .astro/tui.json (#64)",
     instance.stdin.write("/theme contrast");
     instance.stdin.write("\r");
     await waitFor(() => frameHas(instance, "tema: contrast"));
-    const saved = JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")) as { theme: string };
+    const saved = JSON.parse(readFileSync(projectTuiConfigPath(cwd), "utf8")) as { theme: string };
     expect(saved.theme).toBe("contrast");
     // sem arg lista os três com o ativo marcado
     instance.stdin.write("/theme");
@@ -1355,7 +1356,7 @@ test("picker: enter retoma a sessão selecionada pelo id (#64)", async () => {
     await waitFor(() => session.resumed.length === 1);
     expect(session.resumed[0]).toBe("7");
     await waitFor(() => frameHas(instance, "sessão retomada: 7"));
-    expect(JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")).lastModel).toBe("p/m1");
+    expect(JSON.parse(readFileSync(projectTuiConfigPath(cwd), "utf8")).lastModel).toBe("p/m1");
     expect(frameHas(instance, "Sessões")).toBe(false);
   } finally { instance.unmount(); sessionApi.close(); }
 });
@@ -1609,7 +1610,7 @@ test("/provider abre a tela, seta direita lista modelos e enter troca o modelo d
     await waitFor(() => frameHas(instance, "enter ativar")); // voltou à lista de providers
     instance.stdin.write("\u001b"); // esc fecha a tela
     await waitFor(() => frameHas(instance, "modelo: p/m2"));
-    const config = JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")) as { lastModel?: string };
+    const config = JSON.parse(readFileSync(projectTuiConfigPath(cwd), "utf8")) as { lastModel?: string };
     expect(config.lastModel).toBe("p/m2");
   } finally {
     instance.unmount();
