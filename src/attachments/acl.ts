@@ -104,32 +104,27 @@ export function inspectWindowsAcl(path: string): WindowsAcl | undefined {
 }
 
 /**
- * Script de endurecimento: monta uma DACL nova, protegida (sem herança) e com
- * controle total só para o usuário atual, SYSTEM e Administrators, e a instala
- * com `Set-Acl`. Uma DACL nova descarta ACEs herdadas *e* explícitas; `icacls
- * /inheritance:r` só remove as herdadas e deixaria uma ACE explícita da raiz.
+ * Script de endurecimento da raiz: monta uma DACL nova, protegida (sem herança)
+ * e com controle total só para o usuário atual, SYSTEM e Administrators, e a
+ * instala com `Set-Acl`. Uma DACL nova descarta ACEs herdadas *e* explícitas;
+ * `icacls /inheritance:r` só remove as herdadas e deixaria uma ACE explícita da
+ * raiz. Só a raiz de artefatos usa este caminho (uma vez por raiz validada).
  */
-function hardenScript(securityClass: "DirectorySecurity" | "FileSecurity", inheritance: string): string {
-  return [
-    "$ErrorActionPreference='Stop'",
-    "$path=$env:ASTRO_ACL_PATH",
-    "$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
-    `$acl=New-Object System.Security.AccessControl.${securityClass}`,
-    "$acl.SetAccessRuleProtection($true,$false)",
-    "$acl.SetOwner($sid)",
-    "foreach($id in @($sid.Value,'S-1-5-18','S-1-5-32-544')){",
-    "  $rule=New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($id)),[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.InheritanceFlags]'" + inheritance + "',[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Allow)",
-    "  $acl.AddAccessRule($rule)",
-    "}",
-    "Set-Acl -LiteralPath $path -AclObject $acl",
-    "Write-Output $sid.Value",
-    "Write-Output (Get-Acl -LiteralPath $path).Sddl",
-  ].join("\n");
-}
-
-const HARDEN_SCRIPT = hardenScript("DirectorySecurity", "ContainerInherit,ObjectInherit");
-/** Arquivo regular: FileSecurity, sem flags de herança (ADR-0028, config 0600). */
-const HARDEN_FILE_SCRIPT = hardenScript("FileSecurity", "None");
+const HARDEN_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "$path=$env:ASTRO_ACL_PATH",
+  "$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+  "$acl=New-Object System.Security.AccessControl.DirectorySecurity",
+  "$acl.SetAccessRuleProtection($true,$false)",
+  "$acl.SetOwner($sid)",
+  "foreach($id in @($sid.Value,'S-1-5-18','S-1-5-32-544')){",
+  "  $rule=New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($id)),[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Allow)",
+  "  $acl.AddAccessRule($rule)",
+  "}",
+  "Set-Acl -LiteralPath $path -AclObject $acl",
+  "Write-Output $sid.Value",
+  "Write-Output (Get-Acl -LiteralPath $path).Sddl",
+].join("\n");
 
 /**
  * Reescreve a DACL da raiz como owner-only numa única chamada ao PowerShell e
@@ -141,11 +136,27 @@ export function hardenWindowsAcl(path: string): WindowsAcl {
 }
 
 /**
- * Mesma garantia para um arquivo regular (ex.: config temporário, ADR-0028):
- * DACL owner-only com FileSecurity. Qualquer falha lança.
+ * Mesma garantia para um arquivo regular (ex.: config temporário, ADR-0028), mas
+ * pelo `icacls` nativo: o temporário é criado por nós, então a DACL só tem ACEs
+ * herdadas e `/inheritance:r` + `/grant:r` fixa owner/SY/BA sem herança. O
+ * PowerShell 5.1 custava 20–40 s por spawn no runner do CI e o `Set-Acl` com
+ * `FileSecurity` falhava lá; aqui a gravação de config não depende dele (#589).
+ * Qualquer saída não-zero lança (falha fechado).
  */
-export function hardenWindowsAclFile(path: string): WindowsAcl {
-  return runHardenScript(HARDEN_FILE_SCRIPT, path);
+export function hardenWindowsAclFile(path: string): void {
+  const root = windowsRoot();
+  const exe = join(root, "System32", "icacls.exe");
+  if (!existsSync(exe)) throw new Error("icacls.exe não encontrado");
+  const account =
+    process.env.USERDOMAIN !== undefined && process.env.USERNAME !== undefined
+      ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`
+      : (process.env.USERNAME ?? "");
+  if (account === "") throw new Error("usuário atual desconhecido");
+  execFileSync(
+    exe,
+    [path, "/inheritance:r", "/grant:r", `${account}:(F)`, "/grant:r", "*S-1-5-18:(F)", "/grant:r", "*S-1-5-32-544:(F)"],
+    { timeout: 30_000, windowsHide: true, stdio: ["ignore", "ignore", "ignore"], maxBuffer: 1 << 20 },
+  );
 }
 
 function runHardenScript(script: string, path: string): WindowsAcl {
