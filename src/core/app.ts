@@ -55,6 +55,8 @@ import { grepTool } from "../tools/grep";
 import { listDirTool } from "../tools/list-dir";
 import { gitDiffTool, gitStatusTool } from "../tools/git";
 import { editTool } from "../tools/edit";
+import { deletePathTool } from "../tools/delete-path";
+import { movePathTool } from "../tools/move-path";
 import { lspTool } from "../tools/lsp";
 import { pipelineTool } from "../tools/pipeline";
 import { configureRunCommand, resolveSandboxSetting, sandboxWarning } from "../tools/run-command";
@@ -172,7 +174,7 @@ export interface RunReport {
 const AGENT_NAME = "default";
 const TASK_HASH_LENGTH = 16;
 
-export const BUILTIN_TOOLS: readonly Tool[] = [readFileTool, writeFileTool, runCommandTool, handoffTool, grepTool, listDirTool, gitStatusTool, gitDiffTool, editTool, lspTool, pipelineTool];
+export const BUILTIN_TOOLS: readonly Tool[] = [readFileTool, writeFileTool, runCommandTool, handoffTool, grepTool, listDirTool, gitStatusTool, gitDiffTool, editTool, movePathTool, deletePathTool, lspTool, pipelineTool];
 
 const TOOLS_BY_NAME = new Map(BUILTIN_TOOLS.map((tool) => [tool.manifest.name, tool]));
 /** Env de sistema que o shell precisa; não são segredos, mesmo se o servidor MCP os declarar. */

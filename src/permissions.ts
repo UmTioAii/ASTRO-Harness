@@ -148,6 +148,10 @@ const APPROVAL_DETAIL_ELLIPSIS = "...";
 const APPROVAL_DETAIL_HEAD_RATIO = 0.7;
 /** Separador do `move_path` no prompt (#536). */
 const MOVE_ARROW = " -> ";
+/** Marca da remoção recursiva no prompt (#535): o usuário aprova o que a tool faz. */
+const RECURSIVE_SUFFIX = " (recursivo)";
+/** Marca do `move_path` com `overwrite: true` (#535): o destino existente será apagado. */
+const OVERWRITE_SUFFIX = " (sobrescreve)";
 
 /** Tools cujo argumento material é um path (#536). `move_path` soma dois paths. */
 const DETAIL_PATH_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit", "delete_path"]);
@@ -156,8 +160,7 @@ const DETAIL_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command"]);
 
 /**
  * Todos os nomes com argumento material mapeado (#536). O teste de contrato
- * confere cada um contra o registry (`BUILTIN_TOOLS`), com exceção explícita
- * para `delete_path`/`move_path` enquanto não existirem.
+ * confere cada um contra o registry (`BUILTIN_TOOLS`).
  */
 export const APPROVAL_DETAIL_TOOLS: ReadonlySet<string> = new Set([
   ...DETAIL_COMMAND_TOOLS,
@@ -225,19 +228,25 @@ export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined
     const from = detailValue(input.from);
     const to = detailValue(input.to);
     if (from === undefined || to === undefined) return undefined;
+    // #535: `overwrite: true` apaga o destino existente; o prompt precisa dizer isso.
+    const suffix = input.overwrite === true ? OVERWRITE_SUFFIX : "";
     // Orçamento por lado: um `from` longo não pode esconder o destino.
-    const sideBudget = Math.floor((APPROVAL_DETAIL_MAX_CHARS - MOVE_ARROW.length) / 2);
+    const sideBudget = Math.floor((APPROVAL_DETAIL_MAX_CHARS - MOVE_ARROW.length - suffix.length) / 2);
     return {
       kind: "path",
-      value: `${elideDetailValue(from, sideBudget)}${MOVE_ARROW}${elideDetailValue(to, sideBudget)}`,
+      value: `${elideDetailValue(from, sideBudget)}${MOVE_ARROW}${elideDetailValue(to, sideBudget)}${suffix}`,
     };
   }
   if (DETAIL_PATH_TOOLS.has(call.name)) {
     if (typeof input.path !== "string") return undefined;
     const path = detailValue(input.path);
-    return path === undefined
-      ? undefined
-      : { kind: "path", value: elideDetailValue(path, APPROVAL_DETAIL_MAX_CHARS) };
+    if (path === undefined) return undefined;
+    // #535: remoção de diretório aparece como recursiva, não como "path" comum.
+    if (call.name === "delete_path" && input.recursive === true) {
+      const budget = APPROVAL_DETAIL_MAX_CHARS - RECURSIVE_SUFFIX.length;
+      return { kind: "path", value: `${elideDetailValue(path, budget)}${RECURSIVE_SUFFIX}` };
+    }
+    return { kind: "path", value: elideDetailValue(path, APPROVAL_DETAIL_MAX_CHARS) };
   }
   return undefined;
 }
@@ -352,6 +361,16 @@ export interface ToolCallLike {
   input: unknown;
 }
 
+/**
+ * `move_path` com `overwrite: true` remove um arquivo existente (#535): é
+ * escrita destrutiva, não o `edit` comum que `allow-edits` libera sem prompt.
+ */
+function isDestructiveOverwrite(call: ToolCallLike): boolean {
+  if (call.name !== "move_path") return false;
+  if (typeof call.input !== "object" || call.input === null) return false;
+  return (call.input as { overwrite?: unknown }).overwrite === true;
+}
+
 /** Classe da ação: manifesto (`class`) refinado por caminho crítico (PERM-02/#264); `sensitive` eleva escrita. */
 export function actionClassOf(
   tool: Tool,
@@ -372,6 +391,9 @@ export function actionClassOf(
     return declared === "read_critical" || critical ? "read_critical" : "read_common";
   }
   if (declared === "edit") {
+    // #535: sobrescrever o destino apaga o arquivo anterior — mesma classe do
+    // write em caminho crítico (ask mesmo em `allow-edits`).
+    if (isDestructiveOverwrite(call)) return "critical_write";
     const sensitive = pathClassOf !== undefined && candidates.some((path) => pathClassOf(path) === "sensitive");
     return critical || sensitive ? "critical_write" : "edit";
   }
@@ -437,8 +459,12 @@ function isPathLikeToken(token: string): boolean {
   return /\.[A-Za-z0-9]+$/.test(token);
 }
 
-/** Campos de path por tool (default `["path"]`; `lsp` declara `file`) e tools com default de `path` para o cwd (`grep`/`list_dir`/git: "."). */
-const PATH_FIELDS: Record<string, readonly string[]> = { lsp: ["file"] };
+/**
+ * Campos de path por tool (default `["path"]`; `lsp` declara `file`;
+ * `move_path` soma origem e destino) e tools com default de `path` para o cwd
+ * (`grep`/`list_dir`/git: ".").
+ */
+const PATH_FIELDS: Record<string, readonly string[]> = { lsp: ["file"], move_path: ["from", "to"] };
 const DEFAULT_PATH_FIELDS: readonly string[] = ["path"];
 const CWD_DEFAULT_TOOLS: ReadonlySet<string> = new Set(["grep", "list_dir", "git_status", "git_diff"]);
 /** Candidatos a path do input (ADR-0027, #391 slice 1): `PATH_FIELDS` + default `path`; `CWD_DEFAULT_TOOLS` sem `path` ganha "."; `run_command` soma tokens path-like de `command` (token nu: slice 4). */

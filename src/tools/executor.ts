@@ -34,6 +34,8 @@ import type { Tool, ToolContext, ToolResult } from "./types";
 
 const TIMEOUT = Symbol("timeout");
 const ABORTED = Symbol("aborted");
+/** Teto de um path no `tool.call` (#535): cabeçalho + cauda não; o path inteiro basta até aqui. */
+const AUDIT_PATH_MAX_CHARS = 200;
 
 /** AbortError padrão para quando o signal do run não traz `reason`. */
 function abortError(reason: unknown): Error {
@@ -192,6 +194,11 @@ export class ToolExecutor {
     // Tempo do ciclo completo da chamada; vai no tool.result como payload
     // padronizado (issue #61), não no tool.call, que marca o início.
     const startedAt = Date.now();
+    // Argumento material no `tool.call` (#535): `delete`/`edit` registram O QUE
+    // foi tocado, não só o nome da tool. Redigido e truncado; conteúdo nunca
+    // entra (I-03). Demais classes mantêm o payload sem paths.
+    const paths = this.callPaths(call);
+    const pathPayload = paths.length === 0 ? {} : { paths };
     // Dedup por call_id determinístico (F-03), apenas para tools declaradas
     // idempotentes (F-10, I-12); as demais sempre executam de verdade.
     const { step, journal } = ctx;
@@ -214,7 +221,7 @@ export class ToolExecutor {
         run: ctx.run,
         agent: ctx.agent,
         tipo: "tool.call",
-        payload: { name: call.name, callId: id },
+        payload: { name: call.name, callId: id, ...pathPayload },
       });
       const result = await this.execute(ctx, call);
       journal.record(id, result);
@@ -231,7 +238,7 @@ export class ToolExecutor {
       run: ctx.run,
       agent: ctx.agent,
       tipo: "tool.call",
-      payload: { name: call.name },
+      payload: { name: call.name, ...pathPayload },
     });
 
     const result = await this.execute(ctx, call);
@@ -513,6 +520,26 @@ export class ToolExecutor {
       payload: { name: call.name, reason },
     });
     return failure(reason);
+  }
+
+  /**
+   * Caminhos materiais da chamada para o `tool.call` (#535): só `delete`/`edit`
+   * (as classes que mudam o FS) declaram o que tocam. Cada path passa por
+   * `redactSecrets` e é truncado — nunca há conteúdo de arquivo no payload
+   * (I-03). Input ilegível não vira evento quebrado: devolve vazio.
+   */
+  private callPaths(call: ToolCall): string[] {
+    const tool = this.byName.get(call.name);
+    const cls = tool?.manifest?.class;
+    if (cls !== "delete" && cls !== "edit") return [];
+    let input: unknown;
+    try {
+      input = JSON.parse(call.arguments);
+    } catch {
+      return [];
+    }
+    return pathCandidatesOf({ name: call.name, input })
+      .map((path) => redactSecrets(path).slice(0, AUDIT_PATH_MAX_CHARS));
   }
 
   /**

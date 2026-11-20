@@ -23,6 +23,7 @@ import {
   type ToolPermissionRequest,
 } from "../src/permissions";
 import { editTool } from "../src/tools/edit";
+import { movePathTool } from "../src/tools/move-path";
 import { ToolExecutor } from "../src/tools/executor";
 import { grepTool } from "../src/tools/grep";
 import { listDirTool } from "../src/tools/list-dir";
@@ -484,6 +485,13 @@ describe("caminhos críticos (#263)", () => {
     expect(permissionDecision("bypass", "critical_write")).toBe("allow");
   });
 
+  test("move_path com overwrite eleva para critical_write; sem overwrite continua edit (review #535)", () => {
+    const call = (input: unknown) => ({ name: "move_path", input });
+    expect(actionClassOf(movePathTool, call({ from: "a.ts", to: "b.ts" }))).toBe("edit");
+    expect(actionClassOf(movePathTool, call({ from: "a.ts", to: "b.ts", overwrite: false }))).toBe("edit");
+    expect(actionClassOf(movePathTool, call({ from: "a.ts", to: "b.ts", overwrite: true }))).toBe("critical_write");
+  });
+
   test("piso: .astro continua bloqueado por protectedPaths mesmo em bypass", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-critical-"));
     const audit = new Auditor(join(cwd, "audit.jsonl"));
@@ -795,6 +803,9 @@ describe("argumento material no pedido de aprovação (#536)", () => {
       .toEqual({ kind: "path", value: "src/a.ts" });
     expect(approvalDetailOf(call("delete_path", { path: "tmp/a.txt" })))
       .toEqual({ kind: "path", value: "tmp/a.txt" });
+    // remoção de diretório: o prompt precisa mostrar que é recursiva (#535)
+    expect(approvalDetailOf(call("delete_path", { path: "tmp/a.txt", recursive: true })))
+      .toEqual({ kind: "path", value: "tmp/a.txt (recursivo)" });
   });
 
   test("move mostra os dois caminhos (from -> to)", () => {
@@ -802,6 +813,13 @@ describe("argumento material no pedido de aprovação (#536)", () => {
       .toEqual({ kind: "path", value: "a.ts -> dir/b.ts" });
     // forma incompleta não é um fato material: cai no prompt antigo
     expect(approvalDetailOf(call("move_path", { from: "a.ts" }))).toBeUndefined();
+  });
+
+  test("move com overwrite mostra que o destino será sobrescrito (review #535)", () => {
+    expect(approvalDetailOf(call("move_path", { from: "a.ts", to: "b.ts", overwrite: true })))
+      .toEqual({ kind: "path", value: "a.ts -> b.ts (sobrescreve)" });
+    expect(approvalDetailOf(call("move_path", { from: "a.ts", to: "b.ts", overwrite: false }))?.value)
+      .toBe("a.ts -> b.ts");
   });
 
   test("move longo preserva os dois lados: destino não some com orçamento por lado (#536)", () => {
@@ -824,16 +842,11 @@ describe("argumento material no pedido de aprovação (#536)", () => {
     expect(approvalDetailOf(call("write_file", { path: 42 }))).toBeUndefined();
   });
 
-  test("todo nome mapeado em DETAIL_* existe no registry, exceto os ainda não implementados (#536)", () => {
-    // Exceção explícita: quando `delete_path`/`move_path` entrarem no registry
-    // este teste falha e obriga a remover o nome daqui.
-    const NOT_YET: ReadonlySet<string> = new Set(["delete_path", "move_path"]);
+  test("todo nome mapeado em DETAIL_* existe no registry (#536)", () => {
+    // `delete_path`/`move_path` entraram no registry em #535: o mapeamento do
+    // prompt e o registry não podem divergir.
     const registry = new Set(BUILTIN_TOOLS.map((tool) => tool.manifest.name));
-    for (const name of NOT_YET) {
-      expect({ name, registered: registry.has(name) }).toEqual({ name, registered: false });
-    }
     for (const name of APPROVAL_DETAIL_TOOLS) {
-      if (NOT_YET.has(name)) continue;
       expect({ name, registered: registry.has(name) }).toEqual({ name, registered: true });
     }
   });
