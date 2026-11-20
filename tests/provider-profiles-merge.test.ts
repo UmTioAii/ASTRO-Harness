@@ -108,7 +108,7 @@ test("ASTRO_PROVIDER desconhecido é erro", () => {
     project: project(),
     store: store(),
     env: { ASTRO_PROVIDER: "nao-existe" },
-  })).toThrow(/provider "nao-existe" não está configurado/);
+  })).toThrow(/ASTRO_PROVIDER="nao-existe".*conhecidos: p/);
 });
 
 test("activeProfileId inexistente avisa e cai no projeto", () => {
@@ -133,7 +133,7 @@ test("profileFromEnv monta o perfil efêmero", () => {
     OPENAI_MODEL: "gpt-4o",
     OPENAI_BASE_URL: "https://proxy.example/v1",
   });
-  expect(env?.id).toBe("env");
+  expect(env?.id).toBe("openai");
   expect(env?.baseUrl).toBe("https://proxy.example/v1");
   expect(env?.models[0]?.id).toBe("gpt-4o");
 });
@@ -168,12 +168,12 @@ test("env efêmero é usado sem escrever nada", () => {
     project: project(),
     store: store(),
     envProfile,
-    env: { ASTRO_PROVIDER: "env" },
+    env: { ASTRO_PROVIDER: "openai" },
   });
-  expect(result.activeProvider).toBe("env");
+  expect(result.activeProvider).toBe("openai");
   expect(result.providerSource).toBe("env");
   expect(result.providerSelection).toBe("env");
-  expect(result.config.agent.model).toBe("env/gpt-4o");
+  expect(result.config.agent.model).toBe("openai/gpt-4o");
 });
 
 test("nada configurado é erro explicativo", () => {
@@ -263,7 +263,7 @@ test("perfil efêmero não cria arquivo nem grava a chave", () => {
     env: { ASTRO_HOME: home, OPENAI_API_KEY: key, OPENAI_MODEL: "gpt-4o" },
     allowMissing: true,
   });
-  expect(result.activeProvider).toBe("env");
+  expect(result.activeProvider).toBe("openai");
   expect(readdirSync(home)).toEqual([]);
   const leaked = readdirSync(home).some((name) => readFileSync(join(home, name), "utf8").includes(key));
   expect(leaked).toBe(false);
@@ -277,14 +277,14 @@ test("OPENAI_BASE_URL com credencial é rejeitada", () => {
   })).toThrow(/credencial/);
 });
 
-test("perfil salvo com id env colide e avisa", () => {
+test("perfil salvo com id do provider de env colide e avisa", () => {
   const envProfile = profileFromEnv({ OPENAI_API_KEY: "k", OPENAI_MODEL: "gpt-4o" })!;
   const result = resolveEffectiveConfig({
-    store: store(profile({ id: "env", name: "Env salvo" })),
+    store: store(profile({ id: "openai", name: "OpenAI salvo" })),
     envProfile,
     env: {},
   });
-  expect(result.warnings.join(" ")).toMatch(/env.*ignorado/);
+  expect(result.warnings.join(" ")).toMatch(/openai.*ignorado/);
 });
 
 test("agents nomeados com profile sobrevivem à revalidação", () => {

@@ -149,6 +149,7 @@ test("sem config, write_file pede aprovação antes de gravar", async () => {
       task: "crie hello.txt",
       env: {
         ASTRO_HOME: home,
+        ASTRO_ALLOW_INSECURE_BASE_URL: "1",
         OPENAI_API_KEY: "k",
         OPENAI_MODEL: "gpt-4o",
         OPENAI_BASE_URL: `http://127.0.0.1:${server.port}/v1`,

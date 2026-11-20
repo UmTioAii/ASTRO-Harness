@@ -33,7 +33,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 - Objetos mesclam em profundidade; arrays substituem, exceto `models` (união por `provider/id`, projeto vence); escalares substituem.
 - O projeto não amplia as chaves cobertas por `assertNarrowed`: tools e perfil de agente, `permissions.mode`, budget, quotas, endpoint de credencial e `quotaDomain`. `paths`, `tools.run_command.sandbox` e `security` não passam por essa guarda; nas chaves cobertas, violação é erro, não override.
 - Provider ativo: `--provider` > `ASTRO_PROVIDER` > `activeProfileId` > provider de `agent.model`. `agent.profile` vence a seleção de store/env; `--provider` divergente é erro.
-- Modo: `--permission-mode` > `ASTRO_PERMISSION_MODE` > `permissions.mode` > `ask`. O perfil efêmero `OPENAI_*` só é selecionado quando a config não define um provider/modelo e nunca é gravado.
+- Modo: `--permission-mode` > `ASTRO_PERMISSION_MODE` > `permissions.mode` > `ask`. O perfil efêmero do ambiente (`OPENAI_*`, `NVIDIA_*` ou `OPENROUTER_*`) só é selecionado quando a config não define um provider/modelo, nunca é gravado e usa `ASTRO_PROVIDER` como único seletor (#472).
 
 ## Autoridade por ajuste (Q-10)
 
@@ -85,7 +85,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 - #468 move a raiz desse estado para `$ASTRO_HOME` (tema global com override por projeto); a autoridade continua TUI-only.
 - `activeProfileId` mora junto dos providers (store legado; `config.json` após #459/#492); `lastModel` é dica de UI. Depois de `/model`, `●` (ativo salvo) e `em uso` (sessão) podem divergir — é esperado.
 - O rótulo de exibição do provider vive em `providers.<id>.name` no `config.json` e faz round-trip pelo CRUD/dump (#492); no projeto, o mesmo campo vence o id na lista. Escrita em `config.json`/`astro.config.json` que seja symlink é recusada com `config_write_denied` (#495). `config.json` inválido faz o CRUD falhar fechado (nada é gravado) até a camada ser corrigida.
-- Na lista de perfis (`/provider list` no REPL, tela da TUI), projeto e `env` aparecem com `[source]`, mas são somente leitura; ativar é runtime-only. Só perfil global grava `activeProfileId`.
+- Na lista de perfis (`/provider list` no REPL, tela da TUI), projeto e o perfil efêmero do ambiente aparecem com `[source]`, mas são somente leitura; ativar é runtime-only. Só perfil global grava `activeProfileId`.
 
 ## Migração e retrocompatibilidade
 

@@ -177,7 +177,7 @@ describe("vault-import recusas (#311 B.3)", () => {
     const dir = mkdtempSync(join(tmpdir(), "astro-vault-import-env-"));
     const env = { ASTRO_HOME: dir, OPENAI_API_KEY: SENTINEL, OPENAI_MODEL: "m1" };
     expect(() => importVaultCredential({
-      provider: "env", env, configPath: join(dir, "astro.config.json"),
+      provider: "openai", env, configPath: join(dir, "astro.config.json"),
       vault: new Vault(join(dir, "vault.json"), fake), apply: true,
     })).toThrow(/efêmero/);
   });

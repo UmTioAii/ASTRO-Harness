@@ -36,16 +36,17 @@ There are two ways to give ASTRO a model. Both end in the same place: the config
 
 **1. Provider setup inside TUIX (zero config).** With no configuration and no provider in the environment, `astro` opens the provider screen. Pick a provider, paste the key and choose a model. The key goes to the local vault at `~/.astro/vault.json` — protected by DPAPI on Windows and by file mode `0600` elsewhere — and the configuration stores only `vault:<credentialId>`. The key is never written to the project, the ledger or the audit log.
 
-**2. Environment variables.** A single OpenAI-compatible endpoint can be defined entirely from the environment:
+**2. Environment variables.** Each provider reads its own variable set, `OPENAI_*`, `NVIDIA_*` or `OPENROUTER_*` (key, model and optional base URL):
 
 ```bash
-export OPENAI_API_KEY="..."
-export OPENAI_MODEL="gpt-4o-mini"
-export OPENAI_BASE_URL="https://api.openai.com/v1"   # optional, this is the default
+export ASTRO_PROVIDER="nvidia"            # only selector; optional when one set is complete
+export NVIDIA_API_KEY="..."
+export NVIDIA_MODEL="meta/llama-3.3-70b-instruct"
+export NVIDIA_BASE_URL="https://integrate.api.nvidia.com/v1"   # optional, this is the default
 astro
 ```
 
-`OPENAI_API_KEY` plus `OPENAI_MODEL` (or `ASTRO_MODEL`) define an ephemeral provider named `env`; it is used when no project configuration declares another provider. `ASTRO_PROVIDER` selects the active provider by name.
+A complete set (key plus model) becomes an ephemeral provider named after the provider (`openai`, `nvidia`, `openrouter`), used only by that invocation and never written to disk. `ASTRO_PROVIDER` selects the set; an unknown name is a typed error. Without it, exactly one complete set is used and two or more are a typed ambiguity error. A partial set never selects anything, and one provider's variables never select another. `ASTRO_MODEL` and `ASTRO_BASE_URL` were removed. An `http://` base URL requires explicit confirmation with `ASTRO_ALLOW_INSECURE_BASE_URL=1` (development only).
 
 For any provider declared in `astro.config.json`, `credentialRef` is either the name of an environment variable (for example `NVIDIA_API_KEY`) or `vault:<credentialId>` for a secret already in the local vault.
 
@@ -160,10 +161,9 @@ The fixed floor is enforced in every mode, including `bypass`: `.astro/` and con
 | Variable | Required | Purpose |
 |---|---|---|
 | `<credentialRef>` (for example `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`) | For OpenAI-compatible providers | Provider API key, named by the configuration. |
-| `OPENAI_API_KEY` | For the `env` provider | Key for a single OpenAI-compatible endpoint defined from the environment. |
-| `OPENAI_MODEL` / `ASTRO_MODEL` | For the `env` provider | Model identifier for that endpoint. |
-| `OPENAI_BASE_URL` | No | Endpoint for the `env` provider; default `https://api.openai.com/v1`. |
-| `ASTRO_PROVIDER` | No | Active provider, by name. |
+| `OPENAI_*` / `NVIDIA_*` / `OPENROUTER_*` (`_API_KEY` + `_MODEL`, optional `_BASE_URL`) | For the ephemeral env provider | One complete set defines a provider named after it (`openai`, `nvidia`, `openrouter`); nothing is persisted. |
+| `ASTRO_PROVIDER` | No | Selects the environment set (or a configured provider) by name; unknown is a typed error. |
+| `ASTRO_ALLOW_INSECURE_BASE_URL` | No | `1` confirms an `http://` base URL from the environment (development only). |
 | `ASTRO_PERMISSION_MODE` | No | Permission mode for the invocation; the flag wins over the environment and the configuration. |
 | `ASTRO_HOME` | No | State directory; default `~/.astro`. |
 | `ASTRO_NO_GLOBAL_CONFIG` | No | Ignore the global configuration layer. |

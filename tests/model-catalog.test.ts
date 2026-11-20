@@ -60,8 +60,8 @@ test("origem project/global/env e ordem por provider/id", () => {
   const byRef = new Map(catalog.map((model) => [model.ref, model]));
   expect(byRef.get("proj/p1")?.source).toBe("project");
   expect(byRef.get("glob/g1")?.source).toBe("global");
-  expect(byRef.get("env/e1")?.source).toBe("env");
-  expect(catalog.map((model) => model.ref)).toEqual(["env/e1", "glob/g1", "proj/p1"]);
+  expect(byRef.get("openai/e1")?.source).toBe("env");
+  expect(catalog.map((model) => model.ref)).toEqual(["glob/g1", "openai/e1", "proj/p1"]);
 });
 
 test("projeto vence global na mesma ref", () => {
