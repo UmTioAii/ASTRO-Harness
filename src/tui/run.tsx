@@ -6,7 +6,7 @@ import { ProfileManager } from "../providers/profile-manager";
 import { NoProviderError, NO_PROVIDER_MESSAGE, loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { ensureFirstRunConfig } from "../chat/init";
-import { ensureTermsAccepted, ttyTermsAsk } from "../terms";
+import { ensureTermsAccepted, ttyTermsAsk, type TermsAsk } from "../terms";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
 import { createSecretHandlers } from "./vault-secret";
@@ -107,6 +107,40 @@ export async function withProviderSetup<T>(
   }
 }
 
+/** Portão dos termos da TUI (#479), antes de qualquer escrita (config, sessão, estado). */
+export type TuiTermsBoot =
+  /** Recusou: nada foi criado nem gravado. */
+  | { kind: "declined" }
+  /** Sem canal interativo: segue sem perguntar e sem registrar aceite. */
+  | { kind: "unattended" }
+  /** Versão corrente já aceita ou aceita agora; o boot pode seguir. */
+  | { kind: "ready" };
+
+export interface BootTuiTermsOptions {
+  /** `$ASTRO_HOME` de onde sai o `state.json`; default `process.env`. */
+  env?: NodeJS.ProcessEnv;
+  /** Caminho do `state.json` (teste); default `statePath(env)`. */
+  path?: string;
+  /** Canal interativo; ausente = sem TTY (não pergunta, não grava). */
+  ask?: TermsAsk;
+  /** Relógio do teste; default `new Date()`. */
+  now?: () => Date;
+}
+
+/**
+ * Espelha o `bootChat`: o portão dos termos roda antes de `ensureFirstRun`, da
+ * config e da sessão, e a recusa sai sem gravar nada.
+ */
+export async function bootTuiTerms(opts: BootTuiTermsOptions = {}): Promise<TuiTermsBoot> {
+  const decision = await ensureTermsAccepted({
+    path: opts.path ?? statePath(opts.env ?? process.env),
+    ...(opts.ask === undefined ? {} : { ask: opts.ask }),
+    ...(opts.now === undefined ? {} : { now: opts.now }),
+  });
+  if (decision.kind === "declined") return { kind: "declined" };
+  return decision.kind === "unattended" ? { kind: "unattended" } : { kind: "ready" };
+}
+
 export interface TuiBootstrapOptions<T> {
   createSession(): T;
   setup(): Promise<boolean>;
@@ -175,7 +209,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
   }
   try {
     // #479: termos de uso antes de qualquer escrita (config, sessão, estado).
-    const terms = await ensureTermsAccepted({ path: statePath(opts.env ?? process.env), ask: ttyTermsAsk() });
+    const terms = await bootTuiTerms({ env: opts.env ?? process.env, ask: ttyTermsAsk() });
     if (terms.kind === "declined") {
       console.error("termos de uso não aceitos — saindo sem gravar nada");
       return 1;

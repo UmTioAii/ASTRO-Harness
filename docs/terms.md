@@ -46,7 +46,8 @@ Sem canal interativo a escolha é **prosseguir com aviso**, não recusar: os ter
 | `acceptedAt` | data ISO (`toISOString()`) do aceite |
 
 - Só a versão e a data: nenhuma credencial, caminho, nome ou identificador de máquina.
-- Escrita atômica (tmp + rename) com `0600` e diretório `0700` no POSIX (vale a ACL do perfil no Windows); `state.json` ausente ou sem `terms` continua válido.
+- Escrita atômica (tmp + rename) com `0600`; diretório `0700` no POSIX — criado assim e, se já existia com outro modo, ajustado em melhor esforço (no Windows vale a ACL do perfil); `state.json` ausente ou sem `terms` continua válido.
+- O aceite fica registrado só aqui: não gera linha de auditoria nesta versão — diferente de `trust.decision` (`src/trust.ts`), não há evento de aceite por decisão de escopo do #479.
 - A mesma versão não pergunta de novo; a versão nova pergunta e substitui o registro. A recusa nunca escreve: um `state.json` existente fica byte a byte igual; o aceite preserva `trust` e `migrations`.
 - Registro inválido (campo desconhecido, versão vazia, data fora do ISO) é erro que cita só o caminho, nunca o conteúdo.
 - No boot, registro inválido encerra com erro (não dá para registrar um aceite confiável); no `/terms` o mesmo erro vira aviso e a sessão continua.

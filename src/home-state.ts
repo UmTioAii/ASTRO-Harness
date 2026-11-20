@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { statePath } from "./astro-home";
 import { looksLikeSecret } from "./secrets";
@@ -22,6 +22,20 @@ const EMPTY_STATE: AstroHomeState = {
   trust: { folders: [] },
   migrations: { providers: false, trust: false },
 };
+
+/**
+ * Diretório do estado que não pode ser criado (ex.: `$ASTRO_HOME` apontando
+ * para um arquivo). Erro tipado que cita só o caminho: a mensagem crua do
+ * `mkdir` duplica o `code` e vaza jargão (`EEXIST: ... mkdir`). Fail-closed:
+ * nada é gravado, nenhum `.tmp` fica para trás.
+ */
+export class HomeStateUnwritableError extends Error {
+  readonly code = "state_unwritable";
+  constructor(readonly path: string) {
+    super(`estado global não gravável em "${path}": o diretório não pode ser criado`);
+    this.name = "HomeStateUnwritableError";
+  }
+}
 
 /** Versão curta e opaca; a data é o `toISOString()` do aceite. */
 const TERMS_VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$/;
@@ -113,7 +127,17 @@ export function loadHomeState(path: string = statePath()): AstroHomeState {
 
 export function saveHomeState(state: AstroHomeState, path: string = statePath()): void {
   const valid = validateHomeState(state);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const dir = dirname(path);
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch {
+    throw new HomeStateUnwritableError(dir);
+  }
+  // `mode` do `mkdirSync` é ignorado quando o diretório já existe, e outro módulo
+  // pode ter criado o `$ASTRO_HOME` com 0755: ajusta em melhor esforço, como `saveVault`.
+  if (process.platform !== "win32") {
+    try { chmodSync(dir, 0o700); } catch { /* melhor esforço */ }
+  }
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporary, `${JSON.stringify(valid, null, 2)}\n`, {

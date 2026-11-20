@@ -1423,7 +1423,6 @@ async function main(argv: string[]): Promise<number> {
         console.error("termos de uso não aceitos — saindo sem gravar nada");
         return 1;
       }
-      if (boot.kind === "unattended") console.error(`aviso: ${TERMS_UNATTENDED_NOTICE}`);
       io = boot.io;
       const configPath = resolve(o.configPath);
       const project = loadProjectConfig(configPath, { env: process.env });
@@ -1444,6 +1443,9 @@ async function main(argv: string[]): Promise<number> {
       for (const warning of session.warnings) console.error(`aviso: ${warning}`);
       const { openSessionApi } = await import("./chat/session-api");
       sessionApi = openSessionApi(projectDataDir(base), { home: astroHomePath() });
+      // Sem TTY o aviso dos termos só faz sentido agora: antes da config carregada
+      // ele antecedia um erro de config que não o causava (#591).
+      if (boot.kind === "unattended") console.error(`aviso: ${TERMS_UNATTENDED_NOTICE}`);
       await runRepl(session, io, { sessionApi, signal: io.signal, style: interactive, cwd: base, manager, interactive });
       return 0;
     } catch (error) {
