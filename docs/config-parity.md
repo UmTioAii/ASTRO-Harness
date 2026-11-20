@@ -52,7 +52,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | sessões | `$ASTRO_HOME/projects/<chave>/sessions.db` (SQLite; `sessions/` ao lado é o JSON v1 importado; #468) | sem comando | picker: lista/renomeia/exclui/retoma | lista/retoma/exclui (TTY) | compartilhado; renomear TUI-only |
 | `--allow-critical`/`--allow-sensitive`/`--i-understand` | invocação | entrada | herda | herda | CLI-only: allowlist é ato explícito (ADR-0027) |
 | `--artifact-root` | invocação de `chat`/TUI | entrada | herda | herda | CLI-only na entrada, compartilhado na sessão |
-| `config push/pull`, `providers vault-import`, `doctor --fix`, `config migrate` (alvo) | camada 3/2, `$ASTRO_HOME` | executa | não expõe | não expõe | CLI-only: operação administrativa |
+| `config push/pull`, `providers vault-import`, `doctor --fix`, `config migrate` | camada 3/2, `$ASTRO_HOME` | executa | não expõe | não expõe | CLI-only: operação administrativa |
 | primeiro run / setup de provider | TUI cria `astro.config.json` (só `agent.model` do perfil global ativo) e `$ASTRO_HOME/config.json` se ausentes, sempre `wx` 0600 — sem provider ainda, só o global nasce e o setup cria os dois juntos (#559) | `run` exige config | abre setup automático | erro com instrução | contrato comum quando S3 (#469) definir a criação |
 
 ## Flag versus valor gravado (Q-10)
@@ -95,12 +95,12 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 - #459 importa `providers.json` uma vez para `config.json` e marca `migrations.providers`; depois disso o legado é import-only (preservado byte a byte, não lido, escrita recusada com `ProfileStoreMigratedError`, nome planejado em #459).
 - `trusted.json` é importado e preservado (#403); depois de `migrations.trust` não é mais lido, mas `saveTrustedStore` não recusa escrita em caminho explícito — diferente de `providers.json` após #459.
 - Antes de #459, o CRUD da TUI/REPL ainda grava o store legado; é a janela de migração, não uma segunda fonte. Quando #459 entrar e antes de #492, o CRUD recusa; o alvo é um só: `config.json`.
+- Schema da config (ADR-0028, #493): implementado e igual nas duas camadas, checado por camada de origem antes do merge. Ausente = `0.0.0` (legado), aceito e migrado em memória; major à frente falha fechado. `astro config migrate [--config <path>] [--apply]` é o único escritor da migração — dry-run por default, atômico, idempotente e CLI-only.
 
 ## Lacunas de implementação
 
 | Lacuna | Efeito hoje | Onde |
 |---|---|---|
-| `astro config migrate` e `CONFIG_SCHEMA_VERSION` (ADR-0028) | não há migração de major nem rejeição de chave desconhecida | #493 |
 | `/config` em projeto sem arquivo | TUI cria o arquivo no first-run (#559), então persiste; fora da TUI, modo não persiste e S3 não cria config | #469 |
 
 - `preset` (`simple`/`control`, default `control`) é escalar: a camada de projeto vence. Em `simple`, `agent.maxSteps` e `agents.*.maxSteps` têm teto 500: um valor menor vindo de outra camada é mantido e acima de 500 é erro com `preset: "control"` como próximo passo; sem `agent.maxSteps`, o teto efetivo é 500 (#515). Também só no `control` (#552): `agents.maxActive`, `spawn.maxActive`, `team.sessionBudgetUsd` e `team.weekBudgetUsd` — em `simple`, declarar qualquer um é erro de config.

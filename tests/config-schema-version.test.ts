@@ -50,8 +50,16 @@ describe("ADR-0028 versão do schema", () => {
     expect(CONFIG_SCHEMA_VERSION.split(".")[0]).toBe("1");
   });
 
-  test("versão ausente é legado aceito e AstroConfig.version continua undefined", () => {
-    expect(validateConfig(base()).version).toBeUndefined();
+  test("versão ausente é legado aceito: version undefined e migratedFrom 0.0.0", () => {
+    const config = validateConfig(base());
+    expect(config.version).toBeUndefined();
+    expect(config.migratedFrom).toBe("0.0.0");
+  });
+
+  test("versão antiga explícita é migrada em memória e mantém a origem", () => {
+    const config = validateConfig(base({ version: "0.4.2" }));
+    expect(config.version).toBe("0.4.2");
+    expect(config.migratedFrom).toBe("0.4.2");
   });
 
   test("major à frente recusa antes de qualquer checagem de chave", () => {
@@ -134,6 +142,7 @@ describe("ADR-0028 versão do schema", () => {
       version: CONFIG_SCHEMA_VERSION,
       providers: {
         "provider-livre": { kind: "openai-compat", baseUrl: "http://localhost:1234/v1", credentialRef: "TEST_KEY" },
+        outro: { kind: "openai-compat", baseUrl: "http://localhost:1234/v1", credentialRef: "OUTRA_KEY" },
       },
       models: [{ provider: "provider-livre", id: "m1", tags: ["writing-code"], context: 4096 }],
       agent: { model: "provider-livre/m1", maxSteps: 3, tools: [], entryAgent: "planejador-livre" },
@@ -197,7 +206,10 @@ describe("astro config migrate (ADR-0028)", () => {
       permissions: { mode: "ask" },
       tools: { run_command: { sandbox: true } },
       budget: { scope: "month", limitUsd: 10 },
-      providers: { "provider-livre": { kind: "openai-compat", baseUrl: "http://localhost:1234/v1", credentialRef: "TEST_KEY" } },
+      providers: {
+        mock: { kind: "openai-compat", baseUrl: "http://localhost:1234/v1", credentialRef: "TEST_KEY" },
+        "provider-livre": { kind: "openai-compat", baseUrl: "http://localhost:1234/v1", credentialRef: "OUTRA_KEY" },
+      },
     }));
     const report = migrateConfigFile(path, { apply: true });
     expect(report.written).toBe(true);
@@ -211,6 +223,14 @@ describe("astro config migrate (ADR-0028)", () => {
     expect(Object.keys(written.providers as object)).toContain("provider-livre");
     // Nada de budget/permissions injetados quando a origem não declara.
     expect(() => validateConfig(written)).not.toThrow();
+  });
+
+  test("versão de major anterior com minor/patch é carimbada no major suportado", () => {
+    const path = tempConfig(base({ version: "0.4.2" }));
+    const report = migrateConfigFile(path, { apply: true });
+    expect(report.declaredVersion).toBe("0.4.2");
+    expect(report.written).toBe(true);
+    expect((JSON.parse(readFileSync(path, "utf8")) as { version?: string }).version).toBe(CONFIG_SCHEMA_VERSION);
   });
 
   test("segunda execução é no-op (idempotente)", () => {
@@ -244,6 +264,29 @@ describe("astro config migrate (ADR-0028)", () => {
     const before = readFileSync(path, "utf8");
     expect(codeOf(() => migrateConfigFile(path, { apply: true }))).toBe("config_unknown_key");
     expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("config de projeto incompleta não é gravada (validação sempre)", () => {
+    const path = tempConfig({ version: CONFIG_SCHEMA_VERSION, agent: { maxSteps: 1 } });
+    const before = readFileSync(path, "utf8");
+    expect(() => migrateConfigFile(path, { apply: true })).toThrow(ConfigError);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("camada global parcial migra e preserva o conteúdo", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-config-migrate-home-"));
+    const path = join(home, "config.json");
+    writeFileSync(path, JSON.stringify({
+      activeProfileId: "g",
+      providers: { g: { kind: "openai-compat", baseUrl: "https://g.example/v1", credentialRef: "KEY" } },
+    }));
+    const report = migrateConfigFile(path, { apply: true, env: { ASTRO_HOME: home } });
+    expect(report.written).toBe(true);
+    const written = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    expect(written.version).toBe(CONFIG_SCHEMA_VERSION);
+    expect(written.activeProfileId).toBe("g");
+    expect(Object.keys(written.providers as object)).toEqual(["g"]);
+    expect(migrateConfigFile(path, { apply: true, env: { ASTRO_HOME: home } }).written).toBe(false);
   });
 
   test.skipIf(process.platform === "win32")("destino symlink é recusado e o alvo fica intacto", () => {

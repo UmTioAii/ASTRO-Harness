@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, inspectConfigDocument, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
 import { globalConfigPath, statePath } from "../astro-home";
 import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
@@ -282,6 +282,8 @@ export function saveProfileStoreToConfig(store: ProviderStore, configPath: strin
   // Camada atual inválida não é "consertada" por silêncio (ex.: modelo duplicado
   // faria a deleção abaixo apagar um provider editado à mão): falha sem gravar.
   assertLayerSchema(raw);
+  // ADR-0028: config de um harness mais novo não é reescrita por um antigo.
+  inspectConfigDocument(raw, { source: configPath });
   const providers: Record<string, unknown> = isPlainObject(raw.providers) ? { ...raw.providers } : {};
   const models: unknown[] = Array.isArray(raw.models) ? [...raw.models] : [];
   const storeIds = new Set(valid.profiles.map((profile) => profile.id));
@@ -363,6 +365,8 @@ export function updateGlobalProviderCredentialRef(env: NodeJS.ProcessEnv, provid
   }
   entry.credentialRef = ref;
   assertLayerSchema(raw);
+  // ADR-0028: refusa config de harness mais novo antes de reescrever o arquivo.
+  inspectConfigDocument(raw, { source: path });
   writeConfigRaw(raw, path);
 }
 
@@ -503,6 +507,15 @@ export function loadGlobalConfig(env: NodeJS.ProcessEnv = process.env): Record<s
 }
 
 /**
+ * ADR-0028: cada camada crua segue a própria `version`. Mais nova que o harness
+ * falha fechada (`config_ahead_of_harness`, nomeando o arquivo) antes de
+ * qualquer merge; uma camada antiga é migrada em memória, nunca no disco.
+ */
+function inspectLayerDocument(layer: Record<string, unknown>, source: string | undefined): Record<string, unknown> {
+  return inspectConfigDocument(layer, { ...(source === undefined ? {} : { source }) }).document;
+}
+
+/**
  * Valida uma camada de projeto crua contra global+store (ADR-0029) e devolve a
  * config mesclada; sem gravar nada. Usada por `loadProjectConfig` e pela
  * pré-validação do `/config` antes de gravar (#558).
@@ -510,6 +523,7 @@ export function loadGlobalConfig(env: NodeJS.ProcessEnv = process.env): Record<s
 export function validateProjectLayer(
   projectLayer: Record<string, unknown>,
   env: NodeJS.ProcessEnv = process.env,
+  projectSource?: string,
 ): AstroConfig {
   const homeEnv = { ...process.env, ...env };
   const global = homeEnv.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(homeEnv);
@@ -518,14 +532,17 @@ export function validateProjectLayer(
   // camada é erro).
   assertLayerSchema(projectLayer);
   assertLayerSchema(global);
-  const declared = mergeConfigLayers(global ?? {}, projectLayer);
+  // ADR-0028: versão e chaves são checadas por camada de origem, antes do merge.
+  const projectDoc = inspectLayerDocument(projectLayer, projectSource);
+  const globalDoc = global === undefined ? {} : inspectLayerDocument(global, globalConfigPath(homeEnv));
+  const declared = mergeConfigLayers(globalDoc, projectDoc);
   // Todo model declarado aponta para um provider declarado nas camadas.
   assertDeclaredProviders(declared);
   // O store é fonte global de credenciais mesmo sem `$ASTRO_HOME/config.json`;
   // depois da migração a leitura vem de `config.json` (#459).
   const store = readGlobalProfileStore(homeEnv);
   const storeProviders = Object.fromEntries(store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));
-  assertNarrowed(global ?? {}, declared, storeProviders, projectLayer);
+  assertNarrowed(globalDoc, declared, storeProviders, projectDoc);
   return validateConfig(declared);
 }
 
@@ -533,7 +550,7 @@ export function validateProjectLayer(
  * `chat`/`tui` não validam o projeto isolado: ele pode depender do global. */
 export function loadProjectConfig(configPath: string, opts: { env?: NodeJS.ProcessEnv } = {}): AstroConfig | undefined {
   if (!existsSync(configPath)) return undefined;
-  return validateProjectLayer(loadConfigRaw(configPath), opts.env ?? process.env);
+  return validateProjectLayer(loadConfigRaw(configPath), opts.env ?? process.env, configPath);
 }
 
 export type ProviderSource = "project" | "global" | "env";
@@ -813,6 +830,8 @@ export function resolveEffectiveConfig(input: {
    * efetiva é validada com ele em vez de mascarar camadas inválidas (#523).
    */
   diagnosticFallback?: ProviderProfile;
+  /** Arquivo da camada de projeto, só para nomear a recusa de schema (ADR-0028). */
+  projectPath?: string;
 }): EffectiveConfig {
   const env = input.env ?? process.env;
   const warnings: string[] = [];
@@ -823,8 +842,12 @@ export function resolveEffectiveConfig(input: {
   } catch {
     // cofre ilegível não quebra o start da sessão; `astro health` reporta o detalhe
   }
-  const project = isPlainObject(input.project) ? input.project : undefined;
-  const global = isPlainObject(input.global) ? input.global : undefined;
+  const project = isPlainObject(input.project)
+    ? inspectLayerDocument(input.project, input.projectPath)
+    : undefined;
+  const global = isPlainObject(input.global)
+    ? inspectLayerDocument(input.global, globalConfigPath({ ...process.env, ...env }))
+    : undefined;
   // ADR-0029: defaults < global < projeto; a validação do merge decide o que é seguro.
   const declared = mergeConfigLayers(global ?? {}, project ?? {});
   const base = project === undefined ? mergeConfigLayers(BASELINE_LAYER, declared) : declared;
@@ -1084,6 +1107,7 @@ export function loadEffectiveConfig(
   return resolveEffectiveConfig({
     ...(project === undefined ? {} : { project }),
     ...(global === undefined ? {} : { global }),
+    projectPath: configPath,
     store,
     ...(opts.provider === undefined ? {} : { providerFlag: opts.provider }),
     ...(opts.ignoreStoredSelection === true ? { ignoreStoredSelection: true } : {}),

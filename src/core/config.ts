@@ -452,8 +452,10 @@ export interface AstroConfig {
   cache?: CacheConfig;
   /** Caminhos ou pacotes de plugins a carregar (F7-1). */
   plugins?: string[];
-  /** Versão semântica da config (x.y.z) para sharing (F7-4). */
+  /** Versão semântica da config (x.y.z) para sharing (F7-4); ausente = legado. */
   version?: string;
+  /** Versão de origem de uma migração em memória (ADR-0028); ausente = já no major. */
+  migratedFrom?: string;
   /** Recursos de time (F7-5). */
   team?: TeamSectionConfig;
   /** Handoff (F-24): timeout do ack; default 30000ms (D-15). */
@@ -489,7 +491,10 @@ export type ConfigErrorCode =
   | "config_write_denied"
   | "config_write_failed"
   | "config_invalid_json"
-  | "config_invalid_schema";
+  | "config_invalid_schema"
+  | "config_ahead_of_harness"
+  | "config_migration_required"
+  | "config_unknown_key";
 
 export class ConfigError extends Error {
   /**
@@ -1713,15 +1718,472 @@ function validateWebSearch(value: unknown): WebSearchConfig {
 }
 
 /**
+ * Versão do schema do documento de config (ADR-0028), independente da versão do
+ * harness em `package.json`: major remove/renomeia/redefine (ou endurece a
+ * validação), minor soma chave opcional retrocompatível, patch só corrige
+ * mensagem. O alvo hoje é o major 1.
+ */
+export const CONFIG_SCHEMA_VERSION = "1.0.0";
+
+const CONFIG_SCHEMA_MAJOR = Number(CONFIG_SCHEMA_VERSION.split(".")[0]);
+
+/**
+ * Chaves de topo conhecidas por major (ADR-0028), fonte runtime de "chave
+ * conhecida". O major 1 não remove nem renomeia chave de topo — endurece a
+ * validação das seções de forma fixa —, então o conjunto é o mesmo do legado.
+ * `activeProfileId` só existe na camada global (`$ASTRO_HOME/config.json`,
+ * #459/#492); `$schema` e `provenance` são metadados, nunca config.
+ * `migratedFrom` é derivado por `validateConfig` (ADR-0028): aceito de volta
+ * quando uma config já validada entra como camada, e nunca lido como ajuste.
+ */
+const CONFIG_KEYS_V1: readonly string[] = [
+  "$schema", "provenance", "activeProfileId", "migratedFrom",
+  "preset", "providers", "models", "modelPool", "agent", "agents", "maxActive",
+  "tools", "telemetry", "quota", "budget", "run", "attachments", "cache",
+  "plugins", "version", "team", "handoff", "spawn", "permissions", "security",
+  "effort", "pricing", "mcpServers", "outputLimit", "compaction", "webSearch",
+  "memory", "paths",
+];
+
+export const CONFIG_KEYS: Readonly<Record<number, readonly string[]>> = Object.freeze({
+  0: CONFIG_KEYS_V1,
+  1: CONFIG_KEYS_V1,
+});
+
+/** Forma de uma seção para a checagem de chave desconhecida (ADR-0028). */
+interface ConfigShape {
+  /** Chaves de objeto de forma fixa; ausente = contêiner de nome livre. */
+  keys?: readonly string[];
+  /** Chaves resolvidas pelo conteúdo (provider varia com `kind`); undefined = forma opaca. */
+  keysFor?: (value: Record<string, unknown>) => readonly string[] | undefined;
+  /** Forma dos valores de um contêiner de nome livre. */
+  values?: ConfigShape;
+  /** Forma de cada item de uma lista. */
+  items?: ConfigShape;
+  children?: Record<string, ConfigShape>;
+}
+
+const OPAQUE_SHAPE: ConfigShape = {};
+const FREE_STRING_MAP: ConfigShape = { values: OPAQUE_SHAPE };
+
+const PRICE_KEYS: readonly string[] = ["inputPerM", "outputPerM", "fonte", "verificado"];
+const QUOTA_KEYS: readonly string[] = ["dailyTokens", "monthlyCostUsd"];
+const PROVIDER_COMMON_KEYS: readonly string[] = [
+  "kind", "name", "quotaDomain", "headers", "priority", "fallback",
+  "maxRetries", "retryBackoffMs", "timeoutMs", "streamTimeoutMs",
+];
+const OPENAI_PROVIDER_KEYS: readonly string[] = [...PROVIDER_COMMON_KEYS, "baseUrl", "credentialRef"];
+const CODEX_PROVIDER_KEYS: readonly string[] = [...PROVIDER_COMMON_KEYS, "credentialsPath", "baseUrl"];
+const NAMED_AGENT_KEYS: readonly string[] = [
+  "model", "maxSteps", "tools", "systemPrompt", "profile", "permission", "modelRouting",
+];
+
+/** Forma do documento no major 1: só as seções de forma fixa são inspecionadas. */
+const CONFIG_SHAPE: ConfigShape = {
+  keys: CONFIG_KEYS_V1,
+  children: {
+    providers: {
+      values: {
+        keysFor: (value) =>
+          value.kind === "openai-compat"
+            ? OPENAI_PROVIDER_KEYS
+            : value.kind === "codex-oauth"
+              ? CODEX_PROVIDER_KEYS
+              : undefined,
+        children: { headers: FREE_STRING_MAP },
+      },
+    },
+    models: {
+      items: {
+        keys: ["provider", "id", "tags", "context", "status", "price", "capabilities", "call", "efficiency"],
+        children: {
+          price: { keys: PRICE_KEYS },
+          capabilities: FREE_STRING_MAP,
+          call: {
+            keys: [...CALL_KEYS],
+            children: {
+              thinking: { keys: [...THINKING_KEYS] },
+              effort: { keys: ["param", "map"], children: { map: FREE_STRING_MAP } },
+            },
+          },
+        },
+      },
+    },
+    modelPool: { values: { keys: ["model", "capabilities", "fallback"] } },
+    agent: { keys: ["model", "maxSteps", "tools", "systemPrompt", "entryAgent", "profile"] },
+    agents: {
+      values: { keys: NAMED_AGENT_KEYS, children: { modelRouting: { keys: ["cheapModel", "strongModel"] } } },
+    },
+    tools: { keys: ["run_command"], children: { run_command: { keys: ["sandbox"] } } },
+    telemetry: { keys: ["enabled", "endpoint", "sampleRate"] },
+    quota: { values: { keys: QUOTA_KEYS } },
+    budget: { keys: ["scope", "limitUsd", "warnAt", "onExceed", "hardCeilingUsd"] },
+    run: {
+      // `maxTurns` é chave removida no P4: `validateRun` responde com a migração
+      // para `agent.maxSteps` (não é typo, então não vira config_unknown_key).
+      keys: ["checkpointAt", "noProgressSegments", "judge", "tests", "maxTurns"],
+      children: { tests: { keys: ["command", "timeoutMs"] } },
+    },
+    attachments: {
+      keys: ["image", "directory", "artifactTtlDays", "artifactMaxBytes"],
+      children: { image: { keys: ["autoResize"] }, directory: { keys: ["showHidden"] } },
+    },
+    cache: { keys: ["enabled", "ttlHours", "maxEntries"] },
+    team: { keys: TEAM_KEYS, children: { agentQuotas: { values: { keys: QUOTA_KEYS } } } },
+    handoff: { keys: ["ackTimeoutMs"] },
+    spawn: { keys: ["parallel", "maxActive"] },
+    permissions: { keys: ["mode", "approvalTimeoutMs"] },
+    security: { keys: ["entropyThreshold"] },
+    effort: { keys: ["auto", "autoJumpMax", "maxCumulativeJump"] },
+    pricing: { values: { keys: PRICE_KEYS } },
+    mcpServers: {
+      values: {
+        keys: ["transport", "command", "args", "env", "url", "headers", "retryBackoffMs", "timeoutMs", "enabled"],
+        children: { env: FREE_STRING_MAP, headers: FREE_STRING_MAP },
+      },
+    },
+    outputLimit: { keys: ["maxTokens", "shareOfWindow"] },
+    compaction: { keys: ["buffer"] },
+    webSearch: { keys: ["provider", "apiKeyEnv", "baseUrl", "defaultMaxResults"] },
+    memory: { keys: ["maxChars"] },
+    paths: { keys: ["ledger", "audit"] },
+    provenance: { keys: ["registry", "plugins"] },
+  },
+};
+
+interface ParsedConfigVersion {
+  text: string;
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+const CONFIG_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/;
+
+function configLabel(source: string | undefined): string {
+  return source === undefined ? "config" : `configuração em "${source}"`;
+}
+
+/** Forma de `version` (ADR-0028 passo 1); o valor cru nunca aparece na mensagem (I-03). */
+function parseConfigVersion(
+  document: Record<string, unknown>,
+  source: string | undefined,
+): ParsedConfigVersion | undefined {
+  const value = document.version;
+  if (value === undefined) return undefined;
+  const match = typeof value === "string" ? CONFIG_VERSION_PATTERN.exec(value) : null;
+  if (match === null) {
+    throw new ConfigError(
+      `${configLabel(source)}: "version" deve ser semver x.y.z (formato esperado: ${CONFIG_SCHEMA_VERSION}) — nada foi alterado`,
+      "config_invalid_schema",
+    );
+  }
+  return {
+    text: value as string,
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+function collectUnknownKeys(value: unknown, shape: ConfigShape, field: string, out: Set<string>): void {
+  if (Array.isArray(value)) {
+    const items = shape.items;
+    if (items === undefined) return;
+    value.forEach((item, index) => collectUnknownKeys(item, items, `${field}[${index}]`, out));
+    return;
+  }
+  if (!isPlainObject(value)) return;
+  const values = shape.values;
+  if (values !== undefined) {
+    for (const [name, item] of Object.entries(value)) {
+      collectUnknownKeys(item, values, field === "" ? name : `${field}.${name}`, out);
+    }
+    return;
+  }
+  const keys = shape.keysFor === undefined ? shape.keys : shape.keysFor(value);
+  // Forma opaca (provider de plugin): o conteúdo é do plugin, não do schema.
+  if (keys === undefined) return;
+  const allowed = new Set(keys);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) out.add(field === "" ? key : `${field}.${key}`);
+  }
+  for (const [name, child] of Object.entries(shape.children ?? {})) {
+    const item = value[name];
+    if (item !== undefined) collectUnknownKeys(item, child, field === "" ? name : `${field}.${name}`, out);
+  }
+}
+
+/** União `CONFIG_KEYS(0..major)`: uma config legada usa o conjunto legado inteiro. */
+function topLevelKeysThrough(major: number): readonly string[] {
+  const keys = new Set<string>();
+  for (let step = 0; step <= major; step += 1) {
+    for (const key of CONFIG_KEYS[step] ?? []) keys.add(key);
+  }
+  return [...keys];
+}
+
+function assertKnownConfigKeys(
+  document: Record<string, unknown>,
+  options: {
+    source?: string;
+    topLevelKeys: readonly string[];
+    strictSections: boolean;
+    minorAhead: boolean;
+  },
+): void {
+  const problems = new Set<string>();
+  const allowed = new Set(options.topLevelKeys);
+  for (const key of Object.keys(document)) {
+    if (!allowed.has(key)) problems.add(key);
+  }
+  if (options.strictSections) collectUnknownKeys(document, CONFIG_SHAPE, "", problems);
+  const first = [...problems][0];
+  if (first === undefined) return;
+  const hint = options.minorAhead ? " e o arquivo declara um minor mais novo que este harness" : "";
+  throw new ConfigError(
+    `${configLabel(options.source)}: chave desconhecida "${first}" (major ${CONFIG_SCHEMA_MAJOR} de destino${hint}) — ` +
+      'se a config veio de outra versão, rode "astro config migrate"; nada foi alterado',
+    "config_unknown_key",
+  );
+}
+
+/** `$schema` e `provenance` são metadados validados, nunca config nem autorização. */
+function validateConfigMetadata(document: Record<string, unknown>, source: string | undefined): void {
+  if (document.$schema !== undefined) {
+    const value = document.$schema;
+    if (typeof value !== "string" || !/^[a-z][a-z0-9+.-]*:/i.test(value.trim())) {
+      throw new ConfigError(
+        `${configLabel(source)}: "$schema" deve ser uma URI em string — nada foi alterado`,
+        "config_invalid_schema",
+      );
+    }
+  }
+  if (document.provenance !== undefined) {
+    const provenance = document.provenance;
+    if (
+      !isPlainObject(provenance) ||
+      typeof provenance.registry !== "string" ||
+      provenance.registry.trim() === "" ||
+      typeof provenance.plugins !== "boolean"
+    ) {
+      throw new ConfigError(
+        `${configLabel(source)}: "provenance" deve ser {registry: string, plugins: boolean} — nada foi alterado`,
+        "config_invalid_schema",
+      );
+    }
+  }
+}
+
+const PERMISSION_MODE_RANK: Readonly<Record<string, number>> = { ask: 0, "allow-edits": 1, bypass: 2 };
+
+function nestedSection(value: unknown, ...keys: string[]): Record<string, unknown> | undefined {
+  let current: unknown = value;
+  for (const key of keys) {
+    if (!isPlainObject(current)) return undefined;
+    current = current[key];
+  }
+  return isPlainObject(current) ? current : undefined;
+}
+
+function stringSet(value: unknown): Set<string> | undefined {
+  return Array.isArray(value)
+    ? new Set(value.filter((item): item is string => typeof item === "string"))
+    : undefined;
+}
+
+/**
+ * Problema de segurança introduzido por um passo de migração: a chave citada
+ * ficaria mais permissiva ou teria sido injetada (ADR-0028). Chave ausente conta
+ * como default, então o guard é fail-closed.
+ */
+function migrationSecurityProblem(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): string | undefined {
+  for (const key of Object.keys(after)) {
+    if (key !== "version" && !Object.hasOwn(before, key)) return key;
+  }
+  const beforePermissions = nestedSection(before, "permissions");
+  const afterPermissions = nestedSection(after, "permissions");
+  if (beforePermissions !== undefined) {
+    if (afterPermissions === undefined) return "permissions";
+    const rank = (mode: unknown): number => (typeof mode === "string" ? PERMISSION_MODE_RANK[mode] ?? 0 : 0);
+    if (rank(afterPermissions.mode ?? "ask") < rank(beforePermissions.mode ?? "ask")) return "permissions.mode";
+  }
+  const beforeSandbox = nestedSection(before, "tools", "run_command")?.sandbox;
+  const afterSandbox = nestedSection(after, "tools", "run_command")?.sandbox;
+  if (afterSandbox === false && beforeSandbox !== false) return "tools.run_command.sandbox";
+  const beforeBudget = nestedSection(before, "budget");
+  const afterBudget = nestedSection(after, "budget");
+  if (beforeBudget !== undefined) {
+    if (afterBudget === undefined) return "budget";
+    const beforeLimit = beforeBudget.limitUsd;
+    const afterLimit = afterBudget.limitUsd;
+    if (typeof beforeLimit === "number" && (typeof afterLimit !== "number" || afterLimit > beforeLimit)) {
+      return "budget.limitUsd";
+    }
+    const beforeCeiling = beforeBudget.hardCeilingUsd;
+    const afterCeiling = afterBudget.hardCeilingUsd;
+    if (typeof beforeCeiling === "number" && (typeof afterCeiling !== "number" || afterCeiling > beforeCeiling)) {
+      return "budget.hardCeilingUsd";
+    }
+    if (beforeBudget.onExceed === "stop" && afterBudget.onExceed !== "stop") return "budget.onExceed";
+  }
+  const beforePaths = nestedSection(before, "paths");
+  if (beforePaths !== undefined && JSON.stringify(beforePaths) !== JSON.stringify(nestedSection(after, "paths"))) {
+    return "paths";
+  }
+  const beforeEntropy = nestedSection(before, "security")?.entropyThreshold;
+  const afterEntropy = nestedSection(after, "security")?.entropyThreshold;
+  if (typeof beforeEntropy === "number" && (typeof afterEntropy !== "number" || afterEntropy > beforeEntropy)) {
+    return "security.entropyThreshold";
+  }
+  // A allowlist de tools nunca cresce (I-01).
+  const beforeTools = stringSet(nestedSection(before, "agent")?.tools);
+  const afterTools = stringSet(nestedSection(after, "agent")?.tools);
+  if (beforeTools !== undefined && (afterTools === undefined || [...afterTools].some((tool) => !beforeTools.has(tool)))) {
+    return "agent.tools";
+  }
+  return undefined;
+}
+
+type ConfigMigrationStep = (document: Record<string, unknown>) => Record<string, unknown>;
+
+/**
+ * Major 0 -> 1: o major 1 só endurece a validação das seções de forma fixa, sem
+ * remover nem renomear chave. O passo preserva o documento inteiro (inclusive
+ * `$schema`, `provenance` e nomes livres) e é a base da cadeia `VnToN+1`.
+ */
+function migrateV0ToV1(document: Record<string, unknown>): Record<string, unknown> {
+  return document;
+}
+
+/** Passo puro `n -> n+1`; falta de passo é `config_migration_required`, nunca adivinha. */
+const CONFIG_MIGRATIONS: Readonly<Record<number, ConfigMigrationStep>> = Object.freeze({
+  0: migrateV0ToV1,
+});
+
+function migrateToSupported(
+  document: Record<string, unknown>,
+  fromMajor: number,
+  source: string | undefined,
+): Record<string, unknown> {
+  let current = document;
+  for (let major = fromMajor; major < CONFIG_SCHEMA_MAJOR; major += 1) {
+    const step = CONFIG_MIGRATIONS[major];
+    if (step === undefined) {
+      throw new ConfigError(
+        `${configLabel(source)}: não há migração do major ${major} para ${major + 1} rumo ao major ` +
+          `${CONFIG_SCHEMA_MAJOR} — nada foi alterado`,
+        "config_migration_required",
+      );
+    }
+    const next = step(current);
+    const problem = migrationSecurityProblem(current, next);
+    if (problem !== undefined) {
+      throw new ConfigError(
+        `${configLabel(source)}: a migração ${major}->${major + 1} reduziria a chave de segurança "${problem}"; ` +
+          "recusada — nada foi alterado",
+        "config_migration_required",
+      );
+    }
+    current = next;
+  }
+  return current;
+}
+
+export interface ConfigDocumentMeta {
+  /** Documento migrado em memória para o major suportado (sem carimbar `version`). */
+  document: Record<string, unknown>;
+  /** `version` declarado; `"0.0.0"` quando ausente (legado). */
+  declaredVersion: string;
+  versionDeclared: boolean;
+  targetVersion: string;
+  /** `true` quando o major declarado é anterior ao suportado. */
+  migrated: boolean;
+  minorAheadOfSupported: boolean;
+}
+
+/**
+ * Ordem normativa do ADR-0028: (1) forma de `version`; (2) major à frente falha
+ * **antes** de qualquer checagem de chave; (3) chave desconhecida no documento
+ * de origem; (4) migração em memória, um major por passo; (5) destino contra o
+ * major suportado. Passo (6), a validação do resultado, é de `validateConfig`.
+ * Puro: nunca grava.
+ */
+export function inspectConfigDocument(
+  raw: Record<string, unknown>,
+  options: { source?: string } = {},
+): ConfigDocumentMeta {
+  const source = options.source;
+  const declared = parseConfigVersion(raw, source);
+  if (declared !== undefined && declared.major > CONFIG_SCHEMA_MAJOR) {
+    throw new ConfigError(
+      `${configLabel(source)} declara schema ${declared.text}, mas este harness suporta até ` +
+        `${CONFIG_SCHEMA_VERSION} (major ${CONFIG_SCHEMA_MAJOR}) — atualize o harness; nada foi alterado`,
+      "config_ahead_of_harness",
+    );
+  }
+  const declaredMajor = declared?.major ?? 0;
+  const declaredMinor = declared?.minor ?? 0;
+  const supportedMinor = Number(CONFIG_SCHEMA_VERSION.split(".")[1]);
+  assertKnownConfigKeys(raw, {
+    ...(source === undefined ? {} : { source }),
+    // ADR-0028: união `CONFIG_KEYS(declarado..suportado)`; sem `version`, `0..suportado`.
+    topLevelKeys: topLevelKeysThrough(CONFIG_SCHEMA_MAJOR),
+    strictSections: declaredMajor >= 1,
+    minorAhead: false,
+  });
+  const document = migrateToSupported(raw, declaredMajor, source);
+  // Major igual e minor maior: a chave desconhecida ganha dica de upgrade, mas
+  // continua erro — a dica nunca suprime typo.
+  const minorAhead = declaredMajor === CONFIG_SCHEMA_MAJOR && declaredMinor > supportedMinor;
+  assertKnownConfigKeys(document, {
+    ...(source === undefined ? {} : { source }),
+    topLevelKeys: CONFIG_KEYS[CONFIG_SCHEMA_MAJOR] ?? [],
+    strictSections: true,
+    minorAhead,
+  });
+  validateConfigMetadata(document, source);
+  return {
+    document,
+    declaredVersion: declared?.text ?? "0.0.0",
+    versionDeclared: declared !== undefined,
+    targetVersion: CONFIG_SCHEMA_VERSION,
+    migrated: declaredMajor < CONFIG_SCHEMA_MAJOR,
+    minorAheadOfSupported: minorAhead,
+  };
+}
+
+/**
+ * Migração em memória (o default do ADR-0028, sem escrita). Carimba `version`
+ * só quando há mudança de major; um arquivo já no major suportado devolve
+ * `changed: false` e nunca é reescrito.
+ */
+export function migrateConfigInMemory(
+  raw: Record<string, unknown>,
+  options: { source?: string } = {},
+): ConfigDocumentMeta & { changed: boolean } {
+  const meta = inspectConfigDocument(raw, options);
+  if (!meta.migrated) return { ...meta, changed: false };
+  // `version` carimbado por último: a versão antiga do documento não vence.
+  return { ...meta, document: { ...meta.document, version: CONFIG_SCHEMA_VERSION }, changed: true };
+}
+
+/**
  * Valida a configuração crua (tipicamente vinda de JSON) e aplica os defaults:
  * `status: "active"` por modelo e `quotaDomain: "default"` por provider.
+ * `source` é o arquivo de origem, citado nas recusas de schema (ADR-0028).
  */
-export function validateConfig(raw: unknown): AstroConfig {
+export function validateConfig(raw: unknown, options: { source?: string } = {}): AstroConfig {
   const input = expectObject(raw, "config");
-  const preset = validatePreset(input.preset);
+  const meta = inspectConfigDocument(input, options);
+  const checked = meta.document;
+  const preset = validatePreset(checked.preset);
   // #515: simple fixa os limites antes da validação normal; control ganha 500
   // turnos quando não declara nenhum.
-  const root = preset === "simple" ? applySimplePreset(input) : input;
+  const root = preset === "simple" ? applySimplePreset(checked) : checked;
 
   const providersRaw = expectObject(root.providers, "providers");
   const providers: Record<string, ProviderConfig> = Object.create(null);
@@ -1836,14 +2298,9 @@ export function validateConfig(raw: unknown): AstroConfig {
     plugins = expectStringArray(root.plugins, "plugins");
   }
 
-  // Versão semântica (F7-4): x.y.z quando presente
-  let version: string | undefined;
-  if (root.version !== undefined) {
-    version = expectString(root.version, "version");
-    if (!/^\d+\.\d+\.\d+$/.test(version)) {
-      fail(`config inválida: "version" deve ser semântica x.y.z (recebido: "${version}")`);
-    }
-  }
+  // Versão semântica (ADR-0028): forma e compatibilidade já foram decididas por
+  // `inspectConfigDocument`; ausente continua undefined (legado), nunca default.
+  const version = typeof root.version === "string" ? root.version : undefined;
 
   // Team features (F7-5)
   const team = root.team === undefined ? undefined : validateTeam(root.team);
@@ -1870,7 +2327,7 @@ export function validateConfig(raw: unknown): AstroConfig {
   const security = root.security === undefined ? undefined : validateSecurity(root.security);
   const effort = root.effort === undefined ? undefined : validateEffort(root.effort);
 
-  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
 }
 
 /** Lê o JSON cru de um config, sem validar (o merge por camadas vem antes). */
@@ -1897,7 +2354,7 @@ export function loadConfigRaw(path: string): Record<string, unknown> {
 
 /** Lê um arquivo JSON de configuração e o valida. */
 export function loadConfig(path: string): AstroConfig {
-  return validateConfig(loadConfigRaw(path));
+  return validateConfig(loadConfigRaw(path), { source: path });
 }
 
 /** Código de erro de sistema de arquivos (ENOENT, EACCES...), quando presente. */

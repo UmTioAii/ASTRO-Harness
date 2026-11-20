@@ -33,6 +33,7 @@ import { runHealthCheck, runPoolHealthCheck, formatProvidersList, testProvider }
 import { Vault, vaultPath } from "./vault";
 import { applyFixes, doctorJson, exitCode as doctorExitCode, renderReport, runDoctor } from "./doctor";
 import { GitHubConfigRegistry, prepareConfigForPush, preparePulledConfig } from "./config-share";
+import { migrateConfigFile } from "./core/config-migrate";
 import { runSkillsCommand } from "./skills/cli";
 import { runMcpCommand } from "./mcp/cli";
 import { cliErrorLine } from "./cli-error";
@@ -209,6 +210,7 @@ const USAGE = `Uso:
   astro locks [release <run>] [--agent <name>] [--force] [--json] [--config <path>]
   astro models list [--config <path>] [--seeds] [--json]
   astro config <push|pull> <org/projeto> [--registry <owner/repo>] [--config <path>] [--token <t>] [--allow-plugins]
+  astro config migrate [--config <path>] [--apply]
   astro skills <list|show|validate|install|remove|verify> [--user] [--force]
   astro mcp <list|test <server> <tool>> [--args <json>] [--config <path>]
   astro --help | help
@@ -382,6 +384,12 @@ interface ConfigShareCommand {
   allowPlugins?: boolean;
 }
 
+/** `astro config migrate` (ADR-0028): CLI-only, dry-run por default. */
+interface ConfigMigrateCommand {
+  configPath: string;
+  apply: boolean;
+}
+
 type ParsedCommand =
   | { kind: "help" }
   | { kind: "version" }
@@ -404,6 +412,7 @@ type ParsedCommand =
   | { kind: "handoff"; options: HandoffShowCommand }
   | { kind: "cost"; options: CostCommand }
   | { kind: "config"; options: ConfigShareCommand }
+  | { kind: "config-migrate"; options: ConfigMigrateCommand }
   | { kind: "skills"; args: string[] }
   | { kind: "mcp"; args: string[] };
 
@@ -693,16 +702,21 @@ function parseArgs(argv: string[]): ParsedCommand {
   }
 
   if (command === "config") {
-    let action: "push" | "pull" | undefined;
+    let action: "push" | "pull" | "migrate" | undefined;
     let name: string | undefined;
     let registry: string | undefined;
     let configPath = "astro.config.json";
     let token: string | undefined;
     let allowPlugins = false;
+    let apply = false;
     for (let i = 0; i < rest.length; i++) {
       const arg = rest[i] as string;
       if (arg === "--allow-plugins") {
         allowPlugins = true;
+        continue;
+      }
+      if (arg === "--apply") {
+        apply = true;
         continue;
       }
       if (arg === "--registry" || arg === "--config" || arg === "--token") {
@@ -719,7 +733,7 @@ function parseArgs(argv: string[]): ParsedCommand {
       if (arg.startsWith("-")) {
         throw new UsageError(`opção desconhecida: "${arg}"`);
       }
-      if (action === undefined && (arg === "push" || arg === "pull")) {
+      if (action === undefined && (arg === "push" || arg === "pull" || arg === "migrate")) {
         action = arg;
         continue;
       }
@@ -728,8 +742,20 @@ function parseArgs(argv: string[]): ParsedCommand {
       }
       name = arg;
     }
+    if (action === "migrate") {
+      if (name !== undefined) {
+        throw new UsageError(`argumento inesperado: "${name}"`);
+      }
+      if (registry !== undefined || token !== undefined || allowPlugins) {
+        throw new UsageError("--registry, --token e --allow-plugins não valem para config migrate");
+      }
+      return { kind: "config-migrate", options: { configPath, apply } };
+    }
+    if (apply) {
+      throw new UsageError("--apply só vale para config migrate");
+    }
     if (action === undefined || name === undefined) {
-      throw new UsageError('use: config <push|pull> <org/projeto> [--registry <owner/repo>] [--allow-plugins]');
+      throw new UsageError('use: config <push|pull|migrate> <org/projeto> [--registry <owner/repo>] [--allow-plugins]');
     }
     return {
       kind: "config",
@@ -1431,6 +1457,18 @@ async function main(argv: string[]): Promise<number> {
       const config = loadEffectiveConfig(resolve(o.configPath)).config;
       const ledger = new Ledger(resolve(process.cwd(), config.paths.ledger));
       console.log(formatHandoffShow(ledger, o.handoffId));
+      return 0;
+    } catch (error) {
+      console.error(cliErrorLine(error));
+      return 1;
+    }
+  }
+
+  if (parsed.kind === "config-migrate") {
+    const o = parsed.options;
+    try {
+      const report = migrateConfigFile(resolve(o.configPath), { apply: o.apply });
+      for (const line of report.lines) console.log(line);
       return 0;
     } catch (error) {
       console.error(cliErrorLine(error));

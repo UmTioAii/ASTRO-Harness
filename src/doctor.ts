@@ -7,7 +7,7 @@ import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, 
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { loadConfig, loadConfigRaw, type AstroConfig, type MCPServerConfig } from "./core/config";
+import { loadConfig, loadConfigRaw, CONFIG_SCHEMA_VERSION, type AstroConfig, type MCPServerConfig } from "./core/config";
 import { credentialMissingMessage } from "./credential-ref";
 import { loadEffectiveConfig, loadGlobalConfig, NoProviderError } from "./providers/profiles";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "./attachments/store";
@@ -120,6 +120,8 @@ export interface DoctorFacts {
     effectiveError?: string;
     providers?: ProviderFact[];
     mcp?: McpFact;
+    /** `version` declarado na config (ADR-0028): ausente = legado, aceito com dica. */
+    versionDeclared?: boolean;
     /** Camada global (`$ASTRO_HOME/config.json`), validada só como JSON objeto. */
     global?: { path: string; present: boolean; error?: string };
   };
@@ -306,6 +308,15 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
     checks.push(...credentialChecks(facts.config.providers, facts.env));
     const mcp = mcpCheck(facts.config.mcp);
     if (mcp !== undefined) checks.push(mcp);
+    // ADR-0028: config sem `version` é legado aceito; o doctor sugere declarar.
+    if (facts.config.versionDeclared === false) {
+      checks.push({
+        name: "configSchema",
+        level: "warn",
+        label: "schema da config",
+        detail: `sem "version"; rode astro config migrate --apply para declarar ${CONFIG_SCHEMA_VERSION}`,
+      });
+    }
   }
 
   const globalConfig = facts.config.global;
@@ -643,7 +654,7 @@ function readConfig(
         ? { credentialsReadable: readableFile(provider.credentialsPath) }
         : {}),
     }));
-    return { ...base, present: true, providers, mcp: readMcpFact(config.mcpServers, env) };
+    return { ...base, present: true, versionDeclared: config.version !== undefined, providers, mcp: readMcpFact(config.mcpServers, env) };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return { ...base, present: true, error: redactSecrets(detail) };
