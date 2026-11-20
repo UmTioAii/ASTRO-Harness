@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -342,5 +342,185 @@ describe("/memory (#532)", () => {
     const text = memoryReport(loadMemory({ cwd, env }));
     expect(text).toContain(join(cwd, ".astro", "memory.md"));
     expect(text).toContain("nenhum bloco");
+  });
+});
+
+describe("memory_write: integridade do arquivo (review #579)", () => {
+  function setup() {
+    const { cwd, home, env } = project();
+    const auditPath = join(cwd, "audit.jsonl");
+    const tool = createMemoryWriteTool({ audit: new Auditor(auditPath), env });
+    return { cwd, home, env, auditPath, tool, ctx: { cwd, run: "r1", agent: "default" } };
+  }
+
+  const pathOf = (cwd: string) => join(cwd, ".astro", "memory.md");
+
+  test("não re-redige seções intocadas ao substituir outra seção", async () => {
+    const { tool, cwd, ctx } = setup();
+    const original = "## Notas\n\nnunca coloque token: use o cofre\n";
+    writeFileSync(pathOf(cwd), original, "utf8");
+
+    const result = await tool.execute({ scope: "project", section: "Outra", text: "x" }, ctx);
+    expect(result.isError).not.toBe(true);
+
+    const content = readFileSync(pathOf(cwd), "utf8");
+    expect(content).toContain("nunca coloque token: use o cofre");
+    expect(content).not.toContain("[REDACTED]");
+    expect(content.startsWith(original)).toBe(true);
+  });
+
+  test("grava atomicamente e mantém .bak com o conteúdo anterior (I-16)", async () => {
+    const { tool, cwd, ctx } = setup();
+    const original = "## Notas\n\nantes\n";
+    writeFileSync(pathOf(cwd), original, "utf8");
+
+    const result = await tool.execute({ scope: "project", section: "Notas", text: "depois" }, ctx);
+    expect(result.isError).not.toBe(true);
+
+    const dir = join(cwd, ".astro");
+    const entries = readdirSync(dir);
+    expect(entries.some((name) => name.startsWith("memory.md.") && name.endsWith(".bak"))).toBe(true);
+    expect(entries.some((name) => name.endsWith(".tmp"))).toBe(false);
+    const backup = entries.find((name) => name.startsWith("memory.md.") && name.endsWith(".bak"))!;
+    expect(readFileSync(join(dir, backup), "utf8")).toBe(original);
+    expect(readFileSync(pathOf(cwd), "utf8")).toBe("## Notas\n\ndepois\n");
+  });
+
+  test("relata o delta de caracteres do arquivo", async () => {
+    const { tool, cwd, ctx } = setup();
+    writeFileSync(pathOf(cwd), "## A\n\naaaa\n", "utf8");
+    const result = await tool.execute({ scope: "project", section: "A", text: "bb" }, ctx);
+    expect(result.isError).not.toBe(true);
+    expect(result.output).toContain("delta");
+    expect(result.output).toMatch(/delta -2/);
+  });
+
+  test("redige o texto recebido antes de gravar; segredo não vai a disco, audit nem resultado (I-03)", async () => {
+    const { tool, cwd, ctx, auditPath } = setup();
+    const result = await tool.execute({ scope: "project", section: "Deploy", text: `TOKEN=${SECRET}` }, ctx);
+    expect(result.isError).not.toBe(true);
+
+    const content = readFileSync(pathOf(cwd), "utf8");
+    expect(content).not.toContain(SECRET);
+    expect(content).toContain("[REDACTED]");
+    expect(readFileSync(auditPath, "utf8")).not.toContain(SECRET);
+    expect(result.output).not.toContain(SECRET);
+  });
+
+  test("substituir a seção do meio mantém as outras duas byte a byte", async () => {
+    const { tool, cwd, ctx } = setup();
+    const original = "## A\n\nalpha\n\n## B\n\nbeta\n\n## C\n\ngamma\n";
+    writeFileSync(pathOf(cwd), original, "utf8");
+
+    const result = await tool.execute({ scope: "project", section: "B", text: "novo" }, ctx);
+    expect(result.isError).not.toBe(true);
+    expect(readFileSync(pathOf(cwd), "utf8")).toBe("## A\n\nalpha\n\n## B\n\nnovo\n\n## C\n\ngamma\n");
+  });
+
+  test("seções duplicadas viram uma só, na primeira posição", async () => {
+    const { tool, cwd, ctx } = setup();
+    writeFileSync(pathOf(cwd), "## Notas\n\nvelho1\n\n## Outra\n\nx\n\n## Notas\n\nvelho2\n", "utf8");
+
+    const result = await tool.execute({ scope: "project", section: "Notas", text: "novo" }, ctx);
+    expect(result.isError).not.toBe(true);
+    const content = readFileSync(pathOf(cwd), "utf8");
+    expect(content.match(/^## Notas$/gm)).toHaveLength(1);
+    expect(content).toBe("## Notas\n\nnovo\n\n## Outra\n\nx\n");
+  });
+
+  test("substitui seção cujo corpo tem fence com `## ` dentro (BLOCKER 2)", async () => {
+    const { tool, cwd, ctx } = setup();
+    const original = [
+      "## A", "", "alpha", "",
+      "## B", "", "```md", "## nao-e-secao", "texto", "```", "",
+      "## C", "", "gamma", "",
+    ].join("\n");
+    writeFileSync(pathOf(cwd), original, "utf8");
+
+    const result = await tool.execute({ scope: "project", section: "C", text: "novo" }, ctx);
+    expect(result.isError).not.toBe(true);
+    expect(readFileSync(pathOf(cwd), "utf8")).toBe([
+      "## A", "", "alpha", "",
+      "## B", "", "```md", "## nao-e-secao", "texto", "```", "",
+      "## C", "", "novo", "",
+    ].join("\n"));
+  });
+
+  test("texto com heading de nível 2 fora de fence é recusado; dentro de fence é aceito", async () => {
+    const { tool, ctx } = setup();
+    const rejected = await tool.execute({ scope: "project", section: "A", text: "a\n## b" }, ctx);
+    expect(rejected.isError).toBe(true);
+    expect(rejected.code).toBe(MEMORY_INVALID_INPUT);
+
+    const fenced = await tool.execute({ scope: "project", section: "A", text: "```\n## b\n```" }, ctx);
+    expect(fenced.isError).not.toBe(true);
+  });
+});
+
+describe("memória: fences, mínimo de budget e hint (review #579)", () => {
+  test("cap não corta dentro de um fence", () => {
+    const { cwd, env } = project();
+    const fence = ["```", ...Array.from({ length: 40 }, (_, i) => `## linha ${i}`), "```"].join("\n");
+    writeProjectMemory(cwd, `## Curta\n\naaaa\n\n## Longa\n\n${fence}\n`);
+
+    const prompt = memoryPrompt(loadMemory({ cwd, env, maxChars: 400 }))!;
+    expect(prompt).toContain("## Curta");
+    expect(prompt).not.toContain("```");
+    expect(prompt).toMatch(MARKER);
+  });
+
+  test("memory.maxChars tem mínimo de 200 e é aplicado no loader", () => {
+    const { cwd, env } = project();
+    writeProjectMemory(cwd, "## A\n\naaaa\n");
+    expect(loadMemory({ cwd, env, maxChars: 50 }).maxChars).toBe(200);
+
+    const base = {
+      providers: { p: { kind: "openai-compat", baseUrl: "https://api.example/v1", credentialRef: "KEY" } },
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 4096 }],
+      agent: { model: "p/m1", maxSteps: 3, tools: [] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    };
+    expect(() => validateConfig({ ...base, memory: { maxChars: 100 } })).toThrow(/memory\.maxChars/);
+    expect(validateConfig({ ...base, memory: { maxChars: 200 } }).memory).toEqual({ maxChars: 200 });
+  });
+
+  test("hint de memory_write é omitido sem a tool na allowlist", () => {
+    const { cwd, env } = project();
+    writeProjectMemory(cwd, "## A\n\naaaa\n");
+    expect(memoryPrompt(loadMemory({ cwd, env }))!).toContain("memory_write");
+    const withoutHint = memoryPrompt(loadMemory({ cwd, env, memoryWriteAllowed: false }))!;
+    expect(withoutHint).not.toContain("memory_write");
+    expect(withoutHint).toContain("## Memory");
+  });
+});
+
+describe("memória: system prompt de agent nomeado (review #579)", () => {
+  test("agents.<nome>.systemPrompt recebe a memória depois do override", async () => {
+    const { cwd, env } = project();
+    writeProjectMemory(cwd, "## Projeto\n\nregra do projeto\n");
+    const systems: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const body = (await req.json()) as { messages: Array<{ role: string; content: string }> };
+        systems.push(body.messages.find((message) => message.role === "system")?.content ?? "");
+        return Response.json({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+      },
+    });
+    try {
+      const configPath = join(cwd, "astro.config.json");
+      writeFileSync(configPath, JSON.stringify({
+        providers: { mock: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "TEST_KEY" } },
+        models: [{ provider: "mock", id: "mock-1", tags: ["writing-code"], context: 4096 }],
+        agent: { model: "mock/mock-1", maxSteps: 2, tools: [], entryAgent: "planner" },
+        agents: { maxActive: 1, planner: { model: "mock/mock-1", maxSteps: 2, tools: [], systemPrompt: "OVERRIDE-PLANNER" } },
+      }));
+      const report = await runTask({ configPath, task: "oi", cwd, env: { ...env, TEST_KEY: "test-key" } });
+      expect(report.final).toBe("ok");
+      expect(systems[0]).toContain("OVERRIDE-PLANNER");
+      expect(systems[0]).toContain("regra do projeto");
+    } finally {
+      server.stop(true);
+    }
   });
 });
