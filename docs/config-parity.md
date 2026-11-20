@@ -43,7 +43,8 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | pricing, quota, paths, MCP, plugins | camadas 2–3 | lê | lê | lê | compartilhado; edição só no arquivo |
 | provider ativo | `activeProfileId` (store legado hoje; `config.json` após #459/#492) | `--provider` efêmero | tela; só perfil global | `/provider use`; só global | compartilhado; flag CLI-only |
 | modelo do turno | `agent.model`/`modelPool` (camadas 2–3) | sem flag | `/model` em runtime; `lastModel` só vale sem `agent.model` declarado (#497) | só config; `/model` em runtime | compartilhado; memória TUI-only |
-| `permissions.mode` | camada 3 | `--permission-mode`/env efêmeros | `/config` grava; `/mode` runtime | `/config` só imprime; `/mode` runtime | compartilhado; persistência TUI-only |
+| `permissions.mode` | camada 3 | `--permission-mode`/env efêmeros | `/config` grava; `/mode` runtime | `/config <chave> <valor>` grava; `/mode` runtime | compartilhado; persistência TUI+REPL (#558) |
+| knobs editáveis (`agent.maxSteps`, `budget.*`, `team.*BudgetUsd`, `permissions.mode`) | camada 3 | lê | tela `/config` (tecla `e`) e `/config chave valor` gravam | `/config chave valor` grava | whitelist fechada em `EDITABLE_CONFIG_KEYS`; pré-valida teto global antes de gravar; preset `simple` read-only nos knobs de controle (#558) |
 | `permissions.approvalTimeoutMs` | camada 3 | lê | `/config` só imprime | lê | compartilhado; teto da espera por aprovação (#526) |
 | trust | `$ASTRO_HOME/state.json` | pergunta no TTY | pergunta; revoga no `/config` | pergunta | compartilhado; revogação TUI-only |
 | tema, `lastModel`, favoritos, recentes | estado de UI (`.astro/tui.json` hoje; #468 define a raiz) | não lê | lê/grava | não lê | TUI-only: preferência de terminal |
