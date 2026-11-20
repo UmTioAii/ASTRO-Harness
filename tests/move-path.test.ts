@@ -270,5 +270,72 @@ describe("move_path (#535)", () => {
       .map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
     expect(events.find((event) => event.tipo === "tool.call")?.payload)
       .toMatchObject({ name: "move_path", paths: ["a.txt", "b.txt"] });
+    // par auditado (I-04): a chamada e o resultado, sem conteúdo
+    expect(events.find((event) => event.tipo === "tool.result")?.payload)
+      .toMatchObject({ name: "move_path", isError: false });
+  });
+
+  test("recusa mover árvore com .env e deixa tudo intacto (review B3)", async () => {
+    const cwd = dir();
+    mkdirSync(join(cwd, "app"));
+    writeFileSync(join(cwd, "app", ".env"), "CHAVE=sintetica\n");
+    writeFileSync(join(cwd, "app", "notes.txt"), "x");
+    const result = await movePathTool.execute({ from: "app", to: "public" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("hard-block");
+    expect(existsSync(join(cwd, "app", ".env"))).toBe(true);
+    expect(existsSync(join(cwd, "app", "notes.txt"))).toBe(true);
+    expect(existsSync(join(cwd, "public"))).toBe(false);
+  });
+
+  test("recusa mover árvore que contém protectedPaths relativo ao cwd (review B3)", async () => {
+    const cwd = dir();
+    mkdirSync(join(cwd, "app"));
+    writeFileSync(join(cwd, "app", "keep.json"), "{}");
+    writeFileSync(join(cwd, "app", "notes.txt"), "x");
+    const result = await movePathTool.execute(
+      { from: "app", to: "public" },
+      { ...ctx(cwd), protectedPaths: ["app/keep.json"] },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("hard-block");
+    expect(existsSync(join(cwd, "app", "keep.json"))).toBe(true);
+    expect(existsSync(join(cwd, "public"))).toBe(false);
+  });
+
+  test("destino que já é diretório com hard-block é recusado e intacto (review B3)", async () => {
+    const cwd = dir();
+    mkdirSync(join(cwd, "app"));
+    writeFileSync(join(cwd, "app", "notes.txt"), "x");
+    mkdirSync(join(cwd, "public"));
+    writeFileSync(join(cwd, "public", ".env"), "CHAVE=sintetica\n");
+    const result = await movePathTool.execute({ from: "app", to: "public" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(existsSync(join(cwd, "public", ".env"))).toBe(true);
+    expect(existsSync(join(cwd, "app", "notes.txt"))).toBe(true);
+  });
+
+  test("destino sob diretório hard-block é recusado (review B3)", async () => {
+    const cwd = dir();
+    writeFileSync(join(cwd, "a.txt"), "x");
+    mkdirSync(join(cwd, "keys"));
+    const result = await movePathTool.execute({ from: "a.txt", to: "keys/novo.txt" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("hard-block");
+    expect(existsSync(join(cwd, "a.txt"))).toBe(true);
+    expect(existsSync(join(cwd, "keys", "novo.txt"))).toBe(false);
+  });
+
+  test("erro de FS não ecoa o texto cru do SO e cita só o caminho relativo (review B4)", async () => {
+    const cwd = dir();
+    writeFileSync(join(cwd, "a.txt"), "x");
+    writeFileSync(join(cwd, "blob"), "sou um arquivo");
+    const result = await movePathTool.execute({ from: "a.txt", to: "blob/x.txt" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("atravessa um arquivo");
+    expect(result.output).toContain("blob/x.txt");
+    expect(result.output).not.toContain(cwd); // nada de path absoluto do SO
+    expect(result.output).not.toContain("EEXIST");
+    expect(existsSync(join(cwd, "a.txt"))).toBe(true);
   });
 });

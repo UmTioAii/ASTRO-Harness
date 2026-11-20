@@ -211,5 +211,16 @@ describe("delete_path (#535)", () => {
       .map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
     expect(events.find((event) => event.tipo === "tool.call")?.payload)
       .toMatchObject({ name: "delete_path", paths: ["a.txt"] });
+    // par auditado (I-04): a chamada e o resultado, sem conteúdo
+    expect(events.find((event) => event.tipo === "tool.result")?.payload)
+      .toMatchObject({ name: "delete_path", isError: false });
+  });
+
+  test("caminho inexistente devolve erro tipado com path relativo (review A)", async () => {
+    const cwd = dir();
+    const result = await deletePathTool.execute({ path: "ghost.txt" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("caminho não existe: ghost.txt");
+    expect(result.output).not.toContain(cwd);
   });
 });
