@@ -52,7 +52,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | `--allow-critical`/`--allow-sensitive`/`--i-understand` | invocação | entrada | herda | herda | CLI-only: allowlist é ato explícito (ADR-0027) |
 | `--artifact-root` | invocação de `chat`/TUI | entrada | herda | herda | CLI-only na entrada, compartilhado na sessão |
 | `config push/pull`, `providers vault-import`, `doctor --fix`, `config migrate` (alvo) | camada 3/2, `$ASTRO_HOME` | executa | não expõe | não expõe | CLI-only: operação administrativa |
-| primeiro run / setup de provider | nenhum arquivo por default | `run` exige config | abre setup automático | erro com instrução | TUI-only hoje; alvo: contrato comum quando S3 (#469) definir a criação |
+| primeiro run / setup de provider | TUI cria `astro.config.json` (só `agent.model` do perfil global ativo) e `$ASTRO_HOME/config.json` se ausentes, sempre `wx` 0600 — sem provider ainda, só o global nasce e o setup cria os dois juntos (#559) | `run` exige config | abre setup automático | erro com instrução | contrato comum quando S3 (#469) definir a criação |
 
 ## Flag versus valor gravado (Q-10)
 
@@ -99,7 +99,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 | Lacuna | Efeito hoje | Onde |
 |---|---|---|
 | `astro config migrate` e `CONFIG_SCHEMA_VERSION` (ADR-0028) | não há migração de major nem rejeição de chave desconhecida | #493 |
-| `/config` em projeto sem arquivo | modo não persiste; S3 não cria config | #469 |
+| `/config` em projeto sem arquivo | TUI cria o arquivo no first-run (#559), então persiste; fora da TUI, modo não persiste e S3 não cria config | #469 |
 
 - `preset` (`simple`/`control`, default `control`) é escalar: a camada de projeto vence. Em `simple`, `agent.maxSteps` e `agents.*.maxSteps` têm teto 500: um valor menor vindo de outra camada é mantido e acima de 500 é erro com `preset: "control"` como próximo passo; sem `agent.maxSteps`, o teto efetivo é 500 (#515). Também só no `control` (#552): `agents.maxActive`, `spawn.maxActive`, `team.sessionBudgetUsd` e `team.weekBudgetUsd` — em `simple`, declarar qualquer um é erro de config.
 

@@ -5,6 +5,7 @@ import { ConfigError } from "../core/config";
 import { ProfileManager } from "../providers/profile-manager";
 import { NoProviderError, NO_PROVIDER_MESSAGE, loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
+import { ensureFirstRunConfig } from "../chat/init";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
 import { createSecretHandlers } from "./vault-secret";
@@ -182,6 +183,20 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
     const vault = new Vault(vaultPath(opts.env ?? process.env));
     const { saveSecret, discardSecret } = createSecretHandlers(vault);
     const configPath = resolve(opts.configPath);
+    // #559: first-run com config implícita garante astro.config.json + config.json
+    // global se ausentes (nunca sobrescreve). Falha vira aviso: o boot segue em
+    // zero-config. Roda de novo após o setup: o first-time setup cria os dois juntos.
+    const ensureFirstRun = (): void => {
+      try {
+        ensureFirstRunConfig(configPath, {
+          env: opts.env ?? process.env,
+          allowMissing: opts.allowMissingConfig === true,
+        });
+      } catch (error) {
+        console.error(`aviso: ${redactSecrets(error instanceof Error ? error.message : String(error))}`);
+      }
+    };
+    ensureFirstRun();
     const project = loadProjectConfig(configPath, { env: opts.env });
     const manager = new ProfileManager({
       project,
@@ -213,7 +228,11 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
         });
         return currentSession;
       },
-      setup: () => setupProvider(manager, cwd, saveSecret, discardSecret),
+      setup: async () => {
+        const configured = await setupProvider(manager, cwd, saveSecret, discardSecret);
+        if (configured) ensureFirstRun(); // first-time setup cria projeto + global juntos (#559)
+        return configured;
+      },
       createShell: () => createShellRunner({
         configPath, cwd, env: opts.env ?? process.env,
         allowMissingConfig: opts.allowMissingConfig === true,
