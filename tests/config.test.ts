@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, loadConfig, providerAccountRefFor, providerCredentialRefFor, updateConfigPermissionsMode, validateConfig, writeConfigFileAtomic } from "../src/core/config";
@@ -510,6 +510,33 @@ describe("writeConfigFileAtomic (#495)", () => {
     } else {
       expect(statSync(path).mode & 0o077).toBe(0);
     }
+    noTmp(dir);
+  });
+
+  // O runner windows-latest levava 20–40 s por spawn do PowerShell 5.1 e o
+  // `Set-Acl` com `FileSecurity` falhava lá; um `SystemRoot` sem powershell.exe
+  // reproduz a dependência sem depender do runner: a gravação atômica precisa
+  // funcionar só com o `icacls` nativo.
+  test.skipIf(process.platform !== "win32")("não depende do PowerShell para a DACL do temporário (#589)", () => {
+    const fakeRoot = mkdtempSync(join(tmpdir(), "astro-acl-root-"));
+    mkdirSync(join(fakeRoot, "System32"));
+    copyFileSync(join(process.env.SystemRoot!, "System32", "icacls.exe"), join(fakeRoot, "System32", "icacls.exe"));
+    const dir = mkdtempSync(join(tmpdir(), "astro-config-495-"));
+    const path = join(dir, "astro.config.json");
+    const saved = { SystemRoot: process.env.SystemRoot, windir: process.env.windir };
+    process.env.SystemRoot = fakeRoot;
+    process.env.windir = fakeRoot;
+    try {
+      writeConfigFileAtomic(path, "{\n  \"a\": 1\n}\n");
+    } finally {
+      process.env.SystemRoot = saved.SystemRoot;
+      process.env.windir = saved.windir;
+    }
+    expect(readFileSync(path, "utf8")).toBe("{\n  \"a\": 1\n}\n");
+    // Lido de volta com o PowerShell real (o `fakeRoot` não tem um).
+    const acl = inspectWindowsAcl(path);
+    expect(acl).toBeDefined();
+    expect(windowsAclIsPrivate(acl!.sddl, acl!.userSid)).toBe(true);
     noTmp(dir);
   });
 
