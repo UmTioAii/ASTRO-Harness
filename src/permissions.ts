@@ -160,8 +160,7 @@ const DETAIL_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command"]);
 
 /**
  * Todos os nomes com argumento material mapeado (#536). O teste de contrato
- * confere cada um contra o registry (`BUILTIN_TOOLS`), com exceção explícita
- * para `delete_path`/`move_path` enquanto não existirem.
+ * confere cada um contra o registry (`BUILTIN_TOOLS`).
  */
 export const APPROVAL_DETAIL_TOOLS: ReadonlySet<string> = new Set([
   ...DETAIL_COMMAND_TOOLS,

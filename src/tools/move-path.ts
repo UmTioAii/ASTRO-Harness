@@ -1,6 +1,6 @@
 import { copyFileSync, lstatSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
-import { assertNoHardBlocked, isSamePath, relativePath } from "./path-guard";
+import { assertNoHardBlocked, assertPathNotHardBlocked, fsErrorCode, fsFailure, isSamePath, relativePath } from "./path-guard";
 import { canonicalize, isWithin, resolveWritableWithin } from "./paths";
 import { ToolError, type Tool, type ToolResult } from "./types";
 
@@ -33,16 +33,21 @@ function parseInput(input: unknown): MoveInput {
 
 /**
  * Move/renomeia arquivo ou diretório dentro do cwd (#535). Origem e destino
- * passam por `resolveWritableWithin` (I-11 + `.astro/`/`protectedPaths`);
- * `overwrite` só substitui arquivo, nunca árvore, e o destino não pode cair
- * dentro da própria origem. Sem symlink seguido para fora do cwd.
+ * passam por `resolveWritableWithin` (I-11 + `.astro/`/`protectedPaths`); a
+ * árvore de origem é varrida contra hard-block (`.env`/`.git`/protected), o
+ * destino só tem a raiz classificada (diretório de destino nunca é substituído),
+ * `overwrite` só substitui arquivo — com backup `.bak` — e o destino não pode
+ * cair dentro da própria origem (junction inclusa). Sem symlink seguido para
+ * fora do cwd.
  */
 export const movePathTool: Tool = {
   manifest: {
     name: "move_path",
     description:
       "Move ou renomeia um arquivo/diretório dentro do diretório de trabalho, criando os diretórios " +
-      "de destino. Um destino existente só é substituído com overwrite: true (arquivo).",
+      "de destino. Recusa mover uma árvore que contenha caminho hard-block/protegido (ex.: .env, " +
+      ".git) e não atravessa sistemas de arquivos (EXDEV). Um destino existente só é substituído com " +
+      "overwrite: true (arquivo), com backup .bak do destino anterior.",
     parameters: {
       type: "object",
       properties: {
@@ -56,7 +61,7 @@ export const movePathTool: Tool = {
         },
         overwrite: {
           type: "boolean",
-          description: "Substitui um arquivo de destino existente (default: false).",
+          description: "Substitui um arquivo de destino existente, guardando o anterior em .bak (default: false).",
         },
       },
       required: ["from", "to"],
@@ -71,6 +76,8 @@ export const movePathTool: Tool = {
   },
 
   async execute(input, ctx): Promise<ToolResult> {
+    /** Destino relativo para a mensagem de erro de FS (nunca o path absoluto do SO). */
+    let display = "";
     try {
       const { from, to, overwrite } = parseInput(input);
       for (const [field, value] of [["from", from], ["to", to]] as const) {
@@ -81,6 +88,7 @@ export const movePathTool: Tool = {
       const protectedPaths = ctx.protectedPaths ?? [];
       const source = resolveWritableWithin(ctx.cwd, from, protectedPaths);
       const destination = resolveWritableWithin(ctx.cwd, to, protectedPaths);
+      display = relativePath(ctx.cwd, destination);
       if (isSamePath(source, ctx.cwd)) {
         throw new ToolError("recusado: o diretório de trabalho não pode ser movido");
       }
@@ -103,10 +111,13 @@ export const movePathTool: Tool = {
         return failure(`recusado: destino dentro da própria origem: ${to}`);
       }
 
-      // Nada é tocado antes do piso de hard-block (origem, destino e árvore).
+      // Piso da origem antes de qualquer mutação: a árvore movida não pode
+      // carregar `.env`/`.git`/protectedPaths para fora da proteção (#535).
       assertNoHardBlocked(source, ctx);
-      assertNoHardBlocked(destination, ctx);
 
+      // Existência do destino antes de qualquer varredura: diretório de destino
+      // é recusado sem walk (nunca é substituído) e o custo de uma árvore
+      // grande não entra no caminho de erro.
       let destinationExists = false;
       let destinationDir = false;
       try {
@@ -116,7 +127,6 @@ export const movePathTool: Tool = {
       } catch {
         destinationExists = false;
       }
-      let backup: string | undefined;
       if (destinationExists) {
         if (!overwrite) {
           return failure(`destino já existe: ${to} (use overwrite: true para substituir um arquivo)`);
@@ -124,16 +134,33 @@ export const movePathTool: Tool = {
         if (destinationDir) {
           return failure(`destino é um diretório; overwrite só substitui arquivo: ${to}`);
         }
+      }
+      // Raiz do destino: barra `keys/x.txt`/`.git/x` mesmo antes de o path existir.
+      assertPathNotHardBlocked(destination, ctx);
+
+      mkdirSync(dirname(destination), { recursive: true });
+
+      let backup: string | undefined;
+      if (destinationExists) {
         // Mesma convenção de backup do `edit` (#535): o destino sobrescrito
         // fica recuperável; `allow-edits` aprova a sobrescrita como critical_write.
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
         backup = `${destination}.${timestamp}.bak`;
         copyFileSync(destination, backup);
-        rmSync(destination);
+        try {
+          // `rename` substitui arquivo existente nos dois SOs; só cai no
+          // unlink+retry quando o SO recusa a troca direta (ex.: arquivo read-only).
+          renameSync(source, destination);
+        } catch (error) {
+          const code = fsErrorCode(error);
+          if (code !== "EEXIST" && code !== "EPERM") throw error;
+          rmSync(destination);
+          renameSync(source, destination);
+        }
+      } else {
+        renameSync(source, destination);
       }
 
-      mkdirSync(dirname(destination), { recursive: true });
-      renameSync(source, destination);
       const moved = `movido: ${relativePath(ctx.cwd, source)} -> ${relativePath(ctx.cwd, destination)}`;
       return {
         output: backup === undefined
@@ -142,8 +169,7 @@ export const movePathTool: Tool = {
       };
     } catch (error) {
       if (error instanceof ToolError) return failure(error.message);
-      const message = error instanceof Error ? error.message : String(error);
-      return failure(`erro ao mover: ${message}`);
+      return failure(fsFailure("mover", error, display));
     }
   },
 };

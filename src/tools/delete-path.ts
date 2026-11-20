@@ -1,6 +1,6 @@
 import { lstatSync, rmSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { assertNoHardBlocked, isSamePath, relativePath } from "./path-guard";
+import { assertNoHardBlocked, fsFailure, isSamePath, relativePath } from "./path-guard";
 import { resolveWritableWithin } from "./paths";
 import { ToolError, type Tool, type ToolResult } from "./types";
 
@@ -39,7 +39,8 @@ export const deletePathTool: Tool = {
     name: "delete_path",
     description:
       "Remove um arquivo do diretório de trabalho. Remover um diretório (com todo o conteúdo) " +
-      "exige recursive: true; caminhos reservados e hard-block são sempre recusados.",
+      "exige recursive: true; recusa caminho reservado e árvore que contenha hard-block/protegido " +
+      "(ex.: .env, .git).",
     parameters: {
       type: "object",
       properties: {
@@ -64,12 +65,15 @@ export const deletePathTool: Tool = {
   },
 
   async execute(input, ctx): Promise<ToolResult> {
+    /** Alvo relativo para a mensagem de erro de FS (nunca o path absoluto do SO). */
+    let display = "";
     try {
       const { path, recursive } = parseInput(input);
       if (isAbsolute(path)) {
         throw new ToolError(`path absoluto não é aceito: ${path}; use caminho relativo ao cwd`);
       }
       const target = resolveWritableWithin(ctx.cwd, path, ctx.protectedPaths ?? []);
+      display = relativePath(ctx.cwd, target);
       if (isSamePath(target, ctx.cwd)) {
         throw new ToolError("recusado: o diretório de trabalho não pode ser removido");
       }
@@ -96,8 +100,7 @@ export const deletePathTool: Tool = {
       return { output: `arquivo removido: ${relativePath(ctx.cwd, target)}` };
     } catch (error) {
       if (error instanceof ToolError) return failure(error.message);
-      const message = error instanceof Error ? error.message : String(error);
-      return failure(`erro ao remover: ${message}`);
+      return failure(fsFailure("remover", error, display));
     }
   },
 };
