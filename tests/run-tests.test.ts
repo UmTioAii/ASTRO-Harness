@@ -1,0 +1,348 @@
+/**
+ * `run_tests` (F-15, #538): o comando de teste vem da config (`run.tests.command`,
+ * argv) e roda pelo MESMO sandbox do `run_command`, sem shell e sem comando do
+ * modelo. Cobre not configured, sucesso, exit != 0, timeout, cap, redação e a
+ * matriz de aprovação da classe `shell`.
+ */
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Auditor } from "../src/audit";
+import { runTask } from "../src/core/app";
+import { ConfigError, validateConfig } from "../src/core/config";
+import { actionClassOf, permissionDecision, requiredPermission } from "../src/permissions";
+import { ToolExecutor } from "../src/tools/executor";
+import type { ToolResult } from "../src/tools/types";
+import {
+  installDockerSpawnMock,
+  isolatedRunCommand,
+  type DockerMock,
+  type DockerRunReply,
+  type RunCommandModule,
+} from "./helpers/docker-mock";
+import { testEnv } from "./setup";
+
+/** Secret sintético (montado em runtime para não virar literal no arquivo — I-03). */
+const SECRET = ["s", "k", "-"].join("") + "live-run-tests-987654";
+/** Cap da saída de `run_command`, reusado por `run_tests`. */
+const CAP = 10_000;
+
+let seq = 0;
+let active: DockerMock | undefined;
+
+afterEach(() => {
+  active?.restore();
+  active = undefined;
+});
+
+interface SetupOptions {
+  config?: { command: string[]; timeoutMs?: number };
+  reply?: (argv: string[]) => DockerRunReply;
+  sandbox?: boolean;
+}
+
+/** Docker mock + módulo isolado de `run-command` (estado do sandbox por teste). */
+async function setup(options: SetupOptions = {}): Promise<{
+  mod: RunCommandModule;
+  mock: DockerMock;
+  audit: Auditor;
+  tool: ReturnType<RunCommandModule["createRunTestsTool"]>;
+  cwd: string;
+}> {
+  const cwd = mkdtempSync(join(tmpdir(), "astro-rt-"));
+  const mock = installDockerSpawnMock(options.reply);
+  active = mock;
+  const mod = await isolatedRunCommand(`rt-${seq++}`);
+  mod.configureRunCommand({ sandbox: options.sandbox ?? true });
+  const audit = new Auditor(join(cwd, "audit.jsonl"));
+  const tool = mod.createRunTestsTool({
+    ...(options.config === undefined ? {} : { config: options.config }),
+    audit,
+  });
+  return { mod, mock, audit, tool, cwd };
+}
+
+const ctx = (cwd: string) => ({ cwd, run: "r1", agent: "coder" });
+
+interface TestsResult {
+  command: string[];
+  exitCode: number | null;
+  durationMs: number;
+  truncated: boolean;
+  timedOut?: boolean;
+  cancelled?: boolean;
+  output: string;
+}
+
+const resultOf = (result: ToolResult): TestsResult => JSON.parse(result.output) as TestsResult;
+
+/** Args entregues ao `docker run` depois da imagem (o que o container executa). */
+const containerCmd = (argv: string[]): string[] =>
+  argv.slice(argv.indexOf("oven/bun:1.4.2") + 1);
+
+const baseConfig = {
+  providers: { openai: { kind: "openai-compat", baseUrl: "http://localhost", credentialRef: "OPENAI_API_KEY" } },
+  models: [{ provider: "openai", id: "gpt-4o-mini", tags: ["writing-code", "tools"], context: 128000 }],
+  agent: { model: "openai/gpt-4o-mini", maxSteps: 12, tools: ["run_tests"] },
+  paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+};
+
+const configWithRun = (run: unknown) => {
+  const raw = structuredClone(baseConfig) as Record<string, unknown>;
+  raw.run = run;
+  return validateConfig(raw);
+};
+
+describe("config run.tests.command (F-15, #538)", () => {
+  test("sem run.tests: nada é auto-detectado", () => {
+    expect(validateConfig(structuredClone(baseConfig)).run?.tests).toBeUndefined();
+  });
+
+  test("argv é preservado; timeoutMs default é 120000 e explícito é aceito", () => {
+    const cfg = configWithRun({ tests: { command: ["bun", "test"] } });
+    expect(cfg.run?.tests).toEqual({ command: ["bun", "test"], timeoutMs: 120_000 });
+    const custom = configWithRun({ tests: { command: ["bun", "test", "--run"], timeoutMs: 45_000 } });
+    expect(custom.run?.tests).toEqual({ command: ["bun", "test", "--run"], timeoutMs: 45_000 });
+  });
+
+  test("string de shell, lista vazia, chave desconhecida e timeout inválido falham no load", () => {
+    expect(() => configWithRun({ tests: { command: "bun test" } })).toThrow(ConfigError);
+    // Item único com espaço é a string de shell disfarçada de argv.
+    expect(() => configWithRun({ tests: { command: ["bun test"] } })).toThrow(/argv/);
+    expect(() => configWithRun({ tests: { command: [] } })).toThrow(ConfigError);
+    expect(() => configWithRun({ tests: { command: ["bun", "test"], shell: true } })).toThrow(/run\.tests\.shell/);
+    expect(() => configWithRun({ tests: { command: ["bun", "test"], timeoutMs: 0 } })).toThrow(ConfigError);
+  });
+});
+
+describe("run_tests manifesto", () => {
+  test("executa processo, só aceita `filter` e deixa o timeout do comando com o sandbox", async () => {
+    const { tool } = await setup({ config: { command: ["bun", "test"], timeoutMs: 1_000 } });
+    expect(tool.manifest.name).toBe("run_tests");
+    expect(tool.manifest.class).toBe("shell");
+    expect(tool.manifest.permission).toBe("execute");
+    expect(tool.manifest.sideEffects).toBe("process");
+    expect(tool.manifest.retryable).toBe(false);
+    expect(tool.manifest.idempotent).toBe(false);
+    // A tool precisa sobreviver ao timeout do comando para formatar o resultado.
+    expect(tool.manifest.timeoutMs).toBeGreaterThan(1_000);
+    const params = tool.manifest.parameters as {
+      properties: Record<string, unknown>;
+      additionalProperties: boolean;
+    };
+    expect(Object.keys(params.properties)).toEqual(["filter"]);
+    expect(params.additionalProperties).toBe(false);
+  });
+});
+
+describe("run_tests sem configuração", () => {
+  test("erro tipado tests_not_configured cita run.tests.command e não spawna", async () => {
+    const { tool, mock, cwd } = await setup({ reply: () => "não deveria rodar" });
+    const result = await tool.execute({}, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.code).toBe("tests_not_configured");
+    expect(result.output).toContain("run.tests.command");
+    expect(mock.runCalls).toHaveLength(0);
+  });
+});
+
+describe("run_tests execução no sandbox", () => {
+  test("sucesso: exit 0, duração, saída e audit só com comando/exit", async () => {
+    const { tool, mock, audit, cwd } = await setup({
+      config: { command: ["bun", "test"] },
+      reply: () => "3 pass\n0 fail\nOK",
+    });
+    const result = await tool.execute({}, ctx(cwd));
+    expect(result.isError).toBeUndefined();
+    const out = resultOf(result);
+    expect(out.exitCode).toBe(0);
+    expect(out.truncated).toBe(false);
+    expect(out.output).toContain("3 pass");
+    expect(typeof out.durationMs).toBe("number");
+
+    const argv = mock.runCalls.at(-1)!;
+    // Sem shell: o argv configurado vai direto para o container.
+    expect(containerCmd(argv)).toEqual(["bun", "test"]);
+    expect(argv).not.toContain("-c");
+
+    const event = audit.readAll().find((entry) => entry.tipo === "tests.result");
+    expect(event?.payload).toMatchObject({ command: "bun test", exitCode: 0, isError: false });
+    expect(JSON.stringify(event?.payload)).not.toContain("3 pass");
+  });
+
+  test("falha: exit != 0 devolve isError com exitCode e a saída", async () => {
+    const { tool, mock, cwd } = await setup({
+      config: { command: ["bun", "test"] },
+      reply: () => ({ code: 1, stdout: "1 fail\nFALHOU no fim\n", stderr: "" }),
+    });
+    const result = await tool.execute({}, ctx(cwd));
+    expect(result.isError).toBe(true);
+    const out = resultOf(result);
+    expect(out.exitCode).toBe(1);
+    expect(out.output).toContain("FALHOU no fim");
+    expect(mock.runCalls).toHaveLength(1);
+  });
+
+  test("filter entra como UM item de argv, nunca concatenado num shell", async () => {
+    const { tool, mock, cwd } = await setup({ config: { command: ["bun", "test"] }, reply: () => "" });
+    const filter = "math; rm -rf build";
+    await tool.execute({ filter }, ctx(cwd));
+    expect(containerCmd(mock.runCalls.at(-1)!)).toEqual(["bun", "test", filter]);
+  });
+
+  test("filter com flag, vazio ou campo desconhecido é invalid_input sem spawnar", async () => {
+    const { tool, mock, cwd } = await setup({ config: { command: ["bun", "test"] }, reply: () => "" });
+    for (const input of [{ filter: "--bail" }, { filter: "  " }, { filter: 7 }, { command: "rm -rf /" }]) {
+      const result = await tool.execute(input, ctx(cwd));
+      expect(result.isError).toBe(true);
+      expect(result.code).toBe("invalid_input");
+    }
+    expect(mock.runCalls).toHaveLength(0);
+  });
+
+  test("timeout de run.tests.timeoutMs interrompe o container e volta tipado", async () => {
+    const { tool, mock, cwd } = await setup({
+      config: { command: ["bun", "test"], timeoutMs: 40 },
+      reply: () => ({ hang: true }),
+    });
+    const result = await tool.execute({}, ctx(cwd));
+    expect(result.isError).toBe(true);
+    const out = resultOf(result);
+    expect(out.timedOut).toBe(true);
+    expect(out.exitCode).toBeNull();
+    // docker run morto não para o container: limpeza forçada.
+    expect(mock.calls.some((cmd) => cmd[0] === "docker" && cmd[1] === "rm")).toBe(true);
+  });
+
+  test("sandbox:false recusa sem tocar o host e sem spawn", async () => {
+    const { tool, mock, cwd } = await setup({ sandbox: false, config: { command: ["bun", "test"] } });
+    const result = await tool.execute({}, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.code).toBe("sandbox_required_for_shell");
+    expect(result.output).toContain("sandbox:false");
+    expect(mock.calls).toHaveLength(0);
+  });
+});
+
+/** Saída longa e variada: passa pela redação intacta (um bloco uniforme vira [REDACTED]). */
+const bigOutput = (label: string): string =>
+  Array.from({ length: 1_200 }, (_, index) => `${label} ${index}: pass`).join("\n");
+
+describe("run_tests cap e redação da saída", () => {
+  test("saída acima do cap trunca no mesmo limite do run_command", async () => {
+    const { tool, cwd } = await setup({
+      config: { command: ["bun", "test"] },
+      reply: () => bigOutput("caso"),
+    });
+    const out = resultOf(await tool.execute({}, ctx(cwd)));
+    expect(out.truncated).toBe(true);
+    expect(out.output).toHaveLength(CAP);
+  });
+
+  test("falha acima do cap mantém a cauda, onde mora o resumo", async () => {
+    const { tool, cwd } = await setup({
+      config: { command: ["bun", "test"] },
+      reply: () => ({ code: 2, stdout: `inicio\n${bigOutput("caso")}\nFIM-DO-RELATORIO`, stderr: "" }),
+    });
+    const out = resultOf(await tool.execute({}, ctx(cwd)));
+    expect(out.truncated).toBe(true);
+    expect(out.output.endsWith("FIM-DO-RELATORIO")).toBe(true);
+    expect(out.output.startsWith("inicio")).toBe(false);
+  });
+
+  test("segredo na saída é redigido antes do truncamento e não chega ao audit (I-03)", async () => {
+    const { tool, audit, cwd } = await setup({
+      config: { command: ["bun", "test"] },
+      reply: () => `${SECRET}\n${bigOutput("caso")}`,
+    });
+    const result = await tool.execute({}, ctx(cwd));
+    expect(result.output).not.toContain(SECRET);
+    expect(result.output).toContain("[REDACTED]");
+    expect(readFileSync(join(cwd, "audit.jsonl"), "utf8")).not.toContain(SECRET);
+    expect(JSON.stringify(audit.readAll())).not.toContain(SECRET);
+  });
+});
+
+describe("run_tests aprovação (classe shell)", () => {
+  test("classe shell: pede aprovação em ask/allow-edits e libera em bypass", async () => {
+    const { tool } = await setup({ config: { command: ["bun", "test"] } });
+    expect(actionClassOf(tool, { name: "run_tests", input: {} })).toBe("shell");
+    expect(requiredPermission(tool.manifest)).toBe("execute");
+    expect(permissionDecision("ask", "shell")).toBe("ask");
+    expect(permissionDecision("allow-edits", "shell")).toBe("ask");
+    expect(permissionDecision("bypass", "shell")).toBe("allow");
+  });
+
+  test("no executor: ask consulta o aprovador com ação shell e nega sem executar", async () => {
+    const { tool, mock, audit, cwd } = await setup({ config: { command: ["bun", "test"] }, reply: () => "ok" });
+    const asked: string[] = [];
+    const executor = new ToolExecutor({
+      tools: [tool],
+      allow: ["run_tests"],
+      audit,
+      permissionMode: "ask",
+      approveTool: (request) => {
+        asked.push(request.action);
+        return false;
+      },
+    });
+    const result = await executor.run(ctx(cwd), { id: "c1", name: "run_tests", arguments: "{}" });
+    expect(asked).toEqual(["shell"]);
+    expect(result.isError).toBe(true);
+    expect(mock.runCalls).toHaveLength(0);
+  });
+
+  test("I-01: fora da allowlist o executor nega mesmo em bypass", async () => {
+    const { tool, mock, audit, cwd } = await setup({ config: { command: ["bun", "test"] }, reply: () => "ok" });
+    const executor = new ToolExecutor({ tools: [tool], allow: ["read_file"], audit, permissionMode: "bypass" });
+    const result = await executor.run(ctx(cwd), { id: "c1", name: "run_tests", arguments: "{}" });
+    expect(result.isError).toBe(true);
+    expect(mock.runCalls).toHaveLength(0);
+  });
+});
+
+describe("run_tests registrada no run (#538)", () => {
+  test('agent.tools: ["run_tests"] resolve e devolve tests_not_configured sem run.tests', async () => {
+    let call = 0;
+    const bodies: unknown[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        bodies.push(await request.json());
+        call += 1;
+        return Response.json(call === 1
+          ? {
+              choices: [{ message: { content: "", tool_calls: [{ id: "c1", type: "function", function: {
+                name: "run_tests",
+                arguments: "{}",
+              } }] } }],
+              usage: { prompt_tokens: 5, completion_tokens: 2 },
+            }
+          : { choices: [{ message: { content: "sem comando de teste" } }], usage: { prompt_tokens: 6, completion_tokens: 3 } });
+      },
+    });
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "astro-rt-app-"));
+      const configPath = join(dir, "astro.config.json");
+      writeFileSync(configPath, JSON.stringify({
+        providers: { mock: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "TEST_KEY" } },
+        models: [{ provider: "mock", id: "mock-1", tags: ["writing-code"], context: 4096 }],
+        agent: { model: "mock/mock-1", maxSteps: 4, tools: ["run_tests"] },
+        paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+      }));
+      const report = await runTask({
+        approveTool: () => true,
+        configPath,
+        task: "rode os testes",
+        cwd: dir,
+        env: testEnv({ TEST_KEY: "test-key" }),
+      });
+      expect(report.final).toBe("sem comando de teste");
+      expect(JSON.stringify(bodies[1])).toContain("run.tests.command");
+      expect(JSON.stringify(bodies[1])).toContain("tests_not_configured");
+    } finally {
+      server.stop(true);
+    }
+  });
+});
