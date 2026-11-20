@@ -40,3 +40,14 @@ export function tailLog(lines: readonly string[], n?: number): string[] {
 export function sessionHeaderLine(data: { version: string; model: string; endpoint: string }): string {
   return sanitizeLogLine(`ASTRO v${data.version} · ${data.model} · endpoint ${data.endpoint}`);
 }
+
+/** Lanes do buffer do /log (#560): cada linha carrega o prefixo `[lane]`. */
+export type LogLane = "sessão" | "turno" | "saúde" | "aviso";
+
+/**
+ * Prefixa a linha com a lane para o `/log` mostrar as lanes separadas (#560).
+ * A sanitização (I-03) continua sendo aplicada por `appendLog`.
+ */
+export function laneLine(lane: LogLane, line: string): string {
+  return `[${lane}] ${line}`;
+}

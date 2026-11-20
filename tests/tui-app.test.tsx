@@ -293,7 +293,7 @@ test("erro fatal de sessão encerra a TUI", async () => {
   }
 });
 
-test("ignora Enter durante o turno e atualiza o status após /model", async () => {
+test("enfileira Enter durante o turno (#560) e atualiza o status após /model", async () => {
   class Slow extends FakeSession {
     override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
       await new Promise((resolve) => setTimeout(resolve, 80));
@@ -309,13 +309,15 @@ test("ignora Enter durante o turno e atualiza o status após /model", async () =
     await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
     instance.stdin.write("outra");
     instance.stdin.write("\r");
-    await waitFor(() => instance.lastFrame()?.includes("eco:demora") === true);
-    expect(session.sent).toEqual(["demora"]);
+    // #560: semântica nova — Enter durante o turno entra na fila em vez de ser descartado
+    await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
+    await waitFor(() => instance.lastFrame()?.includes("eco:outra") === true);
+    expect(session.sent).toEqual(["demora", "outra"]);
 
     instance.stdin.write("/model p/m2");
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("modelo: p/m2") === true);
-    expect(instance.lastFrame()).toMatch(/1 turno\(s\)/);
+    expect(instance.lastFrame()).toMatch(/2 turno\(s\)/);
     expect(instance.lastFrame()).toContain("p/m2");
   } finally {
     instance.unmount();
@@ -1604,6 +1606,126 @@ test("/provider abre a tela, seta direita lista modelos e enter troca o modelo d
     await waitFor(() => frameHas(instance, "modelo: p/m2"));
     const config = JSON.parse(readFileSync(join(cwd, ".astro", "tui.json"), "utf8")) as { lastModel?: string };
     expect(config.lastModel).toBe("p/m2");
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("digitar durante o turno enfileira e envia ao fim do turno (#560)", async () => {
+  class Slow extends FakeSession {
+    override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return super.send(prompt, signal);
+    }
+  }
+  const session = new Slow();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-queue-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    instance.stdin.write("demora");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
+    instance.stdin.write("outra");
+    instance.stdin.write("\r");
+    // RED: hoje o input durante o turno é descartado; com a fila aparece o indicador
+    await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
+    await waitFor(() => session.sent.includes("outra") === true);
+    expect(session.sent).toEqual(["demora", "outra"]);
+    await waitFor(() => instance.lastFrame()?.includes("eco:outra") === true);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("blocos visuais distintos: user, shell (comando/cwd/exit) e resposta (#560)", async () => {
+  const shell = {
+    enabled: true,
+    run: async (command: string) => ({ output: `saida:${command}`, isError: false }),
+  };
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-shellblock-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} shell={shell} />);
+  try {
+    instance.stdin.write("!echo oi");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("saida:echo oi") === true);
+    const frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
+    expect(frame).toContain("> !echo oi"); // bloco do usuário
+    expect(frame).toContain("$ echo oi"); // RED: bloco shell com comando não existe hoje
+    expect(frame).toContain(`cwd: ${cwd}`);
+    expect(frame).toContain("exit: 0");
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("eco:oi") === true); // bloco resposta
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("bloco thinking (stream) é visível durante o turno e recolhe com ctrl+t (#560)", async () => {
+  class Stream extends FakeSession {
+    override async send(
+      prompt: string,
+      signal?: AbortSignal,
+      onToken?: (text: string) => void,
+    ): Promise<TurnResult> {
+      onToken?.("raciocínio parcial");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return super.send(prompt, signal);
+    }
+  }
+  const session = new Stream();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-thinking-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("raciocínio parcial") === true);
+    instance.stdin.write("\u0014"); // ctrl+t recolhe o bloco thinking
+    await waitFor(() => instance.lastFrame()?.includes("recolhido") === true); // RED: sem recolhimento hoje
+    expect(instance.lastFrame()).not.toContain("raciocínio parcial");
+    await waitFor(() => instance.lastFrame()?.includes("eco:oi") === true);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("Enter aplica a completion e o próximo Enter roda; linha exata roda no 1º (#471, #560)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-enter-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    instance.stdin.write("/re");
+    await waitFor(() => instance.lastFrame()?.includes("/resume") === true);
+    instance.stdin.write("\r"); // 1º Enter: aplica "/resume" na linha, não roda
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const frame1 = instance.lastFrame() ?? "";
+    expect(frame1).toContain("/resume");
+    expect(frame1).not.toContain("desconhecido"); // RED: hoje o 1º Enter já submete "/re"
+    instance.stdin.write("\r"); // 2º Enter: roda o comando completado
+    await waitFor(() => instance.lastFrame()?.includes("sem persistência configurada") === true);
+
+    instance.stdin.write("/clear");
+    instance.stdin.write("\r"); // linha já exata: 1º Enter roda direto
+    await waitFor(() => instance.lastFrame()?.includes("contexto limpo") === true);
+    expect(session.cleared).toBe(1);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("/log mostra as lanes separadas por prefixo [lane] (#560)", async () => {
+  const session = new FakeSession();
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-lanes-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} />);
+  try {
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("eco:oi") === true);
+    instance.stdin.write("/log");
+    instance.stdin.write("\r");
+    await waitFor(() => instance.lastFrame()?.includes("[turno]") === true); // RED: hoje sem prefixo de lane
+    expect(instance.lastFrame()).toContain("[sessão]");
   } finally {
     instance.unmount();
   }
