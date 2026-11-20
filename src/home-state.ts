@@ -24,15 +24,19 @@ const EMPTY_STATE: AstroHomeState = {
 };
 
 /**
- * Diretório do estado que não pode ser criado (ex.: `$ASTRO_HOME` apontando
- * para um arquivo). Erro tipado que cita só o caminho: a mensagem crua do
- * `mkdir` duplica o `code` e vaza jargão (`EEXIST: ... mkdir`). Fail-closed:
- * nada é gravado, nenhum `.tmp` fica para trás.
+ * Estado global que não pode ser criado nem gravado (ex.: `$ASTRO_HOME`
+ * apontando para um arquivo, diretório sem permissão, destino ocupado por um
+ * diretório). Erro tipado que cita só o diretório: a mensagem crua do `mkdir`
+ * duplica o `code` e vaza jargão (`EEXIST: ... mkdir`), e a do `write`/`rename`
+ * nomeia um `.tmp` que o usuário nunca viu. Fail-closed: nada é gravado,
+ * nenhum `.tmp` fica para trás.
  */
 export class HomeStateUnwritableError extends Error {
   readonly code = "state_unwritable";
-  constructor(readonly path: string) {
-    super(`estado global não gravável em "${path}": o diretório não pode ser criado`);
+  constructor(readonly path: string, readonly step: "create" | "write" = "create") {
+    super(`estado global não gravável em "${path}": ${step === "create"
+      ? "o diretório não pode ser criado"
+      : "o estado não pode ser gravado"}`);
     this.name = "HomeStateUnwritableError";
   }
 }
@@ -146,8 +150,10 @@ export function saveHomeState(state: AstroHomeState, path: string = statePath())
       flag: "wx",
     });
     renameSync(temporary, path);
-  } catch (error) {
+  } catch {
     try { unlinkSync(temporary); } catch {}
-    throw error;
+    // Diretório existe mas não aceita a escrita (sem permissão, destino ocupado
+    // por um diretório): mesma falha tipada, citando só o diretório e sem `.tmp`.
+    throw new HomeStateUnwritableError(dir, "write");
   }
 }
