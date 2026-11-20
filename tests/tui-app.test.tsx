@@ -93,8 +93,13 @@ class FakeSession implements ChatSession {
   close(): void {}
 }
 
+/**
+ * Espera um frame do Ink: 10 ms por tentativa, teto de 12 s, abaixo do cap de 20 s do runner. O teto antigo
+ * (200 × 10 ms = 2 s) estourava no Windows de CI sob carga, onde o teste
+ * "enfileira Enter durante o turno (#560)" levava 3,2 s (#560); 12 s deixa margem sem tornar o 	hrow inalcançável.
+ */
 async function waitFor(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 1_200; i++) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
