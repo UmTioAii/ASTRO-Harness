@@ -287,6 +287,15 @@ describe("run_command no host: opt-in, aprovado por comando (#474)", () => {
 });
 
 describe("config tools.run_command.sandbox com 'auto' (#474)", () => {
+  test("chamada direta sem executor não roda no host (exige allowlist/gate)", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "não deveria rodar\n" });
+    const mod = await isolatedRunCommand("host-no-executor");
+    mod.configureRunCommand({ mode: "auto", permissionMode: "ask" });
+    const result = await mod.runCommandTool.execute({ command: "echo x" }, ctxOf(cwd()));
+    expect(result.code).toBe("host_shell_requires_gate");
+    expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
+  });
+
   test("runCommandTool de run() continua recusando sandbox=false", async () => {
     const mod = await isolatedRunCommand("host-disabled");
     mod.configureRunCommand({ sandbox: false });

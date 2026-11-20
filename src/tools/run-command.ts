@@ -3,9 +3,10 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, write
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
-import { resolveArtifactRoot, resolveAstroHome, type ApprovalDetail } from "../permissions";
+import { DEFAULT_PERMISSION_MODE, resolveArtifactRoot, resolveAstroHome, setPerCallApproval, type ApprovalDetail, type PermissionMode } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
+import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
 import { realpathPreservingDots } from "./paths";
 import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolResult } from "./types";
 
@@ -100,6 +101,10 @@ function killProcessTree(proc: { pid: number; kill: () => void }): void {
 // --- Sandbox (F4-6) ---
 
 let sandboxEnabled = false;
+/** Estado do #474 (opt-in `sandbox: "auto"`): modo, modo de permissão e `shell.default`. */
+let commandMode: RunCommandMode = "docker";
+let permissionMode: PermissionMode = DEFAULT_PERMISSION_MODE;
+let preferredShell: string | undefined;
 let dockerProbe: Promise<boolean> | undefined;
 
 /**
@@ -150,8 +155,24 @@ function minimalHostEnv(): Record<string, string> {
 }
 
 /** Configura o modo sandbox de run_command (chamado pelo app ao carregar a config). */
-export function configureRunCommand(opts: { sandbox?: boolean }): void {
-  sandboxEnabled = opts.sandbox === true;
+export function configureRunCommand(opts: {
+  sandbox?: boolean;
+  /** Modo resolvido (#474); `sandbox` continua aceito para compatibilidade dos chamadores. */
+  mode?: RunCommandMode;
+  /** Modo de permissão corrente: decide a exigência extra do host em `bypass` (#474). */
+  permissionMode?: PermissionMode;
+  /** `shell.default` da config (#474); ausente = ordem da plataforma. */
+  shellDefault?: string;
+}): void {
+  commandMode = opts.mode ?? (opts.sandbox === false ? "disabled" : "docker");
+  permissionMode = opts.permissionMode ?? DEFAULT_PERMISSION_MODE;
+  preferredShell = opts.shellDefault;
+  // `sandbox: true` mantém o caminho Docker byte a byte; `isRunCommandSandboxEnabled`
+  // segue significando "Docker", como antes.
+  sandboxEnabled = commandMode === "docker";
+  // #474: no modo `auto` o shell pode cair no host, então `shell` deixa de aceitar
+  // grant de sessão - cada comando pede aprovação mostrando o comando.
+  setPerCallApproval("shell", commandMode === "auto");
 }
 
 /** Estado atual do sandbox do run_command (diagnóstico e testes). */
@@ -159,11 +180,33 @@ export function isRunCommandSandboxEnabled(): boolean {
   return sandboxEnabled;
 }
 
+/** Modo efetivo do `run_command` (#474): Docker, auto (Docker → host) ou desligado. */
+export type RunCommandMode = "docker" | "auto" | "disabled";
+
+/**
+ * Resolve `tools.run_command.sandbox` (#474): `true`/ausente = Docker (default,
+ * comportamento anterior); `"auto"` = Docker quando disponível, senão host com
+ * aprovação por comando; `false` = shell desligado (I-19).
+ */
+export function resolveRunCommandMode(configured: boolean | "auto" | undefined): RunCommandMode {
+  if (configured === false) return "disabled";
+  if (configured === "auto") return "auto";
+  return "docker";
+}
+
+/**
+ * Confirmação extra para o host em `bypass` (#474). Em `bypass` o gate não
+ * pergunta nada; sem esta variável o host recusa, porque o comando rodaria sem
+ * nenhuma revisão humana. O modelo nunca controla o ambiente do processo.
+ */
+export const HOST_SHELL_BYPASS_CONFIRMATION_ENV = "ASTRO_HOST_SHELL_CONFIRM_BYPASS";
+
 /**
  * Sandbox ligado salvo opt-out explícito (`sandbox: false`), que NÃO roda no host:
  * recusa com `sandbox_required_for_shell` (I-19, slice 4b). Sem Docker, recusa (I-11).
  */
-export function resolveSandboxSetting(configured: boolean | undefined): boolean {
+export function resolveSandboxSetting(configured: boolean | "auto" | undefined): boolean {
+  // `"auto"` conta como sandbox ligado (Docker quando existe); só `false` desliga.
   return configured !== false;
 }
 
@@ -496,13 +539,136 @@ async function runDockerProcess(
   return { output: redactThenTruncate(output) };
 }
 
+// --- Shell no host (#474, opt-in via `sandbox: "auto"`) ---
+
+/**
+ * Auditoria da decisão do host (#474): só decisão/motivo/modo/shell. O comando
+ * e a saída NUNCA entram no audit (I-03; a saída já volta redigida ao modelo).
+ */
+function auditHostDecision(
+  ctx: ToolContext,
+  decision: "allow" | "deny",
+  extra: { reason?: string; shell?: string } = {},
+): void {
+  ctx.executor?.audit.append({
+    run: ctx.run,
+    agent: ctx.agent,
+    tipo: "host_shell.decision",
+    payload: {
+      decision,
+      permissionMode,
+      ...(extra.reason === undefined ? {} : { reason: extra.reason }),
+      ...(extra.shell === undefined ? {} : { shell: extra.shell }),
+    },
+  });
+}
+
+function failureCode(message: string, code: string): ToolResult {
+  return { output: redactSecrets(message), isError: true, code };
+}
+
+/**
+ * Executa no host (#474) depois de: allowlist/ceiling (executor), gate de
+ * permissão com o comando no prompt (executor) e hard-block de path (executor).
+ * Piso próprio: em `bypass` exige confirmação explícita; env sanitizado;
+ * saída redigida antes do truncamento. O que se perde em relação ao Docker está
+ * no ADR-0031: rede do host, FS do host e processos já em execução.
+ */
+async function runOnHost(
+  command: string,
+  ctx: ToolContext,
+  timeoutMs: number,
+): Promise<ToolResult> {
+  const env = ctx.env ?? process.env;
+  // Sem executor não houve allowlist/gate: o host só existe atrás do gate (#474).
+  if (ctx.executor === undefined) {
+    return failureCode(
+      "host_shell_requires_gate: shell no host só executa via ToolExecutor (allowlist e aprovação por comando)",
+      "host_shell_requires_gate",
+    );
+  }
+  // `bypass` não abre prompt: sem a confirmação explícita o host recusa (fail-closed).
+  if (permissionMode === "bypass" && env[HOST_SHELL_BYPASS_CONFIRMATION_ENV] !== "1") {
+    auditHostDecision(ctx, "deny", { reason: "bypass_confirmation_required" });
+    return failureCode(
+      `host_shell_confirmation_required: em modo bypass o shell no host exige confirmação explícita ` +
+        `(${HOST_SHELL_BYPASS_CONFIRMATION_ENV}=1); use o Docker ou o modo ask`,
+      "host_shell_confirmation_required",
+    );
+  }
+
+  const selection = selectHostShell(detectHostShells(), preferredShell);
+  if (selection.kind === "error") {
+    auditHostDecision(ctx, "deny", { reason: selection.code });
+    return failureCode(selection.message, selection.code);
+  }
+  auditHostDecision(ctx, "allow", { shell: selection.shell });
+
+  const argv = hostShellArgv(selection.shell, command);
+  const proc = Bun.spawn({
+    cmd: argv,
+    cwd: ctx.cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: sanitizedEnv(env, ctx.secretEnvNames ?? []),
+    // Sempre grupo próprio no POSIX: o timeout/cancelamento mata a árvore, não só o shell.
+    detached: process.platform !== "win32",
+  });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = Symbol("timeout");
+  const aborted = Symbol("aborted");
+  const timeout = new Promise<typeof timedOut>((resolve) => {
+    timer = setTimeout(() => {
+      killProcessTree(proc);
+      resolve(timedOut);
+    }, timeoutMs);
+  });
+  let onCancel: (() => void) | undefined;
+  const cancellation = new Promise<typeof aborted>((resolve) => {
+    if (ctx.signal === undefined) return;
+    if (ctx.signal.aborted) {
+      killProcessTree(proc);
+      resolve(aborted);
+      return;
+    }
+    onCancel = (): void => {
+      killProcessTree(proc);
+      resolve(aborted);
+    };
+    ctx.signal.addEventListener("abort", onCancel, { once: true });
+  });
+
+  let exited: typeof timedOut | typeof aborted | number;
+  try {
+    exited = await Promise.race([proc.exited, timeout, cancellation]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onCancel !== undefined) ctx.signal?.removeEventListener("abort", onCancel);
+  }
+
+  if (exited === aborted) return { output: "comando cancelado no shell do host", isError: true };
+  if (exited === timedOut) {
+    const note = `timeout de ${timeoutMs}ms excedido no shell do host; processo interrompido`;
+    const output = await combinedOutput(proc);
+    return { output: redactThenTruncate(output.length > 0 ? `${output}\n${note}` : note), isError: true };
+  }
+  const output = await combinedOutput(proc);
+  if (exited !== 0) {
+    const note = `comando terminou com código ${exited} (shell do host: ${selection.shell})`;
+    return { output: redactThenTruncate(output.length > 0 ? `${output}\n${note}` : note), isError: true };
+  }
+  return { output: redactThenTruncate(output) };
+}
+
 /** Executa um comando de shell no diretório de trabalho, com timeout do manifesto. */
 export const runCommandTool: Tool = {
   manifest: {
     name: "run_command",
     description:
       "Executa um comando de shell no diretório de trabalho e devolve a saída. " +
-      "Só em container Docker efêmero isolado; sem sandbox recusa (sandbox_required_for_shell).",
+      "Só em container Docker efêmero isolado; sem sandbox recusa (sandbox_required_for_shell). " +
+      "Com tools.run_command.sandbox \"auto\" e sem Docker, roda no host com aprovação por comando.",
     parameters: {
       type: "object",
       properties: {
@@ -531,10 +697,16 @@ export const runCommandTool: Tool = {
       return failure(message);
     }
 
-    // Slice 4b (I-19): `sandbox: false` NÃO executa no host — recusa sem spawnar e sem ecoar o comando.
-    if (!sandboxEnabled) {
+    // Slice 4b (I-19): `sandbox: false` NÃO executa no host - recusa sem spawnar e sem ecoar o comando.
+    if (commandMode === "disabled") {
       const error = new SandboxRequiredForShellError("sandbox:false");
       return { ...failure(error.message), code: error.code };
+    }
+
+    // `auto` (#474): Docker quando disponível; sem Docker, host com aprovação por
+    // comando (o gate já rodou antes: allowlist, prompt e hard-block).
+    if (commandMode === "auto" && !(await detectDockerAvailable())) {
+      return runOnHost(command, ctx, runCommandTool.manifest.timeoutMs);
     }
 
     // Sandbox: container Docker efêmero; sem Docker disponível, recusa (sem downgrade)
@@ -761,8 +933,10 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
       }
 
       // Mesma recusa do run_command (I-19): `sandbox: false` não executa no host.
-      if (!sandboxEnabled) {
-        const error = new SandboxRequiredForShellError("sandbox:false", "run_tests");
+      // `auto` (#474) também não: o host do ADR-0031 vale só para `run_command`.
+      if (commandMode !== "docker") {
+        const mode = commandMode === "auto" ? "sandbox:auto (host só para run_command)" : "sandbox:false";
+        const error = new SandboxRequiredForShellError(mode, "run_tests");
         return { ...failure(error.message), code: error.code };
       }
       if (!(await detectDockerAvailable())) {

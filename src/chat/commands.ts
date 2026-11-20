@@ -11,6 +11,7 @@ export type ReplCommand =
   | { kind: "clear" }
   | { kind: "model"; model?: string }
   | { kind: "mode"; mode?: string; confirm?: boolean }
+  | { kind: "shell"; shell?: string; confirm?: boolean }
   | { kind: "config"; key?: string; rawValue?: string }
   | { kind: "providers" }
   | { kind: "provider"; action: ProviderAction; target?: string }
@@ -36,6 +37,7 @@ export const HELP_TEXT = [
   "  /help           esta ajuda",
   "  /model [alvo]   lista (REPL) ou abre o seletor (TUI); com alvo, troca",
   "  /mode [modo]    lista os modos e o ativo; /mode <modo> troca (bypass exige \"confirm\")",
+  "  /shell [shell]  lista os shells do host presentes; /shell <shell> confirm grava shell.default",
   "  /config [chave valor]  resumo da config; com chave e valor, edita e persiste (ex.: /config agent.maxSteps 200, #558)",
   "  /providers      lista providers (kind, credencial, quota, modelos)",
   "  /provider       lista perfis (projeto, globais, env) e o ativo",
@@ -67,7 +69,7 @@ export const HELP_TEXT = [
 
 /** Nomes de comando (sem a barra), com aliases, na ordem do /help. */
 export const COMMAND_NAMES = [
-  "help", "model", "mode", "config", "providers", "provider", "session", "details", "compact", "summarize",
+  "help", "model", "mode", "shell", "config", "providers", "provider", "session", "details", "compact", "summarize",
   "save", "sessions", "resume", "export", "init", "usage", "log", "memory", "theme", "attach", "paste", "detach",
   "clear", "new", "exit", "quit", "q",
 ] as const;
@@ -101,6 +103,30 @@ export function resolveModeCommand(
 export function modeListText(current: PermissionMode): string {
   const lines = PERMISSION_MODES.map((mode) => `${mode === current ? "→" : " "} ${mode}`);
   return `${lines.join("\n")}\nativo: ${current}`;
+}
+
+/** O que o `/shell` manda fazer (#474): listar, gravar (após confirm) ou recusar. */
+export type ShellCommandAction =
+  | { kind: "list"; shells: readonly string[] }
+  | { kind: "switch"; shell: string }
+  | { kind: "needs-confirm"; shell: string }
+  | { kind: "invalid"; shell: string; shells: readonly string[] }
+  | { kind: "unsupported" };
+
+/**
+ * Decide o `/shell` sem I/O (#474): só lista shells presentes e só grava
+ * `shell.default` com `confirm`. Shell ausente da máquina nunca é aceito.
+ */
+export function resolveShellCommand(
+  command: { shell?: string; confirm?: boolean },
+  available: readonly string[],
+  canSet: boolean,
+): ShellCommandAction {
+  if (command.shell === undefined) return { kind: "list", shells: available };
+  if (!available.includes(command.shell)) return { kind: "invalid", shell: command.shell, shells: available };
+  if (command.confirm !== true) return { kind: "needs-confirm", shell: command.shell };
+  if (!canSet) return { kind: "unsupported" };
+  return { kind: "switch", shell: command.shell };
 }
 
 function editDistance(a: string, b: string): number {
@@ -200,6 +226,14 @@ export function parseCommand(line: string): ReplCommand {
     case "config": {
       const [key, ...rest] = arg.split(/\s+/).filter((part) => part !== "");
       return { kind: "config", ...(key === undefined ? {} : { key, rawValue: rest.join(" ") }) };
+    }
+    case "shell": {
+      const [first, second] = arg.split(/\s+/).filter((part) => part !== "");
+      return {
+        kind: "shell",
+        ...(first === undefined ? {} : { shell: first.toLowerCase() }),
+        ...(second !== undefined && second.toLowerCase() === "confirm" ? { confirm: true } : {}),
+      };
     }
     case "providers":
       return { kind: "providers" };

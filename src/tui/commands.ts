@@ -1,5 +1,5 @@
 /** Comandos de barra compartilhados pelo REPL e pela TUI: puro, sem React. */
-import { HELP_TEXT, modeListText, resolveModeCommand, unknownCommandMessage, type ReplCommand } from "../chat/commands";
+import { HELP_TEXT, modeListText, resolveModeCommand, resolveShellCommand, unknownCommandMessage, type ReplCommand } from "../chat/commands";
 import { detailsLines, providerLine, type ChatSession } from "../chat/repl";
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from "../permissions";
 import { toSessionRecord } from "../chat/store";
@@ -10,6 +10,7 @@ import { initAgents } from "../chat/init";
 import { usageLines } from "../chat/usage";
 import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryReport } from "../memory";
 import { THEMES, isTheme, type Theme } from "./theme";
+import { detectHostShells } from "../tools/host-shell";
 import {
   EDITABLE_CONFIG_KEYS,
   isEditableConfigKey,
@@ -55,6 +56,8 @@ export interface RunCommandOptions {
   sessionApi?: SessionApi;
   cwd?: string;
   resumeId?: string;
+  /** Shells presentes na máquina (#474); default = `detectHostShells()` (injetável no teste). */
+  availableShells?: readonly string[];
 }
 
 function messageOf(error: unknown): string {
@@ -110,6 +113,41 @@ export async function runCommand(
       }
       try {
         return { entries: [{ kind: "info", text: `modo: ${session.setPermissionMode(action.mode)}` }] };
+      } catch (error) {
+        return { entries: [{ kind: "error", text: `erro: ${messageOf(error)}` }] };
+      }
+    }
+    case "shell": {
+      const available = options.availableShells ?? detectHostShells();
+      const action = resolveShellCommand(command, available, session.applyConfigEdits !== undefined);
+      if (action.kind === "list") {
+        const text = available.length === 0
+          ? "nenhum shell suportado encontrado no PATH (pwsh, powershell, cmd, bash, zsh, sh)"
+          : `shells do host: ${available.join(", ")}\nuso: /shell <shell> confirm (grava shell.default)`;
+        return { entries: [{ kind: "info", text }] };
+      }
+      if (action.kind === "invalid") {
+        return {
+          entries: [{
+            kind: "error",
+            text: `shell indisponível: ${action.shell} (presentes: ${action.shells.join(", ") || "nenhum"})`,
+          }],
+        };
+      }
+      if (action.kind === "needs-confirm") {
+        return {
+          entries: [{
+            kind: "error",
+            text: `shell.default não alterado: confirme com /shell ${action.shell} confirm`,
+          }],
+        };
+      }
+      if (action.kind === "unsupported") {
+        return { entries: [{ kind: "error", text: "esta sessão não aceita editar a config" }] };
+      }
+      try {
+        session.applyConfigEdits!({ "shell.default": action.shell });
+        return { entries: [{ kind: "info", text: `shell.default: ${action.shell} (gravado na config)` }] };
       } catch (error) {
         return { entries: [{ kind: "error", text: `erro: ${messageOf(error)}` }] };
       }

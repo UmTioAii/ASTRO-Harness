@@ -3,7 +3,8 @@
 - Status: aceita
 - Data: 2026-11-05
 - Issue: #384
-- Decisões relacionadas: ADR-0019, ADR-0023, ADR-0026, I-01, I-03, I-11
+- Decisões relacionadas: ADR-0019, ADR-0023, ADR-0026, ADR-0031, I-01, I-03, I-11
+- Emenda: `tools.run_command.sandbox: "auto"` (#474, ADR-0031) adiciona host opt-in com aprovação por comando quando não há Docker; o default Docker e `false` desligado permanecem.
 
 ## Contexto
 

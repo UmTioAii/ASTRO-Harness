@@ -17,6 +17,7 @@ import {
   PermissionGrants,
   PermissionPendingError,
   denyDisplayPath,
+  requiresPerCallApproval,
   pathCandidatesOf,
   resolveArtifactRoot,
   resolveAstroHome,
@@ -437,8 +438,9 @@ export class ToolExecutor {
     const decision = permissionDecision(this.mode, action);
     let effective: PermissionDecision = decision;
     const grantKey = PermissionGrants.key(action, call.name);
-    if (decision === "ask" && this.permissionGrants.has(grantKey)) {
+    if (decision === "ask" && this.permissionGrants.has(grantKey) && !requiresPerCallApproval(action)) {
       // Grant de sessão ainda vale (PERM-05, #266): allow sem perguntar de novo.
+      // Exceção #474: shell no host exige prompt por comando, sem grant de sessão.
       effective = "allow";
     } else if (decision === "ask") {
       try {

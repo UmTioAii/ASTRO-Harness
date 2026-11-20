@@ -49,7 +49,7 @@
   },
   "tools": {
     "run_command": {
-      "sandbox": false
+      "sandbox": "auto"
     }
   },
   "telemetry": {

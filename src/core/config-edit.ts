@@ -5,6 +5,7 @@
  */
 import { isPermissionMode } from "../permissions";
 import { validateProjectLayer } from "../providers/profiles";
+import { HOST_SHELLS, isHostShell } from "../tools/host-shell";
 import { ConfigError, isPlainObject, loadConfigRaw, writeConfigFileAtomic } from "./config";
 
 /** Chaves editáveis via `/config` (#558); fora daqui é recusado. */
@@ -19,6 +20,7 @@ export const EDITABLE_CONFIG_KEYS = [
   "team.sessionBudgetUsd",
   "team.weekBudgetUsd",
   "permissions.mode",
+  "shell.default",
 ] as const;
 
 export type EditableConfigKey = (typeof EDITABLE_CONFIG_KEYS)[number];
@@ -85,6 +87,12 @@ export function parseConfigEditValue(key: EditableConfigKey, raw: string): unkno
     return text;
   }
   // permissions.mode
+  if (key === "shell.default") {
+    if (!isHostShell(text)) {
+      throw new ConfigError(`valor inválido para "shell.default": deve ser ${HOST_SHELLS.join(", ")} - recebido "${text}"`);
+    }
+    return text;
+  }
   if (!isPermissionMode(text)) {
     throw new ConfigError(`valor inválido para "permissions.mode": deve ser bypass, allow-edits ou ask — recebido "${text}"`);
   }

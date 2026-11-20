@@ -98,6 +98,22 @@ export type ActionClass =
 
 export type PermissionDecision = "allow" | "ask" | "deny";
 
+/**
+ * Ações que exigem aprovação a cada chamada, sem reutilizar grant de sessão
+ * (#474): o shell no host não tem o isolamento do Docker, então "aprovar nesta
+ * sessão" não pode cobrir comandos futuros - o prompt mostra cada comando.
+ */
+const PER_CALL_ACTIONS = new Set<ActionClass>();
+
+export function setPerCallApproval(action: ActionClass, required: boolean): void {
+  if (required) PER_CALL_ACTIONS.add(action);
+  else PER_CALL_ACTIONS.delete(action);
+}
+
+export function requiresPerCallApproval(action: ActionClass): boolean {
+  return PER_CALL_ACTIONS.has(action);
+}
+
 /** Escopo de uma aprovação humana (PERM-05, #266). */
 export type PermissionGrant = "once" | "session";
 

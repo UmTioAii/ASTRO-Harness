@@ -154,7 +154,7 @@ When a call asks, the prompt has exactly three answers:
 
 Anything else denies. Fail-closed is the rule: an empty answer, EOF or an unrecognized key is a denial, not an approval.
 
-The fixed floor is enforced in every mode, including `bypass`: `.astro/` and configured `protectedPaths` cannot be written, critical paths (`.env*`, secrets, tokens, keys, the vault) are blocked or gated, file paths stay inside the working directory, secrets are redacted before any log or prompt, and `run_command` only runs with the sandbox enabled. In a non-interactive context, `ask` denies with `permission.pending` and the run stops at a safe point instead of proceeding.
+The fixed floor is enforced in every mode, including `bypass`: `.astro/` and configured `protectedPaths` cannot be written, critical paths (`.env*`, secrets, tokens, keys, the vault) are blocked or gated, file paths stay inside the working directory, secrets are redacted before any log or prompt, and `run_command` runs in the Docker sandbox by default. `tools.run_command.sandbox: "auto"` is an explicit opt-in that falls back to the host with per-command approval when Docker is absent; what that loses is in ADR-0031. In a non-interactive context, `ask` denies with `permission.pending` and the run stops at a safe point instead of proceeding.
 
 ## Environment variables
 
@@ -221,7 +221,7 @@ These guarantees are enforced in code and covered by tests:
 | Tools outside the agent allowlist never run, and denials are audited. | I-01 |
 | File paths stay inside the working directory; symlinks and junctions are resolved. | I-11 |
 | `.astro/` and `protectedPaths` cannot be written by tools, in any permission mode. | I-11 |
-| `run_command` runs only with the sandbox enabled; the child environment is stripped of secret names. | I-03, I-11 |
+| `run_command` runs in the Docker sandbox by default (`"auto"` opts into the host with per-command approval); the child environment is stripped of secret names. | I-03, I-11 |
 | Prompts are never persisted; `run.started` stores only a task hash. | I-04 |
 | Quotas and budgets block before spending, and the hard ceiling is physical. | I-17 |
 | Provider, model or credential changes require approval, including in `bypass`. | I-08 |
