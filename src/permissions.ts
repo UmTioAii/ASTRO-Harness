@@ -148,6 +148,8 @@ const APPROVAL_DETAIL_ELLIPSIS = "...";
 const APPROVAL_DETAIL_HEAD_RATIO = 0.7;
 /** Separador do `move_path` no prompt (#536). */
 const MOVE_ARROW = " -> ";
+/** Marca da remoção recursiva no prompt (#535): o usuário aprova o que a tool faz. */
+const RECURSIVE_SUFFIX = " (recursivo)";
 
 /** Tools cujo argumento material é um path (#536). `move_path` soma dois paths. */
 const DETAIL_PATH_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit", "delete_path"]);
@@ -235,9 +237,13 @@ export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined
   if (DETAIL_PATH_TOOLS.has(call.name)) {
     if (typeof input.path !== "string") return undefined;
     const path = detailValue(input.path);
-    return path === undefined
-      ? undefined
-      : { kind: "path", value: elideDetailValue(path, APPROVAL_DETAIL_MAX_CHARS) };
+    if (path === undefined) return undefined;
+    // #535: remoção de diretório aparece como recursiva, não como "path" comum.
+    if (call.name === "delete_path" && input.recursive === true) {
+      const budget = APPROVAL_DETAIL_MAX_CHARS - RECURSIVE_SUFFIX.length;
+      return { kind: "path", value: `${elideDetailValue(path, budget)}${RECURSIVE_SUFFIX}` };
+    }
+    return { kind: "path", value: elideDetailValue(path, APPROVAL_DETAIL_MAX_CHARS) };
   }
   return undefined;
 }
@@ -437,8 +443,12 @@ function isPathLikeToken(token: string): boolean {
   return /\.[A-Za-z0-9]+$/.test(token);
 }
 
-/** Campos de path por tool (default `["path"]`; `lsp` declara `file`) e tools com default de `path` para o cwd (`grep`/`list_dir`/git: "."). */
-const PATH_FIELDS: Record<string, readonly string[]> = { lsp: ["file"] };
+/**
+ * Campos de path por tool (default `["path"]`; `lsp` declara `file`;
+ * `move_path` soma origem e destino) e tools com default de `path` para o cwd
+ * (`grep`/`list_dir`/git: ".").
+ */
+const PATH_FIELDS: Record<string, readonly string[]> = { lsp: ["file"], move_path: ["from", "to"] };
 const DEFAULT_PATH_FIELDS: readonly string[] = ["path"];
 const CWD_DEFAULT_TOOLS: ReadonlySet<string> = new Set(["grep", "list_dir", "git_status", "git_diff"]);
 /** Candidatos a path do input (ADR-0027, #391 slice 1): `PATH_FIELDS` + default `path`; `CWD_DEFAULT_TOOLS` sem `path` ganha "."; `run_command` soma tokens path-like de `command` (token nu: slice 4). */
