@@ -9,6 +9,7 @@ import { PROTECTED_FORBIDDEN_ROOTS, DEFAULT_EFFORT_ESCALATION, MAX_AUTO_JUMP, MA
 import { DEFAULT_OUTPUT_LIMIT, type OutputLimitConfig } from "../output-limit";
 import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "../compaction/engine";
 import type { ModelRouting } from "../providers/model-routing";
+import { DEFAULT_RUN_TESTS_TIMEOUT_MS, type RunTestsConfig } from "../tools/run-command";
 import type { WebSearchConfig, WebSearchProvider } from "../tools/web-search";
 import { isPermissionMode, DEFAULT_PERMISSION_MODE, isAgentPermission, type AgentPermission, type PermissionMode } from "../permissions";
 import { isAuthHeader, isEnvName, isVaultCredentialRef, looksLikeSecret, mcpSecretProblem } from "../secrets";
@@ -278,6 +279,8 @@ export interface RunConfig {
   noProgressSegments: number;
   /** Judge do loop (L4, #450): `off` (default), `on` a cada conclusão ou `auto` por sinal. */
   judge: JudgeMode;
+  /** Comando de teste do projeto (F-15, #538): argv, nunca string de shell. Ausente = sem auto-detecção. */
+  tests?: RunTestsConfig;
 }
 
 /** Seção `attachments` (ADR-0026, #392): imagem, diretório e artifact store. */
@@ -1263,6 +1266,36 @@ function validateEffort(value: unknown): EffortEscalationConfig {
   return { auto, autoJumpMax, maxCumulativeJump };
 }
 
+/**
+ * Valida `run.tests` (F-15, #538): o comando é argv (item por argumento),
+ * nunca uma string de shell, e sem histórico de auto-detecção. Um item único
+ * com espaço é a string de shell disfarçada e falha aqui, não no primeiro run.
+ */
+function validateRunTests(value: unknown): RunTestsConfig {
+  const raw = expectObject(value, "run.tests");
+  for (const key of Object.keys(raw)) {
+    if (key !== "command" && key !== "timeoutMs") {
+      fail(`config inválida: "run.tests.${key}" desconhecido (permitidos: "command" e "timeoutMs")`);
+    }
+  }
+  const command = expectStringArray(raw.command, "run.tests.command");
+  if (command.length === 0) {
+    fail('config inválida: "run.tests.command" precisa do executável (ex.: ["bun", "test"])');
+  }
+  if (/\s/.test(command[0]!)) {
+    fail(
+      'config inválida: "run.tests.command" é um argv, não uma string de shell; ' +
+        'separe executável e argumentos (ex.: ["bun", "test"], nunca ["bun test"])',
+    );
+  }
+  return {
+    command,
+    timeoutMs: raw.timeoutMs === undefined
+      ? DEFAULT_RUN_TESTS_TIMEOUT_MS
+      : expectPositiveInteger(raw.timeoutMs, "run.tests.timeoutMs"),
+  };
+}
+
 /** Valida a seção opcional `run` (Q-01/L1, ADR-0014): guardas do loop. `maxTurns` foi removido (P4). */
 function validateRun(value: unknown): RunConfig {
   const raw = expectObject(value, "run");
@@ -1283,7 +1316,8 @@ function validateRun(value: unknown): RunConfig {
   if (!isJudgeMode(judge)) {
     fail('config inválida: "run.judge" deve ser "off", "on" ou "auto"');
   }
-  return { checkpointAt, noProgressSegments, judge };
+  const tests = raw.tests === undefined ? undefined : validateRunTests(raw.tests);
+  return { checkpointAt, noProgressSegments, judge, ...(tests === undefined ? {} : { tests }) };
 }
 
 /** Defaults da seção `attachments` (ADR-0026, #392). */

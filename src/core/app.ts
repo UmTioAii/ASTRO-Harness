@@ -42,7 +42,7 @@ import { headerEnvNames } from "../mcp/headers";
 import { mcpTools } from "../mcp/tool";
 import { ToolExecutor, type ToolApprover } from "../tools/executor";
 import { readFileTool } from "../tools/read-file";
-import { runCommandTool } from "../tools/run-command";
+import { createRunTestsTool, runCommandTool } from "../tools/run-command";
 import { writeFileTool } from "../tools/write-file";
 import { handoffTool } from "../tools/handoff";
 import { createListModelCandidatesTool } from "../tools/list-model-candidates";
@@ -981,6 +981,13 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   // sessão no chat (um turno = um runTask) e é novo em run isolado; nada em disco.
   const todoPlans = opts.todoPlans ?? new TodoPlanStore();
   toolsByName.set("todo_write", createTodoWriteTool({ audit, store: todoPlans }));
+  // run_tests (#538): o comando de teste vem de `run.tests.command`, nunca do
+  // modelo; sem a seção a tool devolve tests_not_configured em vez de adivinhar.
+  const runTestsConfig = config.run?.tests;
+  toolsByName.set("run_tests", createRunTestsTool({
+    audit,
+    ...(runTestsConfig === undefined ? {} : { config: runTestsConfig }),
+  }));
   // #552: teto de spawns por run vem de spawn.maxActive (clamp em DEFAULT_MAX_SPAWNS_PER_RUN).
   const spawns = new SpawnRegistry({ limit: spawnLimitFromConfig(config) });
   // Preenchidos depois de resolver a allowlist/modo; a closure da task lê no call.
