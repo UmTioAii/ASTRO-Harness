@@ -22,6 +22,7 @@ const CREDENTIAL_KEYS = ["credentialRef", "credentialsPath"];
 export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(overlay)) {
+    if (value === undefined) continue;
     const current = merged[key];
     if (key === "version" && (value === undefined || (typeof current === "string" && typeof value === "string"
       && current.localeCompare(value, undefined, { numeric: true }) > 0))) continue;
