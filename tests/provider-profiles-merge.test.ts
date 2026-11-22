@@ -82,6 +82,11 @@ test("sem override, usa o provider do agent.model", () => {
   expect(result.config.agent.model).toBe("p/m1");
 });
 
+test("validated project defaults survive a global run-layer merge", () => {
+  const result = resolveEffectiveConfig({ project: project(), global: { run: {} }, store: store(), env: {} });
+  expect(result.config.run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 2 });
+});
+
 test("provider do projeto vence perfil global com o mesmo nome", () => {
   const result = resolveEffectiveConfig({
     project: project("same"),
