@@ -647,15 +647,20 @@ describe("config mínima: allowlist e paths têm default", () => {
   });
 });
 
-describe("limite único de trabalho (P4)", () => {
-  test("run.maxTurns é recusado com migração para agent.maxSteps", () => {
+describe("turn and round limits (#594)", () => {
+  test("schema 1.x refuses to reinterpret run.maxTurns silently", () => {
     const raw = structuredClone(valid) as Record<string, unknown>;
+    raw.version = "1.0.0";
     raw.run = { maxTurns: 12 };
-    let message = "";
-    try { validateConfig(raw); } catch (error) { message = (error as Error).message; }
+    let caught: unknown;
+    try { validateConfig(raw); } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(ConfigError);
+    expect((caught as ConfigError).code).toBe("config_migration_required");
+    const message = (caught as Error).message;
     expect(message).toContain("run.maxTurns");
-    expect(message).toContain("agent.maxSteps");
-    expect(message).toContain("removido");
+    expect(message).toMatch(/rounds/);
+    expect(message).toMatch(/turns/);
+    expect(message).toContain('version: "2.0.0"');
   });
 
   test("run continua válido sem maxTurns (guardas do loop)", () => {

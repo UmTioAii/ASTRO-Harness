@@ -404,3 +404,25 @@ test("activeProfileId órfão no disco avisa e cai no projeto", () => {
   expect(result.providerSelection).toBe("project");
   expect(result.warnings.join(" ")).toMatch(/activeProfileId/);
 });
+
+test("legacy aliases warn on load without rewriting user configuration (#594)", () => {
+  const home = mkdtempSync(join(tmpdir(), "astro-alias-load-"));
+  const path = join(home, "astro.config.json");
+  const raw = {
+    version: "2.0.0",
+    preset: "control",
+    providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
+    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+    agent: { model: "p/m1", maxSteps: 2, tools: ["read_file"] },
+    tools: { run_command: { sandbox: false } },
+  };
+  const before = `${JSON.stringify(raw, null, 2)}\n`;
+  writeFileSync(path, before);
+  const result = loadEffectiveConfig(path, { env: { ASTRO_HOME: home, ASTRO_NO_GLOBAL_CONFIG: "1" } });
+  expect(result.config.run).toMatchObject({ maxRoundsPerTurn: 2 });
+  expect(result.config.shell?.mode).toBe("off");
+  expect(result.warnings.join(" ")).toMatch(/agent\.maxSteps.*run\.maxRoundsPerTurn/);
+  expect(result.warnings.join(" ")).toMatch(/sandbox.*shell\.mode/);
+  expect(readFileSync(path, "utf8")).toBe(before);
+});
+

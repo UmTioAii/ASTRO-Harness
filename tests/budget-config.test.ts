@@ -50,17 +50,37 @@ describe("budget config (F-05, #132 parte 1)", () => {
     expect(() => withBudget({ scope: "day", limitUsd: 1 })).not.toThrow();
   });
 
-  test("run.maxTurns foi removido: erro de migração aponta agent.maxSteps", () => {
-    expect(() => withBudget(undefined, { run: { maxTurns: 3 } })).toThrow(/run\.maxTurns.*removido/);
-    expect(() => withBudget({ scope: "project", limitUsd: 5 }, { run: { maxTurns: "unlimited" } }))
-      .toThrow(/agent\.maxSteps/);
-    // o bloco `run` continua dono das guardas do loop: apagar a seção as desliga
-    expect(() => withBudget(undefined, { run: { maxTurns: 3 } })).toThrow(/checkpointAt/);
+  test("schema 2 accepts turn and round limits without changing loop guards", () => {
+    const cfg = withBudget(undefined, {
+      version: "2.0.0",
+      preset: "control",
+      run: { maxTurns: 250, maxRoundsPerTurn: 100 },
+    });
+    expect(cfg.run).toMatchObject({
+      maxTurns: 250,
+      maxRoundsPerTurn: 100,
+      checkpointAt: 0.8,
+      noProgressSegments: 3,
+      judge: "off",
+    });
+  });
+
+  test("omitted run derives the round alias without enabling legacy loop guards", () => {
+    expect(withBudget(undefined).run).toEqual({ maxTurns: 500, maxRoundsPerTurn: 5 });
+  });
+
+  test("schema 2 accepts unlimited limits in Control", () => {
+    const cfg = withBudget(undefined, {
+      version: "2.0.0",
+      preset: "control",
+      run: { maxTurns: "unlimited", maxRoundsPerTurn: "unlimited" },
+    });
+    expect(cfg.run).toMatchObject({ maxTurns: "unlimited", maxRoundsPerTurn: "unlimited" });
   });
 
   test("run aplica defaults checkpointAt 0.8, noProgressSegments 3, judge off (L1/L4/L6, #135)", () => {
     expect(withBudget(undefined, { run: {} }).run)
-      .toEqual({ checkpointAt: 0.8, noProgressSegments: 3, judge: "off" });
+      .toEqual({ maxTurns: 500, maxRoundsPerTurn: 5, checkpointAt: 0.8, noProgressSegments: 3, judge: "off" });
   });
 
   test("run.checkpointAt exige 0 < x < 1 (#135)", () => {

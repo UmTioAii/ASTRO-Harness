@@ -545,9 +545,9 @@ test("rejeita: agent nomeado declarado só no projeto também respeita o teto (#
   )).toThrow(/amplia o teto global de passos \(agents\.coder\.maxSteps: 30 acima do teto 20/);
 });
 
-test("run.maxTurns é recusado em qualquer camada (#515 -> P4)", () => {
+test("legacy run.maxTurns is refused in either layer before reinterpretation (#594)", () => {
   expect(() => effective({ run: { maxTurns: 10 } }, project({})))
-    .toThrow(/run\.maxTurns.*removido/);
+    .toThrow(/run\.maxTurns.*rounds.*turns.*2\.0\.0/);
   expect(() => effective({}, project({ run: { maxTurns: 20 } })))
-    .toThrow(/run\.maxTurns.*removido/);
+    .toThrow(/run\.maxTurns.*rounds.*turns.*2\.0\.0/);
 });

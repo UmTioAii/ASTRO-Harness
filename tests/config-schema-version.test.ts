@@ -49,7 +49,7 @@ describe("ADR-0028 versão do schema", () => {
   test("versão suportada é aceita e preservada", () => {
     const config: AstroConfig = validateConfig(base({ version: CONFIG_SCHEMA_VERSION }));
     expect(config.version).toBe(CONFIG_SCHEMA_VERSION);
-    expect(CONFIG_SCHEMA_VERSION.split(".")[0]).toBe("1");
+    expect(CONFIG_SCHEMA_VERSION.split(".")[0]).toBe("2");
   });
 
   test("versão ausente é legado aceito: version undefined e migratedFrom 0.0.0", () => {
@@ -65,7 +65,7 @@ describe("ADR-0028 versão do schema", () => {
   });
 
   test("major à frente recusa antes de qualquer checagem de chave", () => {
-    const raw = base({ version: "2.0.0", chaveInventada: true });
+    const raw = base({ version: "3.0.0", chaveInventada: true });
     let caught: unknown;
     try {
       validateConfig(raw);
@@ -75,7 +75,7 @@ describe("ADR-0028 versão do schema", () => {
     expect(caught).toBeInstanceOf(ConfigError);
     expect((caught as ConfigError).code).toBe("config_ahead_of_harness");
     const message = (caught as Error).message;
-    expect(message).toContain("2.0.0");
+    expect(message).toContain("3.0.0");
     expect(message).not.toContain("chaveInventada");
   });
 
@@ -127,7 +127,7 @@ describe("ADR-0028 versão do schema", () => {
     const message = (caught as Error).message;
     expect(message).toContain("agent.maxStep");
     expect(message).toContain("astro config migrate");
-    expect(message).toMatch(/major 1/);
+    expect(message).toMatch(/major 2/);
   });
 
   test("chave desconhecida no topo falha com config_unknown_key", () => {
@@ -245,7 +245,7 @@ describe("guarda de migração (ADR-0028)", () => {
     expect(runConfigMigrations(
       { permissions: { mode: "bypass" } },
       0,
-      { 0: () => ({ permissions: { mode: "ask" } }) },
+      { 0: () => ({ permissions: { mode: "ask" } }), 1: (document) => document },
     )).toEqual({ permissions: { mode: "ask" } });
   });
 
@@ -429,7 +429,7 @@ describe("ADR-0028 nas duas camadas (global e projeto)", () => {
 
   test("major à frente na camada de projeto vence o erro de forma (XOR model/profile)", () => {
     const path = tempConfig(base({
-      version: "2.0.0",
+      version: "3.0.0",
       agent: { model: "mock/m1", profile: "p", maxSteps: 1, tools: [] },
     }));
     expect(codeOf(() => loadProjectConfig(path, { env: { ASTRO_NO_GLOBAL_CONFIG: "1" } })))
@@ -439,7 +439,7 @@ describe("ADR-0028 nas duas camadas (global e projeto)", () => {
   test("major à frente na camada global vence o erro de forma", () => {
     const home = mkdtempSync(join(tmpdir(), "astro-config-schema-home-"));
     writeFileSync(join(home, "config.json"), JSON.stringify({
-      version: "2.0.0",
+      version: "3.0.0",
       agent: { model: "p/m", profile: "p" },
     }));
     expect(codeOf(() => validateProjectLayer(base(), envFor(home)))).toBe("config_ahead_of_harness");

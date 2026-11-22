@@ -18,12 +18,13 @@ describe("preset simple/control (#515)", () => {
     expect(cfg.run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 500 });
   });
 
-  test("preset ausente é control e não muda os limites declarados", () => {
+  test("omitted preset keeps the legacy round alias without changing its value", () => {
     const raw = base() as unknown as Record<string, unknown>;
     (raw.agent as Record<string, unknown>).maxSteps = 3;
     const cfg = validateConfig(raw);
-    expect(cfg.preset).toBe("control");
+    expect(cfg.preset).toBe("default");
     expect(cfg.agent.maxSteps).toBe(3);
+    expect(cfg.run).toMatchObject({ maxRoundsPerTurn: 3 });
   });
 
   test("sem limites declarados, os dois presets começam em 500", () => {
@@ -33,10 +34,11 @@ describe("preset simple/control (#515)", () => {
     }
   });
 
-  test("simple fixa 500 sem declarar limite", () => {
+  test("simple loads as the Default alias with 500 rounds", () => {
     const cfg = validateConfig({ ...base(), preset: "simple" });
-    expect(cfg.preset).toBe("simple");
+    expect(cfg.preset).toBe("default");
     expect(cfg.agent.maxSteps).toBe(500);
+    expect(cfg.run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 500 });
   });
 
   test("simple aceita um teto mais restrito vindo de outra camada", () => {
@@ -72,10 +74,17 @@ describe("preset simple/control (#515)", () => {
     expect(() => validateConfig({ ...raised, preset: "simple" })).toThrow(/preset.*control/);
   });
 
-  test("simple recusa run.maxTurns como campo removido", () => {
+  test("Default accepts only the published turn choices", () => {
     const withTurns = base() as unknown as Record<string, unknown>;
+    withTurns.run = { maxTurns: 1000 };
+    expect(validateConfig({ ...withTurns, preset: "simple" }).run).toMatchObject({ maxTurns: 1000 });
     withTurns.run = { maxTurns: 600 };
-    expect(() => validateConfig({ ...withTurns, preset: "simple" })).toThrow(/run\.maxTurns.*removido/);
+    expect(() => validateConfig({ ...withTurns, preset: "simple" })).toThrow(/run\.maxTurns.*250.*500.*1000.*unlimited/);
+  });
+
+  test("Default does not expose the advanced round knob", () => {
+    expect(() => validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } }))
+      .toThrow(/run\.maxRoundsPerTurn.*preset.*control/);
   });
 
   test("simple aceita 500 explícito, que é o próprio teto", () => {
