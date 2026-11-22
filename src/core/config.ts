@@ -2507,6 +2507,10 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
   const shell = root.shell === undefined && legacySandbox === undefined
     ? undefined
     : validateShell(root.shell, legacySandbox);
+  // The current runtime consumes the legacy field; `off` must never fall back to auto.
+  const effectiveTools: ToolsConfig | undefined = shell?.mode === "off"
+    ? { ...tools, run_command: { ...tools?.run_command, sandbox: false } }
+    : tools;
 
   // Validar telemetria (F5-5)
   const telemetry = root.telemetry === undefined ? undefined : validateTelemetry(root.telemetry);
@@ -2552,7 +2556,7 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
   const security = root.security === undefined ? undefined : validateSecurity(root.security);
   const effort = root.effort === undefined ? undefined : validateEffort(root.effort);
 
-  const config: AstroConfig = { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  const config: AstroConfig = { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools: effectiveTools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
   if (checked.preset === undefined || isDerivedPreset(checked)) Object.defineProperty(config, DERIVED_PRESET, { value: true });
   return config;
 }
