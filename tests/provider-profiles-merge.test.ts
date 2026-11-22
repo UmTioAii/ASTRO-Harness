@@ -99,6 +99,16 @@ test("derived limits and presets survive layer merges without false migrations",
   expect(resolve(explicit, { preset: "control" }).preset).toBe("default");
 });
 
+test("default-derived validated global limits do not ceiling project run limits", () => {
+  const global = project("p", "m1", false);
+  for (const maxTurns of [1000, "unlimited"] as const) {
+    const projectLayer = validateConfig({ ...global, version: "2.0.0", run: { maxTurns } });
+    expect(resolveEffectiveConfig({ project: projectLayer, global, store: store(), env: {} }).config.run?.maxTurns).toBe(maxTurns);
+  }
+  const projectLayer = validateConfig({ ...global, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: "unlimited" } });
+  expect(resolveEffectiveConfig({ project: projectLayer, global, store: store(), env: {} }).config.run?.maxRoundsPerTurn).toBe("unlimited");
+});
+
 test("provider do projeto vence perfil global com o mesmo nome", () => {
   const result = resolveEffectiveConfig({
     project: project("same"),
