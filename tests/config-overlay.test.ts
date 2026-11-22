@@ -95,6 +95,7 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     [{ version: "2.0.0", run: { maxTurns: 250 } }, project({ version: "2.0.0", run: { maxTurns: "unlimited" } }), /teto global.*run\.maxTurns/],
     [{ version: "2.0.0", run: { maxRoundsPerTurn: 100 } }, project({ version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 500 } }), /teto global.*run\.maxRoundsPerTurn/],
     [{ version: "2.0.0", run: { maxRoundsPerTurn: 100 } }, project({ version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: "unlimited" } }), /teto global.*run\.maxRoundsPerTurn/],
+    [{ version: "2.0.0", run: { maxRoundsPerTurn: 100 } }, project({ version: "2.0.0", preset: "control", agent: { model: "p/m", maxSteps: 500, tools: ["read_file"] } }), /teto global.*run\.maxRoundsPerTurn/],
     [{ version: "2.0.0", shell: { mode: "off" } }, project({ version: "2.0.0", shell: { mode: "host" } }), /reabre o shell desligado/],
     [{ version: "2.0.0", shell: { mode: "off" } }, project({ version: "2.0.0", tools: { run_command: { sandbox: true } } }), /reabre o shell desligado/],
     [{ version: "2.0.0", tools: { run_command: { sandbox: false } } }, project({ version: "2.0.0", shell: { mode: "host" } }), /reabre o shell desligado/],
