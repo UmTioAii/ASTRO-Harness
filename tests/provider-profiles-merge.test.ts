@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConfig, type AstroConfig } from "../src/core/config";
+import { mergeConfigLayers } from "../src/config-overlay";
 import {
   loadEffectiveConfig,
   profileFromEnv,
@@ -90,6 +91,13 @@ test("validated project defaults survive a global run-layer merge", () => {
 test("validated project defaults do not override an explicit global turn limit", () => {
   const result = resolveEffectiveConfig({ project: project(), global: { version: "2.0.0", run: { maxTurns: 250 } }, store: store(), env: {} });
   expect(result.config.run?.maxTurns).toBe(250);
+});
+
+test("layer merges retain the newest schema without a false legacy migration", () => {
+  const legacy = validateConfig({ ...project(), version: "1.0.0" });
+  const result = resolveEffectiveConfig({ project: legacy, global: { version: "2.0.0", run: { maxTurns: 250 } }, store: store(), env: {} });
+  expect(result.config.run?.maxTurns).toBe(250);
+  expect(mergeConfigLayers({ version: "1.0.0" }, { version: "2.1.0" }).version).toBe("2.1.0");
 });
 
 test("provider do projeto vence perfil global com o mesmo nome", () => {
