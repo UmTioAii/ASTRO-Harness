@@ -102,9 +102,9 @@ test("validated layers preserve declared limits, aliases, presets and versions",
 });
 
 test("explicit project rounds preserve an inherited legacy agent alias", () => {
-  const omitted = project("p", "m1", false);
-  const global = validateConfig({ ...omitted, preset: "control", agent: { model: "p/m1", maxSteps: 200, tools: ["read_file"] } });
-  const layer = validateConfig({ ...omitted, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } });
+  const base = { ...project("p", "m1", false), agent: { model: "p/m1", tools: ["read_file"] }, run: undefined };
+  const global = validateConfig({ ...base, preset: "control", agent: { model: "p/m1", maxSteps: 200, tools: ["read_file"] } });
+  const layer = validateConfig({ ...base, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } });
   expect(effective(layer, global).config).toMatchObject({ agent: { maxSteps: 200 }, run: { maxRoundsPerTurn: 100 } });
 });
 

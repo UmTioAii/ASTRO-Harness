@@ -154,14 +154,22 @@ function validatePreset(value: unknown): Preset {
   if (value === "control") return value;
   return fail('config inválida: "preset" deve ser "default", "simple" ou "control"');
 }
-const DERIVED_PRESET = Symbol("astro.derivedPreset");
+const DERIVED_PRESET = Symbol("astro.derivedPreset"), DERIVED_AGENT_MAX_STEPS = Symbol("astro.derivedAgentMaxSteps");
 const isDerivedPreset = (value: Record<string, unknown>): boolean => (value as Record<symbol, unknown>)[DERIVED_PRESET] === true;
 /** Preserve an omitted preset when already validated configs are used as layers. */
 export function mergeDerivedPresetMetadata(base: Record<string, unknown>, overlay: Record<string, unknown>, merged: Record<string, unknown>): void {
   const before = isDerivedPreset(base), after = isDerivedPreset(overlay);
-  if (!before && !after) return; const useBase = Object.hasOwn(base, "preset") && (!Object.hasOwn(overlay, "preset") || after);
-  if (useBase) merged.preset = base.preset;
-  if ((useBase && before) || (!useBase && after)) Object.defineProperty(merged, DERIVED_PRESET, { value: true });
+  if (before || after) {
+    const useBase = Object.hasOwn(base, "preset") && (!Object.hasOwn(overlay, "preset") || after);
+    if (useBase) merged.preset = base.preset;
+    if ((useBase && before) || (!useBase && after)) Object.defineProperty(merged, DERIVED_PRESET, { value: true });
+  }
+  const baseAgent = nestedSection(base, "agent"), overlayAgent = nestedSection(overlay, "agent");
+  const beforeSteps = hasDerivedAgentMaxSteps(base), afterSteps = hasDerivedAgentMaxSteps(overlay);
+  if (afterSteps && baseAgent?.maxSteps !== undefined && isPlainObject(merged.agent)) merged.agent.maxSteps = baseAgent.maxSteps;
+  if ((afterSteps && (baseAgent?.maxSteps === undefined || beforeSteps)) || (overlayAgent?.maxSteps === undefined && beforeSteps)) {
+    Object.defineProperty(merged, DERIVED_AGENT_MAX_STEPS, { value: true });
+  }
 }
 /**
  * Preset `simple`: teto de 500. Uma camada mais restritiva (global/projeto com
@@ -1348,6 +1356,7 @@ function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "ma
 }
 /** A validated omitted agent default mirrors the derived, non-alias round value. */
 export function hasDerivedAgentMaxSteps(layer: Record<string, unknown>): boolean {
+  if ((layer as Record<symbol, unknown>)[DERIVED_AGENT_MAX_STEPS] === true) return true;
   const run = nestedSection(layer, "run"); return run !== undefined && nestedSection(layer, "agent")?.maxSteps === run.maxRoundsPerTurn
     && isDerivedRunLimit(run, "maxRoundsPerTurn") && derivedRunLimits(run)?.roundAlias !== true;
 }
@@ -2480,6 +2489,7 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
 
   const config: AstroConfig = { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools: effectiveTools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
   if (checked.preset === undefined || isDerivedPreset(checked)) Object.defineProperty(config, DERIVED_PRESET, { value: true });
+  if (nestedSection(checked, "agent")?.maxSteps === undefined || hasDerivedAgentMaxSteps(checked)) Object.defineProperty(config, DERIVED_AGENT_MAX_STEPS, { value: true });
   return config;
 }
 

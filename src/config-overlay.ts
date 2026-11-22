@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, declaredRunLimit, hasDerivedAgentMaxSteps, isPlainObject, mergeDerivedPresetMetadata, mergeDerivedRunLimitMetadata } from "./core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, declaredRunLimit, isPlainObject, mergeDerivedPresetMetadata, mergeDerivedRunLimitMetadata } from "./core/config";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./permissions";
 import { isVaultRef } from "./secrets";
 
@@ -39,11 +39,7 @@ export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record
       merged[key] = next;
     } else merged[key] = value;
   }
-  if (hasDerivedAgentMaxSteps(overlay)) {
-    const maxSteps = isPlainObject(base.agent) ? base.agent.maxSteps : undefined;
-    if (maxSteps !== undefined && isPlainObject(merged.agent)) merged.agent.maxSteps = maxSteps;
-  }
-  mergeDerivedPresetMetadata(base, overlay, merged);
+  if (root) mergeDerivedPresetMetadata(base, overlay, merged);
   return merged;
 }
 
