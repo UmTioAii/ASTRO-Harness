@@ -1367,6 +1367,13 @@ function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "ma
   return metadata !== undefined && Object.hasOwn(metadata, key) && metadata[key] === value[key];
 }
 
+/** A validated omitted agent default mirrors the derived, non-alias round value. */
+export function hasDerivedAgentMaxSteps(layer: Record<string, unknown>): boolean {
+  const run = nestedSection(layer, "run");
+  return run !== undefined && nestedSection(layer, "agent")?.maxSteps === run.maxRoundsPerTurn
+    && isDerivedRunLimit(run, "maxRoundsPerTurn") && derivedRunLimits(run)?.roundAlias !== true;
+}
+
 /** Return only user-declared limits, including the legacy round alias. */
 export function declaredRunLimit(run: Record<string, unknown> | undefined, key: "maxTurns" | "maxRoundsPerTurn"): RunLimit | undefined {
   if (run?.[key] === undefined) return undefined;
@@ -1406,7 +1413,8 @@ export function canonicalizeConfigAliases(document: Record<string, unknown>): Re
     : mode === "host" && (sandbox === false || sandbox === true || sandbox === "docker");
   if (conflict) fail('config invalid: "shell.mode" conflicts with "tools.run_command.sandbox"; remove one alias — nothing was changed');
   const agent = nestedSection(document, "agent"), run = nestedSection(document, "run"), rounds = agent?.maxSteps;
-  if (typeof rounds !== "number" || (document.run !== undefined && run === undefined) || run?.maxRoundsPerTurn !== undefined) return document;
+  if (typeof rounds !== "number" || (document.run !== undefined && run === undefined) || hasDerivedAgentMaxSteps(document)
+    || (run?.maxRoundsPerTurn !== undefined && !isDerivedRunLimit(run, "maxRoundsPerTurn"))) return document;
   const previous = run === undefined ? undefined : derivedRunLimits(run);
   const metadata: DerivedRunLimits = { ...previous, maxRoundsPerTurn: rounds, roundAlias: true, legacyGuards: previous?.legacyGuards ?? run !== undefined };
   return { ...document, run: withDerivedRunLimits({ ...run, maxRoundsPerTurn: rounds }, metadata) };
