@@ -116,6 +116,8 @@ test("projeto pode endurecer o sandbox global (auto → Docker/desligado), mas a
     project({ tools: { run_command: { sandbox: false } } }),
   ).config;
   expect(disabled.tools?.run_command?.sandbox).toBe(false);
+  const disabledByMode = effective({ tools: { run_command: { sandbox: "auto" } } }, project({ version: "2.0.0", shell: { mode: "off" } })).config;
+  expect(disabledByMode.tools?.run_command?.sandbox).toBe(false);
   // Global ausente = auto (default); o projeto pode declarar Docker e herda auto sem declarar.
   const fromDefault = effective(undefined, project({ tools: { run_command: { sandbox: "docker" } } })).config;
   expect(fromDefault.tools?.run_command?.sandbox).toBe("docker");
