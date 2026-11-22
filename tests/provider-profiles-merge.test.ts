@@ -109,6 +109,15 @@ test("default-derived validated global limits do not ceiling project run limits"
   expect(resolveEffectiveConfig({ project: projectLayer, global, store: store(), env: {} }).config.run?.maxRoundsPerTurn).toBe("unlimited");
 });
 
+test("an omitted project maxSteps inherits the explicit global round alias", () => {
+  for (const maxSteps of [100, 1000]) {
+    const global = validateConfig({ ...project("p", "m1", false), agent: { model: "p/m1", maxSteps, tools: ["read_file"] } });
+    const result = resolveEffectiveConfig({ project: project("p", "m1", false), global, store: store(), env: {} });
+    expect(result.config.agent.maxSteps).toBe(maxSteps);
+    expect(result.config.run?.maxRoundsPerTurn).toBe(maxSteps);
+  }
+});
+
 test("provider do projeto vence perfil global com o mesmo nome", () => {
   const result = resolveEffectiveConfig({
     project: project("same"),
