@@ -101,6 +101,12 @@ test("validated layers preserve declared limits, aliases, presets and versions",
   expect(effective(omitted).warnings.join(" ")).not.toMatch(/agent\.maxSteps/);
 });
 
+test("validated projects inherit legacy global shell restrictions", () => {
+  for (const sandbox of [false, "docker"] as const) {
+    expect(effective(project("p", "m1", false), { tools: { run_command: { sandbox } } }).config.tools?.run_command?.sandbox).toBe(sandbox);
+  }
+});
+
 test("provider do projeto vence perfil global com o mesmo nome", () => {
   const result = resolveEffectiveConfig({
     project: project("same"),
