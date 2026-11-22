@@ -117,6 +117,17 @@ export function assertNarrowed(
   const mainAfter = isPlainObject(merged.agent) ? merged.agent : undefined;
   const mainCeiling = typeof main?.maxSteps === "number" ? main.maxSteps : BASELINE_MAX_STEPS;
   if (mainAfter !== undefined) assertStepsCeiling(mainAfter.maxSteps, "agent.maxSteps", mainCeiling);
+  const globalRun = isPlainObject(global.run) ? global.run : undefined;
+  const mergedRun = isPlainObject(merged.run) ? merged.run : undefined;
+  if (typeof globalRun?.maxTurns === "number") {
+    assertStepsCeiling(mergedRun?.maxTurns, "run.maxTurns", globalRun.maxTurns);
+  }
+  const globalRoundLimit = globalRun?.maxRoundsPerTurn;
+  const roundCeiling = typeof globalRoundLimit === "number" ? globalRoundLimit : mainCeiling;
+  const hasGlobalRoundCeiling = globalRoundLimit !== undefined || typeof main?.maxSteps === "number";
+  if (hasGlobalRoundCeiling && globalRoundLimit !== "unlimited") {
+    assertStepsCeiling(mergedRun?.maxRoundsPerTurn, "run.maxRoundsPerTurn", roundCeiling);
+  }
   if (main !== undefined && mainAfter !== undefined) assertAgentNarrowed(main, mainAfter, "do agent principal");
   const named = isPlainObject(global.agents) ? global.agents : {};
   const namedAfter = isPlainObject(merged.agents) ? merged.agents : {};
@@ -292,7 +303,7 @@ function assertAgentNarrowed(globalAgent: Record<string, unknown>, mergedAgent: 
 
 /** Teto de passos (#473): o valor mesclado não pode passar do teto (global ou padrão embutido). */
 function assertStepsCeiling(steps: unknown, field: string, ceiling: number): void {
-  if (typeof steps === "number" && steps > ceiling) {
+  if (steps === "unlimited" || (typeof steps === "number" && steps > ceiling)) {
     throw new ConfigError(
       `config inválida: o projeto amplia o teto global de passos (${field}: ${steps} acima do teto ${ceiling})`,
     );
