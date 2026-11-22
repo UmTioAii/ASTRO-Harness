@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, isPlainObject } from "./core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, isPlainObject, mergeDerivedRunLimitMetadata } from "./core/config";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./permissions";
 import { isVaultRef } from "./secrets";
 
@@ -32,6 +32,7 @@ export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record
       // intacto para a validação.
       if (value.model !== undefined && value.profile === undefined) delete (next as Record<string, unknown>).profile;
       else if (value.profile !== undefined && value.model === undefined) delete (next as Record<string, unknown>).model;
+      if (key === "run") mergeDerivedRunLimitMetadata(current, value, next);
       merged[key] = next;
     } else merged[key] = value;
   }

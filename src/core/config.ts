@@ -1369,9 +1369,31 @@ function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "ma
   return metadata !== undefined && Object.hasOwn(metadata, key) && metadata[key] === value[key];
 }
 
-function withDerivedRunLimits(config: RunConfig, metadata: DerivedRunLimits): RunConfig {
-  Object.defineProperty(config, DERIVED_RUN_LIMITS, { value: metadata });
+function withDerivedRunLimits<T extends object>(config: T, metadata: DerivedRunLimits): T {
+  Object.defineProperty(config, DERIVED_RUN_LIMITS, { value: metadata, enumerable: true });
   return config;
+}
+
+/** Preserve per-field provenance when raw and already validated run layers are merged. */
+export function mergeDerivedRunLimitMetadata(
+  base: Record<string, unknown>,
+  overlay: Record<string, unknown>,
+  merged: Record<string, unknown>,
+): void {
+  const before = derivedRunLimits(base);
+  const after = derivedRunLimits(overlay);
+  if (before === undefined && after === undefined) return;
+  const metadata: DerivedRunLimits = {
+    legacyGuards: (before?.legacyGuards ?? true) || (after?.legacyGuards ?? true),
+  };
+  for (const key of ["maxTurns", "maxRoundsPerTurn"] as const) {
+    const source = Object.hasOwn(overlay, key) ? overlay : base;
+    const derived = Object.hasOwn(overlay, key) ? after : before;
+    if (derived !== undefined && Object.hasOwn(derived, key) && derived[key] === source[key]) {
+      metadata[key] = source[key] as RunLimit;
+    }
+  }
+  withDerivedRunLimits(merged, metadata);
 }
 
 /** Validate limits without activating legacy loop guards for an omitted `run` section. */
