@@ -52,6 +52,8 @@ describe("budget config (F-05, #132 parte 1)", () => {
 
   test("schema 2 accepts turn and round limits without changing loop guards", () => {
     expect(withBudget(undefined, { version: "2.0.0", preset: "control", run: { maxTurns: 250, maxRoundsPerTurn: 100 } }).run).toMatchObject({ maxTurns: 250, maxRoundsPerTurn: 100, checkpointAt: 0.8, noProgressSegments: 3, judge: "off" });
+    expect(withBudget(undefined).run).toEqual({ maxTurns: 500, maxRoundsPerTurn: 5 });
+    expect(withBudget(undefined, { version: "2.0.0", preset: "control", run: { maxTurns: "unlimited", maxRoundsPerTurn: "unlimited" } }).run).toMatchObject({ maxTurns: "unlimited", maxRoundsPerTurn: "unlimited" });
   });
 
   test("run aplica defaults checkpointAt 0.8, noProgressSegments 3, judge off (L1/L4/L6, #135)", () => {
