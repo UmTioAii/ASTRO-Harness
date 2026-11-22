@@ -1031,6 +1031,15 @@ export function resolveEffectiveConfig(input: {
     agent: pooled ? agentSansModel : { ...agent, model: modelRef },
     ...(agentsSansModel === undefined ? {} : { agents: agentsSansModel }),
   });
+  if (isPlainObject(declared.agent) && declared.agent.maxSteps !== undefined) {
+    warnings.push('agent.maxSteps is a legacy alias of run.maxRoundsPerTurn; use the new key in schema 2.0.0 (the file was not rewritten)');
+  }
+  const declaredSandbox = isPlainObject(declared.tools) && isPlainObject(declared.tools.run_command)
+    ? declared.tools.run_command.sandbox
+    : undefined;
+  if (declaredSandbox !== undefined) {
+    warnings.push('tools.run_command.sandbox is a legacy alias of shell.mode; use shell.mode in schema 2.0.0 (the file was not rewritten)');
+  }
   const projectProviders = project === undefined ? [] : Object.keys(isPlainObject(project.providers) ? project.providers : {});
   const providerSource: ProviderSource = projectProviders.includes(activeProvider)
     ? "project"

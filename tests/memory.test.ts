@@ -510,6 +510,7 @@ describe("memória: system prompt de agent nomeado (review #579)", () => {
     try {
       const configPath = join(cwd, "astro.config.json");
       writeFileSync(configPath, JSON.stringify({
+        preset: "control",
         providers: { mock: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "TEST_KEY" } },
         models: [{ provider: "mock", id: "mock-1", tags: ["writing-code"], context: 4096 }],
         agent: { model: "mock/mock-1", maxSteps: 2, tools: [], entryAgent: "planner" },

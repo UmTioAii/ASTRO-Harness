@@ -76,6 +76,7 @@ describe("preset simple/control (#515)", () => {
 
   test("Default accepts only the published turn choices", () => {
     const withTurns = base() as unknown as Record<string, unknown>;
+    withTurns.version = "2.0.0";
     withTurns.run = { maxTurns: 1000 };
     expect(validateConfig({ ...withTurns, preset: "simple" }).run).toMatchObject({ maxTurns: 1000 });
     withTurns.run = { maxTurns: 600 };

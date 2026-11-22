@@ -122,6 +122,7 @@ describe("config agents.permission (#58)", () => {
   };
   const withPlan = (plan: Record<string, unknown>) => validateConfig({
     ...structuredClone(valid),
+    preset: "control",
     agents: { maxActive: 1, plan: { model: "openai/gpt-4o-mini", tools: ["read_file"], ...plan } },
   });
 

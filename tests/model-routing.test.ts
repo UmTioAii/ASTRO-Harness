@@ -22,12 +22,14 @@ const response = (content: string): CompletionResponse => ({
 });
 
 const fixture: {
+  preset: "control";
   providers: Record<string, unknown>;
   models: Array<Record<string, unknown>>;
   agent: Record<string, unknown>;
   agents: { plan: Record<string, unknown> } & Record<string, unknown>;
   paths: Record<string, string>;
 } = {
+  preset: "control",
   providers: {
     p: { kind: "openai-compat", baseUrl: "https://example.test/v1", credentialRef: "P_KEY" },
     q: { kind: "openai-compat", baseUrl: "https://example.test/v1", credentialRef: "Q_KEY" },

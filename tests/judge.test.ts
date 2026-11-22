@@ -333,6 +333,7 @@ describe("wiring no app (#450)", () => {
     } });
     try {
       writeFileSync(join(cwd, "astro.config.json"), JSON.stringify({
+        preset: "control",
         providers: { openai: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
         models: [{ provider: "openai", id: "m1", tags: ["writing-code"], context: 8192 }],
         agent: { model: "openai/m1", maxSteps: 2, tools: [], entryAgent: "planner" },

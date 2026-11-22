@@ -138,12 +138,12 @@ export const DEFAULT_AGENT_TOOLS: readonly string[] = [
  * Preset de configuração (#515): `simple` fixa os passos em 500 por tarefa e
  * não aceita esse knob; `control` expõe `agent.maxSteps`.
  */
-export type Preset = "simple" | "control";
+export type Preset = "default" | "simple" | "control";
 
-export const PRESETS: readonly Preset[] = ["simple", "control"];
+export const PRESETS: readonly Preset[] = ["default", "simple", "control"];
 
-/** Preset quando a config não declara nada: compatível com configs anteriores. */
-export const DEFAULT_PRESET: Preset = "control";
+/** Product profile used when the config does not declare one. */
+export const DEFAULT_PRESET: Preset = "default";
 
 /** Limite do preset `simple` (#515). */
 export const SIMPLE_MAX_STEPS = 500;
@@ -151,8 +151,9 @@ export const SIMPLE_MAX_STEPS = 500;
 /** Valida `preset`; desconhecido falha em vez de cair no default. */
 function validatePreset(value: unknown): Preset {
   if (value === undefined) return DEFAULT_PRESET;
-  if (value === "simple" || value === "control") return value;
-  return fail('config inválida: "preset" deve ser "simple" ou "control"');
+  if (value === "default" || value === "simple") return "default";
+  if (value === "control") return value;
+  return fail('config inválida: "preset" deve ser "default", "simple" ou "control"');
 }
 
 /**
@@ -162,10 +163,12 @@ function validatePreset(value: unknown): Preset {
 function applySimplePreset(root: Record<string, unknown>): Record<string, unknown> {
   const check = (field: string, value: unknown): void => {
     if (value === undefined) return;
-    if (typeof value === "number" && Number.isInteger(value) && value > 0 && value <= SIMPLE_MAX_STEPS) return;
+    // The regular validator owns type/range errors; the profile only enforces its ceiling.
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) return;
+    if (value <= SIMPLE_MAX_STEPS) return;
     fail(
       `config inválida: "${field}" só pode ser alterado com "preset": "control" ` +
-        `(no simple o teto é ${SIMPLE_MAX_STEPS})`,
+        `(no Default o teto é ${SIMPLE_MAX_STEPS})`,
     );
   };
 
@@ -199,6 +202,13 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
     : undefined;
   controlOnly("team.sessionBudgetUsd", team?.sessionBudgetUsd);
   controlOnly("team.weekBudgetUsd", team?.weekBudgetUsd);
+
+  const run = root.run !== null && typeof root.run === "object"
+    ? (root.run as Record<string, unknown>)
+    : undefined;
+  if (run === undefined || !isDerivedRunLimit(run, "maxRoundsPerTurn")) {
+    controlOnly("run.maxRoundsPerTurn", run?.maxRoundsPerTurn);
+  }
 
   // Só injeta quando `agent` é objeto: entrada de tipo errado segue para o
   // validador normal, que reporta a causa certa (nunca mascara o erro).
@@ -238,9 +248,10 @@ export interface RunCommandToolConfig {
   sandbox?: boolean | "auto" | "docker";
 }
 
-/** Shell do host (#474): `shell.default` escolhido por `/shell`, só se presente. */
+/** Host shell selection; `mode` is the schema 2 replacement for `sandbox`. */
 export interface ShellConfig {
   default?: string;
+  mode?: "host" | "off";
 }
 
 /** Telemetria opt-in (F5-5): métricas anônimas por run; off por default. */
@@ -283,15 +294,21 @@ export interface BudgetConfig {
   hardCeilingUsd?: number;
 }
 
-/** Seção `run` (Q-01/L1/L4/L5/L6, ADR-0014): guardas do loop. */
+export type RunLimit = number | "unlimited";
+
+/** Session limits always exist; legacy loop guards require an explicit `run` section. */
 export interface RunConfig {
-  /** Fração do limite de passos em que o checkpoint é gravado (L5); default 0.8. */
-  checkpointAt: number;
-  /** Segmentos consecutivos sem mudança que disparam a pausa (L6); default 3. */
-  noProgressSegments: number;
-  /** Judge do loop (L4, #450): `off` (default), `on` a cada conclusão ou `auto` por sinal. */
-  judge: JudgeMode;
-  /** Comando de teste do projeto (F-15, #538): argv, nunca string de shell. Ausente = sem auto-detecção. */
+  /** Maximum user turns in a chat session. */
+  maxTurns: RunLimit;
+  /** Maximum model/tool rounds within one turn. */
+  maxRoundsPerTurn: RunLimit;
+  /** Fraction of the round limit at which a checkpoint is written. */
+  checkpointAt?: number;
+  /** Consecutive unchanged segments that pause the loop. */
+  noProgressSegments?: number;
+  /** Loop judge: off, on every completion, or automatic by signal. */
+  judge?: JudgeMode;
+  /** Project test command as argv; absent means no auto-detection. */
   tests?: RunTestsConfig;
 }
 
@@ -1326,16 +1343,65 @@ function validateRunTests(value: unknown): RunTestsConfig {
   return { command, timeoutMs };
 }
 
-/** Valida a seção opcional `run` (Q-01/L1, ADR-0014): guardas do loop. `maxTurns` foi removido (P4). */
-function validateRun(value: unknown): RunConfig {
-  const raw = expectObject(value, "run");
-  if (raw.maxTurns !== undefined) {
-    fail(
-      'config inválida: "run.maxTurns" foi removido; o limite de trabalho é contado em passos - ' +
-        'use "agent.maxSteps" (tarefa/agente) e "budget" para teto de custo. O bloco "run" continua dono de ' +
-        '"checkpointAt", "noProgressSegments" e "judge": mantenha-o (ex.: "run": {}) em vez de apagar a seção',
-    );
-  }
+function validateRunLimit(value: unknown, field: string, choices: readonly number[]): RunLimit {
+  if (value === "unlimited") return value;
+  if (typeof value === "number" && choices.includes(value)) return value;
+  return fail(`config inválida: "${field}" deve ser ${choices.join(" / ")} / unlimited`);
+}
+
+interface DerivedRunLimits {
+  maxTurns?: RunLimit;
+  maxRoundsPerTurn?: RunLimit;
+  legacyGuards: boolean;
+}
+
+/** Non-serializable metadata makes validation idempotent without weakening raw input checks. */
+const DERIVED_RUN_LIMITS = Symbol("astro.derivedRunLimits");
+
+function derivedRunLimits(value: Record<string, unknown>): DerivedRunLimits | undefined {
+  const metadata = (value as Record<symbol, unknown>)[DERIVED_RUN_LIMITS];
+  return isPlainObject(metadata) && typeof metadata.legacyGuards === "boolean"
+    ? metadata as unknown as DerivedRunLimits
+    : undefined;
+}
+
+function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "maxRoundsPerTurn"): boolean {
+  const metadata = derivedRunLimits(value);
+  return metadata !== undefined && Object.hasOwn(metadata, key) && metadata[key] === value[key];
+}
+
+function withDerivedRunLimits(config: RunConfig, metadata: DerivedRunLimits): RunConfig {
+  Object.defineProperty(config, DERIVED_RUN_LIMITS, { value: metadata });
+  return config;
+}
+
+/** Validate limits without activating legacy loop guards for an omitted `run` section. */
+function validateRun(value: unknown, legacyRounds: number): RunConfig {
+  const omitted = value === undefined;
+  const raw = omitted ? {} : expectObject(value, "run");
+  const previous = derivedRunLimits(raw);
+  const turnsDerived = raw.maxTurns === undefined || isDerivedRunLimit(raw, "maxTurns");
+  const roundsDerived = raw.maxRoundsPerTurn === undefined || isDerivedRunLimit(raw, "maxRoundsPerTurn");
+  const maxTurns = raw.maxTurns === undefined
+    ? 500
+    : turnsDerived
+      ? raw.maxTurns as RunLimit
+      : validateRunLimit(raw.maxTurns, "run.maxTurns", [250, 500, 1000]);
+  const maxRoundsPerTurn = raw.maxRoundsPerTurn === undefined
+    ? legacyRounds
+    : roundsDerived
+      ? raw.maxRoundsPerTurn as RunLimit
+      : validateRunLimit(raw.maxRoundsPerTurn, "run.maxRoundsPerTurn", [100, 200, 500]);
+  const declaresGuard = ["checkpointAt", "noProgressSegments", "judge", "tests"]
+    .some((key) => Object.hasOwn(raw, key));
+  const legacyGuards = omitted ? false : previous === undefined || previous.legacyGuards || declaresGuard;
+  const metadata: DerivedRunLimits = {
+    ...(turnsDerived ? { maxTurns } : {}),
+    ...(roundsDerived ? { maxRoundsPerTurn } : {}),
+    legacyGuards,
+  };
+  if (!legacyGuards) return withDerivedRunLimits({ maxTurns, maxRoundsPerTurn }, metadata);
+
   const checkpointAt = raw.checkpointAt === undefined ? 0.8 : expectNonNegativeNumber(raw.checkpointAt, "run.checkpointAt");
   if (checkpointAt <= 0 || checkpointAt >= 1) {
     fail('config inválida: "run.checkpointAt" deve estar entre 0 e 1 (exclusivo)');
@@ -1347,7 +1413,10 @@ function validateRun(value: unknown): RunConfig {
     fail('config inválida: "run.judge" deve ser "off", "on" ou "auto"');
   }
   const tests = raw.tests === undefined ? undefined : validateRunTests(raw.tests);
-  return { checkpointAt, noProgressSegments, judge, ...(tests === undefined ? {} : { tests }) };
+  return withDerivedRunLimits(
+    { maxTurns, maxRoundsPerTurn, checkpointAt, noProgressSegments, judge, ...(tests === undefined ? {} : { tests }) },
+    metadata,
+  );
 }
 
 /** Defaults da seção `attachments` (ADR-0026, #392). */
@@ -1596,12 +1665,12 @@ function validateTools(value: unknown): ToolsConfig {
   return result;
 }
 
-/** Valida `shell` (#474): só o vocabulário de `host-shell.ts` entra; ausente é válido. */
-function validateShell(value: unknown): ShellConfig {
-  const raw = expectObject(value, "shell");
+/** Validate shell selection and derive `shell.mode` from the legacy sandbox flag in memory. */
+function validateShell(value: unknown, legacySandbox?: boolean | "auto" | "docker"): ShellConfig {
+  const raw = value === undefined ? {} : expectObject(value, "shell");
   const result: ShellConfig = Object.create(null);
   for (const key of Object.keys(raw)) {
-    if (key !== "default") fail(`config inválida: "shell.${key}" desconhecido`);
+    if (key !== "default" && key !== "mode") fail(`config inválida: "shell.${key}" desconhecido`);
   }
   if (raw.default !== undefined) {
     const shell = expectString(raw.default, "shell.default");
@@ -1609,6 +1678,11 @@ function validateShell(value: unknown): ShellConfig {
       fail(`config inválida: "shell.default" deve ser ${HOST_SHELLS.join(", ")} (recebido: "${shell}")`);
     }
     result.default = shell;
+  }
+  const mode = raw.mode ?? (legacySandbox === undefined ? undefined : legacySandbox === false ? "off" : "host");
+  if (mode !== undefined) {
+    if (mode !== "host" && mode !== "off") fail('config inválida: "shell.mode" deve ser "host" ou "off"');
+    result.mode = mode;
   }
   return result;
 }
@@ -1724,7 +1798,7 @@ function validateWebSearch(value: unknown): WebSearchConfig {
  * validação), minor soma chave opcional retrocompatível, patch só corrige
  * mensagem. O alvo hoje é o major 1.
  */
-export const CONFIG_SCHEMA_VERSION = "1.0.0";
+export const CONFIG_SCHEMA_VERSION = "2.0.0";
 
 const CONFIG_SCHEMA_MAJOR = Number(CONFIG_SCHEMA_VERSION.split(".")[0]);
 
@@ -1749,6 +1823,7 @@ const CONFIG_KEYS_V1: readonly string[] = [
 export const CONFIG_KEYS: Readonly<Record<number, readonly string[]>> = Object.freeze({
   0: CONFIG_KEYS_V1,
   1: CONFIG_KEYS_V1,
+  2: CONFIG_KEYS_V1,
 });
 
 /** Forma de uma seção para a checagem de chave desconhecida (ADR-0028). */
@@ -1816,14 +1891,14 @@ const CONFIG_SHAPE: ConfigShape = {
       values: { keys: NAMED_AGENT_KEYS, children: { modelRouting: { keys: ["cheapModel", "strongModel"] } } },
     },
     tools: { keys: ["run_command"], children: { run_command: { keys: ["sandbox"] } } },
-    shell: { keys: ["default"] },
+    shell: { keys: ["default", "mode"] },
     telemetry: { keys: ["enabled", "endpoint", "sampleRate"] },
     quota: { values: { keys: QUOTA_KEYS } },
     budget: { keys: ["scope", "limitUsd", "warnAt", "onExceed", "hardCeilingUsd"] },
     run: {
       // `maxTurns` é chave removida no P4: `validateRun` responde com a migração
       // para `agent.maxSteps` (não é typo, então não vira config_unknown_key).
-      keys: ["checkpointAt", "noProgressSegments", "judge", "tests", "maxTurns"],
+      keys: ["checkpointAt", "noProgressSegments", "judge", "tests", "maxTurns", "maxRoundsPerTurn"],
       children: { tests: { keys: ["command", "timeoutMs"] } },
     },
     attachments: {
@@ -2109,7 +2184,7 @@ export function migrationSecurityProblem(
   return undefined;
 }
 
-export type ConfigMigrationStep = (document: Record<string, unknown>) => Record<string, unknown>;
+export type ConfigMigrationStep = (document: Record<string, unknown>, source?: string) => Record<string, unknown>;
 
 /**
  * Major 0 -> 1: o major 1 só endurece a validação das seções de forma fixa, sem
@@ -2120,9 +2195,23 @@ function migrateV0ToV1(document: Record<string, unknown>): Record<string, unknow
   return document;
 }
 
+/** Schema 1 maxTurns meant rounds; schema 2 reuses the name for turns, so confirmation is mandatory. */
+function migrateV1ToV2(document: Record<string, unknown>, source?: string): Record<string, unknown> {
+  const run = nestedSection(document, "run");
+  if (run !== undefined && Object.hasOwn(run, "maxTurns") && !isDerivedRunLimit(run, "maxTurns")) {
+    throw new ConfigError(
+      `${configLabel(source)}: "run.maxTurns" meant model/tool rounds in schema 1.x but means chat turns in schema 2.0.0; ` +
+        'confirm the new meaning and set version: "2.0.0" explicitly — nothing was changed',
+      "config_migration_required",
+    );
+  }
+  return document;
+}
+
 /** Passo puro `n -> n+1`; falta de passo é `config_migration_required`, nunca adivinha. */
 const CONFIG_MIGRATIONS: Readonly<Record<number, ConfigMigrationStep>> = Object.freeze({
   0: migrateV0ToV1,
+  1: migrateV1ToV2,
 });
 
 /**
@@ -2146,7 +2235,7 @@ export function runConfigMigrations(
         "config_migration_required",
       );
     }
-    const next = step(current);
+    const next = step(current, source);
     const problem = migrationSecurityProblem(current, next);
     if (problem !== undefined) {
       throw new ConfigError(
@@ -2258,7 +2347,7 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
   const preset = validatePreset(checked.preset);
   // #515: simple fixa os limites antes da validação normal; control ganha 500
   // turnos quando não declara nenhum.
-  const root = preset === "simple" ? applySimplePreset(checked) : checked;
+  const root = preset === "control" ? checked : applySimplePreset(checked);
 
   const providersRaw = expectObject(root.providers, "providers");
   const providers: Record<string, ProviderConfig> = Object.create(null);
@@ -2355,8 +2444,11 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
 
   // Validar seção tools (F4-6)
   const tools = root.tools === undefined ? undefined : validateTools(root.tools);
-  // Shell do host (#474): só o vocabulário; ausente = ordem da plataforma.
-  const shell = root.shell === undefined ? undefined : validateShell(root.shell);
+  // The legacy sandbox value becomes shell.mode only in memory; the file is never rewritten.
+  const legacySandbox = tools?.run_command?.sandbox;
+  const shell = root.shell === undefined && legacySandbox === undefined
+    ? undefined
+    : validateShell(root.shell, legacySandbox);
 
   // Validar telemetria (F5-5)
   const telemetry = root.telemetry === undefined ? undefined : validateTelemetry(root.telemetry);
@@ -2385,7 +2477,7 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
 
   // Budget (B1–B10) e guardas do loop (Q-01/L2)
   const budget = root.budget === undefined ? undefined : validateBudget(root.budget);
-  const run = root.run === undefined ? undefined : validateRun(root.run);
+  const run = validateRun(root.run, agent.maxSteps);
 
   // Servidores MCP (C2, #56): ausente = nenhum servidor
   const mcpServers = root.mcpServers === undefined ? undefined : validateMcpServers(root.mcpServers);
@@ -2402,7 +2494,7 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
   const security = root.security === undefined ? undefined : validateSecurity(root.security);
   const effort = root.effort === undefined ? undefined : validateEffort(root.effort);
 
-  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), ...(run === undefined ? {} : { run }), ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
 }
 
 /** Lê o JSON cru de um config, sem validar (o merge por camadas vem antes). */

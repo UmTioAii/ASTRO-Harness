@@ -20,10 +20,11 @@ test("bun src/cli.ts chat roda um turno e encerra com /exit", async () => {
   try {
     const configPath = join(cwd, "astro.config.json");
     writeFileSync(configPath, JSON.stringify({
+      version: "2.0.0",
       providers: { p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
       models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192,
         price: { inputPerM: 1, outputPerM: 1, fonte: "t", verificado: false } }],
-      agent: { model: "p/m1", maxSteps: 2, tools: [] },
+      agent: { model: "p/m1", tools: [] },
       paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
     }));
     const proc = Bun.spawn(["bun", "src/cli.ts", "chat", "--config", configPath, "--cwd", cwd], {
@@ -101,9 +102,10 @@ test("erro de provider não encerra o REPL e aceita /exit", async () => {
   try {
     const configPath = join(cwd, "astro.config.json");
     writeFileSync(configPath, JSON.stringify({
+      version: "2.0.0",
       providers: { p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
       models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
-      agent: { model: "p/m1", maxSteps: 2, tools: [] },
+      agent: { model: "p/m1", tools: [] },
       paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
     }));
     const proc = Bun.spawn(["bun", "src/cli.ts", "chat", "--config", configPath, "--cwd", cwd], {

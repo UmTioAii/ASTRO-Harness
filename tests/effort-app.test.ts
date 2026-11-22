@@ -96,6 +96,7 @@ describe("escalada em runTask (#451)", () => {
     });
     const configPath = join(cwd, "astro.config.json");
     writeFileSync(configPath, JSON.stringify(base(cwd, server.port!, {
+      preset: "control",
       agent: { model: "mock/m", maxSteps: 5, tools: ["task", "write_file"], entryAgent: "planner" },
       agents: {
         maxActive: 1,
