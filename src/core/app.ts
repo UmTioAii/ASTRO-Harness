@@ -1114,8 +1114,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           ? {}
           : {
               checkpointAt: config.run.checkpointAt,
-              noProgressSegments: config.run.noProgressSegments!,
-              ...(config.run.judge === undefined || config.run.judge === "off" ? {} : { judge: config.run.judge }),
+              noProgressSegments: config.run.noProgressSegments,
+              ...(config.run.judge === "off" ? {} : { judge: config.run.judge }),
             }),
         ...(opts.onNoProgress === undefined ? {} : { onNoProgress: opts.onNoProgress }),
         ...(config.effort === undefined ? {} : { effort: config.effort }),
@@ -1221,7 +1221,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         taskHash: shortTaskHash(opts.task),
         ...(config.run?.checkpointAt === undefined
           ? {}
-          : { checkpointAt: config.run.checkpointAt, noProgressSegments: config.run.noProgressSegments! }),
+          : { checkpointAt: config.run.checkpointAt, noProgressSegments: config.run.noProgressSegments }),
         ...(opts.onNoProgress === undefined ? {} : { onNoProgress: opts.onNoProgress }),
         ...(config.effort === undefined ? {} : { effort: config.effort }),
         ...(tracer === undefined ? {} : { tracer }),
@@ -1286,8 +1286,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
             ? {}
             : {
                 checkpointAt: config.run.checkpointAt,
-                noProgressSegments: config.run.noProgressSegments!,
-                ...(config.run.judge === undefined || config.run.judge === "off" ? {} : { judge: config.run.judge }),
+                noProgressSegments: config.run.noProgressSegments,
+                ...(config.run.judge === "off" ? {} : { judge: config.run.judge }),
               }),
           ...(opts.onNoProgress === undefined ? {} : { onNoProgress: opts.onNoProgress }),
           ...(config.effort === undefined ? {} : { effort: config.effort }),

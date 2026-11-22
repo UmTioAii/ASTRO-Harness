@@ -142,7 +142,6 @@ export type Preset = "default" | "simple" | "control";
 
 export const PRESETS: readonly Preset[] = ["default", "simple", "control"];
 
-/** Product profile used when the config does not declare one. */
 export const DEFAULT_PRESET: Preset = "default";
 
 /** Limite do preset `simple` (#515). */
@@ -157,13 +156,10 @@ function validatePreset(value: unknown): Preset {
 }
 
 const DERIVED_PRESET = Symbol("astro.derivedPreset");
-const isDerivedPreset = (value: Record<string, unknown>): boolean =>
-  (value as Record<symbol, unknown>)[DERIVED_PRESET] === true;
+const isDerivedPreset = (value: Record<string, unknown>): boolean => (value as Record<symbol, unknown>)[DERIVED_PRESET] === true;
 
 /** Preserve an omitted preset when already validated configs are used as layers. */
-export function mergeDerivedPresetMetadata(
-  base: Record<string, unknown>, overlay: Record<string, unknown>, merged: Record<string, unknown>,
-): void {
+export function mergeDerivedPresetMetadata(base: Record<string, unknown>, overlay: Record<string, unknown>, merged: Record<string, unknown>): void {
   const before = isDerivedPreset(base);
   const after = isDerivedPreset(overlay);
   if (!before && !after) return;
@@ -180,8 +176,7 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
   const check = (field: string, value: unknown): void => {
     if (value === undefined) return;
     // The regular validator owns type/range errors; the profile only enforces its ceiling.
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) return;
-    if (value <= SIMPLE_MAX_STEPS) return;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value <= SIMPLE_MAX_STEPS) return;
     fail(
       `config inválida: "${field}" só pode ser alterado com "preset": "control" ` +
         `(no Default o teto é ${SIMPLE_MAX_STEPS})`,
@@ -219,12 +214,8 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
   controlOnly("team.sessionBudgetUsd", team?.sessionBudgetUsd);
   controlOnly("team.weekBudgetUsd", team?.weekBudgetUsd);
 
-  const run = root.run !== null && typeof root.run === "object"
-    ? (root.run as Record<string, unknown>)
-    : undefined;
-  if (run === undefined || !isDerivedRunLimit(run, "maxRoundsPerTurn")) {
-    controlOnly("run.maxRoundsPerTurn", run?.maxRoundsPerTurn);
-  }
+  const run = nestedSection(root, "run");
+  if (run === undefined || !isDerivedRunLimit(run, "maxRoundsPerTurn")) controlOnly("run.maxRoundsPerTurn", run?.maxRoundsPerTurn);
 
   // Só injeta quando `agent` é objeto: entrada de tipo errado segue para o
   // validador normal, que reporta a causa certa (nunca mascara o erro).
@@ -312,20 +303,14 @@ export interface BudgetConfig {
 export type RunLimit = number | "unlimited";
 
 /** Session limits always exist; legacy loop guards require an explicit `run` section. */
-export interface RunConfig {
-  /** Maximum user turns in a chat session. */
+export type RunConfig = {
   maxTurns: RunLimit;
-  /** Maximum model/tool rounds within one turn. */
   maxRoundsPerTurn: RunLimit;
-  /** Fraction of the round limit at which a checkpoint is written. */
-  checkpointAt?: number;
-  /** Consecutive unchanged segments that pause the loop. */
-  noProgressSegments?: number;
-  /** Loop judge: off, on every completion, or automatic by signal. */
-  judge?: JudgeMode;
-  /** Project test command as argv; absent means no auto-detection. */
   tests?: RunTestsConfig;
-}
+} & (
+  | { checkpointAt: number; noProgressSegments: number; judge: JudgeMode }
+  | { checkpointAt?: undefined; noProgressSegments?: undefined; judge?: undefined }
+);
 
 /** Seção `attachments` (ADR-0026, #392): imagem, diretório e artifact store. */
 export interface AttachmentsConfig {
@@ -1365,10 +1350,8 @@ function validateRunLimit(value: unknown, field: string, choices: readonly numbe
 }
 
 interface DerivedRunLimits {
-  maxTurns?: RunLimit;
-  maxRoundsPerTurn?: RunLimit;
-  roundAlias?: boolean;
-  legacyGuards: boolean;
+  maxTurns?: RunLimit; maxRoundsPerTurn?: RunLimit;
+  roundAlias?: boolean; legacyGuards: boolean;
 }
 
 /** Non-serializable metadata makes validation idempotent without weakening raw input checks. */
@@ -1376,9 +1359,7 @@ const DERIVED_RUN_LIMITS = Symbol("astro.derivedRunLimits");
 
 function derivedRunLimits(value: Record<string, unknown>): DerivedRunLimits | undefined {
   const metadata = (value as Record<symbol, unknown>)[DERIVED_RUN_LIMITS];
-  return isPlainObject(metadata) && typeof metadata.legacyGuards === "boolean"
-    ? metadata as unknown as DerivedRunLimits
-    : undefined;
+  return isPlainObject(metadata) && typeof metadata.legacyGuards === "boolean" ? metadata as unknown as DerivedRunLimits : undefined;
 }
 
 function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "maxRoundsPerTurn"): boolean {
@@ -1387,25 +1368,17 @@ function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "ma
 }
 
 function withDerivedRunLimits<T extends object>(config: T, metadata: DerivedRunLimits): T {
-  Object.defineProperty(config, DERIVED_RUN_LIMITS, { value: metadata });
-  return config;
+  return Object.defineProperty(config, DERIVED_RUN_LIMITS, { value: metadata });
 }
 
 /** Preserve per-field provenance when raw and already validated run layers are merged. */
-export function mergeDerivedRunLimitMetadata(
-  base: Record<string, unknown>,
-  overlay: Record<string, unknown>,
-  merged: Record<string, unknown>,
-): void {
-  const before = derivedRunLimits(base);
-  const after = derivedRunLimits(overlay);
+export function mergeDerivedRunLimitMetadata(base: Record<string, unknown>, overlay: Record<string, unknown>, merged: Record<string, unknown>): void {
+  const before = derivedRunLimits(base), after = derivedRunLimits(overlay);
   if (before === undefined && after === undefined) return;
-  const metadata: DerivedRunLimits = {
-    legacyGuards: (before?.legacyGuards ?? true) || (after?.legacyGuards ?? true),
-  };
+  const metadata: DerivedRunLimits = { legacyGuards: (before?.legacyGuards ?? true) || (after?.legacyGuards ?? true) };
   for (const key of ["maxTurns", "maxRoundsPerTurn"] as const) {
-    const overlayDerived = after !== undefined && Object.hasOwn(after, key) && after[key] === overlay[key];
-    const overlayAlias = key === "maxRoundsPerTurn" && overlayDerived && after.roundAlias === true;
+    const overlayDerived = isDerivedRunLimit(overlay, key);
+    const overlayAlias = key === "maxRoundsPerTurn" && overlayDerived && after?.roundAlias === true;
     const useBase = Object.hasOwn(base, key) && (!Object.hasOwn(overlay, key) || (overlayDerived && !overlayAlias));
     const source = useBase ? base : overlay;
     if (useBase) merged[key] = base[key];
@@ -1422,48 +1395,31 @@ export function mergeDerivedRunLimitMetadata(
 export function canonicalizeConfigAliases(document: Record<string, unknown>): Record<string, unknown> {
   const mode = nestedSection(document, "shell")?.mode;
   const sandbox = nestedSection(nestedSection(document, "tools"), "run_command")?.sandbox;
-  const conflict = mode === "off"
-    ? sandbox === true || sandbox === "auto" || sandbox === "docker"
+  const conflict = mode === "off" ? sandbox === true || sandbox === "auto" || sandbox === "docker"
     : mode === "host" && (sandbox === false || sandbox === true || sandbox === "docker");
   if (conflict) fail('config invalid: "shell.mode" conflicts with "tools.run_command.sandbox"; remove one alias — nothing was changed');
-  const agent = nestedSection(document, "agent");
-  const run = nestedSection(document, "run");
-  const rounds = agent?.maxSteps;
+  const agent = nestedSection(document, "agent"), run = nestedSection(document, "run"), rounds = agent?.maxSteps;
   if (typeof rounds !== "number" || (document.run !== undefined && run === undefined) || run?.maxRoundsPerTurn !== undefined) return document;
   const previous = run === undefined ? undefined : derivedRunLimits(run);
-  const metadata: DerivedRunLimits = {
-    ...previous, maxRoundsPerTurn: rounds, roundAlias: true, legacyGuards: previous?.legacyGuards ?? run !== undefined,
-  };
+  const metadata: DerivedRunLimits = { ...previous, maxRoundsPerTurn: rounds, roundAlias: true, legacyGuards: previous?.legacyGuards ?? run !== undefined };
   return { ...document, run: withDerivedRunLimits({ ...run, maxRoundsPerTurn: rounds }, metadata) };
 }
 
 /** Validate limits without activating legacy loop guards for an omitted `run` section. */
 function validateRun(value: unknown, legacyRounds: number): RunConfig {
-  const omitted = value === undefined;
-  const raw = omitted ? {} : expectObject(value, "run");
+  const omitted = value === undefined, raw = omitted ? {} : expectObject(value, "run");
   const previous = derivedRunLimits(raw);
-  const turnsDerived = raw.maxTurns === undefined || isDerivedRunLimit(raw, "maxTurns");
-  const roundsDerived = raw.maxRoundsPerTurn === undefined || isDerivedRunLimit(raw, "maxRoundsPerTurn");
+  const turnsDerived = raw.maxTurns === undefined || isDerivedRunLimit(raw, "maxTurns"), roundsDerived = raw.maxRoundsPerTurn === undefined || isDerivedRunLimit(raw, "maxRoundsPerTurn");
   const roundAlias = roundsDerived && previous?.roundAlias === true;
-  const maxTurns = raw.maxTurns === undefined
-    ? 500
-    : turnsDerived
-      ? raw.maxTurns as RunLimit
-      : validateRunLimit(raw.maxTurns, "run.maxTurns", [250, 500, 1000]);
-  const maxRoundsPerTurn = raw.maxRoundsPerTurn === undefined
-    ? legacyRounds
-    : roundsDerived
-      ? raw.maxRoundsPerTurn as RunLimit
-      : validateRunLimit(raw.maxRoundsPerTurn, "run.maxRoundsPerTurn", [100, 200, 500]);
-  const declaresGuard = ["checkpointAt", "noProgressSegments", "judge", "tests"]
-    .some((key) => Object.hasOwn(raw, key));
+  const maxTurns = raw.maxTurns === undefined ? 500 : turnsDerived
+    ? raw.maxTurns as RunLimit
+    : validateRunLimit(raw.maxTurns, "run.maxTurns", [250, 500, 1000]);
+  const maxRoundsPerTurn = raw.maxRoundsPerTurn === undefined ? legacyRounds : roundsDerived
+    ? raw.maxRoundsPerTurn as RunLimit
+    : validateRunLimit(raw.maxRoundsPerTurn, "run.maxRoundsPerTurn", [100, 200, 500]);
+  const declaresGuard = ["checkpointAt", "noProgressSegments", "judge", "tests"].some((key) => Object.hasOwn(raw, key));
   const legacyGuards = omitted ? false : previous === undefined || previous.legacyGuards || declaresGuard;
-  const metadata: DerivedRunLimits = {
-    ...(turnsDerived ? { maxTurns } : {}),
-    ...(roundsDerived ? { maxRoundsPerTurn } : {}),
-    ...(roundAlias ? { roundAlias: true } : {}),
-    legacyGuards,
-  };
+  const metadata: DerivedRunLimits = { ...(turnsDerived ? { maxTurns } : {}), ...(roundsDerived ? { maxRoundsPerTurn } : {}), ...(roundAlias ? { roundAlias: true } : {}), legacyGuards };
   if (!legacyGuards) return withDerivedRunLimits({ maxTurns, maxRoundsPerTurn }, metadata);
 
   const checkpointAt = raw.checkpointAt === undefined ? 0.8 : expectNonNegativeNumber(raw.checkpointAt, "run.checkpointAt");
@@ -1477,10 +1433,7 @@ function validateRun(value: unknown, legacyRounds: number): RunConfig {
     fail('config inválida: "run.judge" deve ser "off", "on" ou "auto"');
   }
   const tests = raw.tests === undefined ? undefined : validateRunTests(raw.tests);
-  return withDerivedRunLimits(
-    { maxTurns, maxRoundsPerTurn, checkpointAt, noProgressSegments, judge, ...(tests === undefined ? {} : { tests }) },
-    metadata,
-  );
+  return withDerivedRunLimits({ maxTurns, maxRoundsPerTurn, checkpointAt, noProgressSegments, judge, ...(tests === undefined ? {} : { tests }) }, metadata);
 }
 
 /** Defaults da seção `attachments` (ADR-0026, #392). */
@@ -2266,8 +2219,7 @@ function migrateV1ToV2(document: Record<string, unknown>, source?: string): Reco
   if (run !== undefined && Object.hasOwn(run, "maxTurns") && !isDerivedRunLimit(run, "maxTurns")) {
     throw new ConfigError(
       `${configLabel(source)}: "run.maxTurns" meant model/tool rounds in schema 1.x but means chat turns in schema 2.0.0; ` +
-        'confirm the new meaning and set version: "2.0.0" explicitly — nothing was changed',
-      "config_migration_required",
+        'confirm the new meaning and set version: "2.0.0" explicitly — nothing was changed', "config_migration_required",
     );
   }
   return document;
@@ -2509,15 +2461,10 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
 
   // Validar seção tools (F4-6)
   const tools = root.tools === undefined ? undefined : validateTools(root.tools);
-  // The legacy sandbox value becomes shell.mode only in memory; the file is never rewritten.
+  // Aliases are normalized only in memory; `off` must never fall back to auto in the current runtime.
   const legacySandbox = tools?.run_command?.sandbox;
-  const shell = root.shell === undefined && legacySandbox === undefined
-    ? undefined
-    : validateShell(root.shell, legacySandbox);
-  // The current runtime consumes the legacy field; `off` must never fall back to auto.
-  const effectiveTools: ToolsConfig | undefined = shell?.mode === "off"
-    ? { ...tools, run_command: { ...tools?.run_command, sandbox: false } }
-    : tools;
+  const shell = root.shell === undefined && legacySandbox === undefined ? undefined : validateShell(root.shell, legacySandbox);
+  const effectiveTools: ToolsConfig | undefined = shell?.mode === "off" ? { ...tools, run_command: { ...tools?.run_command, sandbox: false } } : tools;
 
   // Validar telemetria (F5-5)
   const telemetry = root.telemetry === undefined ? undefined : validateTelemetry(root.telemetry);

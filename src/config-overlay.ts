@@ -122,13 +122,10 @@ export function assertNarrowed(
   if (mainAfter !== undefined) assertStepsCeiling(mainAfter.maxSteps, "agent.maxSteps", mainCeiling);
   const globalRun = isPlainObject(global.run) ? global.run : undefined;
   const mergedRun = isPlainObject(merged.run) ? merged.run : undefined;
-  if (typeof globalRun?.maxTurns === "number") {
-    assertStepsCeiling(mergedRun?.maxTurns, "run.maxTurns", globalRun.maxTurns);
-  }
+  if (typeof globalRun?.maxTurns === "number") assertStepsCeiling(mergedRun?.maxTurns, "run.maxTurns", globalRun.maxTurns);
   const globalRoundLimit = globalRun?.maxRoundsPerTurn;
   const roundCeiling = typeof globalRoundLimit === "number" ? globalRoundLimit : mainCeiling;
-  const hasGlobalRoundCeiling = globalRoundLimit !== undefined || typeof main?.maxSteps === "number";
-  if (hasGlobalRoundCeiling && globalRoundLimit !== "unlimited") {
+  if ((globalRoundLimit !== undefined || typeof main?.maxSteps === "number") && globalRoundLimit !== "unlimited") {
     assertStepsCeiling(mergedRun?.maxRoundsPerTurn, "run.maxRoundsPerTurn", roundCeiling);
   }
   if (main !== undefined && mainAfter !== undefined) assertAgentNarrowed(main, mainAfter, "do agent principal");
@@ -170,10 +167,8 @@ export function assertNarrowed(
   const projectTools = isPlainObject(projectLayer?.tools) ? projectLayer.tools : undefined;
   const globalRunCommand = isPlainObject(globalTools?.run_command) ? globalTools.run_command : undefined;
   const projectRunCommand = isPlainObject(projectTools?.run_command) ? projectTools.run_command : undefined;
-  const globalShell = isPlainObject(global.shell) ? global.shell : undefined;
-  const projectShell = isPlainObject(projectLayer?.shell) ? projectLayer.shell : undefined;
-  const fromSandbox = SANDBOX_RANK[String(globalShell?.mode ?? globalRunCommand?.sandbox ?? "auto")];
-  const projectSandbox = projectShell?.mode ?? projectRunCommand?.sandbox;
+  const fromSandbox = SANDBOX_RANK[String((isPlainObject(global.shell) ? global.shell.mode : undefined) ?? globalRunCommand?.sandbox ?? "auto")];
+  const projectSandbox = (isPlainObject(projectLayer?.shell) ? projectLayer.shell.mode : undefined) ?? projectRunCommand?.sandbox;
   const toSandbox = projectSandbox === undefined ? undefined : SANDBOX_RANK[String(projectSandbox)];
   if (fromSandbox !== undefined && toSandbox !== undefined && toSandbox > fromSandbox) {
     const reason = fromSandbox === 0

@@ -656,11 +656,7 @@ describe("turn and round limits (#594)", () => {
     try { validateConfig(raw); } catch (error) { caught = error; }
     expect(caught).toBeInstanceOf(ConfigError);
     expect((caught as ConfigError).code).toBe("config_migration_required");
-    const message = (caught as Error).message;
-    expect(message).toContain("run.maxTurns");
-    expect(message).toMatch(/rounds/);
-    expect(message).toMatch(/turns/);
-    expect(message).toContain('version: "2.0.0"');
+    expect((caught as Error).message).toMatch(/run\.maxTurns[\s\S]*rounds[\s\S]*turns[\s\S]*version: "2\.0\.0"/);
   });
 
   test("run continua válido sem maxTurns (guardas do loop)", () => {

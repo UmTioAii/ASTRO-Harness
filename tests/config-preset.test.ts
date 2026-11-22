@@ -12,13 +12,8 @@ function base() {
 }
 
 describe("preset simple/control (#515)", () => {
-  test("omitted preset defaults to Default with 500 turns and rounds (#594)", () => {
-    const cfg = validateConfig(base());
-    expect(cfg.preset).toBe("default");
-    expect(cfg.run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 500 });
-  });
-
-  test("omitted preset keeps the legacy round alias without changing its value", () => {
+  test("omitted preset defaults to Default and preserves a legacy round alias", () => {
+    expect(validateConfig(base())).toMatchObject({ preset: "default", run: { maxTurns: 500, maxRoundsPerTurn: 500 } });
     const raw = base() as unknown as Record<string, unknown>;
     (raw.agent as Record<string, unknown>).maxSteps = 3;
     const cfg = validateConfig(raw);
@@ -74,18 +69,14 @@ describe("preset simple/control (#515)", () => {
     expect(() => validateConfig({ ...raised, preset: "simple" })).toThrow(/preset.*control/);
   });
 
-  test("Default accepts only the published turn choices", () => {
+  test("Default accepts only published turn choices and hides the advanced round knob", () => {
     const withTurns = base() as unknown as Record<string, unknown>;
     withTurns.version = "2.0.0";
     withTurns.run = { maxTurns: 1000 };
     expect(validateConfig({ ...withTurns, preset: "simple" }).run).toMatchObject({ maxTurns: 1000 });
     withTurns.run = { maxTurns: 600 };
     expect(() => validateConfig({ ...withTurns, preset: "simple" })).toThrow(/run\.maxTurns.*250.*500.*1000.*unlimited/);
-  });
-
-  test("Default does not expose the advanced round knob", () => {
-    expect(() => validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } }))
-      .toThrow(/run\.maxRoundsPerTurn.*preset.*control/);
+    expect(() => validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } })).toThrow(/run\.maxRoundsPerTurn.*preset.*control/);
   });
 
   test("simple aceita 500 explícito, que é o próprio teto", () => {

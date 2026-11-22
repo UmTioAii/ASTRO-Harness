@@ -83,35 +83,20 @@ test("sem override, usa o provider do agent.model", () => {
   expect(result.config.agent.model).toBe("p/m1");
 });
 
-test("validated project defaults survive a global run-layer merge", () => {
-  const result = resolveEffectiveConfig({ project: project(), global: { run: {} }, store: store(), env: {} });
-  expect(result.config.run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 2 });
-});
-
-test("validated project defaults do not override an explicit global turn limit", () => {
-  const result = resolveEffectiveConfig({ project: project(), global: { version: "2.0.0", run: { maxTurns: 250 } }, store: store(), env: {} });
-  expect(result.config.run?.maxTurns).toBe(250);
-});
-
-test("layer merges retain the newest schema without a false legacy migration", () => {
+test("derived limits and presets survive layer merges without false migrations", () => {
+  const resolve = (projectLayer: AstroConfig, global: unknown) =>
+    resolveEffectiveConfig({ project: projectLayer, global, store: store(), env: {} }).config;
+  expect(resolve(project(), { run: {} }).run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 2 });
+  const globalTurns = { version: "2.0.0", run: { maxTurns: 250 } };
+  expect(resolve(project(), globalTurns).run?.maxTurns).toBe(250);
   const legacy = validateConfig({ ...project(), version: "1.0.0" });
-  const result = resolveEffectiveConfig({ project: legacy, global: { version: "2.0.0", run: { maxTurns: 250 } }, store: store(), env: {} });
-  expect(result.config.run?.maxTurns).toBe(250);
+  expect(resolve(legacy, globalTurns).run?.maxTurns).toBe(250);
   expect(mergeConfigLayers({ version: "1.0.0" }, { version: "2.1.0" }).version).toBe("2.1.0");
-});
-
-test("alias-derived project rounds override default-derived global rounds", () => {
-  const result = resolveEffectiveConfig({ project: project(), global: project("p", "m1", false), store: store(), env: {} });
-  expect(result.config.run?.maxRoundsPerTurn).toBe(2);
-});
-
-test("derived project presets inherit Control while explicit Default remains reversible", () => {
-  const inherited = resolveEffectiveConfig({
-    project: project("p", "m1", false), global: { version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } }, store: store(), env: {},
-  });
-  expect(inherited.config).toMatchObject({ preset: "control", run: { maxRoundsPerTurn: 100 } });
+  expect(resolve(project(), project("p", "m1", false)).run?.maxRoundsPerTurn).toBe(2);
+  const globalControl = { version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } };
+  expect(resolve(project("p", "m1", false), globalControl)).toMatchObject({ preset: "control", run: { maxRoundsPerTurn: 100 } });
   const explicit = validateConfig({ ...project("p", "m1", false), preset: "default" });
-  expect(resolveEffectiveConfig({ project: explicit, global: { preset: "control" }, store: store(), env: {} }).config.preset).toBe("default");
+  expect(resolve(explicit, { preset: "control" }).preset).toBe("default");
 });
 
 test("provider do projeto vence perfil global com o mesmo nome", () => {
@@ -441,19 +426,15 @@ test("legacy aliases warn on load without rewriting user configuration (#594)", 
   const home = mkdtempSync(join(tmpdir(), "astro-alias-load-"));
   const path = join(home, "astro.config.json");
   const raw = {
-    version: "2.0.0",
-    preset: "control",
+    version: "2.0.0", preset: "control",
     providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
     models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
-    agent: { model: "p/m1", maxSteps: 2, tools: ["read_file"] },
-    tools: { run_command: { sandbox: false } },
+    agent: { model: "p/m1", maxSteps: 2, tools: ["read_file"] }, tools: { run_command: { sandbox: false } },
   };
   const before = `${JSON.stringify(raw, null, 2)}\n`;
   writeFileSync(path, before);
   const result = loadEffectiveConfig(path, { env: { ASTRO_HOME: home, ASTRO_NO_GLOBAL_CONFIG: "1" } });
-  expect(result.config.run).toMatchObject({ maxRoundsPerTurn: 2 });
-  expect(result.config.shell?.mode).toBe("off");
-  expect(result.warnings.join(" ")).toMatch(/agent\.maxSteps.*run\.maxRoundsPerTurn/);
-  expect(result.warnings.join(" ")).toMatch(/sandbox.*shell\.mode/);
+  expect(result.config).toMatchObject({ run: { maxRoundsPerTurn: 2 }, shell: { mode: "off" } });
+  expect(result.warnings.join(" ")).toMatch(/agent\.maxSteps.*run\.maxRoundsPerTurn[\s\S]*sandbox.*shell\.mode/);
   expect(readFileSync(path, "utf8")).toBe(before);
 });
