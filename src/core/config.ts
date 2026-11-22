@@ -1418,8 +1418,14 @@ export function mergeDerivedRunLimitMetadata(
   withDerivedRunLimits(merged, metadata);
 }
 
-/** Canonicalize the declared round alias before layer merging; defaults keep their existing provenance. */
-export function canonicalizeRoundAlias(document: Record<string, unknown>): Record<string, unknown> {
+/** Validate shell aliases and canonicalize declared rounds before layer merging. */
+export function canonicalizeConfigAliases(document: Record<string, unknown>): Record<string, unknown> {
+  const mode = nestedSection(document, "shell")?.mode;
+  const sandbox = nestedSection(nestedSection(document, "tools"), "run_command")?.sandbox;
+  const conflict = mode === "off"
+    ? sandbox === true || sandbox === "auto" || sandbox === "docker"
+    : mode === "host" && (sandbox === false || sandbox === true || sandbox === "docker");
+  if (conflict) fail('config invalid: "shell.mode" conflicts with "tools.run_command.sandbox"; remove one alias — nothing was changed');
   const agent = nestedSection(document, "agent");
   const run = nestedSection(document, "run");
   const rounds = agent?.maxSteps;
@@ -2399,10 +2405,10 @@ export function migrateConfigInMemory(
  * `status: "active"` por modelo e `quotaDomain: "default"` por provider.
  * `source` é o arquivo de origem, citado nas recusas de schema (ADR-0028).
  */
-export function validateConfig(raw: unknown, options: { source?: string } = {}): AstroConfig {
+export function validateConfig(raw: unknown, options: { source?: string; aliasesResolved?: boolean } = {}): AstroConfig {
   const input = expectObject(raw, "config");
   const meta = inspectConfigDocument(input, options);
-  const checked = canonicalizeRoundAlias(meta.document);
+  const checked = options.aliasesResolved === true ? meta.document : canonicalizeConfigAliases(meta.document);
   const preset = validatePreset(checked.preset);
   // #515: simple fixa os limites antes da validação normal; control ganha 500
   // turnos quando não declara nenhum.

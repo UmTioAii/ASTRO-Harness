@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BASELINE_MAX_STEPS, canonicalizeRoundAlias, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, inspectConfigDocument, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
+import { BASELINE_MAX_STEPS, canonicalizeConfigAliases, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, inspectConfigDocument, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
 import { globalConfigPath, statePath } from "../astro-home";
 import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
@@ -512,7 +512,7 @@ export function loadGlobalConfig(env: NodeJS.ProcessEnv = process.env): Record<s
  * qualquer merge; uma camada antiga é migrada em memória, nunca no disco.
  */
 function inspectLayerDocument(layer: Record<string, unknown>, source: string | undefined): Record<string, unknown> {
-  return canonicalizeRoundAlias(inspectConfigDocument(layer, { ...(source === undefined ? {} : { source }) }).document);
+  return canonicalizeConfigAliases(inspectConfigDocument(layer, { ...(source === undefined ? {} : { source }) }).document);
 }
 
 /**
@@ -545,7 +545,7 @@ export function validateProjectLayer(
   const store = readGlobalProfileStore(homeEnv);
   const storeProviders = Object.fromEntries(store.profiles.map((profile) => [profile.id, profileToProvider(profile)]));
   assertNarrowed(globalDoc, declared, storeProviders, projectDoc);
-  return validateConfig(declared);
+  return validateConfig(declared, { aliasesResolved: true });
 }
 
 /** Config do projeto mesclada com a camada global (validada); ausente = undefined.
@@ -977,7 +977,7 @@ export function resolveEffectiveConfig(input: {
       // Sem provider em lugar nenhum: o erro de schema vem primeiro (como em
       // `origin/main`), senão a mensagem aponta para a correção errada
       // ("/provider add") em vez de apontar o campo inválido.
-      if (project !== undefined) validateConfig(declared);
+      if (project !== undefined) validateConfig(declared, { aliasesResolved: true });
       const fallback = input.diagnosticFallback;
       if (fallback === undefined) throw new NoProviderError(NO_PROVIDER_MESSAGE);
       // Diagnóstico: o provider sintético entra só na validação da config
@@ -1030,7 +1030,7 @@ export function resolveEffectiveConfig(input: {
     models,
     agent: pooled ? agentSansModel : { ...agent, model: modelRef },
     ...(agentsSansModel === undefined ? {} : { agents: agentsSansModel }),
-  });
+  }, { aliasesResolved: true });
   if (isPlainObject(declared.agent) && declared.agent.maxSteps !== undefined) {
     warnings.push('agent.maxSteps is a legacy alias of run.maxRoundsPerTurn; use the new key in schema 2.0.0 (the file was not rewritten)');
   }
