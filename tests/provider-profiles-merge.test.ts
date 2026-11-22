@@ -89,7 +89,7 @@ test("validated project defaults survive a global run-layer merge", () => {
 
 test("validated project defaults do not override an explicit global turn limit", () => {
   const result = resolveEffectiveConfig({ project: project(), global: { version: "2.0.0", run: { maxTurns: 250 } }, store: store(), env: {} });
-  expect(result.config.run.maxTurns).toBe(250);
+  expect(result.config.run?.maxTurns).toBe(250);
 });
 
 test("provider do projeto vence perfil global com o mesmo nome", () => {

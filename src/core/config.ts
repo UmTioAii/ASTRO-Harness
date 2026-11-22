@@ -1387,8 +1387,11 @@ export function mergeDerivedRunLimitMetadata(
     legacyGuards: (before?.legacyGuards ?? true) || (after?.legacyGuards ?? true),
   };
   for (const key of ["maxTurns", "maxRoundsPerTurn"] as const) {
-    const source = Object.hasOwn(overlay, key) ? overlay : base;
-    const derived = Object.hasOwn(overlay, key) ? after : before;
+    const overlayDerived = after !== undefined && Object.hasOwn(after, key) && after[key] === overlay[key];
+    const useBase = Object.hasOwn(base, key) && (!Object.hasOwn(overlay, key) || overlayDerived);
+    const source = useBase ? base : overlay;
+    if (useBase) merged[key] = base[key];
+    const derived = useBase ? before : after;
     if (derived !== undefined && Object.hasOwn(derived, key) && derived[key] === source[key]) {
       metadata[key] = source[key] as RunLimit;
     }
