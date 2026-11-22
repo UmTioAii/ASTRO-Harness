@@ -778,7 +778,7 @@ test("/config abre a tela de configuração e trocar o modo atualiza o footer (#
         approvalTimeoutMs: "300000 (default)",
         costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
         budget: "sem budget",
-        knobs: [{ key: "agent.maxSteps", value: "12" }, { key: "permissions.mode", value: this.mode }],
+        knobs: [{ key: "run.maxRoundsPerTurn", value: "12" }, { key: "permissions.mode", value: this.mode }],
       };
     }
     savePermissionMode(mode: PermissionMode): PermissionMode {
@@ -830,7 +830,7 @@ class TrustScreenSession extends FakeSession {
       approvalTimeoutMs: "300000 (default)",
       costs: [],
       budget: "sem budget",
-      knobs: [{ key: "agent.maxSteps", value: "12" }, { key: "permissions.mode", value: "ask" }],
+      knobs: [{ key: "run.maxRoundsPerTurn", value: "12" }, { key: "permissions.mode", value: "ask" }],
     };
   }
   trustedFolders(): string[] {

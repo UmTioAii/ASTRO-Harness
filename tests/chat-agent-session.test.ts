@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { AgentSession } from "../src/chat/agent-session";
 import type { LoadedAttachment } from "../src/attachments/model";
-import { loadConfig } from "../src/core/config";
+import { loadConfig, loadConfigRaw } from "../src/core/config";
 import type { PermissionMode } from "../src/permissions";
 import type { ChatMessage } from "../src/providers/types";
 import { Ledger } from "../src/ledger";
@@ -613,7 +613,7 @@ describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", ()
   // A API ainda não existe no RED: o cast mantém o typecheck limpo e o teste falha em runtime.
   type Editable = { applyConfigEdits?: (edits: Record<string, string>) => unknown };
 
-  test("persiste agent.maxSteps no arquivo e no resumo da sessão (próximo run relê o arquivo)", () => {
+  test("persists run.maxTurns and reloads the session summary", () => {
     const { configPath, session, stop } = setup();
     const saved = process.env.ASTRO_PERMISSION_MODE;
     try {
@@ -621,10 +621,11 @@ describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", ()
       const chat = session();
       const before = readFileSync(configPath, "utf8");
       const editable = chat as unknown as Editable;
-      expect(typeof editable.applyConfigEdits).toBe("function"); // RED: método ainda não existe
-      editable.applyConfigEdits!({ "agent.maxSteps": "50" });
-      expect(loadConfig(configPath).agent.maxSteps).toBe(50); // persistido no disco
-      expect(chat.configSummary().maxSteps).toBe(50); // sessão recarregada em memória
+      expect(typeof editable.applyConfigEdits).toBe("function");
+      editable.applyConfigEdits!({ "run.maxTurns": "1000" });
+      expect(loadConfig(configPath).run?.maxTurns).toBe(1000);
+      expect(loadConfigRaw(configPath).version).toBe("2.0.0");
+      expect(chat.configSummary().knobs).toContainEqual({ key: "run.maxTurns", value: "1000" });
       expect(readFileSync(configPath, "utf8")).not.toBe(before);
       chat.close();
     } finally {
@@ -643,8 +644,8 @@ describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", ()
       const before = readFileSync(configPath, "utf8");
       const editable = chat as unknown as Editable;
       expect(typeof editable.applyConfigEdits).toBe("function");
-      expect(() => editable.applyConfigEdits!({ "agent.maxSteps": "abc" })).toThrow(/agent\.maxSteps/);
-      expect(() => editable.applyConfigEdits!({ "agent.maxSteps": "-5" })).toThrow(/agent\.maxSteps/);
+      expect(() => editable.applyConfigEdits!({ "run.maxTurns": "abc" })).toThrow(/run\.maxTurns/);
+      expect(() => editable.applyConfigEdits!({ "run.maxTurns": "600" })).toThrow(/run\.maxTurns/);
       expect(() => editable.applyConfigEdits!({ "chave.falsa": "1" })).toThrow(/não editável/);
       expect(readFileSync(configPath, "utf8")).toBe(before);
       expect(chat.configSummary().maxSteps).toBe(3);
@@ -656,7 +657,7 @@ describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", ()
     }
   });
 
-  test("preset simple deixa agent.maxSteps read-only; permissions.mode continua editável (#273)", () => {
+  test("Default leaves run.maxRoundsPerTurn read-only; permissions.mode remains editable", () => {
     const { configPath, session, stop } = setup();
     const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
     raw.preset = "simple";
@@ -668,7 +669,7 @@ describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", ()
       const before = readFileSync(configPath, "utf8");
       const editable = chat as unknown as Editable;
       expect(typeof editable.applyConfigEdits).toBe("function");
-      expect(() => editable.applyConfigEdits!({ "agent.maxSteps": "100" })).toThrow(/"control"/);
+      expect(() => editable.applyConfigEdits!({ "run.maxRoundsPerTurn": "100" })).toThrow(/"control"/);
       expect(readFileSync(configPath, "utf8")).toBe(before);
       editable.applyConfigEdits!({ "permissions.mode": "allow-edits" }); // modo segue editável no simple
       expect(loadConfig(configPath).permissions.mode).toBe("allow-edits");
@@ -681,10 +682,13 @@ describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", ()
     }
   });
 
-  test("não amplia o teto global de passos (ADR-0029, #494/#558)", () => {
+  test("does not widen the global round ceiling (ADR-0029, #494/#558)", () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-steps-"));
-    writeFileSync(join(home, "config.json"), JSON.stringify({ agent: { maxSteps: 20 } }));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ run: { maxRoundsPerTurn: 200 } }));
     const { configPath, session, stop } = setup();
+    const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    raw.preset = "control";
+    writeFileSync(configPath, JSON.stringify(raw));
     const saved = process.env.ASTRO_PERMISSION_MODE;
     try {
       delete process.env.ASTRO_PERMISSION_MODE;
@@ -692,7 +696,7 @@ describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", ()
       const before = readFileSync(configPath, "utf8");
       const editable = chat as unknown as Editable;
       expect(typeof editable.applyConfigEdits).toBe("function");
-      expect(() => editable.applyConfigEdits!({ "agent.maxSteps": "50" })).toThrow(/teto global/);
+      expect(() => editable.applyConfigEdits!({ "run.maxRoundsPerTurn": "500" })).toThrow(/teto global/);
       expect(readFileSync(configPath, "utf8")).toBe(before);
       expect(chat.configSummary().maxSteps).toBe(3);
       chat.close();

@@ -437,3 +437,22 @@ test("legacy aliases warn on load without rewriting user configuration (#594)", 
   expect(result.warnings.join(" ")).toMatch(/agent\.maxSteps.*run\.maxRoundsPerTurn[\s\S]*sandbox.*shell\.mode/);
   expect(readFileSync(path, "utf8")).toBe(before);
 });
+
+test("Control and unlimited limits emit startup warnings (#594)", () => {
+  const result = resolveEffectiveConfig({
+    project: {
+      version: "2.0.0",
+      preset: "control",
+      providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "p/m1", tools: ["read_file"] },
+      run: { maxTurns: "unlimited", maxRoundsPerTurn: "unlimited" },
+    },
+    store: store(),
+    env: { ASTRO_NO_GLOBAL_CONFIG: "1" },
+  });
+  const warnings = result.warnings.join(" ");
+  expect(warnings).toMatch(/preset.*control/i);
+  expect(warnings).toMatch(/run\.maxTurns.*unlimited.*spend/i);
+  expect(warnings).toMatch(/run\.maxRoundsPerTurn.*unlimited.*loop/i);
+});

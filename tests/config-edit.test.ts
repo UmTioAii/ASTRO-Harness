@@ -28,7 +28,10 @@ const BASE = {
 describe("isEditableConfigKey (#558)", () => {
   test("aceita só a whitelist fechada", () => {
     for (const key of EDITABLE_CONFIG_KEYS) expect(isEditableConfigKey(key)).toBe(true);
-    expect(isEditableConfigKey("run.maxTurns")).toBe(false); // removido no P4
+    expect(isEditableConfigKey("run.maxTurns")).toBe(true);
+    expect(isEditableConfigKey("run.maxRoundsPerTurn")).toBe(true);
+    expect(isEditableConfigKey("preset")).toBe(true);
+    expect(isEditableConfigKey("agent.maxSteps")).toBe(false);
     expect(isEditableConfigKey("agent.tools")).toBe(false);
     expect(isEditableConfigKey("providers.p.apiKey")).toBe(false); // nunca credencial
     expect(isEditableConfigKey("")).toBe(false);
@@ -37,13 +40,19 @@ describe("isEditableConfigKey (#558)", () => {
 });
 
 describe("parseConfigEditValue (#558)", () => {
-  test("agent.maxSteps: inteiro >= 1", () => {
-    expect(parseConfigEditValue("agent.maxSteps", "200")).toBe(200);
-    expect(parseConfigEditValue("agent.maxSteps", " 7 ")).toBe(7);
-    expect(() => parseConfigEditValue("agent.maxSteps", "abc")).toThrow(/agent\.maxSteps/);
-    expect(() => parseConfigEditValue("agent.maxSteps", "0")).toThrow(/agent\.maxSteps/);
-    expect(() => parseConfigEditValue("agent.maxSteps", "-5")).toThrow(/agent\.maxSteps/);
-    expect(() => parseConfigEditValue("agent.maxSteps", "1.5")).toThrow(/agent\.maxSteps/);
+  test("run limits accept only their published choices", () => {
+    expect(parseConfigEditValue("run.maxTurns", "250")).toBe(250);
+    expect(parseConfigEditValue("run.maxTurns", "unlimited")).toBe("unlimited");
+    expect(parseConfigEditValue("run.maxRoundsPerTurn", " 100 ")).toBe(100);
+    expect(parseConfigEditValue("run.maxRoundsPerTurn", "unlimited")).toBe("unlimited");
+    expect(() => parseConfigEditValue("run.maxTurns", "600")).toThrow(/run\.maxTurns/);
+    expect(() => parseConfigEditValue("run.maxRoundsPerTurn", "50")).toThrow(/run\.maxRoundsPerTurn/);
+  });
+
+  test("preset accepts Default and Control", () => {
+    expect(parseConfigEditValue("preset", "default")).toBe("default");
+    expect(parseConfigEditValue("preset", "control")).toBe("control");
+    expect(() => parseConfigEditValue("preset", "turbo")).toThrow(/preset/);
   });
 
   test("budget.* e team.*: números >= 0, warnAt entre 0 e 1, scope/onExceed fechados", () => {
@@ -69,9 +78,10 @@ describe("parseConfigEditValue (#558)", () => {
 
 describe("applyConfigEditsToRaw (#558)", () => {
   test("aplica aninhado no raw sem tocar em outras chaves", () => {
-    const raw = loadConfigRaw(writeProject(BASE));
-    applyConfigEditsToRaw(raw, { "agent.maxSteps": "50", "budget.onExceed": "stop" });
-    expect(raw.agent).toMatchObject({ maxSteps: 50, model: "p/m1" });
+    const raw = loadConfigRaw(writeProject({ ...BASE, preset: "control" }));
+    applyConfigEditsToRaw(raw, { "run.maxRoundsPerTurn": "100", "budget.onExceed": "stop" });
+    expect(raw.run).toEqual({ maxRoundsPerTurn: 100 });
+    expect(raw.agent).toMatchObject({ maxSteps: 3, model: "p/m1" });
     expect(raw.budget).toEqual({ onExceed: "stop" }); // cria a seção
   });
 
@@ -81,47 +91,51 @@ describe("applyConfigEditsToRaw (#558)", () => {
     expect(() => applyConfigEditsToRaw(raw, {} as never)).toThrow(/nenhuma chave/);
   });
 
-  test("preset simple deixa knobs control-only read-only", () => {
+  test("Default leaves advanced knobs read-only and Control is reversible", () => {
     const raw = loadConfigRaw(writeProject({ ...BASE, preset: "simple" }));
-    expect(() => applyConfigEditsToRaw(raw, { "agent.maxSteps": "100" })).toThrow(/"control"/);
+    expect(() => applyConfigEditsToRaw(raw, { "run.maxRoundsPerTurn": "100" })).toThrow(/"control"/);
     expect(() => applyConfigEditsToRaw(raw, { "team.sessionBudgetUsd": "10" })).toThrow(/"control"/);
-    applyConfigEditsToRaw(raw, { "permissions.mode": "allow-edits" }); // modo segue editável (#273)
+    applyConfigEditsToRaw(raw, { preset: "control", "permissions.mode": "allow-edits" });
+    expect(raw.preset).toBe("control");
     expect(raw.permissions).toEqual({ mode: "allow-edits" });
+    applyConfigEditsToRaw(raw, { preset: "default" });
+    expect(raw.preset).toBe("default");
   });
 });
 
 describe("updateConfigKnobs (#558)", () => {
-  test("grava no arquivo e o loadConfig relê o valor novo", () => {
-    const path = writeProject(BASE);
-    updateConfigKnobs(path, { "agent.maxSteps": "50" });
-    expect(loadConfig(path).agent.maxSteps).toBe(50);
-    expect(loadConfigRaw(path).agent).toMatchObject({ maxSteps: 50, model: "p/m1" });
+  test("writes the new round key without rewriting the legacy alias", () => {
+    const path = writeProject({ ...BASE, preset: "control" });
+    updateConfigKnobs(path, { "run.maxRoundsPerTurn": "100" });
+    expect(loadConfig(path).run).toMatchObject({ maxRoundsPerTurn: 100 });
+    expect(loadConfigRaw(path).agent).toMatchObject({ maxSteps: 3, model: "p/m1" });
   });
 
   test("falha de validação deixa o arquivo byte a byte intacto", () => {
     const path = writeProject(BASE);
     const before = readFileSync(path, "utf8");
-    expect(() => updateConfigKnobs(path, { "agent.maxSteps": "abc" })).toThrow(/agent\.maxSteps/);
+    expect(() => updateConfigKnobs(path, { "run.maxTurns": "600" })).toThrow(/run\.maxTurns/);
     expect(() => updateConfigKnobs(path, { "chave.falsa": "1" } as never)).toThrow(/não editável/);
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
-  test("pré-valida contra o teto global (ADR-0029): projeto não amplia maxSteps global", () => {
+  test("pre-validates the global round ceiling without rewriting the file", () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-edit-"));
-    writeFileSync(join(home, "config.json"), JSON.stringify({ agent: { maxSteps: 20 } }));
-    const path = writeProject(BASE);
+    writeFileSync(join(home, "config.json"), JSON.stringify({ run: { maxRoundsPerTurn: 200 } }));
+    const path = writeProject({ ...BASE, preset: "control" });
     const before = readFileSync(path, "utf8");
-    expect(() => updateConfigKnobs(path, { "agent.maxSteps": "50" }, { env: { ASTRO_HOME: home } })).toThrow(/teto global/);
+    expect(() => updateConfigKnobs(path, { "run.maxRoundsPerTurn": "500" }, { env: { ASTRO_HOME: home } }))
+      .toThrow(/teto global/);
     expect(readFileSync(path, "utf8")).toBe(before);
-    updateConfigKnobs(path, { "agent.maxSteps": "10" }, { env: { ASTRO_HOME: home } }); // estreita: ok
-    expect(loadConfig(path).agent.maxSteps).toBe(10);
+    updateConfigKnobs(path, { "run.maxRoundsPerTurn": "100" }, { env: { ASTRO_HOME: home } });
+    expect(loadConfig(path).run).toMatchObject({ maxRoundsPerTurn: 100 });
   });
 
-  test("ASTRO_NO_GLOBAL_CONFIG=1 desliga a pré-validação global", () => {
+  test("ASTRO_NO_GLOBAL_CONFIG=1 disables global ceiling validation", () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-edit-off-"));
-    writeFileSync(join(home, "config.json"), JSON.stringify({ agent: { maxSteps: 20 } }));
-    const path = writeProject(BASE);
-    updateConfigKnobs(path, { "agent.maxSteps": "50" }, { env: { ASTRO_HOME: home, ASTRO_NO_GLOBAL_CONFIG: "1" } });
-    expect(loadConfig(path).agent.maxSteps).toBe(50);
+    writeFileSync(join(home, "config.json"), JSON.stringify({ run: { maxRoundsPerTurn: 200 } }));
+    const path = writeProject({ ...BASE, preset: "control" });
+    updateConfigKnobs(path, { "run.maxRoundsPerTurn": "500" }, { env: { ASTRO_HOME: home, ASTRO_NO_GLOBAL_CONFIG: "1" } });
+    expect(loadConfig(path).run).toMatchObject({ maxRoundsPerTurn: 500 });
   });
 });
