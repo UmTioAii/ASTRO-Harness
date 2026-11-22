@@ -154,7 +154,7 @@ function validatePreset(value: unknown): Preset {
   if (value === "control") return value;
   return fail('config inválida: "preset" deve ser "default", "simple" ou "control"');
 }
-const DERIVED_PRESET = Symbol("astro.derivedPreset"), DERIVED_AGENT_MAX_STEPS = Symbol("astro.derivedAgentMaxSteps");
+const DERIVED_PRESET = Symbol("astro.derivedPreset"), DERIVED_AGENT_MAX_STEPS = Symbol("astro.derivedAgentMaxSteps"), DERIVED_SHELL_SANDBOX = Symbol("astro.derivedShellSandbox");
 const isDerivedPreset = (value: Record<string, unknown>): boolean => (value as Record<symbol, unknown>)[DERIVED_PRESET] === true;
 /** Preserve an omitted preset when already validated configs are used as layers. */
 export function mergeDerivedPresetMetadata(base: Record<string, unknown>, overlay: Record<string, unknown>, merged: Record<string, unknown>): void {
@@ -169,6 +169,11 @@ export function mergeDerivedPresetMetadata(base: Record<string, unknown>, overla
   if (afterSteps && baseAgent?.maxSteps !== undefined && isPlainObject(merged.agent)) merged.agent.maxSteps = baseAgent.maxSteps;
   if ((afterSteps && (baseAgent?.maxSteps === undefined || beforeSteps)) || (overlayAgent?.maxSteps === undefined && beforeSteps)) {
     Object.defineProperty(merged, DERIVED_AGENT_MAX_STEPS, { value: true });
+  }
+  const baseSandbox = nestedSection(nestedSection(base, "tools"), "run_command")?.sandbox, overlaySandbox = nestedSection(nestedSection(overlay, "tools"), "run_command")?.sandbox;
+  if (nestedSection(nestedSection(merged, "tools"), "run_command")?.sandbox !== undefined
+    && (baseSandbox === undefined || hasDerivedShellSandbox(base)) && (overlaySandbox === undefined || hasDerivedShellSandbox(overlay))) {
+    Object.defineProperty(merged, DERIVED_SHELL_SANDBOX, { value: true });
   }
 }
 /**
@@ -1360,6 +1365,9 @@ export function hasDerivedAgentMaxSteps(layer: Record<string, unknown>): boolean
   const run = nestedSection(layer, "run"); return run !== undefined && nestedSection(layer, "agent")?.maxSteps === run.maxRoundsPerTurn
     && isDerivedRunLimit(run, "maxRoundsPerTurn") && derivedRunLimits(run)?.roundAlias !== true;
 }
+export function hasDerivedShellSandbox(layer: Record<string, unknown>): boolean {
+  return (layer as Record<symbol, unknown>)[DERIVED_SHELL_SANDBOX] === true;
+}
 /** Return only user-declared limits, including the legacy round alias. */
 export function declaredRunLimit(run: Record<string, unknown> | undefined, key: "maxTurns" | "maxRoundsPerTurn"): RunLimit | undefined {
   if (run?.[key] === undefined) return undefined;
@@ -1390,6 +1398,7 @@ export function canonicalizeConfigAliases(document: Record<string, unknown>): Re
   if (conflict) fail('config invalid: "shell.mode" conflicts with "tools.run_command.sandbox"; remove one alias — nothing was changed');
   const agent = nestedSection(document, "agent"), run = nestedSection(document, "run"), rounds = agent?.maxSteps;
   if (typeof rounds !== "number" || (document.run !== undefined && run === undefined) || hasDerivedAgentMaxSteps(document)
+    || (run?.maxRoundsPerTurn === rounds && derivedRunLimits(run)?.roundAlias === true)
     || (run?.maxRoundsPerTurn !== undefined && !isDerivedRunLimit(run, "maxRoundsPerTurn"))) return document;
   const previous = run === undefined ? undefined : derivedRunLimits(run), metadata: DerivedRunLimits = { ...previous, maxRoundsPerTurn: rounds, roundAlias: true, legacyGuards: previous?.legacyGuards ?? run !== undefined };
   return { ...document, run: withDerivedRunLimits({ ...run, maxRoundsPerTurn: rounds }, metadata) };
@@ -2490,6 +2499,7 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
   const config: AstroConfig = { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools: effectiveTools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
   if (checked.preset === undefined || isDerivedPreset(checked)) Object.defineProperty(config, DERIVED_PRESET, { value: true });
   if (nestedSection(checked, "agent")?.maxSteps === undefined || hasDerivedAgentMaxSteps(checked)) Object.defineProperty(config, DERIVED_AGENT_MAX_STEPS, { value: true });
+  if ((shell?.mode === "off" && legacySandbox === undefined) || hasDerivedShellSandbox(checked)) Object.defineProperty(config, DERIVED_SHELL_SANDBOX, { value: true });
   return config;
 }
 
