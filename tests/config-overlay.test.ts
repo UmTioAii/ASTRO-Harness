@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadEffectiveConfig } from "../src/providers/profiles";
+import { mergeConfigLayers } from "../src/config-overlay";
 
 const PATHS = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
 const provider = (id: string): Record<string, unknown> => ({ kind: "openai-compat", baseUrl: `https://${id}.example/v1`, credentialRef: `${id.toUpperCase()}_KEY` });
@@ -32,6 +33,14 @@ function effective(global: unknown, projectLayer?: unknown, profileStore?: unkno
   if (projectLayer !== undefined) writeFileSync(configPath, JSON.stringify(projectLayer));
   return loadEffectiveConfig(configPath, { env: { ASTRO_HOME: home, ...env }, allowMissing: true });
 }
+
+test("only the root schema version uses newest-version precedence", () => {
+  const merged = mergeConfigLayers(
+    { version: "1.0.0", providers: { p: { kind: "custom", version: "9.0.0" } } },
+    { version: "2.0.0", providers: { p: { version: "1.0.0" } } },
+  );
+  expect(merged).toMatchObject({ version: "2.0.0", providers: { p: { version: "1.0.0" } } });
+});
 
 test("merge: agent, providers e models (três linhas de resultado da tabela do #401)", () => {
   // 1) o global mantém maxSteps e tools; o projeto sobrescreve só o model.
