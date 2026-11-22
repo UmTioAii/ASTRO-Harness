@@ -118,6 +118,11 @@ test("an omitted project maxSteps inherits the explicit global round alias", () 
   }
 });
 
+test("an omitted legacy round alias does not emit a warning", () => {
+  const result = resolveEffectiveConfig({ project: project("p", "m1", false), store: store(), env: {} });
+  expect(result.warnings.join(" ")).not.toMatch(/agent\.maxSteps/);
+});
+
 test("provider do projeto vence perfil global com o mesmo nome", () => {
   const result = resolveEffectiveConfig({
     project: project("same"),
