@@ -45,7 +45,9 @@ function approvalTimeoutText(value: number | undefined): string {
 function knobEntries(config: AstroConfig): { key: EditableConfigKey; value: string }[] {
   const fmt = (value: number | null): string => (value === null ? "null" : String(value));
   const knobs: { key: EditableConfigKey; value: string }[] = [
-    { key: "agent.maxSteps", value: String(config.agent.maxSteps) },
+    { key: "preset", value: config.preset },
+    { key: "run.maxTurns", value: String(config.run?.maxTurns ?? 500) },
+    { key: "run.maxRoundsPerTurn", value: String(config.run?.maxRoundsPerTurn ?? config.agent.maxSteps) },
     { key: "permissions.mode", value: config.permissions.mode },
   ];
   const budget = config.budget;

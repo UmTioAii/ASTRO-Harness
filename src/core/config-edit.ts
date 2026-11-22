@@ -6,11 +6,13 @@
 import { isPermissionMode } from "../permissions";
 import { validateProjectLayer } from "../providers/profiles";
 import { HOST_SHELLS, isHostShell } from "../tools/host-shell";
-import { ConfigError, isPlainObject, loadConfigRaw, writeConfigFileAtomic } from "./config";
+import { CONFIG_SCHEMA_VERSION, ConfigError, isPlainObject, loadConfigRaw, writeConfigFileAtomic } from "./config";
 
 /** Chaves editáveis via `/config` (#558); fora daqui é recusado. */
 export const EDITABLE_CONFIG_KEYS = [
-  "agent.maxSteps",
+  "preset",
+  "run.maxTurns",
+  "run.maxRoundsPerTurn",
   "budget.scope",
   "budget.limitUsd",
   "budget.warnAt",
@@ -30,8 +32,12 @@ export function isEditableConfigKey(value: unknown): value is EditableConfigKey 
   return typeof value === "string" && (EDITABLE_CONFIG_KEYS as readonly string[]).includes(value);
 }
 
-/** Knobs só do preset `control` (#515/#552): no `simple` o /config fica read-only neles (#558). */
-const CONTROL_ONLY_KEYS: ReadonlySet<string> = new Set(["agent.maxSteps", "team.sessionBudgetUsd", "team.weekBudgetUsd"]);
+/** Advanced knobs are read-only in Default; switching to Control makes them editable. */
+const CONTROL_ONLY_KEYS: ReadonlySet<string> = new Set([
+  "run.maxRoundsPerTurn",
+  "team.sessionBudgetUsd",
+  "team.weekBudgetUsd",
+]);
 
 const USD_KEYS: ReadonlySet<string> = new Set([
   "budget.limitUsd",
@@ -50,11 +56,18 @@ const BUDGET_SCOPES: readonly string[] = ["day", "month", "project", "use-as-you
  */
 export function parseConfigEditValue(key: EditableConfigKey, raw: string): unknown {
   const text = raw.trim();
-  if (key === "agent.maxSteps") {
-    if (!/^\d+$/.test(text) || Number(text) < 1) {
-      throw new ConfigError(`valor inválido para "agent.maxSteps": deve ser inteiro >= 1 (ex.: 200) — recebido "${text}"`);
+  if (key === "run.maxTurns" || key === "run.maxRoundsPerTurn") {
+    if (text === "unlimited") return text;
+    const choices = key === "run.maxTurns" ? [250, 500, 1000] : [100, 200, 500];
+    const value = Number(text);
+    if (!choices.includes(value)) {
+      throw new ConfigError(`valor inválido para "${key}": deve ser ${choices.join(" / ")} / unlimited — recebido "${text}"`);
     }
-    return Number(text);
+    return value;
+  }
+  if (key === "preset") {
+    if (text === "default" || text === "control") return text;
+    throw new ConfigError(`valor inválido para "preset": deve ser default ou control — recebido "${text}"`);
   }
   if (USD_KEYS.has(key)) {
     if (text.toLowerCase() === "null") {
@@ -129,11 +142,11 @@ export function applyConfigEditsToRaw(
       throw new ConfigError(`chave não editável via /config: "${key}" — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
     }
   }
-  if (raw.preset === "simple") {
+  if (raw.preset !== "control" && edits.preset !== "control") {
     for (const [key] of entries) {
       if (CONTROL_ONLY_KEYS.has(key)) {
         throw new ConfigError(
-          `"${key}" só pode ser alterado com "preset": "control" — no preset "simple" o /config fica read-only nesse knob`,
+          `"${key}" só pode ser alterado com "preset": "control" — no preset Default o /config fica read-only nesse knob`,
         );
       }
     }
@@ -141,6 +154,8 @@ export function applyConfigEditsToRaw(
   for (const [key, rawValue] of entries) {
     setNested(raw, key, parseConfigEditValue(key as EditableConfigKey, rawValue));
   }
+  // Editing the redefined key is an explicit opt-in to its schema 2 turn meaning.
+  if (entries.some(([key]) => key === "run.maxTurns")) raw.version = CONFIG_SCHEMA_VERSION;
 }
 
 /**
