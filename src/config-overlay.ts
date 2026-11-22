@@ -10,7 +10,7 @@ import { isVaultRef } from "./secrets";
 /** Ranque de permissão: `ask` é o mais restrito, `bypass` o mais largo. */
 const MODE_RANK: Record<string, number> = { ask: 0, "allow-edits": 1, bypass: 2 };
 /** auto (default; pode cair no host) > Docker > desligado (#474): o projeto não reabre o host. */
-const SANDBOX_RANK: Record<string, number> = { false: 0, true: 1, docker: 1, auto: 2 };
+const SANDBOX_RANK: Record<string, number> = { false: 0, off: 0, true: 1, docker: 1, auto: 2, host: 2 };
 /** Ranque do perfil do agent: `read-only` é o mais restrito. */
 const PERMISSION_RANK: Record<string, number> = { "read-only": 0, write: 1, execute: 2, full: 3 };
 /** Janela do budget: `project` é a mais estreita (o teto do time entra nela). */
@@ -167,8 +167,10 @@ export function assertNarrowed(
   const projectTools = isPlainObject(projectLayer?.tools) ? projectLayer.tools : undefined;
   const globalRunCommand = isPlainObject(globalTools?.run_command) ? globalTools.run_command : undefined;
   const projectRunCommand = isPlainObject(projectTools?.run_command) ? projectTools.run_command : undefined;
-  const fromSandbox = SANDBOX_RANK[String(globalRunCommand?.sandbox ?? "auto")];
-  const projectSandbox = projectRunCommand?.sandbox;
+  const globalShell = isPlainObject(global.shell) ? global.shell : undefined;
+  const projectShell = isPlainObject(projectLayer?.shell) ? projectLayer.shell : undefined;
+  const fromSandbox = SANDBOX_RANK[String(globalShell?.mode ?? globalRunCommand?.sandbox ?? "auto")];
+  const projectSandbox = projectShell?.mode ?? projectRunCommand?.sandbox;
   const toSandbox = projectSandbox === undefined ? undefined : SANDBOX_RANK[String(projectSandbox)];
   if (fromSandbox !== undefined && toSandbox !== undefined && toSandbox > fromSandbox) {
     const reason = fromSandbox === 0
