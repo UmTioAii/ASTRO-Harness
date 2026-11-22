@@ -797,7 +797,7 @@ test("/config abre a tela de configuração e trocar o modo atualiza o footer (#
     // a tela nova é montada por update: o useEffect que assina o input roda depois do
     // frame — assentamos antes da primeira tecla para não perdê-la
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(instance.lastFrame()).toContain("agent.maxSteps: 12");
+    expect(instance.lastFrame()).toContain("run.maxRoundsPerTurn: 12");
     expect(instance.lastFrame()).toContain("permissions.mode: ask");
     instance.stdin.write("m"); // abre o seletor de modo dentro da tela
     await waitFor(() => instance.lastFrame()?.includes("↑/↓") === true);

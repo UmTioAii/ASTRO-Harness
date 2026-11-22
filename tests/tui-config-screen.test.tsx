@@ -29,7 +29,7 @@ async function waitFor(check: () => boolean): Promise<void> {
   throw new Error("timeout esperando o frame");
 }
 
-test("mostra config, maxSteps, modo, custos, budget e pastas confiáveis (#273)", async () => {
+test("shows config, canonical rounds, mode, costs, budget and trusted folders (#273)", async () => {
   const saved: PermissionMode[] = [];
   const instance = render(
     <ConfigScreen
@@ -44,7 +44,7 @@ test("mostra config, maxSteps, modo, custos, budget e pastas confiáveis (#273)"
     await waitFor(() => instance.lastFrame()?.includes("Configuração") === true);
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("config: /tmp/proj/astro.config.json");
-    expect(frame).toContain("agent.maxSteps: 12");
+    expect(frame).toContain("run.maxRoundsPerTurn: 12");
     expect(frame).toContain("permissions.mode: ask");
     expect(frame).toContain("p/m1: in US$ 1.00/M · out US$ 2.00/M");
     expect(frame).toContain("day · limite US$ 5.00");

@@ -44,6 +44,14 @@ describe("configSummaryOf / configLines (#273)", () => {
     expect(summary.permissionMode).toBe("bypass");
   });
 
+  test("Default hides advanced limits while Control exposes canonical turn and round knobs", () => {
+    const summaries = (["default", "control"] as const).map((preset) => configSummaryOf(validateConfig({ ...base, version: "2.0.0", preset }), "/cfg/astro.config.json", "ask"));
+    expect(summaries[0]!.knobs).toEqual([{ key: "preset", value: "default" }, { key: "permissions.mode", value: "ask" }]);
+    expect(summaries[1]!.knobs).toEqual(expect.arrayContaining([{ key: "run.maxTurns", value: "500" }, { key: "run.maxRoundsPerTurn", value: "3" }]));
+    expect(configLines(summaries[0]!, []).join("\n")).not.toMatch(/agent\.maxSteps|run\.maxTurns|run\.maxRoundsPerTurn/);
+    expect(configLines(summaries[1]!, []).join("\n")).toContain("run.maxTurns: 500\nrun.maxRoundsPerTurn: 3");
+  });
+
   test("configLines monta o texto exibido no REPL e na tela", () => {
     const summary: ConfigSummary = {
       configPath: "/cfg/astro.config.json",
@@ -56,7 +64,7 @@ describe("configSummaryOf / configLines (#273)", () => {
     };
     expect(configLines(summary, []).join("\n")).toBe(
       "config: /cfg/astro.config.json\n"
-      + "agent.maxSteps: 5\n"
+      + "run.maxRoundsPerTurn: 5\n"
       + "permissions.mode: ask\n"
     + "permissions.approvalTimeoutMs: 300000 (default)\n"
       + "budget: sem budget\n"

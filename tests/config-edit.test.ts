@@ -55,6 +55,22 @@ describe("parseConfigEditValue (#558)", () => {
     expect(() => parseConfigEditValue("preset", "turbo")).toThrow(/preset/);
   });
 
+  test("errors never echo arbitrary input", () => {
+    const secret = "sk-live-do-not-echo";
+    const keys = ["run.maxTurns", "run.maxRoundsPerTurn", "preset", "budget.limitUsd", "budget.warnAt", "budget.scope", "budget.onExceed", "shell.default", "permissions.mode"] as const;
+    for (const key of keys) {
+      let message = "";
+      try { parseConfigEditValue(key, secret); } catch (error) { message = (error as Error).message; }
+      expect(message).not.toBe("");
+      expect(message).not.toContain(secret);
+    }
+    const raw = loadConfigRaw(writeProject(BASE));
+    let message = "";
+    try { applyConfigEditsToRaw(raw, { [secret]: "1" } as never); } catch (error) { message = (error as Error).message; }
+    expect(message).not.toBe("");
+    expect(message).not.toContain(secret);
+  });
+
   test("budget.* e team.*: números >= 0, warnAt entre 0 e 1, scope/onExceed fechados", () => {
     expect(parseConfigEditValue("budget.limitUsd", "12.5")).toBe(12.5);
     expect(parseConfigEditValue("budget.limitUsd", "null")).toBe(null);
@@ -92,7 +108,7 @@ describe("applyConfigEditsToRaw (#558)", () => {
   });
 
   test("Default leaves advanced knobs read-only and Control is reversible", () => {
-    const raw = loadConfigRaw(writeProject({ ...BASE, preset: "simple" }));
+    const raw = loadConfigRaw(writeProject({ ...BASE, version: "1.0.0", preset: "simple" }));
     expect(() => applyConfigEditsToRaw(raw, { "run.maxRoundsPerTurn": "100" })).toThrow(/"control"/);
     expect(() => applyConfigEditsToRaw(raw, { "team.sessionBudgetUsd": "10" })).toThrow(/"control"/);
     applyConfigEditsToRaw(raw, { preset: "control", "permissions.mode": "allow-edits" });
@@ -100,6 +116,7 @@ describe("applyConfigEditsToRaw (#558)", () => {
     expect(raw.permissions).toEqual({ mode: "allow-edits" });
     applyConfigEditsToRaw(raw, { preset: "default" });
     expect(raw.preset).toBe("default");
+    expect(raw.version).toBe("1.0.0");
   });
 });
 
@@ -111,6 +128,14 @@ describe("updateConfigKnobs (#558)", () => {
     expect(loadConfigRaw(path).agent).toMatchObject({ maxSteps: 3, model: "p/m1" });
   });
 
+  test("schema opt-in never downgrades a newer minor", () => {
+    for (const [version, expected] of [[undefined, "2.0.0"], ["1.0.0", "2.0.0"], ["2.1.0", "2.1.0"]] as const) {
+      const path = writeProject({ ...BASE, version });
+      updateConfigKnobs(path, { "run.maxTurns": "1000" }, { env: { ASTRO_NO_GLOBAL_CONFIG: "1" } });
+      expect(loadConfigRaw(path).version).toBe(expected);
+    }
+  });
+
   test("falha de validação deixa o arquivo byte a byte intacto", () => {
     const path = writeProject(BASE);
     const before = readFileSync(path, "utf8");
@@ -119,16 +144,30 @@ describe("updateConfigKnobs (#558)", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
-  test("pre-validates the global round ceiling without rewriting the file", () => {
+  test("inherits global Control without overriding explicit project Default", () => {
+    const home = mkdtempSync(join(tmpdir(), "astro-global-control-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ version: "2.0.0", preset: "control" }));
+    const env = { ASTRO_HOME: home }, inherited = writeProject({ ...BASE, version: "2.0.0" });
+    updateConfigKnobs(inherited, { "run.maxRoundsPerTurn": "100" }, { env });
+    expect(loadConfigRaw(inherited).run).toEqual({ maxRoundsPerTurn: 100 });
+    const explicit = writeProject({ ...BASE, version: "2.0.0", preset: "default" }), before = readFileSync(explicit, "utf8");
+    expect(() => updateConfigKnobs(explicit, { "run.maxRoundsPerTurn": "100" }, { env })).toThrow(/"control"/);
+    expect(readFileSync(explicit, "utf8")).toBe(before);
+    updateConfigKnobs(explicit, { preset: "control" }, { env });
+    updateConfigKnobs(explicit, { preset: "default" }, { env });
+    expect(loadConfigRaw(explicit).preset).toBe("default");
+  });
+
+  test("pre-validates global turn and round ceilings without rewriting the file", () => {
     const home = mkdtempSync(join(tmpdir(), "astro-global-edit-"));
-    writeFileSync(join(home, "config.json"), JSON.stringify({ run: { maxRoundsPerTurn: 200 } }));
-    const path = writeProject({ ...BASE, preset: "control" });
-    const before = readFileSync(path, "utf8");
-    expect(() => updateConfigKnobs(path, { "run.maxRoundsPerTurn": "500" }, { env: { ASTRO_HOME: home } }))
-      .toThrow(/teto global/);
-    expect(readFileSync(path, "utf8")).toBe(before);
-    updateConfigKnobs(path, { "run.maxRoundsPerTurn": "100" }, { env: { ASTRO_HOME: home } });
-    expect(loadConfig(path).run).toMatchObject({ maxRoundsPerTurn: 100 });
+    writeFileSync(join(home, "config.json"), JSON.stringify({ version: "2.0.0", run: { maxTurns: 250, maxRoundsPerTurn: 200 } }));
+    for (const [key, widened, narrowed] of [["run.maxTurns", "1000", "250"], ["run.maxRoundsPerTurn", "500", "100"]] as const) {
+      const path = writeProject({ ...BASE, preset: "control" }), before = readFileSync(path, "utf8");
+      expect(() => updateConfigKnobs(path, { [key]: widened }, { env: { ASTRO_HOME: home } })).toThrow(/teto global/);
+      expect(readFileSync(path, "utf8")).toBe(before);
+      updateConfigKnobs(path, { [key]: narrowed }, { env: { ASTRO_HOME: home } });
+      expect(loadConfigRaw(path).run).toMatchObject({ [key.split(".")[1]!]: Number(narrowed) });
+    }
   });
 
   test("ASTRO_NO_GLOBAL_CONFIG=1 disables global ceiling validation", () => {

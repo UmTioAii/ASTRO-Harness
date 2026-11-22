@@ -439,20 +439,15 @@ test("legacy aliases warn on load without rewriting user configuration (#594)", 
 });
 
 test("Control and unlimited limits emit startup warnings (#594)", () => {
-  const result = resolveEffectiveConfig({
-    project: {
-      version: "2.0.0",
-      preset: "control",
-      providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
-      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
-      agent: { model: "p/m1", tools: ["read_file"] },
-      run: { maxTurns: "unlimited", maxRoundsPerTurn: "unlimited" },
-    },
-    store: store(),
-    env: { ASTRO_NO_GLOBAL_CONFIG: "1" },
-  });
-  const warnings = result.warnings.join(" ");
+  const project = { version: "2.0.0", preset: "control", providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
+    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }], agent: { model: "p/m1", tools: ["read_file"] },
+    run: { maxTurns: "unlimited", maxRoundsPerTurn: "unlimited" } }, options = { store: store(), env: { ASTRO_NO_GLOBAL_CONFIG: "1" } };
+  const warnings = resolveEffectiveConfig({ project, ...options }).warnings.join(" ");
   expect(warnings).toMatch(/preset.*control/i);
   expect(warnings).toMatch(/run\.maxTurns.*unlimited.*spend/i);
   expect(warnings).toMatch(/run\.maxRoundsPerTurn.*unlimited.*loop/i);
+  const { preset: _preset, run: _run, ...inheritedProject } = project;
+  const inherited = resolveEffectiveConfig({ project: inheritedProject, global: { version: "2.0.0", preset: "control" }, ...options });
+  expect(inherited.config.preset).toBe("control");
+  expect(inherited.warnings.join(" ")).toMatch(/preset.*control/i);
 });
