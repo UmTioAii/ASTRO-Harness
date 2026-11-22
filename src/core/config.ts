@@ -156,6 +156,22 @@ function validatePreset(value: unknown): Preset {
   return fail('config inválida: "preset" deve ser "default", "simple" ou "control"');
 }
 
+const DERIVED_PRESET = Symbol("astro.derivedPreset");
+const isDerivedPreset = (value: Record<string, unknown>): boolean =>
+  (value as Record<symbol, unknown>)[DERIVED_PRESET] === true;
+
+/** Preserve an omitted preset when already validated configs are used as layers. */
+export function mergeDerivedPresetMetadata(
+  base: Record<string, unknown>, overlay: Record<string, unknown>, merged: Record<string, unknown>,
+): void {
+  const before = isDerivedPreset(base);
+  const after = isDerivedPreset(overlay);
+  if (!before && !after) return;
+  const useBase = Object.hasOwn(base, "preset") && (!Object.hasOwn(overlay, "preset") || after);
+  if (useBase) merged.preset = base.preset;
+  if ((useBase && before) || (!useBase && after)) Object.defineProperty(merged, DERIVED_PRESET, { value: true });
+}
+
 /**
  * Preset `simple`: teto de 500. Uma camada mais restritiva (global/projeto com
  * 30, por exemplo) continua valendo; acima de 500 é erro com o próximo passo.
@@ -1351,6 +1367,7 @@ function validateRunLimit(value: unknown, field: string, choices: readonly numbe
 interface DerivedRunLimits {
   maxTurns?: RunLimit;
   maxRoundsPerTurn?: RunLimit;
+  roundAlias?: boolean;
   legacyGuards: boolean;
 }
 
@@ -1388,24 +1405,27 @@ export function mergeDerivedRunLimitMetadata(
   };
   for (const key of ["maxTurns", "maxRoundsPerTurn"] as const) {
     const overlayDerived = after !== undefined && Object.hasOwn(after, key) && after[key] === overlay[key];
-    const useBase = Object.hasOwn(base, key) && (!Object.hasOwn(overlay, key) || overlayDerived);
+    const overlayAlias = key === "maxRoundsPerTurn" && overlayDerived && after.roundAlias === true;
+    const useBase = Object.hasOwn(base, key) && (!Object.hasOwn(overlay, key) || (overlayDerived && !overlayAlias));
     const source = useBase ? base : overlay;
     if (useBase) merged[key] = base[key];
     const derived = useBase ? before : after;
     if (derived !== undefined && Object.hasOwn(derived, key) && derived[key] === source[key]) {
       metadata[key] = source[key] as RunLimit;
+      if (key === "maxRoundsPerTurn" && derived.roundAlias === true) metadata.roundAlias = true;
     }
   }
   withDerivedRunLimits(merged, metadata);
 }
 
 /** Validate limits without activating legacy loop guards for an omitted `run` section. */
-function validateRun(value: unknown, legacyRounds: number): RunConfig {
+function validateRun(value: unknown, legacyRounds: number, legacyAlias: boolean): RunConfig {
   const omitted = value === undefined;
   const raw = omitted ? {} : expectObject(value, "run");
   const previous = derivedRunLimits(raw);
   const turnsDerived = raw.maxTurns === undefined || isDerivedRunLimit(raw, "maxTurns");
   const roundsDerived = raw.maxRoundsPerTurn === undefined || isDerivedRunLimit(raw, "maxRoundsPerTurn");
+  const roundAlias = roundsDerived && (previous?.roundAlias ?? legacyAlias);
   const maxTurns = raw.maxTurns === undefined
     ? 500
     : turnsDerived
@@ -1422,6 +1442,7 @@ function validateRun(value: unknown, legacyRounds: number): RunConfig {
   const metadata: DerivedRunLimits = {
     ...(turnsDerived ? { maxTurns } : {}),
     ...(roundsDerived ? { maxRoundsPerTurn } : {}),
+    ...(roundAlias ? { roundAlias: true } : {}),
     legacyGuards,
   };
   if (!legacyGuards) return withDerivedRunLimits({ maxTurns, maxRoundsPerTurn }, metadata);
@@ -2369,6 +2390,7 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
   const meta = inspectConfigDocument(input, options);
   const checked = meta.document;
   const preset = validatePreset(checked.preset);
+  const legacyAlias = isPlainObject(checked.agent) && Object.hasOwn(checked.agent, "maxSteps");
   // #515: simple fixa os limites antes da validação normal; control ganha 500
   // turnos quando não declara nenhum.
   const root = preset === "control" ? checked : applySimplePreset(checked);
@@ -2501,7 +2523,7 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
 
   // Budget (B1–B10) e guardas do loop (Q-01/L2)
   const budget = root.budget === undefined ? undefined : validateBudget(root.budget);
-  const run = validateRun(root.run, agent.maxSteps);
+  const run = validateRun(root.run, agent.maxSteps, legacyAlias);
 
   // Servidores MCP (C2, #56): ausente = nenhum servidor
   const mcpServers = root.mcpServers === undefined ? undefined : validateMcpServers(root.mcpServers);
@@ -2518,7 +2540,9 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
   const security = root.security === undefined ? undefined : validateSecurity(root.security);
   const effort = root.effort === undefined ? undefined : validateEffort(root.effort);
 
-  return { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  const config: AstroConfig = { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  if (checked.preset === undefined || isDerivedPreset(checked)) Object.defineProperty(config, DERIVED_PRESET, { value: true });
+  return config;
 }
 
 /** Lê o JSON cru de um config, sem validar (o merge por camadas vem antes). */
