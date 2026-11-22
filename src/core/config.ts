@@ -1370,7 +1370,7 @@ function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "ma
 }
 
 function withDerivedRunLimits<T extends object>(config: T, metadata: DerivedRunLimits): T {
-  Object.defineProperty(config, DERIVED_RUN_LIMITS, { value: metadata, enumerable: true });
+  Object.defineProperty(config, DERIVED_RUN_LIMITS, { value: metadata });
   return config;
 }
 
