@@ -430,4 +430,3 @@ test("legacy aliases warn on load without rewriting user configuration (#594)", 
   expect(result.warnings.join(" ")).toMatch(/sandbox.*shell\.mode/);
   expect(readFileSync(path, "utf8")).toBe(before);
 });
-
