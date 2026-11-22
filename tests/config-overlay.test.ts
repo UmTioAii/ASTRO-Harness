@@ -91,6 +91,10 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     [{ tools: { run_command: { sandbox: true } } }, project({ tools: { run_command: { sandbox: "auto" } } }), /amplia o sandbox global/],
     // Global desligado: o projeto não reabre nem para Docker nem para o host.
     [{ tools: { run_command: { sandbox: false } } }, project({ tools: { run_command: { sandbox: true } } }), /reabre o shell desligado/],
+    [{ version: "2.0.0", run: { maxTurns: 250 } }, project({ version: "2.0.0", run: { maxTurns: 1000 } }), /teto global.*run\.maxTurns/],
+    [{ version: "2.0.0", run: { maxTurns: 250 } }, project({ version: "2.0.0", run: { maxTurns: "unlimited" } }), /teto global.*run\.maxTurns/],
+    [{ version: "2.0.0", run: { maxRoundsPerTurn: 100 } }, project({ version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 500 } }), /teto global.*run\.maxRoundsPerTurn/],
+    [{ version: "2.0.0", run: { maxRoundsPerTurn: 100 } }, project({ version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: "unlimited" } }), /teto global.*run\.maxRoundsPerTurn/],
   ];
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);
