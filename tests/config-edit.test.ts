@@ -56,7 +56,7 @@ describe("parseConfigEditValue (#558)", () => {
   });
 
   test("errors never echo arbitrary input", () => {
-    const secret = "sk-live-do-not-echo";
+    const secret = "sensitive-value-do-not-echo";
     const keys = ["run.maxTurns", "run.maxRoundsPerTurn", "preset", "budget.limitUsd", "budget.warnAt", "budget.scope", "budget.onExceed", "shell.default", "permissions.mode"] as const;
     for (const key of keys) {
       let message = "";
