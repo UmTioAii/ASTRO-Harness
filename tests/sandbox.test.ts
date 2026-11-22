@@ -68,6 +68,13 @@ describe("config tools.run_command.sandbox (F4-6, #474)", () => {
     }
   });
 
+  test("shell mode rejects contradictory aliases but accepts off with false (#594)", () => {
+    const raw = structuredClone(baseConfig) as Record<string, unknown>;
+    expect(() => validateConfig({ ...raw, version: "2.0.0", shell: { mode: "host" }, tools: { run_command: { sandbox: "auto" } } }))
+      .toThrow(/shell\.mode.*conflicts.*sandbox/);
+    expect(validateConfig({ ...raw, version: "2.0.0", shell: { mode: "off" }, tools: { run_command: { sandbox: false } } }).shell?.mode).toBe("off");
+  });
+
   test("tools.run_command.sandbox inválido → ConfigError", () => {
     const raw = structuredClone(baseConfig) as Record<string, unknown>;
     raw.tools = { run_command: { sandbox: "yes" } };
