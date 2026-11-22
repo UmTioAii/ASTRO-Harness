@@ -100,6 +100,11 @@ test("validated layers preserve declared limits, aliases, presets and versions",
   expect(effective(validateConfig({ ...base, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } }), global).config).toMatchObject({ agent: { maxSteps: 200 }, run: { maxRoundsPerTurn: 100 } });
   expect(effective(validateConfig({ ...omitted, version: "2.0.0", shell: { mode: "off" } })).warnings.join(" ")).not.toMatch(/sandbox.*legacy alias/);
   for (const sandbox of [false, "docker"] as const) expect(effective(omitted, { tools: { run_command: { sandbox } } }).config.tools?.run_command?.sandbox).toBe(sandbox);
+  const normalized = effective(validateConfig({ ...base, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 500 } })).config;
+  const global1000 = validateConfig({ ...base, preset: "control", agent: { model: "p/m1", maxSteps: 1000, tools: ["read_file"] } });
+  const rounds = effective(normalized, global1000).config.agent.maxSteps;
+  const warnings = effective(effective(validateConfig({ ...omitted, version: "2.0.0", shell: { mode: "off" } })).config).warnings.join(" ");
+  expect([rounds, /sandbox.*legacy alias/.test(warnings)]).toEqual([1000, false]);
 });
 test("provider do projeto vence perfil global com o mesmo nome", () => {
   const result = resolveEffectiveConfig({
