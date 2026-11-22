@@ -108,6 +108,11 @@ test("explicit project rounds preserve an inherited legacy agent alias", () => {
   expect(effective(layer, global).config).toMatchObject({ agent: { maxSteps: 200 }, run: { maxRoundsPerTurn: 100 } });
 });
 
+test("validated shell mode does not warn as a legacy sandbox alias", () => {
+  const layer = validateConfig({ ...project("p", "m1", false), version: "2.0.0", shell: { mode: "off" } });
+  expect(effective(layer).warnings.join(" ")).not.toMatch(/sandbox.*legacy alias/);
+});
+
 test("validated projects inherit legacy global shell restrictions", () => {
   for (const sandbox of [false, "docker"] as const) {
     expect(effective(project("p", "m1", false), { tools: { run_command: { sandbox } } }).config.tools?.run_command?.sandbox).toBe(sandbox);
