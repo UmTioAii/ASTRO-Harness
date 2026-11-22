@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, inspectConfigDocument, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
+import { BASELINE_MAX_STEPS, canonicalizeRoundAlias, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, inspectConfigDocument, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
 import { globalConfigPath, statePath } from "../astro-home";
 import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
@@ -512,7 +512,7 @@ export function loadGlobalConfig(env: NodeJS.ProcessEnv = process.env): Record<s
  * qualquer merge; uma camada antiga é migrada em memória, nunca no disco.
  */
 function inspectLayerDocument(layer: Record<string, unknown>, source: string | undefined): Record<string, unknown> {
-  return inspectConfigDocument(layer, { ...(source === undefined ? {} : { source }) }).document;
+  return canonicalizeRoundAlias(inspectConfigDocument(layer, { ...(source === undefined ? {} : { source }) }).document);
 }
 
 /**

@@ -1418,14 +1418,27 @@ export function mergeDerivedRunLimitMetadata(
   withDerivedRunLimits(merged, metadata);
 }
 
+/** Canonicalize the declared round alias before layer merging; defaults keep their existing provenance. */
+export function canonicalizeRoundAlias(document: Record<string, unknown>): Record<string, unknown> {
+  const agent = nestedSection(document, "agent");
+  const run = nestedSection(document, "run");
+  const rounds = agent?.maxSteps;
+  if (typeof rounds !== "number" || (document.run !== undefined && run === undefined) || run?.maxRoundsPerTurn !== undefined) return document;
+  const previous = run === undefined ? undefined : derivedRunLimits(run);
+  const metadata: DerivedRunLimits = {
+    ...previous, maxRoundsPerTurn: rounds, roundAlias: true, legacyGuards: previous?.legacyGuards ?? run !== undefined,
+  };
+  return { ...document, run: withDerivedRunLimits({ ...run, maxRoundsPerTurn: rounds }, metadata) };
+}
+
 /** Validate limits without activating legacy loop guards for an omitted `run` section. */
-function validateRun(value: unknown, legacyRounds: number, legacyAlias: boolean): RunConfig {
+function validateRun(value: unknown, legacyRounds: number): RunConfig {
   const omitted = value === undefined;
   const raw = omitted ? {} : expectObject(value, "run");
   const previous = derivedRunLimits(raw);
   const turnsDerived = raw.maxTurns === undefined || isDerivedRunLimit(raw, "maxTurns");
   const roundsDerived = raw.maxRoundsPerTurn === undefined || isDerivedRunLimit(raw, "maxRoundsPerTurn");
-  const roundAlias = roundsDerived && (previous?.roundAlias ?? legacyAlias);
+  const roundAlias = roundsDerived && previous?.roundAlias === true;
   const maxTurns = raw.maxTurns === undefined
     ? 500
     : turnsDerived
@@ -2388,9 +2401,8 @@ export function migrateConfigInMemory(
 export function validateConfig(raw: unknown, options: { source?: string } = {}): AstroConfig {
   const input = expectObject(raw, "config");
   const meta = inspectConfigDocument(input, options);
-  const checked = meta.document;
+  const checked = canonicalizeRoundAlias(meta.document);
   const preset = validatePreset(checked.preset);
-  const legacyAlias = isPlainObject(checked.agent) && Object.hasOwn(checked.agent, "maxSteps");
   // #515: simple fixa os limites antes da validação normal; control ganha 500
   // turnos quando não declara nenhum.
   const root = preset === "control" ? checked : applySimplePreset(checked);
@@ -2523,7 +2535,7 @@ export function validateConfig(raw: unknown, options: { source?: string } = {}):
 
   // Budget (B1–B10) e guardas do loop (Q-01/L2)
   const budget = root.budget === undefined ? undefined : validateBudget(root.budget);
-  const run = validateRun(root.run, agent.maxSteps, legacyAlias);
+  const run = validateRun(root.run, agent.maxSteps);
 
   // Servidores MCP (C2, #56): ausente = nenhum servidor
   const mcpServers = root.mcpServers === undefined ? undefined : validateMcpServers(root.mcpServers);
