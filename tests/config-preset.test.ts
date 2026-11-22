@@ -12,6 +12,12 @@ function base() {
 }
 
 describe("preset simple/control (#515)", () => {
+  test("omitted preset defaults to Default with 500 turns and rounds (#594)", () => {
+    const cfg = validateConfig(base());
+    expect(cfg.preset).toBe("default");
+    expect(cfg.run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 500 });
+  });
+
   test("preset ausente é control e não muda os limites declarados", () => {
     const raw = base() as unknown as Record<string, unknown>;
     (raw.agent as Record<string, unknown>).maxSteps = 3;
