@@ -46,8 +46,10 @@ function knobEntries(config: AstroConfig): { key: EditableConfigKey; value: stri
   const fmt = (value: number | null): string => (value === null ? "null" : String(value));
   const knobs: { key: EditableConfigKey; value: string }[] = [
     { key: "preset", value: config.preset },
-    { key: "run.maxTurns", value: String(config.run?.maxTurns ?? 500) },
-    { key: "run.maxRoundsPerTurn", value: String(config.run?.maxRoundsPerTurn ?? config.agent.maxSteps) },
+    ...(config.preset === "control" ? [
+      { key: "run.maxTurns" as const, value: String(config.run?.maxTurns ?? 500) },
+      { key: "run.maxRoundsPerTurn" as const, value: String(config.run?.maxRoundsPerTurn ?? config.agent.maxSteps) },
+    ] : []),
     { key: "permissions.mode", value: config.permissions.mode },
   ];
   const budget = config.budget;
@@ -97,7 +99,7 @@ export function configLines(summary: ConfigSummary, trustedFolders: readonly str
   const money = (value: number): string => `US$ ${value.toFixed(2)}/M`;
   return [
     `config: ${summary.configPath}`,
-    `agent.maxSteps: ${summary.maxSteps}`,
+    ...summary.knobs.flatMap(({ key, value }) => key === "run.maxTurns" || key === "run.maxRoundsPerTurn" ? [`${key}: ${value}`] : []),
     `permissions.mode: ${summary.permissionMode}`,
     `permissions.approvalTimeoutMs: ${summary.approvalTimeoutMs}`,
     `budget: ${summary.budget}`,

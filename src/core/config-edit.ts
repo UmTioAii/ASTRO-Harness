@@ -4,7 +4,7 @@
  * gravação atômica. Nenhuma mensagem ecoa conteúdo do arquivo (I-03).
  */
 import { isPermissionMode } from "../permissions";
-import { validateProjectLayer } from "../providers/profiles";
+import { loadGlobalConfig, validateProjectLayer } from "../providers/profiles";
 import { HOST_SHELLS, isHostShell } from "../tools/host-shell";
 import { CONFIG_SCHEMA_VERSION, ConfigError, isPlainObject, loadConfigRaw, writeConfigFileAtomic } from "./config";
 
@@ -61,13 +61,13 @@ export function parseConfigEditValue(key: EditableConfigKey, raw: string): unkno
     const choices = key === "run.maxTurns" ? [250, 500, 1000] : [100, 200, 500];
     const value = Number(text);
     if (!choices.includes(value)) {
-      throw new ConfigError(`valor inválido para "${key}": deve ser ${choices.join(" / ")} / unlimited — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "${key}": deve ser ${choices.join(" / ")} / unlimited`);
     }
     return value;
   }
   if (key === "preset") {
     if (text === "default" || text === "control") return text;
-    throw new ConfigError(`valor inválido para "preset": deve ser default ou control — recebido "${text}"`);
+    throw new ConfigError(`valor inválido para "preset": deve ser default ou control`);
   }
   if (USD_KEYS.has(key)) {
     if (text.toLowerCase() === "null") {
@@ -76,38 +76,38 @@ export function parseConfigEditValue(key: EditableConfigKey, raw: string): unkno
     }
     const value = Number(text);
     if (text === "" || !Number.isFinite(value) || value < 0) {
-      throw new ConfigError(`valor inválido para "${key}": deve ser número >= 0 — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "${key}": deve ser número >= 0`);
     }
     return value;
   }
   if (key === "budget.warnAt") {
     const value = Number(text);
     if (text === "" || !Number.isFinite(value) || value <= 0 || value >= 1) {
-      throw new ConfigError(`valor inválido para "budget.warnAt": deve ser número entre 0 e 1 exclusive (ex.: 0.8) — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "budget.warnAt": deve ser número entre 0 e 1 exclusive (ex.: 0.8)`);
     }
     return value;
   }
   if (key === "budget.scope") {
     if (!BUDGET_SCOPES.includes(text)) {
-      throw new ConfigError(`valor inválido para "budget.scope": deve ser ${BUDGET_SCOPES.join(", ")} — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "budget.scope": deve ser ${BUDGET_SCOPES.join(", ")}`);
     }
     return text;
   }
   if (key === "budget.onExceed") {
     if (text !== "ask" && text !== "stop") {
-      throw new ConfigError(`valor inválido para "budget.onExceed": deve ser ask ou stop — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "budget.onExceed": deve ser ask ou stop`);
     }
     return text;
   }
   // permissions.mode
   if (key === "shell.default") {
     if (!isHostShell(text)) {
-      throw new ConfigError(`valor inválido para "shell.default": deve ser ${HOST_SHELLS.join(", ")} - recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "shell.default": deve ser ${HOST_SHELLS.join(", ")}`);
     }
     return text;
   }
   if (!isPermissionMode(text)) {
-    throw new ConfigError(`valor inválido para "permissions.mode": deve ser bypass, allow-edits ou ask — recebido "${text}"`);
+    throw new ConfigError(`valor inválido para "permissions.mode": deve ser bypass, allow-edits ou ask`);
   }
   return text;
 }
@@ -132,6 +132,7 @@ function setNested(raw: Record<string, unknown>, key: string, value: unknown): v
 export function applyConfigEditsToRaw(
   raw: Record<string, unknown>,
   edits: Partial<Record<EditableConfigKey, string>>,
+  inheritedControl = false,
 ): void {
   const entries = Object.entries(edits) as [string, string][];
   if (entries.length === 0) {
@@ -139,10 +140,10 @@ export function applyConfigEditsToRaw(
   }
   for (const [key] of entries) {
     if (!isEditableConfigKey(key)) {
-      throw new ConfigError(`chave não editável via /config: "${key}" — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
+      throw new ConfigError(`chave não editável via /config — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
     }
   }
-  if (raw.preset !== "control" && edits.preset !== "control") {
+  if (!inheritedControl && raw.preset !== "control" && edits.preset !== "control") {
     for (const [key] of entries) {
       if (CONTROL_ONLY_KEYS.has(key)) {
         throw new ConfigError(
@@ -154,8 +155,10 @@ export function applyConfigEditsToRaw(
   for (const [key, rawValue] of entries) {
     setNested(raw, key, parseConfigEditValue(key as EditableConfigKey, rawValue));
   }
-  // Editing the redefined key is an explicit opt-in to its schema 2 turn meaning.
-  if (entries.some(([key]) => key === "run.maxTurns")) raw.version = CONFIG_SCHEMA_VERSION;
+  // Editing the redefined key opts into schema 2 without rewriting a newer or invalid version.
+  const olderSchema = typeof raw.version === "string" && /^\d+\.\d+\.\d+$/.test(raw.version)
+    && raw.version.localeCompare(CONFIG_SCHEMA_VERSION, undefined, { numeric: true }) < 0;
+  if (entries.some(([key]) => key === "run.maxTurns") && (raw.version === undefined || olderSchema)) raw.version = CONFIG_SCHEMA_VERSION;
 }
 
 /**
@@ -170,9 +173,10 @@ export function updateConfigKnobs(
   edits: Partial<Record<EditableConfigKey, string>>,
   opts: { env?: NodeJS.ProcessEnv } = {},
 ): void {
-  const raw = loadConfigRaw(path);
+  const raw = loadConfigRaw(path), env = { ...process.env, ...opts.env };
   const next = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
-  applyConfigEditsToRaw(next, edits);
-  validateProjectLayer(next, { ...process.env, ...opts.env });
+  const global = env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(env);
+  applyConfigEditsToRaw(next, edits, raw.preset === undefined && global?.preset === "control");
+  validateProjectLayer(next, env);
   writeConfigFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
 }

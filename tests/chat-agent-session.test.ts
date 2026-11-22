@@ -622,7 +622,7 @@ describe("AgentSession.applyConfigEdits — /config edita e persiste (#558)", ()
       const before = readFileSync(configPath, "utf8");
       const editable = chat as unknown as Editable;
       expect(typeof editable.applyConfigEdits).toBe("function");
-      editable.applyConfigEdits!({ "run.maxTurns": "1000" });
+      editable.applyConfigEdits!({ preset: "control", "run.maxTurns": "1000" });
       expect(loadConfig(configPath).run?.maxTurns).toBe(1000);
       expect(loadConfigRaw(configPath).version).toBe("2.0.0");
       expect(chat.configSummary().knobs).toContainEqual({ key: "run.maxTurns", value: "1000" });
