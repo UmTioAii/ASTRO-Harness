@@ -14,13 +14,13 @@ import {
   type ProviderStore,
 } from "../src/providers/profiles";
 
-function project(provider = "p", model = "m1"): AstroConfig {
+function project(provider = "p", model = "m1", maxSteps: number | false = 2): AstroConfig {
   return validateConfig({
     providers: {
       [provider]: { kind: "openai-compat", baseUrl: `https://${provider}.example/v1`, credentialRef: "KEY" },
     },
     models: [{ provider, id: model, tags: ["writing-code"], context: 8192 }],
-    agent: { model: `${provider}/${model}`, maxSteps: 2, tools: ["read_file"] },
+    agent: { model: `${provider}/${model}`, ...(maxSteps === false ? {} : { maxSteps }), tools: ["read_file"] },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   });
 }
@@ -98,6 +98,20 @@ test("layer merges retain the newest schema without a false legacy migration", (
   const result = resolveEffectiveConfig({ project: legacy, global: { version: "2.0.0", run: { maxTurns: 250 } }, store: store(), env: {} });
   expect(result.config.run?.maxTurns).toBe(250);
   expect(mergeConfigLayers({ version: "1.0.0" }, { version: "2.1.0" }).version).toBe("2.1.0");
+});
+
+test("alias-derived project rounds override default-derived global rounds", () => {
+  const result = resolveEffectiveConfig({ project: project(), global: project("p", "m1", false), store: store(), env: {} });
+  expect(result.config.run?.maxRoundsPerTurn).toBe(2);
+});
+
+test("derived project presets inherit Control while explicit Default remains reversible", () => {
+  const inherited = resolveEffectiveConfig({
+    project: project("p", "m1", false), global: { version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } }, store: store(), env: {},
+  });
+  expect(inherited.config).toMatchObject({ preset: "control", run: { maxRoundsPerTurn: 100 } });
+  const explicit = validateConfig({ ...project("p", "m1", false), preset: "default" });
+  expect(resolveEffectiveConfig({ project: explicit, global: { preset: "control" }, store: store(), env: {} }).config.preset).toBe("default");
 });
 
 test("provider do projeto vence perfil global com o mesmo nome", () => {
