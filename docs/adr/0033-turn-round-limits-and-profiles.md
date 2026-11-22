@@ -1,6 +1,5 @@
 # ADR-0033: turn and round limits with Default/Control profiles
-- Status: accepted; Date: 2026-11-22; Issue: #594
-- Related decisions: ADR-0014, ADR-0028, ADR-0030, D-31
+- Status: accepted; Date: 2026-11-22; Issue: #594; Related decisions: ADR-0014, ADR-0028, ADR-0030, D-31
 ## Context
 Schema 1 overloaded turns and rounds, while Simple/Control left the default profile and migration boundary ambiguous. This decision supersedes the clauses in ADR-0014 and ADR-0030 that deny a turn limit or make Control the implicit preset; their unrelated decisions remain valid.
 ## Decision
@@ -14,5 +13,4 @@ Schema 1 overloaded turns and rounds, while Simple/Control left the default prof
 | Profiles | `preset: "simple"` normalizes to `default`; omitted presets inherit the global profile, while explicit Default remains reversible against global Control. |
 | Shell | `shell.mode: "off"` maps to runtime `sandbox: false`; legacy `true`/`"docker"`/`"auto"` keep their meanings. Same-layer `host`/`auto` conflicts, while compatible aliases and cross-layer narrowing remain valid. |
 ## Consequences
-- An omitted `run` derives limits without enabling legacy loop guards; an explicit legacy `run` retains them. Layer merges retain the newest schema version.
-- Unlimited removes only its corresponding work ceiling, never budget, quota, approval or security controls. Configuration is normalized in memory and never silently rewritten.
+- An omitted `run` derives limits without enabling legacy loop guards; an explicit legacy `run` retains them. Layer merges retain the newest schema version. Unlimited removes only its corresponding work ceiling, never budget, quota, approval or security controls. Configuration is normalized in memory and never silently rewritten.

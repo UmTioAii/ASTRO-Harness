@@ -154,9 +154,7 @@ function validatePreset(value: unknown): Preset {
   if (value === "control") return value;
   return fail('config inválida: "preset" deve ser "default", "simple" ou "control"');
 }
-const DERIVED_PRESET = Symbol("astro.derivedPreset"), DERIVED_AGENT_MAX_STEPS = Symbol("astro.derivedAgentMaxSteps"), DERIVED_SHELL_SANDBOX = Symbol("astro.derivedShellSandbox");
-const isDerivedPreset = (value: Record<string, unknown>): boolean => (value as Record<symbol, unknown>)[DERIVED_PRESET] === true;
-/** Preserve an omitted preset when already validated configs are used as layers. */
+const DERIVED_PRESET = Symbol("astro.derivedPreset"), DERIVED_AGENT_MAX_STEPS = Symbol("astro.derivedAgentMaxSteps"), DERIVED_SHELL_SANDBOX = Symbol("astro.derivedShellSandbox"); const isDerivedPreset = (value: Record<string, unknown>): boolean => (value as Record<symbol, unknown>)[DERIVED_PRESET] === true;
 export function mergeDerivedPresetMetadata(base: Record<string, unknown>, overlay: Record<string, unknown>, merged: Record<string, unknown>): void {
   const before = isDerivedPreset(base), after = isDerivedPreset(overlay);
   if (before || after) { const useBase = Object.hasOwn(base, "preset") && (!Object.hasOwn(overlay, "preset") || after);

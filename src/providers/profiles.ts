@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BASELINE_MAX_STEPS, canonicalizeConfigAliases, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, hasDerivedAgentMaxSteps, hasDerivedShellSandbox, inspectConfigDocument, isPlainObject, loadConfigRaw, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
+import { BASELINE_MAX_STEPS, canonicalizeConfigAliases, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, hasDerivedAgentMaxSteps, hasDerivedShellSandbox, inspectConfigDocument, isPlainObject, loadConfigRaw, mergeDerivedPresetMetadata, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
 import { globalConfigPath, statePath } from "../astro-home";
 import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
@@ -1024,13 +1024,13 @@ export function resolveEffectiveConfig(input: {
         const { model: _resolved, ...rest } = entry;
         return [name, rest];
       }));
-  const config = validateConfig({
+  const normalized = {
     ...base,
     providers,
     models,
     agent: pooled ? agentSansModel : { ...agent, model: modelRef },
     ...(agentsSansModel === undefined ? {} : { agents: agentsSansModel }),
-  }, { aliasesResolved: true });
+  }; mergeDerivedPresetMetadata({}, base, normalized); const config = validateConfig(normalized, { aliasesResolved: true });
   if (isPlainObject(declared.agent) && declared.agent.maxSteps !== undefined && !hasDerivedAgentMaxSteps(declared)) warnings.push('agent.maxSteps is a legacy alias of run.maxRoundsPerTurn; use the new key in schema 2.0.0 (the file was not rewritten)');
   const declaredSandbox = isPlainObject(declared.tools) && isPlainObject(declared.tools.run_command) ? declared.tools.run_command.sandbox : undefined;
   if (declaredSandbox !== undefined && !hasDerivedShellSandbox(declared)) warnings.push('tools.run_command.sandbox is a legacy alias of shell.mode; use shell.mode in schema 2.0.0 (the file was not rewritten)');
