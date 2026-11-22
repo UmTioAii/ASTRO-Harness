@@ -19,16 +19,16 @@ const SCOPE_RANK: Record<string, number> = { project: 0, month: 1, day: 2, "use-
 const CREDENTIAL_KEYS = ["credentialRef", "credentialsPath"];
 
 /** Mescla camadas: objetos por chave, arrays substituem, escalares substituem. */
-export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
+export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record<string, unknown>, root = true): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(overlay)) {
     if (value === undefined) continue;
     const current = merged[key];
-    if (key === "version" && (value === undefined || (typeof current === "string" && typeof value === "string"
-      && current.localeCompare(value, undefined, { numeric: true }) > 0))) continue;
+    if (root && key === "version" && typeof current === "string" && typeof value === "string"
+      && current.localeCompare(value, undefined, { numeric: true }) > 0) continue;
     if (key === "models" && Array.isArray(current) && Array.isArray(value)) merged[key] = mergeModelLayers(current, value);
     else if (isPlainObject(current) && isPlainObject(value)) {
-      const next = mergeConfigLayers(current, value);
+      const next = mergeConfigLayers(current, value, false);
       // `model` e `profile` são uma chave lógica (o schema proíbe os dois):
       // declarar um no projeto descarta o herdado da camada global. O
       // conflito dentro da mesma camada é erro do schema (ADR-0007) e passa
