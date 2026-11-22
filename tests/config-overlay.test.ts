@@ -99,6 +99,7 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     [{ version: "2.0.0", shell: { mode: "off" } }, project({ version: "2.0.0", shell: { mode: "host" } }), /reabre o shell desligado/],
     [{ version: "2.0.0", shell: { mode: "off" } }, project({ version: "2.0.0", tools: { run_command: { sandbox: true } } }), /reabre o shell desligado/],
     [{ version: "2.0.0", tools: { run_command: { sandbox: false } } }, project({ version: "2.0.0", shell: { mode: "host" } }), /reabre o shell desligado/],
+    [{ version: "2.0.0", shell: { mode: "off" } }, project({ version: "2.0.0", shell: { mode: "off" }, tools: { run_command: { sandbox: true } } }), /shell\.mode.*conflicts.*sandbox/],
   ];
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);
