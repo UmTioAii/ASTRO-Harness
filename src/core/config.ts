@@ -1410,7 +1410,7 @@ export function canonicalizeConfigAliases(document: Record<string, unknown>): Re
   const mode = nestedSection(document, "shell")?.mode;
   const sandbox = nestedSection(nestedSection(document, "tools"), "run_command")?.sandbox;
   const conflict = mode === "off" ? sandbox === true || sandbox === "auto" || sandbox === "docker"
-    : mode === "host" && (sandbox === false || sandbox === true || sandbox === "docker");
+    : mode === "host" && (sandbox === false || sandbox === true || sandbox === "docker" || sandbox === "auto");
   if (conflict) fail('config invalid: "shell.mode" conflicts with "tools.run_command.sandbox"; remove one alias — nothing was changed');
   const agent = nestedSection(document, "agent"), run = nestedSection(document, "run"), rounds = agent?.maxSteps;
   if (typeof rounds !== "number" || (document.run !== undefined && run === undefined) || hasDerivedAgentMaxSteps(document)
