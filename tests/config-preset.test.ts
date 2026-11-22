@@ -65,8 +65,7 @@ describe("preset simple/control (#515)", () => {
 
   test("Default accepts only published turn choices and hides the advanced round knob", () => {
     const withTurns = { ...base(), version: "2.0.0", preset: "simple" };
-    expect(validateConfig({ ...withTurns, run: { maxTurns: 1000 } }).run).toMatchObject({ maxTurns: 1000 });
-    expect(() => validateConfig({ ...withTurns, run: { maxTurns: 600 } })).toThrow(/run\.maxTurns.*250.*500.*1000.*unlimited/);
+    expect(validateConfig({ ...withTurns, run: { maxTurns: 1000 } }).run).toMatchObject({ maxTurns: 1000 }); expect(() => validateConfig({ ...withTurns, run: { maxTurns: 600 } })).toThrow(/run\.maxTurns.*250.*500.*1000.*unlimited/);
     expect(() => validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } })).toThrow(/run\.maxRoundsPerTurn.*preset.*control/);
   });
 
@@ -82,8 +81,6 @@ describe("preset simple/control (#515)", () => {
 
   test("agent de tipo errado não é mascarado pelo preset", () => {
     expect(() => validateConfig({ ...base(), agent: "p/m1", preset: "simple" })).toThrow(/agent/);
-    for (const maxSteps of ["25", null, true, 500.5, Infinity]) {
-      expect(() => validateConfig({ ...base(), agent: { ...base().agent, maxSteps } })).toThrow(ConfigError);
-    }
+    for (const maxSteps of ["25", null, true, 500.5, Infinity]) expect(() => validateConfig({ ...base(), agent: { ...base().agent, maxSteps } })).toThrow(ConfigError);
   });
 });

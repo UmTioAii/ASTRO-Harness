@@ -159,22 +159,15 @@ const isDerivedPreset = (value: Record<string, unknown>): boolean => (value as R
 /** Preserve an omitted preset when already validated configs are used as layers. */
 export function mergeDerivedPresetMetadata(base: Record<string, unknown>, overlay: Record<string, unknown>, merged: Record<string, unknown>): void {
   const before = isDerivedPreset(base), after = isDerivedPreset(overlay);
-  if (before || after) {
-    const useBase = Object.hasOwn(base, "preset") && (!Object.hasOwn(overlay, "preset") || after);
-    if (useBase) merged.preset = base.preset;
-    if ((useBase && before) || (!useBase && after)) Object.defineProperty(merged, DERIVED_PRESET, { value: true });
-  }
+  if (before || after) { const useBase = Object.hasOwn(base, "preset") && (!Object.hasOwn(overlay, "preset") || after);
+    if (useBase) merged.preset = base.preset; if ((useBase && before) || (!useBase && after)) Object.defineProperty(merged, DERIVED_PRESET, { value: true }); }
   const baseAgent = nestedSection(base, "agent"), overlayAgent = nestedSection(overlay, "agent");
   const beforeSteps = hasDerivedAgentMaxSteps(base), afterSteps = hasDerivedAgentMaxSteps(overlay);
   if (afterSteps && baseAgent?.maxSteps !== undefined && isPlainObject(merged.agent)) merged.agent.maxSteps = baseAgent.maxSteps;
-  if ((afterSteps && (baseAgent?.maxSteps === undefined || beforeSteps)) || (overlayAgent?.maxSteps === undefined && beforeSteps)) {
-    Object.defineProperty(merged, DERIVED_AGENT_MAX_STEPS, { value: true });
-  }
+  if ((afterSteps && (baseAgent?.maxSteps === undefined || beforeSteps)) || (overlayAgent?.maxSteps === undefined && beforeSteps)) Object.defineProperty(merged, DERIVED_AGENT_MAX_STEPS, { value: true });
   const baseSandbox = nestedSection(nestedSection(base, "tools"), "run_command")?.sandbox, overlaySandbox = nestedSection(nestedSection(overlay, "tools"), "run_command")?.sandbox;
   if (nestedSection(nestedSection(merged, "tools"), "run_command")?.sandbox !== undefined
-    && (baseSandbox === undefined || hasDerivedShellSandbox(base)) && (overlaySandbox === undefined || hasDerivedShellSandbox(overlay))) {
-    Object.defineProperty(merged, DERIVED_SHELL_SANDBOX, { value: true });
-  }
+    && (baseSandbox === undefined || hasDerivedShellSandbox(base)) && (overlaySandbox === undefined || hasDerivedShellSandbox(overlay))) Object.defineProperty(merged, DERIVED_SHELL_SANDBOX, { value: true });
 }
 /**
  * Preset `simple`: teto de 500. Uma camada mais restritiva (global/projeto com
@@ -309,9 +302,7 @@ export interface BudgetConfig {
 
 export type RunLimit = number | "unlimited";
 /** Session limits always exist; legacy loop guards require an explicit `run` section. */
-export type RunConfig = { maxTurns: RunLimit; maxRoundsPerTurn: RunLimit;
-  tests?: RunTestsConfig;
-} & (
+export type RunConfig = { maxTurns: RunLimit; maxRoundsPerTurn: RunLimit; tests?: RunTestsConfig } & (
   | { checkpointAt: number; noProgressSegments: number; judge: JudgeMode }
   | { checkpointAt?: undefined; noProgressSegments?: undefined; judge?: undefined });
 
@@ -1359,15 +1350,12 @@ function derivedRunLimits(value: Record<string, unknown>): DerivedRunLimits | un
 function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "maxRoundsPerTurn"): boolean {
   const metadata = derivedRunLimits(value); return metadata !== undefined && metadata[key] === value[key] && Object.hasOwn(metadata, key);
 }
-/** A validated omitted agent default mirrors the derived, non-alias round value. */
 export function hasDerivedAgentMaxSteps(layer: Record<string, unknown>): boolean {
   if ((layer as Record<symbol, unknown>)[DERIVED_AGENT_MAX_STEPS] === true) return true;
   const run = nestedSection(layer, "run"); return run !== undefined && nestedSection(layer, "agent")?.maxSteps === run.maxRoundsPerTurn
     && isDerivedRunLimit(run, "maxRoundsPerTurn") && derivedRunLimits(run)?.roundAlias !== true;
 }
-export function hasDerivedShellSandbox(layer: Record<string, unknown>): boolean {
-  return (layer as Record<symbol, unknown>)[DERIVED_SHELL_SANDBOX] === true;
-}
+export function hasDerivedShellSandbox(layer: Record<string, unknown>): boolean { return (layer as Record<symbol, unknown>)[DERIVED_SHELL_SANDBOX] === true; }
 /** Return only user-declared limits, including the legacy round alias. */
 export function declaredRunLimit(run: Record<string, unknown> | undefined, key: "maxTurns" | "maxRoundsPerTurn"): RunLimit | undefined {
   if (run?.[key] === undefined) return undefined;
@@ -1383,10 +1371,7 @@ export function mergeDerivedRunLimitMetadata(base: Record<string, unknown>, over
     const useBase = Object.hasOwn(base, key) && (!Object.hasOwn(overlay, key) || (overlayDerived && !overlayAlias));
     const source = useBase ? base : overlay, derived = useBase ? before : after;
     if (useBase) merged[key] = base[key];
-    if (derived !== undefined && Object.hasOwn(derived, key) && derived[key] === source[key]) {
-      metadata[key] = source[key] as RunLimit;
-      if (key === "maxRoundsPerTurn" && derived.roundAlias === true) metadata.roundAlias = true;
-    }
+    if (derived !== undefined && Object.hasOwn(derived, key) && derived[key] === source[key]) { metadata[key] = source[key] as RunLimit; if (key === "maxRoundsPerTurn" && derived.roundAlias === true) metadata.roundAlias = true; }
   }
   withDerivedRunLimits(merged, metadata);
 }
@@ -1398,8 +1383,7 @@ export function canonicalizeConfigAliases(document: Record<string, unknown>): Re
   if (conflict) fail('config invalid: "shell.mode" conflicts with "tools.run_command.sandbox"; remove one alias — nothing was changed');
   const agent = nestedSection(document, "agent"), run = nestedSection(document, "run"), rounds = agent?.maxSteps;
   if (typeof rounds !== "number" || (document.run !== undefined && run === undefined) || hasDerivedAgentMaxSteps(document)
-    || (run?.maxRoundsPerTurn === rounds && derivedRunLimits(run)?.roundAlias === true)
-    || (run?.maxRoundsPerTurn !== undefined && !isDerivedRunLimit(run, "maxRoundsPerTurn"))) return document;
+    || (run?.maxRoundsPerTurn === rounds && derivedRunLimits(run)?.roundAlias === true) || (run?.maxRoundsPerTurn !== undefined && !isDerivedRunLimit(run, "maxRoundsPerTurn"))) return document;
   const previous = run === undefined ? undefined : derivedRunLimits(run), metadata: DerivedRunLimits = { ...previous, maxRoundsPerTurn: rounds, roundAlias: true, legacyGuards: previous?.legacyGuards ?? run !== undefined };
   return { ...document, run: withDerivedRunLimits({ ...run, maxRoundsPerTurn: rounds }, metadata) };
 }
@@ -1407,8 +1391,7 @@ export function canonicalizeConfigAliases(document: Record<string, unknown>): Re
 function validateRun(value: unknown, legacyRounds: number): RunConfig {
   const omitted = value === undefined, raw = omitted ? {} : expectObject(value, "run");
   const turnsDerived = raw.maxTurns === undefined || isDerivedRunLimit(raw, "maxTurns"), roundsDerived = raw.maxRoundsPerTurn === undefined || isDerivedRunLimit(raw, "maxRoundsPerTurn");
-  const previous = derivedRunLimits(raw), roundAlias = roundsDerived && previous?.roundAlias === true;
-  const maxTurns = raw.maxTurns === undefined ? 500 : turnsDerived ? raw.maxTurns as RunLimit : validateRunLimit(raw.maxTurns, "run.maxTurns", [250, 500, 1000]);
+  const previous = derivedRunLimits(raw), roundAlias = roundsDerived && previous?.roundAlias === true, maxTurns = raw.maxTurns === undefined ? 500 : turnsDerived ? raw.maxTurns as RunLimit : validateRunLimit(raw.maxTurns, "run.maxTurns", [250, 500, 1000]);
   const maxRoundsPerTurn = raw.maxRoundsPerTurn === undefined ? legacyRounds : roundsDerived ? raw.maxRoundsPerTurn as RunLimit : validateRunLimit(raw.maxRoundsPerTurn, "run.maxRoundsPerTurn", [100, 200, 500]);
   const declaresGuard = ["checkpointAt", "noProgressSegments", "judge", "tests"].some((key) => Object.hasOwn(raw, key)), legacyGuards = omitted ? false : previous === undefined || previous.legacyGuards || declaresGuard;
   const metadata: DerivedRunLimits = { ...(turnsDerived ? { maxTurns } : {}), ...(roundsDerived ? { maxRoundsPerTurn } : {}), ...(roundAlias ? { roundAlias: true } : {}), legacyGuards };
@@ -2206,8 +2189,7 @@ function migrateV0ToV1(document: Record<string, unknown>): Record<string, unknow
 /** Schema 1 maxTurns meant rounds; schema 2 reuses the name for turns, so confirmation is mandatory. */
 function migrateV1ToV2(document: Record<string, unknown>, source?: string): Record<string, unknown> {
   const run = nestedSection(document, "run"); if (run !== undefined && Object.hasOwn(run, "maxTurns") && !isDerivedRunLimit(run, "maxTurns")) {
-    throw new ConfigError(`${configLabel(source)}: "run.maxTurns" meant model/tool rounds in schema 1.x but means chat turns in schema 2.0.0; ` +
-      'confirm the new meaning and set version: "2.0.0" explicitly — nothing was changed', "config_migration_required");
+    throw new ConfigError(`${configLabel(source)}: "run.maxTurns" meant model/tool rounds in schema 1.x but means chat turns in schema 2.0.0; confirm the new meaning and set version: "2.0.0" explicitly — nothing was changed`, "config_migration_required");
   }
   return document;
 }

@@ -34,15 +34,8 @@ function effective(global: unknown, projectLayer?: unknown, profileStore?: unkno
   return loadEffectiveConfig(configPath, { env: { ASTRO_HOME: home, ...env }, allowMissing: true });
 }
 
-test("only the root schema version uses newest-version precedence", () => {
-  const merged = mergeConfigLayers(
-    { version: "1.0.0", providers: { p: { kind: "custom", version: "9.0.0" } } },
-    { version: "2.0.0", providers: { p: { version: "1.0.0" } } },
-  );
-  expect(merged).toMatchObject({ version: "2.0.0", providers: { p: { version: "1.0.0" } } });
-});
-
 test("merge: agent, providers e models (três linhas de resultado da tabela do #401)", () => {
+  expect(mergeConfigLayers({ version: "1.0.0", providers: { p: { kind: "custom", version: "9.0.0" } } }, { version: "2.0.0", providers: { p: { version: "1.0.0" } } })).toMatchObject({ version: "2.0.0", providers: { p: { version: "1.0.0" } } });
   // 1) o global mantém maxSteps e tools; o projeto sobrescreve só o model.
   expect(effective({ agent: { maxSteps: 12, tools: ["read_file", "grep"] } },
     project({ agent: { model: "p/m" } })).config.agent)
