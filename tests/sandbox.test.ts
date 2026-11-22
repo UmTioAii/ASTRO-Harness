@@ -61,6 +61,14 @@ describe("config tools.run_command.sandbox (F4-6, #474)", () => {
     expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("docker");
   });
 
+  test("legacy Docker and auto modes are not relabeled as host (#594)", () => {
+    for (const sandbox of [true, "docker", "auto"] as const) {
+      const cfg = validateConfig({ ...structuredClone(baseConfig), tools: { run_command: { sandbox } } });
+      expect(cfg.shell?.mode).toBeUndefined();
+      expect(cfg.tools?.run_command?.sandbox).toBe(sandbox);
+    }
+  });
+
   test("tools.run_command.sandbox inválido → ConfigError", () => {
     const raw = structuredClone(baseConfig) as Record<string, unknown>;
     raw.tools = { run_command: { sandbox: "yes" } };
