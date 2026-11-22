@@ -61,17 +61,11 @@ describe("config tools.run_command.sandbox (F4-6, #474)", () => {
     expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("docker");
   });
 
-  test("legacy Docker and auto modes are not relabeled as host (#594)", () => {
+  test("legacy shell aliases retain their meaning and reject contradictions (#594)", () => {
     for (const sandbox of [true, "docker", "auto"] as const) {
-      const cfg = validateConfig({ ...structuredClone(baseConfig), tools: { run_command: { sandbox } } });
-      expect([cfg.shell?.mode, cfg.tools?.run_command?.sandbox]).toEqual([undefined, sandbox]);
+      const cfg = validateConfig({ ...structuredClone(baseConfig), tools: { run_command: { sandbox } } }); expect([cfg.shell?.mode, cfg.tools?.run_command?.sandbox]).toEqual([undefined, sandbox]);
     }
-  });
-
-  test("shell mode rejects contradictory aliases but accepts off with false (#594)", () => {
-    const raw = structuredClone(baseConfig) as Record<string, unknown>;
-    expect(() => validateConfig({ ...raw, version: "2.0.0", shell: { mode: "host" }, tools: { run_command: { sandbox: "auto" } } }))
-      .toThrow(/shell\.mode.*conflicts.*sandbox/);
+    const raw = structuredClone(baseConfig) as Record<string, unknown>; expect(() => validateConfig({ ...raw, version: "2.0.0", shell: { mode: "host" }, tools: { run_command: { sandbox: "auto" } } })).toThrow(/shell\.mode.*conflicts.*sandbox/);
     expect(validateConfig({ ...raw, version: "2.0.0", shell: { mode: "off" }, tools: { run_command: { sandbox: false } } }).shell?.mode).toBe("off");
   });
 

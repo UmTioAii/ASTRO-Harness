@@ -1,6 +1,6 @@
 # ADR-0030: presets Simple/Control e a fronteira entre `profile` e `preset`
 
-- Status: aceita
+- Status: aceita; turn/preset clauses partially superseded by ADR-0033 (#594)
 - Data: 2026-11-20
 - Issue: #478
 - Decisões relacionadas: D-07, D-24, D-28, D-31, ADR-0007, ADR-0014, ADR-0029

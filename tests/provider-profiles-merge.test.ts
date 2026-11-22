@@ -3,7 +3,6 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConfig, type AstroConfig } from "../src/core/config";
-import { mergeConfigLayers } from "../src/config-overlay";
 import {
   loadEffectiveConfig,
   profileFromEnv,
@@ -83,44 +82,23 @@ test("sem override, usa o provider do agent.model", () => {
   expect(result.config.agent.model).toBe("p/m1");
 });
 
-test("derived limits and presets survive layer merges without false migrations", () => {
-  const resolve = (projectLayer: AstroConfig, global: unknown) =>
-    resolveEffectiveConfig({ project: projectLayer, global, store: store(), env: {} }).config;
-  expect(resolve(project(), { run: {} }).run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 2 });
-  const globalTurns = { version: "2.0.0", run: { maxTurns: 250 } };
-  expect(resolve(project(), globalTurns).run?.maxTurns).toBe(250);
-  const legacy = validateConfig({ ...project(), version: "1.0.0" });
-  expect(resolve(legacy, globalTurns).run?.maxTurns).toBe(250);
-  expect(mergeConfigLayers({ version: "1.0.0" }, { version: "2.1.0" }).version).toBe("2.1.0");
-  expect(resolve(project(), project("p", "m1", false)).run?.maxRoundsPerTurn).toBe(2);
-  const globalControl = { version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } };
-  expect(resolve(project("p", "m1", false), globalControl)).toMatchObject({ preset: "control", run: { maxRoundsPerTurn: 100 } });
-  const explicit = validateConfig({ ...project("p", "m1", false), preset: "default" });
-  expect(resolve(explicit, { preset: "control" }).preset).toBe("default");
-});
+const effective = (projectLayer: AstroConfig, global?: unknown) => resolveEffectiveConfig({ project: projectLayer, ...(global === undefined ? {} : { global }), store: store(), env: {} });
 
-test("default-derived validated global limits do not ceiling project run limits", () => {
-  const global = project("p", "m1", false);
-  for (const maxTurns of [1000, "unlimited"] as const) {
-    const projectLayer = validateConfig({ ...global, version: "2.0.0", run: { maxTurns } });
-    expect(resolveEffectiveConfig({ project: projectLayer, global, store: store(), env: {} }).config.run?.maxTurns).toBe(maxTurns);
-  }
-  const projectLayer = validateConfig({ ...global, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: "unlimited" } });
-  expect(resolveEffectiveConfig({ project: projectLayer, global, store: store(), env: {} }).config.run?.maxRoundsPerTurn).toBe("unlimited");
-});
-
-test("an omitted project maxSteps inherits the explicit global round alias", () => {
+test("validated layers preserve declared limits, aliases, presets and versions", () => {
+  const omitted = project("p", "m1", false), globalTurns = { version: "2.0.0", run: { maxTurns: 250 } };
+  expect(effective(project(), { run: {} }).config.run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 2 });
+  expect([effective(project(), globalTurns).config.run?.maxTurns, effective(validateConfig({ ...project(), version: "1.0.0" }), globalTurns).config.run?.maxTurns]).toEqual([250, 250]);
+  expect(effective(validateConfig({ ...project(), version: "1.0.0" }), { version: "2.1.0" }).config.version).toBe("2.1.0");
+  expect(effective(project(), omitted).config.run?.maxRoundsPerTurn).toBe(2);
+  expect(effective(omitted, { version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } }).config).toMatchObject({ preset: "control", run: { maxRoundsPerTurn: 100 } });
+  expect(effective(validateConfig({ ...omitted, preset: "default" }), { preset: "control" }).config.preset).toBe("default");
+  for (const maxTurns of [1000, "unlimited"] as const) expect(effective(validateConfig({ ...omitted, version: "2.0.0", run: { maxTurns } }), omitted).config.run?.maxTurns).toBe(maxTurns);
+  expect(effective(validateConfig({ ...omitted, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: "unlimited" } }), omitted).config.run?.maxRoundsPerTurn).toBe("unlimited");
   for (const maxSteps of [100, 1000]) {
-    const global = validateConfig({ ...project("p", "m1", false), preset: "control", agent: { model: "p/m1", maxSteps, tools: ["read_file"] } });
-    const result = resolveEffectiveConfig({ project: project("p", "m1", false), global, store: store(), env: {} });
-    expect(result.config.agent.maxSteps).toBe(maxSteps);
-    expect(result.config.run?.maxRoundsPerTurn).toBe(maxSteps);
+    const global = validateConfig({ ...omitted, preset: "control", agent: { model: "p/m1", maxSteps, tools: ["read_file"] } }), result = effective(omitted, global).config;
+    expect([result.agent.maxSteps, result.run?.maxRoundsPerTurn]).toEqual([maxSteps, maxSteps]);
   }
-});
-
-test("an omitted legacy round alias does not emit a warning", () => {
-  const result = resolveEffectiveConfig({ project: project("p", "m1", false), store: store(), env: {} });
-  expect(result.warnings.join(" ")).not.toMatch(/agent\.maxSteps/);
+  expect(effective(omitted).warnings.join(" ")).not.toMatch(/agent\.maxSteps/);
 });
 
 test("provider do projeto vence perfil global com o mesmo nome", () => {
@@ -447,14 +425,11 @@ test("activeProfileId órfão no disco avisa e cai no projeto", () => {
 });
 
 test("legacy aliases warn on load without rewriting user configuration (#594)", () => {
-  const home = mkdtempSync(join(tmpdir(), "astro-alias-load-"));
-  const path = join(home, "astro.config.json");
+  const home = mkdtempSync(join(tmpdir(), "astro-alias-load-")), path = join(home, "astro.config.json");
   const raw = {
-    version: "2.0.0", preset: "control",
-    providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
-    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
-    agent: { model: "p/m1", maxSteps: 2, tools: ["read_file"] }, tools: { run_command: { sandbox: false } },
-  };
+    version: "2.0.0", preset: "control", providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
+    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }], agent: { model: "p/m1", maxSteps: 2, tools: ["read_file"] },
+    tools: { run_command: { sandbox: false } } };
   const before = `${JSON.stringify(raw, null, 2)}\n`;
   writeFileSync(path, before);
   const result = loadEffectiveConfig(path, { env: { ASTRO_HOME: home, ASTRO_NO_GLOBAL_CONFIG: "1" } });
