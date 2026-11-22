@@ -1737,7 +1737,8 @@ function validateShell(value: unknown, legacySandbox?: boolean | "auto" | "docke
     }
     result.default = shell;
   }
-  const mode = raw.mode ?? (legacySandbox === undefined ? undefined : legacySandbox === false ? "off" : "host");
+  // Only `false` has an exact schema-2 equivalent before the #599 runtime migration.
+  const mode = raw.mode ?? (legacySandbox === false ? "off" : undefined);
   if (mode !== undefined) {
     if (mode !== "host" && mode !== "off") fail('config inválida: "shell.mode" deve ser "host" ou "off"');
     result.mode = mode;
