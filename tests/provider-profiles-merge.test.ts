@@ -101,6 +101,13 @@ test("validated layers preserve declared limits, aliases, presets and versions",
   expect(effective(omitted).warnings.join(" ")).not.toMatch(/agent\.maxSteps/);
 });
 
+test("explicit project rounds preserve an inherited legacy agent alias", () => {
+  const omitted = project("p", "m1", false);
+  const global = validateConfig({ ...omitted, preset: "control", agent: { model: "p/m1", maxSteps: 200, tools: ["read_file"] } });
+  const layer = validateConfig({ ...omitted, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } });
+  expect(effective(layer, global).config).toMatchObject({ agent: { maxSteps: 200 }, run: { maxRoundsPerTurn: 100 } });
+});
+
 test("validated projects inherit legacy global shell restrictions", () => {
   for (const sandbox of [false, "docker"] as const) {
     expect(effective(project("p", "m1", false), { tools: { run_command: { sandbox } } }).config.tools?.run_command?.sandbox).toBe(sandbox);
