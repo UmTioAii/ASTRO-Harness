@@ -101,4 +101,11 @@ describe("preset simple/control (#515)", () => {
   test("agent de tipo errado não é mascarado pelo preset", () => {
     expect(() => validateConfig({ ...base(), agent: "p/m1", preset: "simple" })).toThrow(/agent/);
   });
+
+  test("Default preserves malformed maxSteps values for the regular validator", () => {
+    for (const maxSteps of ["25", null, true, 500.5, Infinity]) {
+      const agent = { ...base().agent, maxSteps };
+      expect(() => validateConfig({ ...base(), agent })).toThrow(ConfigError);
+    }
+  });
 });
