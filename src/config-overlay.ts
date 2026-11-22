@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, isPlainObject, mergeDerivedPresetMetadata, mergeDerivedRunLimitMetadata } from "./core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, declaredRunLimit, isPlainObject, mergeDerivedPresetMetadata, mergeDerivedRunLimitMetadata } from "./core/config";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./permissions";
 import { isVaultRef } from "./secrets";
 
@@ -122,12 +122,10 @@ export function assertNarrowed(
   if (mainAfter !== undefined) assertStepsCeiling(mainAfter.maxSteps, "agent.maxSteps", mainCeiling);
   const globalRun = isPlainObject(global.run) ? global.run : undefined;
   const mergedRun = isPlainObject(merged.run) ? merged.run : undefined;
-  if (typeof globalRun?.maxTurns === "number") assertStepsCeiling(mergedRun?.maxTurns, "run.maxTurns", globalRun.maxTurns);
-  const globalRoundLimit = globalRun?.maxRoundsPerTurn;
-  const roundCeiling = typeof globalRoundLimit === "number" ? globalRoundLimit : mainCeiling;
-  if ((globalRoundLimit !== undefined || typeof main?.maxSteps === "number") && globalRoundLimit !== "unlimited") {
-    assertStepsCeiling(mergedRun?.maxRoundsPerTurn, "run.maxRoundsPerTurn", roundCeiling);
-  }
+  const globalTurnLimit = declaredRunLimit(globalRun, "maxTurns");
+  if (typeof globalTurnLimit === "number") assertStepsCeiling(mergedRun?.maxTurns, "run.maxTurns", globalTurnLimit);
+  const globalRoundLimit = declaredRunLimit(globalRun, "maxRoundsPerTurn");
+  if (typeof globalRoundLimit === "number") assertStepsCeiling(mergedRun?.maxRoundsPerTurn, "run.maxRoundsPerTurn", globalRoundLimit);
   if (main !== undefined && mainAfter !== undefined) assertAgentNarrowed(main, mainAfter, "do agent principal");
   const named = isPlainObject(global.agents) ? global.agents : {};
   const namedAfter = isPlainObject(merged.agents) ? merged.agents : {};

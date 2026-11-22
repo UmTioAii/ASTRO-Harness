@@ -1367,6 +1367,13 @@ function isDerivedRunLimit(value: Record<string, unknown>, key: "maxTurns" | "ma
   return metadata !== undefined && Object.hasOwn(metadata, key) && metadata[key] === value[key];
 }
 
+/** Return only user-declared limits, including the legacy round alias. */
+export function declaredRunLimit(run: Record<string, unknown> | undefined, key: "maxTurns" | "maxRoundsPerTurn"): RunLimit | undefined {
+  if (run?.[key] === undefined) return undefined;
+  return !isDerivedRunLimit(run, key) || (key === "maxRoundsPerTurn" && derivedRunLimits(run)?.roundAlias === true)
+    ? run[key] as RunLimit : undefined;
+}
+
 function withDerivedRunLimits<T extends object>(config: T, metadata: DerivedRunLimits): T {
   return Object.defineProperty(config, DERIVED_RUN_LIMITS, { value: metadata });
 }
