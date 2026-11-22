@@ -212,11 +212,10 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
 
   // Só injeta quando `agent` é objeto: entrada de tipo errado segue para o
   // validador normal, que reporta a causa certa (nunca mascara o erro).
-  if (agent === undefined) return root;
-  const declared = typeof agent.maxSteps === "number" ? agent.maxSteps : SIMPLE_MAX_STEPS;
+  if (agent === undefined || agent.maxSteps !== undefined) return root;
   return {
     ...root,
-    agent: { ...agent, maxSteps: Math.min(declared, SIMPLE_MAX_STEPS) },
+    agent: { ...agent, maxSteps: SIMPLE_MAX_STEPS },
   };
 }
 
