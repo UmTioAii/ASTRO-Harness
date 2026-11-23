@@ -4,13 +4,15 @@
  * gravação atômica. Nenhuma mensagem ecoa conteúdo do arquivo (I-03).
  */
 import { isPermissionMode } from "../permissions";
-import { validateProjectLayer } from "../providers/profiles";
+import { loadGlobalConfig, validateProjectLayer } from "../providers/profiles";
 import { HOST_SHELLS, isHostShell } from "../tools/host-shell";
-import { ConfigError, isPlainObject, loadConfigRaw, writeConfigFileAtomic } from "./config";
+import { CONFIG_SCHEMA_VERSION, ConfigError, isPlainObject, loadConfigRaw, writeConfigFileAtomic } from "./config";
 
 /** Chaves editáveis via `/config` (#558); fora daqui é recusado. */
 export const EDITABLE_CONFIG_KEYS = [
-  "agent.maxSteps",
+  "preset",
+  "run.maxTurns",
+  "run.maxRoundsPerTurn",
   "budget.scope",
   "budget.limitUsd",
   "budget.warnAt",
@@ -23,15 +25,19 @@ export const EDITABLE_CONFIG_KEYS = [
   "shell.default",
 ] as const;
 
-export type EditableConfigKey = (typeof EDITABLE_CONFIG_KEYS)[number];
+export type EditableConfigKey = (typeof EDITABLE_CONFIG_KEYS)[number]; export const CONTROL_ENTRY_WARNING = 'preset "control" is active: advanced limits and budgets are visible; use /config preset default to return';
 
 /** Guard de runtime para input externo (whitelist fechada). */
 export function isEditableConfigKey(value: unknown): value is EditableConfigKey {
   return typeof value === "string" && (EDITABLE_CONFIG_KEYS as readonly string[]).includes(value);
 }
 
-/** Knobs só do preset `control` (#515/#552): no `simple` o /config fica read-only neles (#558). */
-const CONTROL_ONLY_KEYS: ReadonlySet<string> = new Set(["agent.maxSteps", "team.sessionBudgetUsd", "team.weekBudgetUsd"]);
+/** Advanced knobs are read-only in Default; switching to Control makes them editable. */
+const CONTROL_ONLY_KEYS: ReadonlySet<string> = new Set([
+  "run.maxRoundsPerTurn",
+  "team.sessionBudgetUsd",
+  "team.weekBudgetUsd",
+]);
 
 const USD_KEYS: ReadonlySet<string> = new Set([
   "budget.limitUsd",
@@ -50,11 +56,18 @@ const BUDGET_SCOPES: readonly string[] = ["day", "month", "project", "use-as-you
  */
 export function parseConfigEditValue(key: EditableConfigKey, raw: string): unknown {
   const text = raw.trim();
-  if (key === "agent.maxSteps") {
-    if (!/^\d+$/.test(text) || Number(text) < 1) {
-      throw new ConfigError(`valor inválido para "agent.maxSteps": deve ser inteiro >= 1 (ex.: 200) — recebido "${text}"`);
+  if (key === "run.maxTurns" || key === "run.maxRoundsPerTurn") {
+    if (text === "unlimited") return text;
+    const choices = key === "run.maxTurns" ? [250, 500, 1000] : [100, 200, 500];
+    const value = Number(text);
+    if (!choices.includes(value)) {
+      throw new ConfigError(`valor inválido para "${key}": deve ser ${choices.join(" / ")} / unlimited`);
     }
-    return Number(text);
+    return value;
+  }
+  if (key === "preset") {
+    if (text === "default" || text === "control") return text;
+    throw new ConfigError(`valor inválido para "preset": deve ser default ou control`);
   }
   if (USD_KEYS.has(key)) {
     if (text.toLowerCase() === "null") {
@@ -63,38 +76,38 @@ export function parseConfigEditValue(key: EditableConfigKey, raw: string): unkno
     }
     const value = Number(text);
     if (text === "" || !Number.isFinite(value) || value < 0) {
-      throw new ConfigError(`valor inválido para "${key}": deve ser número >= 0 — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "${key}": deve ser número >= 0`);
     }
     return value;
   }
   if (key === "budget.warnAt") {
     const value = Number(text);
     if (text === "" || !Number.isFinite(value) || value <= 0 || value >= 1) {
-      throw new ConfigError(`valor inválido para "budget.warnAt": deve ser número entre 0 e 1 exclusive (ex.: 0.8) — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "budget.warnAt": deve ser número entre 0 e 1 exclusive (ex.: 0.8)`);
     }
     return value;
   }
   if (key === "budget.scope") {
     if (!BUDGET_SCOPES.includes(text)) {
-      throw new ConfigError(`valor inválido para "budget.scope": deve ser ${BUDGET_SCOPES.join(", ")} — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "budget.scope": deve ser ${BUDGET_SCOPES.join(", ")}`);
     }
     return text;
   }
   if (key === "budget.onExceed") {
     if (text !== "ask" && text !== "stop") {
-      throw new ConfigError(`valor inválido para "budget.onExceed": deve ser ask ou stop — recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "budget.onExceed": deve ser ask ou stop`);
     }
     return text;
   }
   // permissions.mode
   if (key === "shell.default") {
     if (!isHostShell(text)) {
-      throw new ConfigError(`valor inválido para "shell.default": deve ser ${HOST_SHELLS.join(", ")} - recebido "${text}"`);
+      throw new ConfigError(`valor inválido para "shell.default": deve ser ${HOST_SHELLS.join(", ")}`);
     }
     return text;
   }
   if (!isPermissionMode(text)) {
-    throw new ConfigError(`valor inválido para "permissions.mode": deve ser bypass, allow-edits ou ask — recebido "${text}"`);
+    throw new ConfigError(`valor inválido para "permissions.mode": deve ser bypass, allow-edits ou ask`);
   }
   return text;
 }
@@ -105,7 +118,8 @@ function setNested(raw: Record<string, unknown>, key: string, value: unknown): v
   let node = raw;
   for (const part of parts.slice(0, -1)) {
     const next = node[part];
-    if (!isPlainObject(next)) node[part] = {};
+    if (next === undefined) node[part] = {};
+    else if (!isPlainObject(next)) throw new ConfigError(`invalid config: section "${part}" must be an object for /config edits`);
     node = node[part] as Record<string, unknown>;
   }
   node[parts[parts.length - 1]!] = value;
@@ -119,6 +133,7 @@ function setNested(raw: Record<string, unknown>, key: string, value: unknown): v
 export function applyConfigEditsToRaw(
   raw: Record<string, unknown>,
   edits: Partial<Record<EditableConfigKey, string>>,
+  inheritedControl = false,
 ): void {
   const entries = Object.entries(edits) as [string, string][];
   if (entries.length === 0) {
@@ -126,14 +141,14 @@ export function applyConfigEditsToRaw(
   }
   for (const [key] of entries) {
     if (!isEditableConfigKey(key)) {
-      throw new ConfigError(`chave não editável via /config: "${key}" — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
+      throw new ConfigError(`chave não editável via /config — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
     }
   }
-  if (raw.preset === "simple") {
+  if (!inheritedControl && raw.preset !== "control" && edits.preset !== "control") {
     for (const [key] of entries) {
       if (CONTROL_ONLY_KEYS.has(key)) {
         throw new ConfigError(
-          `"${key}" só pode ser alterado com "preset": "control" — no preset "simple" o /config fica read-only nesse knob`,
+          `"${key}" só pode ser alterado com "preset": "control" — no preset Default o /config fica read-only nesse knob`,
         );
       }
     }
@@ -141,6 +156,10 @@ export function applyConfigEditsToRaw(
   for (const [key, rawValue] of entries) {
     setNested(raw, key, parseConfigEditValue(key as EditableConfigKey, rawValue));
   }
+  // Editing the redefined key opts into schema 2 without rewriting a newer or invalid version.
+  const olderSchema = typeof raw.version === "string" && /^\d+\.\d+\.\d+$/.test(raw.version)
+    && raw.version.localeCompare(CONFIG_SCHEMA_VERSION, undefined, { numeric: true }) < 0;
+  if (entries.some(([key]) => key === "run.maxTurns") && (raw.version === undefined || olderSchema)) raw.version = CONFIG_SCHEMA_VERSION;
 }
 
 /**
@@ -155,9 +174,10 @@ export function updateConfigKnobs(
   edits: Partial<Record<EditableConfigKey, string>>,
   opts: { env?: NodeJS.ProcessEnv } = {},
 ): void {
-  const raw = loadConfigRaw(path);
+  const raw = loadConfigRaw(path), env = { ...process.env, ...opts.env };
   const next = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
-  applyConfigEditsToRaw(next, edits);
-  validateProjectLayer(next, { ...process.env, ...opts.env });
+  const global = env.ASTRO_NO_GLOBAL_CONFIG === "1" ? undefined : loadGlobalConfig(env);
+  applyConfigEditsToRaw(next, edits, raw.preset === undefined && global?.preset === "control");
+  validateProjectLayer(next, env);
   writeConfigFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
 }

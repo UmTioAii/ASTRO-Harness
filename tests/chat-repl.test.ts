@@ -459,7 +459,7 @@ describe("REPL do chat (T1, #62)", () => {
           approvalTimeoutMs: "300000 (default)",
           costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
           budget: "sem budget",
-          knobs: [{ key: "agent.maxSteps", value: "12" }, { key: "permissions.mode", value: "ask" }],
+          knobs: [{ key: "run.maxRoundsPerTurn", value: "12" }, { key: "permissions.mode", value: "ask" }],
         };
       }
     }
@@ -473,7 +473,7 @@ describe("REPL do chat (T1, #62)", () => {
       await runRepl(session, io);
       const text = io.outputs.join("\n");
       expect(text).toContain("config: /tmp/proj/astro.config.json");
-      expect(text).toContain("agent.maxSteps: 12");
+      expect(text).toContain("run.maxRoundsPerTurn: 12");
       expect(text).toContain("permissions.mode: ask");
       expect(text).toContain("p/m1: in US$ 1.00/M · out US$ 2.00/M");
       expect(text).toContain("pastas confiáveis:\n  /tmp/proj");
@@ -481,6 +481,14 @@ describe("REPL do chat (T1, #62)", () => {
       if (savedHome === undefined) delete process.env.ASTRO_HOME;
       else process.env.ASTRO_HOME = savedHome;
     }
+  });
+
+  test("/config redacts invalid keys and warns immediately on Control entry", async () => {
+    const sentinel = "review-sentinel-not-secret", edits: Record<string, string>[] = [], session = new FakeSession();
+    Object.assign(session, { applyConfigEdits: (edit: Record<string, string>) => { edits.push(edit); return edit; } });
+    const io = new ScriptedIO([`/config ${sentinel} x`, "/config preset control", "/exit"]); await runRepl(session, io);
+    const output = io.outputs.join("\n"); expect(output).not.toContain(sentinel); expect(output).toContain('preset "control" is active');
+    expect(edits).toEqual([{ preset: "control" }]);
   });
 
   test("/config sem configSummary na sessão avisa sem derrubar o REPL (#273)", async () => {

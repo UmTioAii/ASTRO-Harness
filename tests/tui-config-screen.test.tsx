@@ -18,7 +18,7 @@ const summary: ConfigSummary = {
   approvalTimeoutMs: "300000 (default)",
   costs: [{ ref: "p/m1", inputPerM: 1, outputPerM: 2 }],
   budget: "day · limite US$ 5.00 · aviso em 80% · ao exceder: ask",
-  knobs: [{ key: "agent.maxSteps", value: "12" }, { key: "permissions.mode", value: "ask" }],
+  knobs: [{ key: "run.maxRoundsPerTurn", value: "12" }, { key: "permissions.mode", value: "ask" }],
 };
 
 async function waitFor(check: () => boolean): Promise<void> {
@@ -29,7 +29,7 @@ async function waitFor(check: () => boolean): Promise<void> {
   throw new Error("timeout esperando o frame");
 }
 
-test("mostra config, maxSteps, modo, custos, budget e pastas confiáveis (#273)", async () => {
+test("shows config, canonical rounds, mode, costs, budget and trusted folders (#273)", async () => {
   const saved: PermissionMode[] = [];
   const instance = render(
     <ConfigScreen
@@ -44,7 +44,7 @@ test("mostra config, maxSteps, modo, custos, budget e pastas confiáveis (#273)"
     await waitFor(() => instance.lastFrame()?.includes("Configuração") === true);
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("config: /tmp/proj/astro.config.json");
-    expect(frame).toContain("agent.maxSteps: 12");
+    expect(frame).toContain("run.maxRoundsPerTurn: 12");
     expect(frame).toContain("permissions.mode: ask");
     expect(frame).toContain("p/m1: in US$ 1.00/M · out US$ 2.00/M");
     expect(frame).toContain("day · limite US$ 5.00");
@@ -80,6 +80,17 @@ test("enter abre o seletor; up+enter salva allow-edits e o modo exibido muda (#2
   } finally {
     instance.unmount();
   }
+});
+
+test("editor warns immediately after entering Control", async () => {
+  const saved: [string, string][] = [], instance = render(<ConfigScreen colors={colors} summary={{ ...summary, knobs: [{ key: "preset", value: "default" }] }} trustedFolders={[]} onClose={() => undefined} onSaveMode={() => undefined} onSaveKnob={(key, value) => { saved.push([key, value]); }} />);
+  try { instance.stdin.write("e"); await waitFor(() => instance.lastFrame()?.includes("knob editável") === true);
+    instance.stdin.write("\r"); await waitFor(() => instance.lastFrame()?.includes("atual: default") === true);
+    for (let index = 0; index < 7; index++) { instance.stdin.write("\u007f"); await new Promise((resolve) => setTimeout(resolve, 10)); }
+    instance.stdin.write("control "); await waitFor(() => instance.lastFrame()?.includes("control") === true);
+    instance.stdin.write("\r"); await waitFor(() => saved.length === 1);
+    expect(saved).toEqual([["preset", "control "]]); await waitFor(() => instance.lastFrame()?.includes('preset "control" is active') === true);
+  } finally { instance.unmount(); }
 });
 
 test("bypass pede confirmação: x cancela sem salvar, c salva (#273)", async () => {

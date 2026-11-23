@@ -39,7 +39,7 @@ export const HELP_TEXT = [
   "  /model [alvo]   lista (REPL) ou abre o seletor (TUI); com alvo, troca",
   "  /mode [modo]    lista os modos e o ativo; /mode <modo> troca (bypass exige \"confirm\")",
   "  /shell [shell]  lista os shells do host presentes; /shell <shell> confirm grava shell.default",
-  "  /config [chave valor]  resumo da config; com chave e valor, edita e persiste (ex.: /config agent.maxSteps 200, #558)",
+  "  /config [chave valor]  resumo da config; com chave e valor, edita e persiste (ex.: /config run.maxTurns 1000, #558)",
   "  /providers      lista providers (kind, credencial, quota, modelos)",
   "  /provider       lista perfis (projeto, globais, env) e o ativo",
   "  /provider add   cria um perfil (catálogo ou custom)",

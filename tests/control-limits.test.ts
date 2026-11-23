@@ -43,18 +43,9 @@ describe("preset control expõe os novos limites (#552)", () => {
     expect(cfg.maxActive).toBe(2);
   });
 
-  test("simple rejeita cada um dos novos limites", () => {
-    const patches: Record<string, unknown>[] = [
-      { team: { sessionBudgetUsd: 1 } },
-      { team: { weekBudgetUsd: 1 } },
-      { spawn: { maxActive: 3 } },
-      { agents: { maxActive: 2 } },
-    ];
-    for (const patch of patches) {
-      expect(() =>
-        validateConfig({ ...structuredClone(base()), preset: "simple", ...patch }),
-      ).toThrow(ConfigError);
-    }
+  test("Default retains advanced declarations without rewriting them", () => {
+    const patches: Record<string, unknown>[] = [{ team: { sessionBudgetUsd: 1 } }, { team: { weekBudgetUsd: 1 } }, { spawn: { maxActive: 3 } }]; for (const patch of patches) expect(validateConfig({ ...structuredClone(base()), preset: "simple", ...patch })).toMatchObject(patch);
+    expect(validateConfig({ ...base(), preset: "simple", agents: { maxActive: 2 } }).maxActive).toBe(2);
   });
 
   test("valores inválidos são rejeitados", () => {

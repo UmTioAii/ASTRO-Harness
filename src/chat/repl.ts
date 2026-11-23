@@ -11,6 +11,7 @@ import { dedupeKey, type AttachmentMeta, type LoadedAttachment } from "../attach
 import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
 import { loadTrustedStore, trustStatePath } from "../trust";
 import {
+  CONTROL_ENTRY_WARNING,
   EDITABLE_CONFIG_KEYS,
   isEditableConfigKey,
   parseConfigEditValue,
@@ -531,7 +532,7 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
             continue;
           }
           if (!isEditableConfigKey(command.key)) {
-            io.write(`chave não editável via /config: "${command.key}" — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
+            io.write(`chave não editável via /config — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}`);
             continue;
           }
           if ((command.rawValue ?? "").trim() === "") {
@@ -543,6 +544,7 @@ export async function runRepl(session: ChatSession, io: ReplIO, opts: ReplOption
             const value = parseConfigEditValue(key, command.rawValue ?? "");
             session.applyConfigEdits({ [key]: command.rawValue ?? "" });
             io.write(`salvo: ${key} = ${value === null ? "null" : String(value)} (gravado na config)`);
+            if (key === "preset" && value === "control") io.write(CONTROL_ENTRY_WARNING);
           } catch (error) {
             io.write(`erro: ${messageOf(error)}`); // valor inválido não altera o arquivo
           }

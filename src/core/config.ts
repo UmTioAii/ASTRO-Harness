@@ -181,12 +181,6 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
     );
   };
 
-  // Limites novos do #552 são exclusivos do preset `control` (simple fica read-only).
-  const controlOnly = (field: string, value: unknown): void => {
-    if (value === undefined) return;
-    fail(`config inválida: "${field}" só pode ser alterado com "preset": "control"`);
-  };
-
   const agent = root.agent !== null && typeof root.agent === "object"
     ? (root.agent as Record<string, unknown>)
     : undefined;
@@ -199,21 +193,6 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
     if (entry === null || typeof entry !== "object") continue;
     check(`agents.${name}.maxSteps`, (entry as Record<string, unknown>).maxSteps);
   }
-  controlOnly("agents.maxActive", agents?.maxActive);
-
-  const spawn = root.spawn !== null && typeof root.spawn === "object"
-    ? (root.spawn as Record<string, unknown>)
-    : undefined;
-  controlOnly("spawn.maxActive", spawn?.maxActive);
-
-  const team = root.team !== null && typeof root.team === "object"
-    ? (root.team as Record<string, unknown>)
-    : undefined;
-  controlOnly("team.sessionBudgetUsd", team?.sessionBudgetUsd);
-  controlOnly("team.weekBudgetUsd", team?.weekBudgetUsd);
-
-  const run = nestedSection(root, "run");
-  if (run === undefined || !isDerivedRunLimit(run, "maxRoundsPerTurn")) controlOnly("run.maxRoundsPerTurn", run?.maxRoundsPerTurn);
 
   // Só injeta quando `agent` é objeto: entrada de tipo errado segue para o
   // validador normal, que reporta a causa certa (nunca mascara o erro).

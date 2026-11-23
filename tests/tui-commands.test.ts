@@ -454,6 +454,15 @@ describe("/theme na TUI (#64)", () => {
   });
 });
 
+describe("/config editing safety and profile warnings (#594)", () => {
+  test("redacts invalid keys and warns immediately on Control entry", async () => {
+    const sentinel = "review-sentinel-not-secret", edits: Record<string, string>[] = [], session = new FakeSession(); Object.assign(session, { applyConfigEdits: (edit: Record<string, string>) => { edits.push(edit); return edit; } });
+    const invalid = await runCommand({ kind: "config", key: sentinel, rawValue: "x" }, session, {}); expect(invalid.entries[0]!.text).not.toContain(sentinel);
+    const entered = await runCommand({ kind: "config", key: "preset", rawValue: "control" }, session, {});
+    expect(entered.entries.map((entry) => entry.text).join("\n")).toContain('preset "control" is active'); expect(edits).toEqual([{ preset: "control" }]);
+  });
+});
+
 describe("/shell lista só o que existe e grava após confirmar (#474)", () => {
   class ShellSession extends FakeSession {
     edits: Record<string, string>[] = [];
