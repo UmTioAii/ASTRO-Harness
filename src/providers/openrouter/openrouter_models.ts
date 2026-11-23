@@ -1,16 +1,10 @@
-/** Model cards do OpenRouter (#553). */
-import type { ModelCard } from "../seed";
+/** OpenRouter offers (#601); model facts live in `src/models/catalog.ts`. */
+import type { ProviderModel } from "../seed";
 
-export const OPENROUTER_MODELS: readonly ModelCard[] = [
+export const OPENROUTER_MODELS: readonly ProviderModel[] = [
   {
-    id: "openai/gpt-4o-mini",
-    tags: ["writing-code", "tools", "fast"],
-    context: 128000,
-    status: "active",
-    reasoning: false,
-    callMethod: "chat-completions",
-    efforts: [],
-    // Preço de tabela do OpenRouter (USD/1M); curadoria pendente de conferência.
+    ref: "openai/gpt-4o-mini",
+    // OpenRouter table price (USD/1M); curation still pending verification.
     price: {
       inputPerM: 0.15,
       outputPerM: 0.6,
