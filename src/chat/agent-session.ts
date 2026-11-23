@@ -39,6 +39,7 @@ import { guardContext } from "./context-guard";
 import { isFatalSessionError } from "./session-errors";
 import { runHealthCheck, testProvider as probeProvider, type HealthCheck, type HealthReport } from "../health";
 import { boundHookToolResult, emitHook, sanitizeHookMessage, sanitizeHookText, type SessionMessageHook, type SessionToolResultHook } from "./hooks";
+import type { TurnObserver } from "./turn-events";
 
 export interface AgentSessionOptions {
   configPath: string;
@@ -80,8 +81,8 @@ export interface AgentSessionOptions {
 export interface SendTurnOptions {
   attachments?: readonly LoadedAttachment[];
   approveAttachment?: AttachmentApprover;
-  /** Progresso do loop (#508): passo e teto efetivo, antes de cada chamada ao provider. */
-  onStep?: (step: number, maxSteps: number) => void;
+  /** Live turn observer (#600); absent = no event stream. */
+  observer?: TurnObserver;
 }
 
 export interface ProviderInfo {
@@ -794,6 +795,7 @@ export class AgentSession {
     if (maxTurns !== "unlimited" && this.#turns >= maxTurns) throw new MaxTurnsError(maxTurns, this.#turns);
     this.#busy = true;
     try {
+      const turnId = randomUUID();
       const before = this.#messages;
       const baseline = this.#ledger.readAll().length;
       let metas = attachments;
@@ -845,7 +847,8 @@ export class AgentSession {
           ...(metas === undefined ? {} : { attachments: metas }),
           ...(images === undefined ? {} : { images }),
           ...(onToken === undefined ? {} : { onToken }),
-          ...(turn?.onStep === undefined ? {} : { onStep: turn.onStep }),
+          turnId,
+          ...(turn?.observer === undefined ? {} : { onTurnEvent: turn.observer }),
           ...(this.#approveSwap === undefined ? {} : { approveSwap: this.#approveSwap }),
           ...(this.#budgetDecider === undefined ? {} : { onBudgetExceeded: this.#budgetDecider }),
           ...(this.#approveTool === undefined ? {} : { approveTool: this.#approveTool }),

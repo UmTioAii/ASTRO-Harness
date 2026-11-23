@@ -15,6 +15,7 @@ import type { ChatMessage, CompletionResponse, ImagePart, Provider } from "../pr
 import { VisionUnsupportedError } from "../providers/types";
 import type { ModelEntry } from "./registry";
 import { ToolExecutor } from "../tools/executor";
+import type { ToolContext } from "../tools/types";
 import type { AgentEntry } from "./registry";
 import { redactSecrets } from "../sanitize-external";
 import type { SpanHandle, TracerLike } from "../tracing";
@@ -31,6 +32,7 @@ import type { SpawnRegistry } from "../spawn";
 import { mostRestrictive } from "../permissions";
 import { join } from "node:path";
 import { BackgroundCompactor } from "../compaction/background";
+import { TurnEventStream, type TurnObserver } from "../chat/turn-events";
 import {
   continuePrompt,
   evaluateGoal,
@@ -128,8 +130,10 @@ export interface SessionOptions {
   compaction?: CompactionConfig;
   /** Recebe deltas de texto quando o provider suporta streaming (T3). */
   onToken?: (text: string) => void;
-  /** Progresso do loop: passo e teto efetivo, antes de cada chamada ao provider. */
-  onStep?: (step: number, maxSteps: number) => void;
+  /** Live turn observer (#600); absent = no event stream. */
+  onTurnEvent?: TurnObserver;
+  /** Unique turn id for the event stream; defaults to the run id. */
+  turnId?: string;
   executor: ToolExecutor;
   ledger: Ledger;
   audit: Auditor;
@@ -337,6 +341,21 @@ export function safePrompt(messages: readonly ChatMessage[]): ChatMessage[] {
   return scrubPrompt(messages) as ChatMessage[];
 }
 
+/** Per-turn event stream (#600); an absent observer still orders and drops. */
+function turnStream(opts: { run: string; turnId?: string; onTurnEvent?: TurnObserver }): TurnEventStream {
+  return new TurnEventStream({
+    turnId: opts.turnId ?? opts.run,
+    ...(opts.onTurnEvent === undefined ? {} : { observer: opts.onTurnEvent }),
+  });
+}
+
+/** Routes executor lifecycle signals into the turn stream (#600). */
+function toolObserver(stream: TurnEventStream): ToolContext["onToolEvent"] {
+  return (event) => event.phase === "start"
+    ? stream.toolStart(event.callId, event.name, event.arguments)
+    : stream.toolEnd(event.callId, event.isError, event.callId, event.durationMs);
+}
+
 /**
  * Executa uma sessão single-agent: ciclo de completion, execução de tools e
  * registro de uso no ledger até o modelo devolver uma resposta sem tool calls.
@@ -347,6 +366,8 @@ export async function runSession(
   task: string,
 ): Promise<{ final: string; steps: number; messages: ChatMessage[]; appended: ChatMessage[] }> {
   const tracer = opts.tracer;
+  const turnEvents = turnStream(opts);
+  const turnUsage = { inputTokens: 0, outputTokens: 0 };
   /** Uso de uma chamada auxiliar (resumo de compactação) entra no ledger/custo. */
   const recordAuxUsage = (response: CompletionResponse, model: ModelEntry, agent: string): void => {
     const identity = effectiveIdentityFor(opts.resolveIdentity, response, model, opts.credentialRef, opts.quotaDomain);
@@ -558,9 +579,9 @@ export async function runSession(
           opts.ledger.recordBudgetReleased({ run: opts.run, agent: opts.agent, released: reserveUsd });
         }
       };
-      // Progresso (#508): o mesmo contador do loop e o teto já efetivo (budget pode
-      // ter baixado o esforço); só números, nunca prompt nem tool.
-      opts.onStep?.(step, effectiveMaxRounds);
+      // Live round signal (#600): the index orders events and is never rendered
+      // as a progress counter; the budget may already have lowered the ceiling.
+      turnEvents.roundStart(step);
       const stepSpan = tracer?.start("step", { step, agent: redactSecrets(opts.agent) }, rootSpan);
       const providerSpan = tracer?.start(
         "provider.complete",
@@ -604,6 +625,8 @@ export async function runSession(
         "tokens.in": response.usage.inputTokens,
         "tokens.out": response.usage.outputTokens,
       });
+      turnUsage.inputTokens += response.usage.inputTokens;
+      turnUsage.outputTokens += response.usage.outputTokens;
 
       const identity = effectiveIdentityFor(
         opts.resolveIdentity, response, opts.model, opts.credentialRef, opts.quotaDomain,
@@ -688,6 +711,7 @@ export async function runSession(
         tracer?.end(stepSpan, { "tool.calls": 0 });
         tracer?.end(rootSpan, { status: "ok", steps: step });
         appended.push({ role: "assistant", content: response.content });
+        turnEvents.turnEnd("done", turnUsage);
         return { final: response.content, steps: step, messages, appended };
       }
 
@@ -720,6 +744,7 @@ export async function runSession(
             allow: [...opts.executor.allow],
             maxSteps: effectiveMaxRounds,
             outputLimitTokens: effectiveOutputCap(opts.outputLimit, opts.model.context),
+            onToolEvent: toolObserver(turnEvents),
             ...(opts.signal === undefined ? {} : { signal: opts.signal }),
             ...(opts.env === undefined ? {} : { env: opts.env }),
             ...(opts.protectedPaths === undefined ? {} : { protectedPaths: opts.protectedPaths }),
@@ -811,6 +836,7 @@ export async function runSession(
         "error.class": interruptReason(error, opts.signal),
       });
     }
+    turnEvents.turnEnd(isAbortError(error, opts.signal) ? "cancelled" : "failed", turnUsage);
     throw error;
   } finally {
     await compactionBackground.close();
@@ -969,8 +995,10 @@ export interface MultiAgentSessionOptions {
   tracer?: TracerLike;
   /** Recebe deltas de texto quando o provider suporta streaming (T3). */
   onToken?: (text: string) => void;
-  /** Progresso do loop (#508): passo do agente ativo e teto efetivo, antes de cada chamada ao provider. */
-  onStep?: (step: number, maxSteps: number) => void;
+  /** Live turn observer (#600); absent = no event stream. */
+  onTurnEvent?: TurnObserver;
+  /** Unique turn id for the event stream; defaults to the run id. */
+  turnId?: string;
   /** Limites de quota por domínio (F6-3); ausente = sem enforcement. */
   quotaLimits?: Record<string, QuotaLimit>;
   /** Limites de time (F7-5): orçamentos por janela (#552) e quotas por agent. */
@@ -1039,6 +1067,9 @@ export async function runMultiAgentSession(
   opts: MultiAgentSessionOptions,
   task: string,
 ): Promise<{ final: string; steps: number; agentsUsed: string[] }> {
+  /** Live turn stream (#600); one stream for the whole multi-agent turn. */
+  const turnEvents = turnStream(opts);
+  const turnUsage = { inputTokens: 0, outputTokens: 0 };
   const agentsUsed: string[] = [];
   let currentAgentName = opts.entryAgent;
   let currentAgent = opts.registry.requireAgent(currentAgentName);
@@ -1380,10 +1411,8 @@ export async function runMultiAgentSession(
           opts.ledger.recordBudgetReleased({ run: opts.run, agent: currentAgentName, released: reserveUsd });
         }
       };
-      // Progresso (#508): contador do agente ativo, limitado pelo teto global
-      // ainda disponível (o loop para em `step == effectiveBaseMaxSteps`).
-      const stepCeiling = Math.min(currentMaxSteps, Math.max(agentSteps, agentSteps + effectiveBaseMaxSteps - step));
-      opts.onStep?.(agentSteps, stepCeiling);
+      // Live round signal (#600): the global step orders the events.
+      turnEvents.roundStart(step);
 
       // Atualizar executor com tools do agent atual
       const executor = new ToolExecutor({
@@ -1451,6 +1480,8 @@ export async function runMultiAgentSession(
         "tokens.in": response.usage.inputTokens,
         "tokens.out": response.usage.outputTokens,
       });
+      turnUsage.inputTokens += response.usage.inputTokens;
+      turnUsage.outputTokens += response.usage.outputTokens;
 
       const identity = effectiveIdentityFor(
         opts.resolveIdentity, response, currentModel, opts.credentialRef, opts.quotaDomain,
@@ -1488,6 +1519,7 @@ export async function runMultiAgentSession(
         cleanupSpawns("completed");
         tracer?.end(stepSpan, { "tool.calls": 0 });
         tracer?.end(rootSpan, { status: "ok", steps: step });
+        turnEvents.turnEnd("done", turnUsage);
         return { final: response.content, steps: step, agentsUsed: agentsUsed.map((value) => redactSecrets(value)) };
       }
 
@@ -1520,6 +1552,7 @@ export async function runMultiAgentSession(
             allow: [...currentTools],
             maxSteps: currentMaxSteps,
             outputLimitTokens: effectiveOutputCap(opts.outputLimit, currentModel.context),
+            onToolEvent: toolObserver(turnEvents),
             ...(opts.env === undefined ? {} : { env: opts.env }),
             ...(opts.protectedPaths === undefined ? {} : { protectedPaths: opts.protectedPaths }),
             ...(opts.secretEnvNames === undefined ? {} : { secretEnvNames: opts.secretEnvNames }),
@@ -1661,6 +1694,7 @@ export async function runMultiAgentSession(
         "error.class": interruptReason(error, opts.signal),
       });
     }
+    turnEvents.turnEnd(isAbortError(error, opts.signal) ? "cancelled" : "failed", turnUsage);
     throw error;
   } finally {
     await compactionBackground.close();

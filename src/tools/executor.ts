@@ -32,7 +32,7 @@ import { AllowlistInvalidError, classifyPath, type PathClass } from "../path-cla
 import { validateManifest } from "../sdk/tool";
 import { join, relative } from "node:path";
 import type { ToolCall, ToolDef } from "../providers/types";
-import type { Tool, ToolContext, ToolResult } from "./types";
+import type { Tool, ToolContext, ToolLifecycleEvent, ToolResult } from "./types";
 
 const TIMEOUT = Symbol("timeout");
 const ABORTED = Symbol("aborted");
@@ -225,8 +225,10 @@ export class ToolExecutor {
         tipo: "tool.call",
         payload: { name: call.name, callId: id, ...pathPayload },
       });
+      this.emitTool(ctx, { phase: "start", callId: id, name: call.name, arguments: call.arguments });
       const result = await this.execute(ctx, call);
       journal.record(id, result);
+      this.emitTool(ctx, { phase: "end", callId: id, isError: result.isError === true, durationMs: auditDurationMs(startedAt) });
       this.auditRef.append({
         run: ctx.run,
         agent: ctx.agent,
@@ -243,7 +245,9 @@ export class ToolExecutor {
       payload: { name: call.name, ...pathPayload },
     });
 
+    this.emitTool(ctx, { phase: "start", callId: call.id, name: call.name, arguments: call.arguments });
     const result = await this.execute(ctx, call);
+    this.emitTool(ctx, { phase: "end", callId: call.id, isError: result.isError === true, durationMs: auditDurationMs(startedAt) });
 
     this.auditRef.append({
       run: ctx.run,
@@ -253,6 +257,15 @@ export class ToolExecutor {
     });
 
     return result;
+  }
+
+  /** Live signal for the turn observer; an observer error never aborts the tool (#600). */
+  private emitTool(ctx: ToolContext, event: ToolLifecycleEvent): void {
+    try {
+      ctx.onToolEvent?.(event);
+    } catch {
+      // The observer is a consumer, not an execution dependency.
+    }
   }
 
   private async execute(ctx: ToolContext, call: ToolCall): Promise<ToolResult> {
