@@ -463,14 +463,11 @@ describe("limites do host (#474)", () => {
       id: "c1", name: "run_tests", arguments: JSON.stringify({ filter: "link/probe.test.ts" }),
     });
     expect(direct.code).toBe("external_directory");
-    // POSIX follows the link before `..`; Win32 normalizes `..` lexically, so the
-    // kernel stays inside and the call is safe there.
-    if (process.platform !== "win32") {
-      const throughDots = await executor.run(ctxOf(dir), {
-        id: "c2", name: "run_tests", arguments: JSON.stringify({ filter: "link/../probe/x.test.ts" }),
-      });
-      expect(throughDots.code).toBe("external_directory");
-    }
+    // The link is resolved before `..`, so the escape is refused on every platform.
+    const throughDots = await executor.run(ctxOf(dir), {
+      id: "c2", name: "run_tests", arguments: JSON.stringify({ filter: "link/../probe/x.test.ts" }),
+    });
+    expect(throughDots.code).toBe("external_directory");
     expect(mock.calls).toHaveLength(0);
   });
 

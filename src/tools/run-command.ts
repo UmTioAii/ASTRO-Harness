@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
+import { dirname, join, parse, resolve, relative, isAbsolute, sep } from "node:path";
 import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
 import { PATH_HARD_BLOCKED, resolveArtifactRoot, resolveAstroHome, setPerCallApproval, type ApprovalDetail, type PermissionMode } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
@@ -757,27 +757,29 @@ export const DEFAULT_RUN_TESTS_TIMEOUT_MS = 120_000;
 export const MAX_RUN_TESTS_TIMEOUT_MS = 3_600_000;
 
 /**
- * Real path of `target`, resolving symlinks in its deepest existing ancestor and
- * re-appending the non-existent (or glob) suffix. Node's realpath throws for a
- * missing path, and a test filter may legitimately name a file that the runner
- * creates.
+ * Resolve `target` component by component, following symlinks before applying `..`.
+ * A path like `link/../x` must resolve the link first (the kernel does that); a
+ * whole-string `realpath` may normalize the dots first and hide the escape. Missing
+ * components stay literal, so a test name that does not exist is still comparable.
  */
-function realPathOfNearestExisting(target: string, cwd: string): string {
-  // Keep the raw path (do not `resolve`): `..` after a symlink must be resolved by
-  // the kernel, not lexically, or a link can hide an escape (F-00 shape).
-  let current = isAbsolute(target) ? target : `${cwd}${sep}${target}`;
-  const suffix: string[] = [];
-  for (;;) {
+function kernelRealPath(target: string, cwd: string): string {
+  const raw = isAbsolute(target) ? target : `${cwd}${sep}${target}`;
+  const root = parse(raw).root;
+  let current = root;
+  for (const part of raw.slice(root.length).split(/[\\/]+/)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      current = dirname(current);
+      continue;
+    }
+    const next = join(current, part);
     try {
-      const real = realpathSync.native(current);
-      return suffix.length === 0 ? real : join(real, ...suffix.reverse());
+      current = realpathSync.native(next);
     } catch {
-      const parent = dirname(current);
-      if (parent === current) return current;
-      suffix.push(basename(current));
-      current = parent;
+      current = next;
     }
   }
+  return current;
 }
 
 /**
@@ -805,8 +807,8 @@ function filterOutsideProject(filter: string, ctx: ToolContext): ToolResult | un
   // link inside the project that points elsewhere is refused too, including the
   // `link/../x` shape (the kernel follows the link before `..`). Glob segments stay
   // literal, which keeps the static prefix comparable.
-  const real = realPathOfNearestExisting(filter, ctx.cwd);
-  if (!isWithin(realPathOfNearestExisting(ctx.cwd, ctx.cwd), real)) {
+  const real = kernelRealPath(filter, ctx.cwd);
+  if (!isWithin(kernelRealPath(ctx.cwd, ctx.cwd), real)) {
     return failureCode(
       "external_directory: run_tests filter cannot leave the project directory",
       "external_directory",
@@ -826,7 +828,7 @@ function filterOutsideProject(filter: string, ctx: ToolContext): ToolResult | un
       allowCritical: ctx.allowCritical ?? [],
       allowSensitive: ctx.allowSensitive ?? [],
     });
-    if (classify(realPathOfNearestExisting(staticTarget, ctx.cwd)) === "hard-block") {
+    if (classify(kernelRealPath(staticTarget, ctx.cwd)) === "hard-block") {
       return failureCode(
         `path_hard_blocked: run_tests filter targets a critical path (${PATH_HARD_BLOCKED})`,
         PATH_HARD_BLOCKED,
