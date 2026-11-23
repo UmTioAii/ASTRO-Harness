@@ -130,3 +130,51 @@ describe("list_dir tool (F4-2)", () => {
     expect(result.output).toContain("não existe");
   });
 });
+
+describe("list_dir output contract (S6, #603)", () => {
+  // Synthetic secret built at runtime (gate G6: no secret literal in the diff).
+  const SECRET = ["s", "k", "-"].join("") + "listdir-synthetic-778899aabb";
+
+  test("declares an output ceiling", () => {
+    const ceiling = listDirTool.manifest.output;
+    expect(ceiling).toBeDefined();
+    expect(ceiling!.maxTokens).toBeGreaterThan(0);
+    expect(ceiling!.hint.length).toBeGreaterThan(0);
+  });
+
+  test("tree above the ceiling is cut with an explicit marker and a structured field", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-cap-"));
+    mkdirSync(join(cwd, "many"));
+    for (let i = 0; i < 500; i++) {
+      writeFileSync(join(cwd, "many", `file-${String(i).padStart(4, "0")}-${"x".repeat(40)}.txt`), "x");
+    }
+    const result = await listDirTool.execute({ path: "many" }, ctx(cwd));
+    expect(result.isError).toBeFalsy();
+    const tree = JSON.parse(result.output) as DirNode & { truncated?: boolean; notice?: string };
+    expect(tree.truncated).toBe(true);
+    expect(tree.notice).toContain("omitted");
+    expect(tree.children!.length).toBeLessThan(500);
+    expect(result.truncation).toBeDefined();
+    expect(result.truncation!.removed).toBeGreaterThan(0);
+    expect(result.output.length).toBeLessThanOrEqual(16_000);
+  });
+
+  test("a secret in a name is redacted before it reaches the result (I-03)", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-secret-"));
+    writeFileSync(join(cwd, SECRET), "x");
+    const result = await listDirTool.execute({}, ctx(cwd));
+    expect(result.isError).toBeFalsy();
+    expect(result.output).not.toContain(SECRET);
+    expect(result.output).toContain("[REDACTED]");
+  });
+
+  test("failure taxonomy: escape is denied, missing path failed", async () => {
+    const cwd = setupNested(1);
+    const escape = await listDirTool.execute({ path: "../" }, ctx(cwd));
+    expect(escape.isError).toBe(true);
+    expect(escape.failure).toBe("denied");
+    const missing = await listDirTool.execute({ path: "ghost" }, ctx(cwd));
+    expect(missing.isError).toBe(true);
+    expect(missing.failure).toBe("failed");
+  });
+});
