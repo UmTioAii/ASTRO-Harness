@@ -77,6 +77,33 @@ describe("setup wizard — one layer per run (#611)", () => {
     expect(readFileSync(join(home, "config.json"), "utf8")).toBe(before); // global layer untouched
   });
 
+  test("global without providers: no preset prompt, no write, project waits for the provider", async () => {
+    const cwd = tempDir("astro-setup-emptyglobal-");
+    const home = tempDir("astro-setup-emptyglobal-home-");
+    writeFileSync(join(home, "config.json"), "{}\n"); // pre-#611 first run wrote exactly this
+    const { io, out } = fakeIO(["control"]);
+
+    const outcome = await run(join(cwd, "astro.config.json"), { env: { ASTRO_HOME: home }, allowMissing: true, io });
+
+    expect(outcome).toMatchObject({ flow: "project", globalCreated: false, projectCreated: false });
+    expect(out).toEqual([]); // a preset that cannot be written is not asked
+    expect(outcome.notice).toContain("provider");
+    expect(existsSync(join(cwd, "astro.config.json"))).toBe(false);
+  });
+
+  test("dangling credential ref: refused before saving, no layer written", async () => {
+    const cwd = tempDir("astro-setup-dangling-");
+    const home = tempDir("astro-setup-dangling-home-");
+    const { io, out } = fakeIO(["", "custom", "Local", "https://local.example/v1", "MISSING_KEY", "m1", "S", "S"]);
+
+    const outcome = await run(join(cwd, "astro.config.json"), { env: { ASTRO_HOME: home }, allowMissing: true, io });
+
+    expect(outcome.flow).toBe("cancelled");
+    expect(out.join("\n")).toContain("MISSING_KEY");
+    expect(existsSync(join(cwd, "astro.config.json"))).toBe(false);
+    expect(existsSync(join(home, "config.json"))).toBe(false);
+  });
+
   test("existing, explicit and no-global configs are skipped and never written", async () => {
     const cwd = tempDir("astro-setup-skip-");
     const home = tempDir("astro-setup-skip-home-");
@@ -103,8 +130,9 @@ describe("setup wizard — one layer per run (#611)", () => {
     const home = tempDir("astro-setup-short-home-");
     const env = { ASTRO_HOME: home, OPENAI_API_KEY: "sk-env", OPENAI_MODEL: "gpt-5" };
 
-    const kept = await run(join(cwd, "astro.config.json"), { env, allowMissing: true, io: fakeIO(["n", ""]).io });
-    expect(kept).toMatchObject({ flow: "short", globalCreated: false, projectCreated: false, preset: "default" });
+    const kept = await run(join(cwd, "astro.config.json"), { env, allowMissing: true, io: fakeIO(["n"]).io });
+    expect(kept).toMatchObject({ flow: "short", globalCreated: false, projectCreated: false });
+    expect(kept.preset).toBeUndefined(); // nothing is persisted, so no profile is asked
     expect(kept.notice).toContain("$OPENAI_API_KEY"); // always says which set it chose
     expect(existsSync(join(cwd, "astro.config.json")) || existsSync(join(home, "config.json"))).toBe(false);
 
@@ -122,7 +150,7 @@ describe("setup wizard — one layer per run (#611)", () => {
     const short = await run(join(cwd, "astro.config.json"), {
       env: { ASTRO_HOME: home, OPENAI_API_KEY: "sk-env", OPENAI_MODEL: "gpt-5" }, allowMissing: true, acceptDefaults: true, io,
     });
-    expect(short).toMatchObject({ flow: "short", preset: "default" });
+    expect(short).toMatchObject({ flow: "short" });
     expect(out).toEqual([]); // no question was printed
     expect(short.notice).toContain("using openai");
 
