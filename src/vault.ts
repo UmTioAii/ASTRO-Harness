@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { astroHomePath } from "./astro-home";
 import { withFileLock } from "./file-lock";
 import { isVaultId, looksLikeSecret } from "./secrets";
@@ -72,9 +72,29 @@ const DPAPI_UNPROTECT_SCRIPT =
   "[System.Text.Encoding]::UTF8.GetBytes($env:ASTRO_VAULT_ENTROPY), " +
   "[System.Security.Cryptography.DataProtectionScope]::CurrentUser))";
 
+/**
+ * Resolves the Windows PowerShell executable from the system root. PATH and
+ * the cwd are never consulted: a planted `powershell.exe` must not receive the
+ * DPAPI secret (#605, I-03). Missing binary is refused, never downgraded.
+ */
+export function resolvePowerShell(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32") throw new Error("PowerShell is only used for DPAPI on Windows");
+  const root = env.SystemRoot ?? env.windir;
+  if (root === undefined || root.trim() === "") {
+    throw new Error("PowerShell not found: SystemRoot/windir is not set");
+  }
+  if (!isAbsolute(root)) throw new Error("PowerShell not found: SystemRoot/windir is not absolute");
+  const exe = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  if (!existsSync(exe)) throw new Error(`PowerShell not found at "${exe}"`);
+  return exe;
+}
+
 function runDpapi(script: string, envExtra: Record<string, string>): string {
   if (process.platform !== "win32") throw new Error("DPAPI só existe no Windows (cofre usa modo plain fora dele)");
-  return execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+  return execFileSync(resolvePowerShell(), ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
     maxBuffer: 1 << 20,
     stdio: ["ignore", "pipe", "ignore"], // stderr pode conter o segredo (I-03)
