@@ -443,7 +443,7 @@ describe("eval harness (F5-2)", () => {
     await expect(runScenario(
       JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
       { cwd, caseDir, task: "tarefa" },
-    )).rejects.toThrow(/loopback.*webSearch\.fallback\[0\]\.baseUrl/);
+    )).rejects.toThrow(/loopback.*fallback\[0\] \(endpoint padrão de google; o golden não pode sobrescrevê-lo\)/);
   });
 
   test("runCase recusa telemetry habilitado com endpoint público default", async () => {

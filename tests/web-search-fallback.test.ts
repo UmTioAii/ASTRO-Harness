@@ -75,6 +75,7 @@ describe("webSearch.fallback (#604)", () => {
     const invalid = (fallback: unknown[]) => () => validateConfig({ ...structuredClone(base), webSearch: webSearch(fallback) });
     expect(invalid([{ provider: "ghost" }])).toThrow(/webSearch\.fallback\[0\]\.provider/);
     expect(invalid([{ provider: "brave" }, { provider: "brave" }])).toThrow(/webSearch\.fallback\[1\]\.provider/);
+    expect(invalid([{ provider: "exa" }])).toThrow(/webSearch\.fallback\[0\]\.provider/);
     expect(invalid([{ provider: "custom" }])).toThrow(/fallback\[0\]\.provider/);
     expect(invalid([{ provider: "brave", apiKeyEnv: "sk-live-abcdef123456" }])).toThrow(/fallback\[0\]\.apiKeyEnv/);
   });
@@ -157,5 +158,35 @@ describe("webSearch.fallback (#604)", () => {
     expect(calls.filter((url) => url.startsWith(BRAVE_BASE))).toHaveLength(1);
     expect(audit.readAll().filter((item) => item.tipo === "web.search").map((item) => item.payload?.cacheHit))
       .toEqual([false, true]);
+  });
+
+  test("an empty result list is a success and never probes the fallback", async () => {
+    const calls: string[] = [];
+    const fetchImpl = routedFetch([
+      [PRIMARY_BASE, () => Response.json({ results: [] })],
+      [BRAVE_BASE, () => Response.json({ web: { results: [{ title: "B", url: "https://b.test", description: "ok" }] } })],
+    ], calls);
+    const { tool, cwd } = setup(chain, { fetchImpl });
+    const output = parse((await tool.execute({ query: "x" }, ctx(cwd))).output);
+    expect(output.provider).toBe("exa");
+    expect(output.results).toEqual([]);
+    expect(calls.some((url) => url.startsWith(BRAVE_BASE))).toBe(false);
+  });
+
+  test("a pre-aborted signal stops the chain after the primary", async () => {
+    const calls: string[] = [];
+    const fetchImpl = routedFetch([
+      [PRIMARY_BASE, () => new Response("boom", { status: 503 })],
+      [BRAVE_BASE, () => Response.json({ web: { results: [{ title: "B", url: "https://b.test", description: "ok" }] } })],
+    ], calls);
+    const { tool, audit, cwd } = setup(chain, { fetchImpl });
+    const controller = new AbortController();
+    controller.abort();
+    const result = await tool.execute({ query: "x" }, { ...ctx(cwd), signal: controller.signal });
+    expect(result.output).toContain("cancelada");
+    expect(calls.some((url) => url.startsWith(BRAVE_BASE))).toBe(false);
+    expect(audit.readAll().find((item) => item.tipo === "web.search")?.payload?.backends).toEqual([
+      { provider: "exa", status: 0, durationMs: expect.any(Number), reason: "aborted" },
+    ]);
   });
 });
