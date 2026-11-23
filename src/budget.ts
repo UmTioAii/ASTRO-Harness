@@ -51,7 +51,7 @@ function inScope(ts: string, scope: BudgetConfig["scope"], now: Date): boolean {
   return scope === "day" ? sameMonth && at.getUTCDate() === now.getUTCDate() : sameMonth;
 }
 
-/** Reservas ainda sem `released` (B9), casadas por run em FIFO; filtro opcional pela janela do escopo. */
+/** Reservas ainda sem `released` (B9), casadas por `run`+`agent` em FIFO; filtro opcional pela janela do escopo. */
 export function outstandingReservations(ledger: Ledger, inWindow: (ts: string) => boolean = () => true): number {
   const pending: Array<{ key: string; amount: number }> = [];
   for (const entry of ledger.readAllEntries()) {
@@ -324,7 +324,8 @@ export async function enforceBudget(opts: EnforceBudgetOptions): Promise<BudgetC
       ...(oldCeiling === undefined ? {} : { old_ceiling_usd: oldCeiling }),
       ...(result.hardCeilingUsd === undefined ? {} : { new_ceiling_usd: result.hardCeilingUsd, confirmed_ceiling: true }),
     });
-    // Re-check under the lock: another process may have consumed the raise.
+    // Re-check under the lock: the recheck covers the ceiling/unknown-price;
+    // the soft limit was explicitly continued or raised by the decision above.
     attempt(true);
     return choice;
   }
