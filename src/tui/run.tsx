@@ -5,7 +5,7 @@ import { ConfigError } from "../core/config";
 import { ProfileManager } from "../providers/profile-manager";
 import { NoProviderError, NO_PROVIDER_MESSAGE, loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
-import { ensureFirstRunConfig } from "../chat/init";
+import { runSetup, ttySetupIO } from "../chat/setup";
 import { ensureTermsAccepted, ttyTermsAsk, type TermsAsk } from "../terms";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
@@ -214,6 +214,21 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       console.error("termos de uso não aceitos — saindo sem gravar nada");
       return 1;
     }
+    const configPath = resolve(opts.configPath);
+    // #611: the wizard owns first-run and runs at the terms gate, before any read of the config.
+    const setupChannel = ttySetupIO();
+    try {
+      const outcome = await runSetup(configPath, {
+        env: opts.env ?? process.env,
+        allowMissing: opts.allowMissingConfig === true,
+        io: setupChannel.io,
+      });
+      if (outcome.notice !== undefined) console.error(`aviso: ${redactSecrets(outcome.notice)}`);
+    } catch (error) {
+      console.error(`aviso: ${redactSecrets(error instanceof Error ? error.message : String(error))}`);
+    } finally {
+      setupChannel.close();
+    }
     const [{ render }, { AgentSession }, { openSessionApi }, { TuiApp }] = await Promise.all([
       import("ink"),
       import("../chat/agent-session"),
@@ -225,21 +240,6 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
     // Chave digitada no setup vai para o cofre (ADR-0019); o perfil guarda só o ref.
     const vault = new Vault(vaultPath(opts.env ?? process.env));
     const { saveSecret, discardSecret } = createSecretHandlers(vault);
-    const configPath = resolve(opts.configPath);
-    // #559: first-run com config implícita garante astro.config.json + config.json
-    // global se ausentes (nunca sobrescreve). Falha vira aviso: o boot segue em
-    // zero-config. Roda de novo após o setup: o first-time setup cria os dois juntos.
-    const ensureFirstRun = (): void => {
-      try {
-        ensureFirstRunConfig(configPath, {
-          env: opts.env ?? process.env,
-          allowMissing: opts.allowMissingConfig === true,
-        });
-      } catch (error) {
-        console.error(`aviso: ${redactSecrets(error instanceof Error ? error.message : String(error))}`);
-      }
-    };
-    ensureFirstRun();
     const project = loadProjectConfig(configPath, { env: opts.env });
     const manager = new ProfileManager({
       project,
@@ -273,7 +273,10 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       },
       setup: async () => {
         const configured = await setupProvider(manager, cwd, saveSecret, discardSecret);
-        if (configured) ensureFirstRun(); // first-time setup cria projeto + global juntos (#559)
+        // #611: the wizard also owns the project layer after an in-TUI provider setup.
+        if (configured) {
+          await runSetup(configPath, { env: opts.env ?? process.env, allowMissing: opts.allowMissingConfig === true, acceptDefaults: true });
+        }
         return configured;
       },
       createShell: () => createShellRunner({
