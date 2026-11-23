@@ -98,6 +98,7 @@ function harness(maxActive: number, opts: { abortParentSecond?: boolean; childSp
     },
   });
   writeFileSync(join(cwd, "astro.config.json"), JSON.stringify({
+    preset: "control",
     providers: {
       p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_P" },
       q: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_Q", fallback: ["r"] },
@@ -227,6 +228,7 @@ test("fallback do filho move o lock do filho, nunca o lock do pai", async () => 
   });
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
+    preset: "control",
     providers: {
       p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_P" },
       q: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_Q", fallback: ["r"], maxRetries: 0 },
@@ -329,6 +331,7 @@ export function definePlugin() {
   });
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
+    preset: "control",
     providers: {
       p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_P" },
       bq: { kind: "custom" },
@@ -406,6 +409,7 @@ test("reserva de budget impede o segundo filho paralelo a 0.985 + 0.01", async (
   });
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
+    preset: "control",
     providers: {
       p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_P" },
       q: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_Q" },

@@ -1110,7 +1110,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         inheritAgentLock: sameAccount,
         taskHash: shortTaskHash(prompt),
         // L5/L6 (#135): o filho da task segue config.run e o decider do pai; o run do filho é codificado no path.
-        ...(config.run === undefined
+        ...(config.run?.checkpointAt === undefined
           ? {}
           : {
               checkpointAt: config.run.checkpointAt,
@@ -1219,7 +1219,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ...(memorySection === undefined ? {} : { memorySection }),
         entryAgent,
         taskHash: shortTaskHash(opts.task),
-        ...(config.run === undefined
+        ...(config.run?.checkpointAt === undefined
           ? {}
           : { checkpointAt: config.run.checkpointAt, noProgressSegments: config.run.noProgressSegments }),
         ...(opts.onNoProgress === undefined ? {} : { onNoProgress: opts.onNoProgress }),
@@ -1263,7 +1263,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       };
       // L4 (#450): o juiz é estágio do runSession single-agent; no multi-agent não há
       // completion única para julgar — audita a lacuna em vez de ignorar em silêncio.
-      if (config.run !== undefined && config.run.judge !== "off") {
+      if (config.run?.judge !== undefined && config.run.judge !== "off") {
         audit.append({ run, agent: activeAgent.name, tipo: "judge.skipped", payload: { reason: "unsupported" } });
       }
       result = await runMultiAgentSession(multiOpts, task);
@@ -1282,7 +1282,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           audit,
           maxSteps: sessionMaxSteps,
           taskHash: shortTaskHash(opts.task),
-          ...(config.run === undefined
+          ...(config.run?.checkpointAt === undefined
             ? {}
             : {
                 checkpointAt: config.run.checkpointAt,

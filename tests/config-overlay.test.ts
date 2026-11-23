@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadEffectiveConfig } from "../src/providers/profiles";
+import { mergeConfigLayers } from "../src/config-overlay";
 
 const PATHS = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
 const provider = (id: string): Record<string, unknown> => ({ kind: "openai-compat", baseUrl: `https://${id}.example/v1`, credentialRef: `${id.toUpperCase()}_KEY` });
@@ -34,6 +35,7 @@ function effective(global: unknown, projectLayer?: unknown, profileStore?: unkno
 }
 
 test("merge: agent, providers e models (três linhas de resultado da tabela do #401)", () => {
+  expect(mergeConfigLayers({ version: "1.0.0", providers: { p: { kind: "custom", version: "9.0.0" } } }, { version: "2.0.0", providers: { p: { version: "1.0.0" } } })).toMatchObject({ version: "2.0.0", providers: { p: { version: "1.0.0" } } });
   // 1) o global mantém maxSteps e tools; o projeto sobrescreve só o model.
   expect(effective({ agent: { maxSteps: 12, tools: ["read_file", "grep"] } },
     project({ agent: { model: "p/m" } })).config.agent)
@@ -91,6 +93,15 @@ test("rejeita: projeto que amplia a política global (ADR-0029)", () => {
     [{ tools: { run_command: { sandbox: true } } }, project({ tools: { run_command: { sandbox: "auto" } } }), /amplia o sandbox global/],
     // Global desligado: o projeto não reabre nem para Docker nem para o host.
     [{ tools: { run_command: { sandbox: false } } }, project({ tools: { run_command: { sandbox: true } } }), /reabre o shell desligado/],
+    [{ version: "2.0.0", run: { maxTurns: 250 } }, project({ version: "2.0.0", run: { maxTurns: 1000 } }), /teto global.*run\.maxTurns/],
+    [{ version: "2.0.0", run: { maxTurns: 250 } }, project({ version: "2.0.0", run: { maxTurns: "unlimited" } }), /teto global.*run\.maxTurns/],
+    [{ version: "2.0.0", run: { maxRoundsPerTurn: 100 } }, project({ version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 500 } }), /teto global.*run\.maxRoundsPerTurn/],
+    [{ version: "2.0.0", run: { maxRoundsPerTurn: 100 } }, project({ version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: "unlimited" } }), /teto global.*run\.maxRoundsPerTurn/],
+    [{ version: "2.0.0", run: { maxRoundsPerTurn: 100 } }, project({ version: "2.0.0", preset: "control", agent: { model: "p/m", maxSteps: 500, tools: ["read_file"] } }), /teto global.*run\.maxRoundsPerTurn/],
+    [{ version: "2.0.0", shell: { mode: "off" } }, project({ version: "2.0.0", shell: { mode: "host" } }), /reabre o shell desligado/],
+    [{ version: "2.0.0", shell: { mode: "off" } }, project({ version: "2.0.0", tools: { run_command: { sandbox: true } } }), /reabre o shell desligado/],
+    [{ version: "2.0.0", tools: { run_command: { sandbox: false } } }, project({ version: "2.0.0", shell: { mode: "host" } }), /reabre o shell desligado/],
+    [{ version: "2.0.0", shell: { mode: "off" } }, project({ version: "2.0.0", shell: { mode: "off" }, tools: { run_command: { sandbox: true } } }), /shell\.mode.*conflicts.*sandbox/],
   ];
   for (const [global, projectLayer, message] of widening) {
     expect(() => effective(global, projectLayer)).toThrow(message);
@@ -108,6 +119,7 @@ test("projeto pode endurecer o sandbox global (auto → Docker/desligado), mas a
     project({ tools: { run_command: { sandbox: false } } }),
   ).config;
   expect(disabled.tools?.run_command?.sandbox).toBe(false);
+  expect(effective({ tools: { run_command: { sandbox: "auto" } } }, project({ version: "2.0.0", shell: { mode: "off" } })).config.tools?.run_command?.sandbox).toBe(false);
   // Global ausente = auto (default); o projeto pode declarar Docker e herda auto sem declarar.
   const fromDefault = effective(undefined, project({ tools: { run_command: { sandbox: "docker" } } })).config;
   expect(fromDefault.tools?.run_command?.sandbox).toBe("docker");
@@ -545,9 +557,9 @@ test("rejeita: agent nomeado declarado só no projeto também respeita o teto (#
   )).toThrow(/amplia o teto global de passos \(agents\.coder\.maxSteps: 30 acima do teto 20/);
 });
 
-test("run.maxTurns é recusado em qualquer camada (#515 -> P4)", () => {
+test("legacy run.maxTurns is refused in either layer before reinterpretation (#594)", () => {
   expect(() => effective({ run: { maxTurns: 10 } }, project({})))
-    .toThrow(/run\.maxTurns.*removido/);
+    .toThrow(/run\.maxTurns.*rounds.*turns.*2\.0\.0/);
   expect(() => effective({}, project({ run: { maxTurns: 20 } })))
-    .toThrow(/run\.maxTurns.*removido/);
+    .toThrow(/run\.maxTurns.*rounds.*turns.*2\.0\.0/);
 });

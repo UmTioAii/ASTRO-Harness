@@ -12,12 +12,10 @@ function base() {
 }
 
 describe("preset simple/control (#515)", () => {
-  test("preset ausente é control e não muda os limites declarados", () => {
-    const raw = base() as unknown as Record<string, unknown>;
-    (raw.agent as Record<string, unknown>).maxSteps = 3;
-    const cfg = validateConfig(raw);
-    expect(cfg.preset).toBe("control");
-    expect(cfg.agent.maxSteps).toBe(3);
+  test("omitted preset defaults to Default and preserves a legacy round alias", () => {
+    expect(validateConfig(base())).toMatchObject({ preset: "default", run: { maxTurns: 500, maxRoundsPerTurn: 500 } });
+    const cfg = validateConfig({ ...base(), agent: { ...base().agent, maxSteps: 3 } });
+    expect([cfg.preset, cfg.agent.maxSteps, cfg.run?.maxRoundsPerTurn]).toEqual(["default", 3, 3]);
   });
 
   test("sem limites declarados, os dois presets começam em 500", () => {
@@ -27,10 +25,9 @@ describe("preset simple/control (#515)", () => {
     }
   });
 
-  test("simple fixa 500 sem declarar limite", () => {
+  test("simple loads as the Default alias with 500 rounds", () => {
     const cfg = validateConfig({ ...base(), preset: "simple" });
-    expect(cfg.preset).toBe("simple");
-    expect(cfg.agent.maxSteps).toBe(500);
+    expect(cfg).toMatchObject({ preset: "default", agent: { maxSteps: 500 }, run: { maxTurns: 500, maxRoundsPerTurn: 500 } });
   });
 
   test("simple aceita um teto mais restrito vindo de outra camada", () => {
@@ -66,10 +63,10 @@ describe("preset simple/control (#515)", () => {
     expect(() => validateConfig({ ...raised, preset: "simple" })).toThrow(/preset.*control/);
   });
 
-  test("simple recusa run.maxTurns como campo removido", () => {
-    const withTurns = base() as unknown as Record<string, unknown>;
-    withTurns.run = { maxTurns: 600 };
-    expect(() => validateConfig({ ...withTurns, preset: "simple" })).toThrow(/run\.maxTurns.*removido/);
+  test("Default accepts only published turn choices and hides the advanced round knob", () => {
+    const withTurns = { ...base(), version: "2.0.0", preset: "simple" };
+    expect(validateConfig({ ...withTurns, run: { maxTurns: 1000 } }).run).toMatchObject({ maxTurns: 1000 }); expect(() => validateConfig({ ...withTurns, run: { maxTurns: 600 } })).toThrow(/run\.maxTurns.*250.*500.*1000.*unlimited/);
+    expect(() => validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } })).toThrow(/run\.maxRoundsPerTurn.*preset.*control/);
   });
 
   test("simple aceita 500 explícito, que é o próprio teto", () => {
@@ -84,5 +81,6 @@ describe("preset simple/control (#515)", () => {
 
   test("agent de tipo errado não é mascarado pelo preset", () => {
     expect(() => validateConfig({ ...base(), agent: "p/m1", preset: "simple" })).toThrow(/agent/);
+    for (const maxSteps of ["25", null, true, 500.5, Infinity]) expect(() => validateConfig({ ...base(), agent: { ...base().agent, maxSteps } })).toThrow(ConfigError);
   });
 });

@@ -3,6 +3,7 @@ import { ConfigError, validateConfig } from "../src/core/config";
 
 function cfg(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    preset: "control",
     providers: {
       p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "P1_KEY" },
       p2: { kind: "openai-compat", baseUrl: "http://p2/v1", credentialRef: "P2_KEY" },

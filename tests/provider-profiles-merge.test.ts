@@ -13,13 +13,13 @@ import {
   type ProviderStore,
 } from "../src/providers/profiles";
 
-function project(provider = "p", model = "m1"): AstroConfig {
+function project(provider = "p", model = "m1", maxSteps: number | false = 2): AstroConfig {
   return validateConfig({
     providers: {
       [provider]: { kind: "openai-compat", baseUrl: `https://${provider}.example/v1`, credentialRef: "KEY" },
     },
     models: [{ provider, id: model, tags: ["writing-code"], context: 8192 }],
-    agent: { model: `${provider}/${model}`, maxSteps: 2, tools: ["read_file"] },
+    agent: { model: `${provider}/${model}`, ...(maxSteps === false ? {} : { maxSteps }), tools: ["read_file"] },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   });
 }
@@ -82,6 +82,27 @@ test("sem override, usa o provider do agent.model", () => {
   expect(result.config.agent.model).toBe("p/m1");
 });
 
+const effective = (projectLayer: AstroConfig, global?: unknown) => resolveEffectiveConfig({ project: projectLayer, ...(global === undefined ? {} : { global }), store: store(), env: {} });
+test("validated layers preserve declared limits, aliases, presets and versions", () => {
+  const omitted = project("p", "m1", false), globalTurns = { version: "2.0.0", run: { maxTurns: 250 } };
+  expect(effective(project(), { run: {} }).config.run).toMatchObject({ maxTurns: 500, maxRoundsPerTurn: 2 });
+  expect([effective(project(), globalTurns).config.run?.maxTurns, effective(validateConfig({ ...project(), version: "1.0.0" }), globalTurns).config.run?.maxTurns]).toEqual([250, 250]);
+  expect(effective(validateConfig({ ...project(), version: "1.0.0" }), { version: "2.1.0" }).config.version).toBe("2.1.0");
+  expect(effective(project(), omitted).config.run?.maxRoundsPerTurn).toBe(2);
+  expect(effective(omitted, { version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } }).config).toMatchObject({ preset: "control", run: { maxRoundsPerTurn: 100 } });
+  expect(effective(validateConfig({ ...omitted, preset: "default" }), { preset: "control" }).config.preset).toBe("default");
+  for (const maxTurns of [1000, "unlimited"] as const) expect(effective(validateConfig({ ...omitted, version: "2.0.0", run: { maxTurns } }), omitted).config.run?.maxTurns).toBe(maxTurns);
+  expect(effective(validateConfig({ ...omitted, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: "unlimited" } }), omitted).config.run?.maxRoundsPerTurn).toBe("unlimited");
+  for (const maxSteps of [100, 1000]) { const global = validateConfig({ ...omitted, preset: "control", agent: { model: "p/m1", maxSteps, tools: ["read_file"] } }), result = effective(omitted, global).config;
+    expect([result.agent.maxSteps, result.run?.maxRoundsPerTurn]).toEqual([maxSteps, maxSteps]); }
+  expect(effective(omitted).warnings.join(" ")).not.toMatch(/agent\.maxSteps/);
+  const base = { ...omitted, agent: { model: "p/m1", tools: ["read_file"] }, run: undefined }, global = validateConfig({ ...base, preset: "control", agent: { model: "p/m1", maxSteps: 200, tools: ["read_file"] } });
+  expect(effective(validateConfig({ ...base, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 100 } }), global).config).toMatchObject({ agent: { maxSteps: 200 }, run: { maxRoundsPerTurn: 100 } });
+  expect(effective(validateConfig({ ...omitted, version: "2.0.0", shell: { mode: "off" } })).warnings.join(" ")).not.toMatch(/sandbox.*legacy alias/);
+  for (const sandbox of [false, "docker"] as const) expect(effective(omitted, { tools: { run_command: { sandbox } } }).config.tools?.run_command?.sandbox).toBe(sandbox);
+  const normalized = effective(validateConfig({ ...base, version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: 500 } })).config, global1000 = validateConfig({ ...base, preset: "control", agent: { model: "p/m1", maxSteps: 1000, tools: ["read_file"] } }), rounds = effective(normalized, global1000).config.agent.maxSteps, warnings = effective(effective(validateConfig({ ...omitted, version: "2.0.0", shell: { mode: "off" } })).config).warnings.join(" ");
+  expect([rounds, /sandbox.*legacy alias/.test(warnings)]).toEqual([1000, false]);
+});
 test("provider do projeto vence perfil global com o mesmo nome", () => {
   const result = resolveEffectiveConfig({
     project: project("same"),
@@ -403,4 +424,16 @@ test("activeProfileId órfão no disco avisa e cai no projeto", () => {
   expect(result.activeProvider).toBe("p");
   expect(result.providerSelection).toBe("project");
   expect(result.warnings.join(" ")).toMatch(/activeProfileId/);
+});
+
+test("legacy aliases warn on load without rewriting user configuration (#594)", () => {
+  const home = mkdtempSync(join(tmpdir(), "astro-alias-load-")), path = join(home, "astro.config.json");
+  const raw = { version: "2.0.0", preset: "control", providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "KEY" } },
+    models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }], agent: { model: "p/m1", maxSteps: 2, tools: ["read_file"] }, tools: { run_command: { sandbox: false } } };
+  const before = `${JSON.stringify(raw, null, 2)}\n`;
+  writeFileSync(path, before);
+  const result = loadEffectiveConfig(path, { env: { ASTRO_HOME: home, ASTRO_NO_GLOBAL_CONFIG: "1" } });
+  expect(result.config).toMatchObject({ run: { maxRoundsPerTurn: 2 }, shell: { mode: "off" } });
+  expect(result.warnings.join(" ")).toMatch(/agent\.maxSteps.*run\.maxRoundsPerTurn[\s\S]*sandbox.*shell\.mode/);
+  expect(readFileSync(path, "utf8")).toBe(before);
 });

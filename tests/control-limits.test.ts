@@ -190,9 +190,9 @@ describe("spawn.maxActive (#552)", () => {
   test("spawnLimitFromConfig: default 8, maxActive declarado e clamp no teto", () => {
     const cfgDefault = validateConfig(structuredClone(base())) as AstroConfig;
     expect(spawnLimitFromConfig(cfgDefault)).toBe(DEFAULT_MAX_SPAWNS_PER_RUN);
-    const cfg3 = validateConfig({ ...structuredClone(base()), spawn: { maxActive: 3 } }) as AstroConfig;
+    const cfg3 = validateConfig({ ...structuredClone(base()), preset: "control", spawn: { maxActive: 3 } }) as AstroConfig;
     expect(spawnLimitFromConfig(cfg3)).toBe(3);
-    const cfg99 = validateConfig({ ...structuredClone(base()), spawn: { maxActive: 99 } }) as AstroConfig;
+    const cfg99 = validateConfig({ ...structuredClone(base()), preset: "control", spawn: { maxActive: 99 } }) as AstroConfig;
     expect(spawnLimitFromConfig(cfg99)).toBe(DEFAULT_MAX_SPAWNS_PER_RUN);
   });
 });

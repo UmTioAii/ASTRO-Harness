@@ -61,6 +61,14 @@ describe("config tools.run_command.sandbox (F4-6, #474)", () => {
     expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("docker");
   });
 
+  test("legacy shell aliases retain their meaning and reject contradictions (#594)", () => {
+    for (const sandbox of [true, "docker", "auto"] as const) {
+      const cfg = validateConfig({ ...structuredClone(baseConfig), tools: { run_command: { sandbox } } }); expect([cfg.shell?.mode, cfg.tools?.run_command?.sandbox]).toEqual([undefined, sandbox]);
+    }
+    const raw = structuredClone(baseConfig) as Record<string, unknown>; expect(() => validateConfig({ ...raw, version: "2.0.0", shell: { mode: "host" }, tools: { run_command: { sandbox: "auto" } } })).toThrow(/shell\.mode.*conflicts.*sandbox/);
+    expect(validateConfig({ ...raw, version: "2.0.0", shell: { mode: "off" }, tools: { run_command: { sandbox: false } } }).shell?.mode).toBe("off");
+  });
+
   test("tools.run_command.sandbox inválido → ConfigError", () => {
     const raw = structuredClone(baseConfig) as Record<string, unknown>;
     raw.tools = { run_command: { sandbox: "yes" } };

@@ -3,14 +3,14 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, isPlainObject } from "./core/config";
+import { BASELINE_MAX_STEPS, ConfigError, DEFAULT_AGENT_TOOLS, declaredRunLimit, isPlainObject, mergeDerivedPresetMetadata, mergeDerivedRunLimitMetadata } from "./core/config";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./permissions";
 import { isVaultRef } from "./secrets";
 
 /** Ranque de permissão: `ask` é o mais restrito, `bypass` o mais largo. */
 const MODE_RANK: Record<string, number> = { ask: 0, "allow-edits": 1, bypass: 2 };
 /** auto (default; pode cair no host) > Docker > desligado (#474): o projeto não reabre o host. */
-const SANDBOX_RANK: Record<string, number> = { false: 0, true: 1, docker: 1, auto: 2 };
+const SANDBOX_RANK: Record<string, number> = { false: 0, off: 0, true: 1, docker: 1, auto: 2, host: 2 };
 /** Ranque do perfil do agent: `read-only` é o mais restrito. */
 const PERMISSION_RANK: Record<string, number> = { "read-only": 0, write: 1, execute: 2, full: 3 };
 /** Janela do budget: `project` é a mais estreita (o teto do time entra nela). */
@@ -19,22 +19,27 @@ const SCOPE_RANK: Record<string, number> = { project: 0, month: 1, day: 2, "use-
 const CREDENTIAL_KEYS = ["credentialRef", "credentialsPath"];
 
 /** Mescla camadas: objetos por chave, arrays substituem, escalares substituem. */
-export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
+export function mergeConfigLayers(base: Record<string, unknown>, overlay: Record<string, unknown>, root = true): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(overlay)) {
+    if (value === undefined) continue;
     const current = merged[key];
+    if (root && key === "version" && typeof current === "string" && typeof value === "string"
+      && current.localeCompare(value, undefined, { numeric: true }) > 0) continue;
     if (key === "models" && Array.isArray(current) && Array.isArray(value)) merged[key] = mergeModelLayers(current, value);
     else if (isPlainObject(current) && isPlainObject(value)) {
-      const next = mergeConfigLayers(current, value);
+      const next = mergeConfigLayers(current, value, false);
       // `model` e `profile` são uma chave lógica (o schema proíbe os dois):
       // declarar um no projeto descarta o herdado da camada global. O
       // conflito dentro da mesma camada é erro do schema (ADR-0007) e passa
       // intacto para a validação.
       if (value.model !== undefined && value.profile === undefined) delete (next as Record<string, unknown>).profile;
       else if (value.profile !== undefined && value.model === undefined) delete (next as Record<string, unknown>).model;
+      if (key === "run") mergeDerivedRunLimitMetadata(current, value, next);
       merged[key] = next;
     } else merged[key] = value;
   }
+  if (root) mergeDerivedPresetMetadata(base, overlay, merged);
   return merged;
 }
 
@@ -116,6 +121,12 @@ export function assertNarrowed(
   const mainAfter = isPlainObject(merged.agent) ? merged.agent : undefined;
   const mainCeiling = typeof main?.maxSteps === "number" ? main.maxSteps : BASELINE_MAX_STEPS;
   if (mainAfter !== undefined) assertStepsCeiling(mainAfter.maxSteps, "agent.maxSteps", mainCeiling);
+  const globalRun = isPlainObject(global.run) ? global.run : undefined;
+  const mergedRun = isPlainObject(merged.run) ? merged.run : undefined;
+  const globalTurnLimit = declaredRunLimit(globalRun, "maxTurns");
+  if (typeof globalTurnLimit === "number") assertStepsCeiling(mergedRun?.maxTurns, "run.maxTurns", globalTurnLimit);
+  const globalRoundLimit = declaredRunLimit(globalRun, "maxRoundsPerTurn");
+  if (typeof globalRoundLimit === "number") assertStepsCeiling(mergedRun?.maxRoundsPerTurn, "run.maxRoundsPerTurn", globalRoundLimit);
   if (main !== undefined && mainAfter !== undefined) assertAgentNarrowed(main, mainAfter, "do agent principal");
   const named = isPlainObject(global.agents) ? global.agents : {};
   const namedAfter = isPlainObject(merged.agents) ? merged.agents : {};
@@ -155,8 +166,8 @@ export function assertNarrowed(
   const projectTools = isPlainObject(projectLayer?.tools) ? projectLayer.tools : undefined;
   const globalRunCommand = isPlainObject(globalTools?.run_command) ? globalTools.run_command : undefined;
   const projectRunCommand = isPlainObject(projectTools?.run_command) ? projectTools.run_command : undefined;
-  const fromSandbox = SANDBOX_RANK[String(globalRunCommand?.sandbox ?? "auto")];
-  const projectSandbox = projectRunCommand?.sandbox;
+  const fromSandbox = SANDBOX_RANK[String((isPlainObject(global.shell) ? global.shell.mode : undefined) ?? globalRunCommand?.sandbox ?? "auto")];
+  const projectSandbox = (isPlainObject(projectLayer?.shell) ? projectLayer.shell.mode : undefined) ?? projectRunCommand?.sandbox;
   const toSandbox = projectSandbox === undefined ? undefined : SANDBOX_RANK[String(projectSandbox)];
   if (fromSandbox !== undefined && toSandbox !== undefined && toSandbox > fromSandbox) {
     const reason = fromSandbox === 0
@@ -291,7 +302,7 @@ function assertAgentNarrowed(globalAgent: Record<string, unknown>, mergedAgent: 
 
 /** Teto de passos (#473): o valor mesclado não pode passar do teto (global ou padrão embutido). */
 function assertStepsCeiling(steps: unknown, field: string, ceiling: number): void {
-  if (typeof steps === "number" && steps > ceiling) {
+  if (steps === "unlimited" || (typeof steps === "number" && steps > ceiling)) {
     throw new ConfigError(
       `config inválida: o projeto amplia o teto global de passos (${field}: ${steps} acima do teto ${ceiling})`,
     );
