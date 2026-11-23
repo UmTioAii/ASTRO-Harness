@@ -116,6 +116,7 @@ describe("config do shell: host é o default; o alias legado seleciona Docker (#
     expect(example.version).toBe("2.0.0");
     expect(example.shell).toEqual({ mode: "host" });
     expect(JSON.stringify(example)).not.toContain('"sandbox"');
+    expect(() => validateConfig(structuredClone(example))).not.toThrow();
   });
 });
 

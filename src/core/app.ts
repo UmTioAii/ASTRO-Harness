@@ -602,7 +602,7 @@ function projectSystemPrompt(config: AstroConfig, cwd: string, memory?: string):
 /** One-line notice for a CLI run whose shell executes on the host (ADR-0034, planned). */
 export function hostShellNotice(tools: readonly string[], mode: RunCommandMode, suppressed?: boolean): string | undefined {
   if (suppressed === true || mode !== "host" || !tools.includes("run_command")) return undefined;
-  return "the shell runs on the host with per-command approval; the Docker sandbox is inactive (ADR-0034)";
+  return "warning: the shell runs on the host with per-command approval; the Docker sandbox is inactive (ADR-0034)";
 }
 
 export async function runTask(opts: RunOptions): Promise<RunReport> {
