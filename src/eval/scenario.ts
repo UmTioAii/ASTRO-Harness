@@ -11,6 +11,7 @@ import { validateConfig, type AstroConfig } from "../core/config";
 import { runHealthCheck, type HealthReport } from "../health";
 import { looksLikeSecret } from "../secrets";
 import { parseSkill } from "../skills/loader";
+import { DEFAULT_BASE } from "../tools/web-search";
 import { resolveWithin } from "../tools/paths";
 
 export interface ScenarioToolCall {
@@ -522,15 +523,7 @@ function checkExpectations(expect: ScenarioExpectations, obs: Observation): stri
   return diff;
 }
 
-/** Defaults de backend de web_search quando `baseUrl` não é declarado (espelha src/tools/web-search.ts). */
-const WEB_SEARCH_DEFAULT_BASE: Record<string, string> = {
-  exa: "https://api.exa.ai",
-  brave: "https://api.search.brave.com",
-  google: "https://www.googleapis.com/customsearch/v1",
-  custom: "",
-};
-
-/** Valida a config efetiva (defaults inclusos), não só os overrides do scenario. */
+/** Validates the effective config (defaults included), not only the scenario overrides. */
 function assertEffectiveLoopback(config: AstroConfig): void {
   for (const [name, provider] of Object.entries(config.providers)) {
     if (provider.kind === "codex-oauth") {
@@ -546,11 +539,23 @@ function assertEffectiveLoopback(config: AstroConfig): void {
     if (typeof server.url === "string") assertLoopbackUrl(server.url, `mcpServers.${name}.url`);
   }
   if (config.webSearch !== undefined) {
-    const base = config.webSearch.baseUrl ?? WEB_SEARCH_DEFAULT_BASE[config.webSearch.provider];
-    if (base === undefined || base === "") {
-      throw new Error(`cenário com webSearch.baseUrl ausente; o endpoint não é loopback`);
+    const check = (field: string, base: string | undefined): void => {
+      if (base === undefined || base === "") {
+        throw new Error(`cenário com ${field} ausente; o endpoint não é loopback`);
+      }
+      assertLoopbackUrl(base, field);
+    };
+    check("webSearch.baseUrl", config.webSearch.baseUrl ?? DEFAULT_BASE[config.webSearch.provider]);
+    // The whole chain is a fixture surface, not only the primary (#604). A chain
+    // entry has no baseUrl, so name the default endpoint that failed and why it
+    // cannot be overridden here.
+    for (const [index, entry] of (config.webSearch.fallback ?? []).entries()) {
+      const base = DEFAULT_BASE[entry.provider];
+      if (base === undefined || base === "") {
+        throw new Error(`cenário com webSearch.fallback[${index}] (${entry.provider}) sem endpoint padrão; o golden não pode declarar esse fallback`);
+      }
+      assertLoopbackUrl(base, `webSearch.fallback[${index}] (endpoint padrão de ${entry.provider}; o golden não pode sobrescrevê-lo)`);
     }
-    assertLoopbackUrl(base, "webSearch.baseUrl");
   }
   if (config.team?.auditWebhook !== undefined) {
     assertLoopbackUrl(config.team.auditWebhook, "team.auditWebhook");

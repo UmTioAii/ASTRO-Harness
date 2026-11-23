@@ -12,7 +12,7 @@ import type { ModelRouting } from "../providers/model-routing";
 import { DEFAULT_RUN_TESTS_TIMEOUT_MS, MAX_RUN_TESTS_TIMEOUT_MS, type RunTestsConfig } from "../tools/run-command";
 import { HOST_SHELLS, isHostShell } from "../tools/host-shell";
 import type { ShellExternalDirectory, ShellRule, ShellRuleEffect } from "../tools/shell-policy";
-import type { WebSearchConfig, WebSearchProvider } from "../tools/web-search";
+import type { WebSearchBackendConfig, WebSearchConfig, WebSearchProvider } from "../tools/web-search";
 import { isPermissionMode, DEFAULT_PERMISSION_MODE, isAgentPermission, type AgentPermission, type PermissionMode } from "../permissions";
 import { isAuthHeader, isEnvName, isVaultCredentialRef, looksLikeSecret, mcpSecretProblem } from "../secrets";
 import { headerEnvName, isValidHeaderName } from "../mcp/headers";
@@ -1782,25 +1782,53 @@ function validateMemory(value: unknown): MemoryConfig {
   }
   return { maxChars };
 }
+const WEB_SEARCH_PROVIDERS: readonly WebSearchProvider[] = ["exa", "brave", "google", "custom"];
+
+function expectWebSearchProvider(value: unknown, field: string): WebSearchProvider {
+  if (typeof value !== "string" || !WEB_SEARCH_PROVIDERS.includes(value as WebSearchProvider)) {
+    fail(`config inválida: "${field}" deve ser exa, brave, google ou custom`);
+  }
+  return value as WebSearchProvider;
+}
+
+/** A key is a name, never a value (I-03): the message names the field only. */
+function expectWebSearchKeyEnv(value: unknown, field: string): string {
+  const name = expectString(value, field);
+  if (!isEnvName(name) || looksLikeSecret(name)) {
+    fail(`config inválida: "${field}" deve ser o NOME de uma variável de ambiente; nunca o valor da chave (I-03)`);
+  }
+  return name;
+}
+
+/** One backend of the declared chain (#604): provider plus an optional key name. */
+function validateWebSearchBackend(value: unknown, field: string): WebSearchBackendConfig {
+  const raw = expectObject(value, field);
+  const known = new Set(["provider", "apiKeyEnv"]);
+  for (const key of Object.keys(raw)) {
+    if (!known.has(key)) fail(`config inválida: "${field}.${key}" desconhecido`);
+  }
+  const provider = expectWebSearchProvider(raw.provider, `${field}.provider`);
+  if (provider === "custom") {
+    fail(`config inválida: "${field}.provider" não aceita "custom" na cadeia (sem endpoint declarado); use-o como provider principal`);
+  }
+  const apiKeyEnv = raw.apiKeyEnv === undefined ? undefined : expectWebSearchKeyEnv(raw.apiKeyEnv, `${field}.apiKeyEnv`);
+  return { provider, ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }) };
+}
+
 /**
- * Valida `webSearch` (#57): a chave é sempre um NOME de variável de ambiente
- * (I-03); `custom` exige baseUrl. Default de resultados 5, teto 10.
+ * Valida `webSearch` (#57, #604): a chave é sempre um NOME de variável de
+ * ambiente (I-03); `custom` exige baseUrl; a cadeia `fallback` é ordenada, sem
+ * backend repetido (nem o principal) e com chave de ambiente opcional por
+ * entrada. Default de resultados 5, teto 10.
  */
 function validateWebSearch(value: unknown): WebSearchConfig {
   const raw = expectObject(value, "webSearch");
-  const known = new Set(["provider", "apiKeyEnv", "baseUrl", "defaultMaxResults"]);
+  const known = new Set(["provider", "apiKeyEnv", "baseUrl", "defaultMaxResults", "fallback"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) fail(`config inválida: "webSearch.${key}" desconhecido`);
   }
-  const providers: readonly WebSearchProvider[] = ["exa", "brave", "google", "custom"];
-  const provider = raw.provider;
-  if (typeof provider !== "string" || !providers.includes(provider as WebSearchProvider)) {
-    fail('config inválida: "webSearch.provider" deve ser exa, brave, google ou custom');
-  }
-  const apiKeyEnv = expectString(raw.apiKeyEnv, "webSearch.apiKeyEnv");
-  if (!isEnvName(apiKeyEnv) || looksLikeSecret(apiKeyEnv)) {
-    fail('config inválida: "webSearch.apiKeyEnv" deve ser o NOME de uma variável de ambiente; nunca o valor da chave (I-03)');
-  }
+  const provider = expectWebSearchProvider(raw.provider, "webSearch.provider");
+  const apiKeyEnv = expectWebSearchKeyEnv(raw.apiKeyEnv, "webSearch.apiKeyEnv");
   const baseUrl = raw.baseUrl === undefined ? undefined : expectString(raw.baseUrl, "webSearch.baseUrl");
   if (baseUrl !== undefined) {
     const problem = urlProblem(baseUrl);
@@ -1816,11 +1844,27 @@ function validateWebSearch(value: unknown): WebSearchConfig {
       fail('config inválida: "webSearch.defaultMaxResults" deve ser no máximo 10');
     }
   }
+  let fallback: WebSearchBackendConfig[] | undefined;
+  if (raw.fallback !== undefined) {
+    if (!Array.isArray(raw.fallback)) {
+      fail('config inválida: "webSearch.fallback" deve ser uma lista de backends');
+    }
+    fallback = raw.fallback.map((entry: unknown, index: number) =>
+      validateWebSearchBackend(entry, `webSearch.fallback[${index}]`));
+    const seen = new Set<string>([provider]);
+    for (const [index, entry] of fallback.entries()) {
+      if (seen.has(entry.provider)) {
+        fail(`config inválida: "webSearch.fallback[${index}].provider" repete o backend "${entry.provider}"; cada backend aparece uma vez na cadeia`);
+      }
+      seen.add(entry.provider);
+    }
+  }
   return {
-    provider: provider as WebSearchProvider,
+    provider,
     apiKeyEnv,
     ...(baseUrl === undefined ? {} : { baseUrl }),
     ...(defaultMaxResults === undefined ? {} : { defaultMaxResults }),
+    ...(fallback === undefined ? {} : { fallback }),
   };
 }
 
@@ -1830,7 +1874,7 @@ function validateWebSearch(value: unknown): WebSearchConfig {
  * validação), minor soma chave opcional retrocompatível, patch só corrige
  * mensagem. O alvo hoje é o major 1.
  */
-export const CONFIG_SCHEMA_VERSION = "2.0.0";
+export const CONFIG_SCHEMA_VERSION = "2.1.0";
 
 const CONFIG_SCHEMA_MAJOR = Number(CONFIG_SCHEMA_VERSION.split(".")[0]);
 
@@ -1953,7 +1997,10 @@ const CONFIG_SHAPE: ConfigShape = {
     },
     outputLimit: { keys: ["maxTokens", "shareOfWindow"] },
     compaction: { keys: ["buffer"] },
-    webSearch: { keys: ["provider", "apiKeyEnv", "baseUrl", "defaultMaxResults"] },
+    webSearch: {
+      keys: ["provider", "apiKeyEnv", "baseUrl", "defaultMaxResults", "fallback"],
+      children: { fallback: { items: { keys: ["provider", "apiKeyEnv"] } } },
+    },
     memory: { keys: ["maxChars"] },
     paths: { keys: ["ledger", "audit"] },
     provenance: { keys: ["registry", "plugins"] },

@@ -421,6 +421,31 @@ describe("eval harness (F5-2)", () => {
     }
   });
 
+  test("runCase recusa fallback de webSearch sem endpoint loopback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-websearch-fallback-"));
+    const caseDir = writeScenarioCase(root, "01-web-fallback", {
+      schema: 1,
+      kind: "app",
+      env: { EVAL_WEB_KEY: "eval-web-secret-123" },
+      config: {
+        agent: { model: "mock/mock-1", maxSteps: 6, tools: ["web_search", "write_file"] },
+        webSearch: {
+          provider: "exa",
+          apiKeyEnv: "EVAL_WEB_KEY",
+          baseUrl: "http://127.0.0.1:9",
+          fallback: [{ provider: "google", apiKeyEnv: "EVAL_WEB_KEY" }],
+        },
+      },
+      turns: [{ toolCalls: [{ name: "web_search", arguments: { query: "astro" } }] }, { content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-web-fallback-cwd-"));
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/loopback.*fallback\[0\] \(endpoint padrão de google; o golden não pode sobrescrevê-lo\)/);
+  });
+
   test("runCase recusa telemetry habilitado com endpoint público default", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-telemetry-default-"));
     const caseDir = writeScenarioCase(root, "01-telemetry", {

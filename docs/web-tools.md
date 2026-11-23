@@ -1,6 +1,6 @@
 # Web tools
 
-Summary: `web_search` queries one configurable backend and returns deduplicated, stably citable results; `web_fetch` downloads one page. External content is untrusted and never executed.
+Summary: `web_search` queries a configurable backend chain and returns deduplicated, stably citable results; `web_fetch` downloads one page. External content is untrusted and never executed.
 
 ## Configuration (`webSearch`)
 
@@ -10,8 +10,13 @@ Summary: `web_search` queries one configurable backend and returns deduplicated,
 | `apiKeyEnv` | yes | — | **name** of an environment variable; a value that looks like a secret is rejected (I-03) |
 | `baseUrl` | `custom` only | backend endpoint | `http(s)` without credential/metadata; in `google` it may carry `cx` |
 | `defaultMaxResults` | no | 5 | integer 1..10 |
+| `fallback` | no | — | ordered list of `{provider, apiKeyEnv?}`, tried after the primary (#604) |
 
-The key is read from the run `env` at call time. No other host variable reaches the backend; the `web.search` audit records `{query, provider, resultsCount, duration, status, cacheHit}` with the query redacted.
+Each fallback entry repeats the key rule (a name, never a value) and the chain may not repeat a backend, including the primary. `custom` cannot enter the chain because it has no declared endpoint; use it as the primary. An entry without `apiKeyEnv` has no credential and is skipped. The key is read from the run `env` at call time. No other host variable reaches the backend; the `web.search` audit records `{query, provider, resultsCount, duration, status, cacheHit, backends, backendsTotal}` with the query redacted.
+
+## Declared fallback (#604)
+
+Only transport failures move to the next backend: a network error after the retries, a non-2xx final status, or a 2xx with an unparseable body. A missing credential (or a missing `apiKeyEnv`) skips only that backend. Cancellation stops the chain and audits the in-flight backend with `aborted`. An empty result list is a success, not a failure. Every backend the call considered is audited in `backends` with `{provider, status, durationMs, reason?}`, where `reason` is a bounded code: `credential_missing`, `network`, `invalid_body`, `aborted` or `http_<status>`. Never a credential, a message or a URL. `backendsTotal` is how many backends the call considered.
 
 ## Backends
 
@@ -29,7 +34,7 @@ Redirects are not followed (`redirect: "error"`): the key never reaches another 
 - **Canonical URL** — comparison only: `http` is compared as `https`, host lowercased, default port, fragment and tracking parameters (`utm_*`, `gclid`, `fbclid`, `msclkid`, …) dropped, query sorted, trailing slash removed. A group keeps the position of its first occurrence; url, title and snippet always come from one entry (the longest snippet wins), never a mix. Returned URLs keep the scheme the backend sent, and backend order is preserved.
 - **Cap** — results are sliced to `maxResults` before dedupe, so a provider that ignores the limit cannot inflate the list or what the run pins in memory.
 - **Citations** — every result carries a numeric `id`, injected after dedupe. The manifest tells the model to cite `[n]`. Ids are unique inside a run and restart at 1 in a new run; a cache hit replays the same ids, so a citation always maps to a result actually returned in that run.
-- **Cache** — bounded (32 entries, oldest evicted) and in memory, keyed by a SHA-256 digest of provider, `baseUrl`, canonical query (case/whitespace insensitive) and the call options: the query text never becomes a key, so a pasted secret is not retained by the `Map`, and two queries that both redact to the same display text stay distinct. An identical call inside the same run makes no backend request and the audit event has `cacheHit: true`. A call without the configured credential fails and is audited even when an entry exists; the cache and the id counter are cleared when the tool serves a different `run`.
+- **Cache** — bounded (32 entries, oldest evicted) and in memory, keyed by a SHA-256 digest of the resolved backend (provider and `baseUrl`), canonical query (case/whitespace insensitive) and the call options: the query text never becomes a key, so a pasted secret is not retained by the `Map`, and two queries that both redact to the same display text stay distinct. A fallback result is stored and read under the backend that answered, never served as a primary hit. An identical call inside the same run is answered from the cache without requesting the backend that produced it (`cacheHit: true`); only successful calls are cached, so when a fallback produced the entry the earlier backends are probed again first and spend their retry budget before the hit. A call without the configured credential fails (or skips that backend) and is audited even when an entry exists; the cache and the id counter are cleared when the tool serves a different `run`.
 - Only successful calls are cached; errors and aborted calls never are.
 
 ## Limit and backoff
@@ -46,4 +51,4 @@ Search results are external data. The manifest marks `risk: low`, `permission: r
 
 ## Dev opt-in (outbound)
 
-`ASTRO_ALLOW_PRIVATE_URLS=1` (per process and children, dev only) releases loopback, RFC1918, ULA and reserved ranges (`0.0.0.0/8`, multicast) in URLs validated by `outboundUrlProblem`; CGNAT (100.64/10), metadata (ULA `fd00:ec2::/64` and `fd20:ce::/64`, mapped IPv4 and known hosts) and link-local stay blocked. `webSearch.baseUrl` uses only `urlProblem` (any provider): it accepts loopback/RFC1918/ULA; a plugin provider `baseUrl` in `astro.config.json` does not pass through `outboundUrlProblem` (pre-existing limit).
+`ASTRO_ALLOW_PRIVATE_URLS=1` (per process and children, dev only) releases loopback, RFC1918, ULA and reserved ranges (`0.0.0.0/8`, multicast) in URLs validated by `outboundUrlProblem`; CGNAT (100.64/10), metadata (ULA `fd00:ec2::/64` and `fd20:ce::/64`, mapped IPv4 and known hosts) and link-local stay blocked. `webSearch.baseUrl` uses only `urlProblem` (any provider): it accepts loopback/RFC1918/ULA; the golden runner rejects a declared fallback backend whose default endpoint is not loopback; a plugin provider `baseUrl` in `astro.config.json` does not pass through `outboundUrlProblem` (pre-existing limit).
