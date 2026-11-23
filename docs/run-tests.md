@@ -1,6 +1,6 @@
 # Comando de teste do projeto (`run_tests`)
 
-Resumo: `run_tests` executa o comando de teste declarado em `run.tests.command` no mesmo sandbox Docker do `run_command`, sem shell; o modelo não escolhe binário, argumento nem flag.
+Resumo: `run_tests` executa o comando de teste declarado em `run.tests.command` no mesmo caminho do `run_command` — host com aprovação por comando (default) ou Docker explícito — sem shell; o modelo não escolhe binário, argumento nem flag.
 
 | Cobre | Não cobre |
 |---|---|
@@ -31,11 +31,11 @@ Resumo: `run_tests` executa o comando de teste declarado em `run.tests.command` 
 
 | Aspecto | Comportamento |
 |---|---|
-| Sandbox | Sempre Docker, regra própria do `run_tests` (#474): o `auto` do `run_command` não vale aqui. `docker run` efêmero, `--network none`, rootfs read-only, máscaras `:ro` de `.git`/hard-block, cwd bindado |
-| Shell | Nenhum: o argv configurado vira o `cmd` do container, item a item (`dockerArgvNoShell`) |
+| Sandbox | Segue o mesmo `shell.mode`/`sandbox` do `run_command` (#599): host com aprovação por comando é o default; `true`/`"docker"` usa `docker run` efêmero, `--network none`, rootfs read-only, máscaras `:ro` de `.git`/hard-block, cwd bindado |
+| Shell | Nenhum: no host o argv configurado é spawnado item a item; no Docker ele vira o `cmd` do container (`dockerArgvNoShell`) |
 | `sandbox: false` | Recusa `sandbox_required_for_shell` sem tocar o host (I-19), igual ao `run_command` |
-| `sandbox` ausente/`"auto"` | Recusa `sandbox_required_for_shell` citando `run_tests` e Docker; o fallback host do ADR-0031 vale só para `run_command` |
-| `sandbox: true`/`"docker"` | Habilita o caminho Docker; sem daemon a recusa é explícita, sem downgrade para o host |
+| `sandbox` ausente/`"auto"` | Roda no host atrás do mesmo gate/approval do `run_command`; o `filter` é confinado ao cwd (recusa `external_directory` fora dele, inclusive por symlink/glob) |
+| `sandbox: true`/`"docker"` | Habilita o caminho Docker; sem daemon a recusa é explícita com `sandbox_required_for_shell`, sem downgrade para o host |
 | Env | Host não entra no container (env mínima do docker CLI), como no `run_command` (I-03) |
 
 ## Saída
