@@ -534,7 +534,7 @@ async function runDockerProcess(
   return { output: redactThenTruncate(output) };
 }
 
-// --- Shell no host (#474, opt-in via `sandbox: "auto"`) ---
+// --- Shell no host (#474/#599: default com aprovação por comando) ---
 
 /**
  * Auditoria da decisão do host (#474): só decisão/motivo/modo/shell. O comando
@@ -622,8 +622,10 @@ async function runArgv(argv: string[], ctx: ToolContext, timeoutMs: number): Pro
     if (onCancel !== undefined) ctx.signal?.removeEventListener("abort", onCancel);
   }
 
+  // Cancellation returns before draining the pipes: a surviving grandchild could
+  // keep stdout open and the cancelled call would never return (I-19).
+  if (exited === aborted) return { output: "", code: null, timedOut: false, cancelled: true };
   const output = await combinedOutput(proc);
-  if (exited === aborted) return { output, code: null, timedOut: false, cancelled: true };
   if (exited === timedOut) return { output, code: null, timedOut: true, cancelled: false };
   return { output, code: exited, timedOut: false, cancelled: false };
 }

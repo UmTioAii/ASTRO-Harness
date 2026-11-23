@@ -175,15 +175,6 @@ describe("run_command on the host by default, approved per command (#474, #599)"
     expect(mock.calls.some((cmd) => cmd[0] === "docker")).toBe(false);
   });
 
-  test("the legacy 'auto' value also runs on the host", async () => {
-    mock = installDockerSpawnMock(() => "docker-ok");
-    const mod = await isolatedRunCommand("auto-explicit-host");
-    mod.configureRunCommand({ mode: "host" });
-    const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
-    expect(result.output).not.toContain("docker-ok");
-    expect(mock.runCalls).toHaveLength(0);
-  });
-
   test("sandbox:true segue no Docker e só spawna docker", async () => {
     mock = installDockerSpawnMock(() => "docker-ok");
     const mod = await isolatedRunCommand("host-regress-docker");
@@ -210,6 +201,7 @@ describe("run_command on the host by default, approved per command (#474, #599)"
     mod.configureRunCommand({ sandbox: true });
     const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
     expect(result.isError).toBe(true);
+    expect(result.code).toBe("sandbox_required_for_shell");
     expect(result.output).toContain("Docker");
     expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
   });
@@ -220,6 +212,7 @@ describe("run_command on the host by default, approved per command (#474, #599)"
     mod.configureRunCommand({ mode: "docker" });
     const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
     expect(result.isError).toBe(true);
+    expect(result.code).toBe("sandbox_required_for_shell");
     expect(result.output).toContain("Docker");
     expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
   });

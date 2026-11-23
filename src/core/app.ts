@@ -628,7 +628,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
   const sandboxNotice = runCommandMode === "disabled" ? sandboxWarning(false) : undefined;
   if (sandboxNotice !== undefined && opts.suppressRunEvents !== true) console.warn(`aviso: ${sandboxNotice}`);
-  if (runCommandMode === "host" && opts.suppressRunEvents !== true) {
+  if (runCommandMode === "host" && config.agent.tools.includes("run_command") && opts.suppressRunEvents !== true) {
     console.warn("warning: the shell runs on the host with per-command approval; the Docker sandbox is inactive (ADR-0034)");
   }
 
