@@ -124,4 +124,38 @@ describe("webSearch.fallback (#604)", () => {
     expect((payload?.backends as Array<{ reason?: string }>).map((entry) => entry.reason))
       .toEqual(["credential_missing", "http_503", "invalid_body"]);
   });
+
+  test("an aborted backend is audited with the aborted code", async () => {
+    const controller = new AbortController();
+    const fetchImpl: FetchImpl = async (input) => {
+      if (String(input).startsWith(PRIMARY_BASE)) return new Response("boom", { status: 503 });
+      controller.abort();
+      throw new DOMException("aborted", "AbortError");
+    };
+    const { tool, audit, cwd } = setup(chain, { fetchImpl });
+    const result = await tool.execute({ query: "x" }, { ...ctx(cwd), signal: controller.signal });
+    expect(result.output).toContain("cancelada");
+    const payload = audit.readAll().find((item) => item.tipo === "web.search")?.payload;
+    expect(payload).toMatchObject({ status: 0, resultsCount: 0, backendsTotal: 2 });
+    expect(payload?.backends).toEqual([
+      { provider: "exa", status: 503, durationMs: expect.any(Number), reason: "http_503" },
+      { provider: "brave", status: 0, durationMs: expect.any(Number), reason: "aborted" },
+    ]);
+  });
+
+  test("a cached fallback hit re-probes the earlier backend and never caches its failure", async () => {
+    const calls: string[] = [];
+    const fetchImpl = routedFetch([
+      [PRIMARY_BASE, () => new Response("boom", { status: 503 })],
+      [BRAVE_BASE, () => Response.json({ web: { results: [{ title: "B", url: "https://b.test", description: "ok" }] } })],
+    ], calls);
+    const { tool, audit, cwd } = setup(chain, { fetchImpl });
+    await tool.execute({ query: "astro" }, ctx(cwd));
+    await tool.execute({ query: "astro" }, ctx(cwd));
+    // The dead primary spends its full budget again; only the answering backend is cached.
+    expect(calls.filter((url) => url.startsWith(PRIMARY_BASE))).toHaveLength(6);
+    expect(calls.filter((url) => url.startsWith(BRAVE_BASE))).toHaveLength(1);
+    expect(audit.readAll().filter((item) => item.tipo === "web.search").map((item) => item.payload?.cacheHit))
+      .toEqual([false, true]);
+  });
 });
