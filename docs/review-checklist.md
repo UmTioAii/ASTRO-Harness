@@ -35,7 +35,7 @@ Use com o diff do PR e a issue vinculada. Não use o raciocínio do autor como f
 ## Formato do veredito
 
 ```
-Revisão: REQUEST_CHANGES
+Review: REQUEST_CHANGES
 
 1. [bloqueante] src/tools/run-command.ts:42 — `env` herda `process.env` inteiro; com `~/.codex/auth.json` o conteúdo é legível via `cat`. Cenário: modelo chama run_command com "cat ~/.codex/auth.json". Correção: env sanitizado.
 2. [sugestão] tests/session.test.ts — falta caso de maxSteps = 0.

@@ -1,80 +1,80 @@
-# ASTRO — instruções para agentes
+# ASTRO — agent instructions
 
-Leia só este arquivo no início. Os demais documentos são carregados sob demanda pelo mapa em `docs/INDEX.md`.
+Read only this file at the start. Every other document is loaded on demand through the map in `docs/INDEX.md`.
 
-## Projeto
+## Project
 
-ASTRO é um harness CLI local, em Bun + TypeScript strict, multi-provider, com foco em governança: escopo por agente, custo e quota por conta, aprovação e auditoria. Zero dependências de runtime (exceção única: Ink/React sob demanda só na TUI, que abre com `astro`, ADR-0001).
+ASTRO is a local CLI harness built with Bun + strict TypeScript, multi-provider, focused on governance: per-agent scope, cost and quota per account, approval and audit. Zero runtime dependencies (single exception: Ink/React on demand, only in the TUI opened by `astro`, ADR-0001).
 
-## Comandos
+## Commands
 
 - `bun install --frozen-lockfile`
-- `bun run dev` — abre a TUI a partir da fonte, sem build
-- `bun test` — suíte completa
-- `bun run smoke` — build + valida o launcher com Node sem Bun no PATH
-- `bun run smoke:packed` — `npm pack` + instalação limpa + TUI com provider mock em loopback
-- `bun run doctor` — diagnóstico local (versões, deps, dist, config, credenciais por nome, ASTRO_HOME)
+- `bun run dev` — opens the TUI from source, no build
+- `bun test` — full suite
+- `bun run smoke` — build + validates the launcher with Node without Bun on PATH
+- `bun run smoke:packed` — `npm pack` + clean install + TUI with a loopback mock provider
+- `bun run doctor` — local diagnosis (versions, deps, dist, config, credential names, ASTRO_HOME)
 - `bun run typecheck` — `tsc --noEmit`
-- Antes de qualquer PR: `bun test` e `bun run typecheck` passam, sem exceção.
+- Before any PR: `bun test` and `bun run typecheck` pass, no exceptions.
 
-## Mapa do código
+## Code map
 
-- `src/providers/` — adaptadores de modelo (openai-compat, codex-oauth)
-- `src/tools/` — ferramentas e confinamento de caminho
-- `src/audit.ts`, `src/ledger.ts` — auditoria e custo
-- `src/core/` — orquestração e contrato (app, session, config, registry)
-- `src/cli.ts`, `src/doctor.ts` — entrada da CLI e diagnóstico local
-- `tests/` — espelha `src/`
+- `src/providers/` — model adapters (openai-compat, codex-oauth)
+- `src/tools/` — tools and path confinement
+- `src/audit.ts`, `src/ledger.ts` — audit and cost
+- `src/core/` — orchestration and contract (app, session, config, registry)
+- `src/cli.ts`, `src/doctor.ts` — CLI entry point and local diagnosis
+- `tests/` — mirrors `src/`
 
-## Regras inegociáveis
+## Non-negotiable rules
 
-Detalhes e IDs em `docs/invariants.md`.
+Details and IDs in `docs/invariants.md`.
 
-- Segredo só entra pelo cofre local (ADR-0019) ou por variável de ambiente nomeada. Nunca aparece em log, audit, ledger, erro ou prompt (I-03).
-- Negar por padrão: tool fora da allowlist não executa (I-01).
-- Caminho de arquivo fica dentro do `cwd` salvo regra explícita (I-11).
-- Prompt do usuário não é persistido. Só `taskHash`.
-- Mudança de comportamento exige teste que falha antes (RED) e passa depois (GREEN). O RED vai para a descrição do PR.
+- A secret only enters through the local vault (ADR-0019) or a named environment variable. It never appears in a log, audit, ledger, error or prompt (I-03).
+- Deny by default: a tool outside the allowlist does not run (I-01).
+- A file path stays inside the `cwd` unless a rule explicitly allows otherwise (I-11, filesystem sandbox clause; the shell boundary is the rest of I-11).
+- The user prompt is never persisted. Only `taskHash`.
+- A behaviour change requires a test that fails first (RED) and passes after (GREEN). The RED goes into the PR description.
 
-## Fluxo (resumo)
+## Flow (summary)
 
-**Agente implementando uma issue? Leia `docs/implementation-guide.md` primeiro** — tem o passo a passo completo (TDD, branch, PR, revisão dupla, merge).
+**Implementing an issue? Read `docs/implementation-guide.md` first** — it has the full step-by-step (TDD, branch, PR, double review, merge).
 
-Detalhe do fluxo em `docs/workflow.md`; checklist de revisão em `docs/review-checklist.md`.
+Flow detail in `docs/workflow.md`; review checklist in `docs/review-checklist.md`.
 
-1. Toda mudança tem issue (`#n`). Critério de aceite na issue.
-2. Branch a partir de `main` atualizada: `<tipo>/<n>-<slug>`, por exemplo `feat/14-pool-placement`.
-3. TDD obrigatório: RED (`test:`) antes de GREEN (`feat:`/`fix:`), commits separados, RED no corpo do PR.
-4. Commits no formato `tipo: resumo`, com rodapé `Refs #n`.
-5. PR pelo template, com `Closes #n`. Alvo de até 200 linhas alteradas, teto de 400.
-6. Revisão dupla obrigatória antes do merge: revisor A (segurança: I-03/I-01/I-11, bloqueia sempre) + revisor B (correctness/contrato), em paralelo e contexto fresco. Ver `docs/review-checklist.md`.
-7. Squash merge. `main` nunca recebe commit direto.
+1. Every change has an issue (`#n`). Acceptance criteria live in the issue.
+2. Branch from an up-to-date `main`: `<type>/<n>-<slug>`, for example `feat/14-pool-placement`.
+3. TDD is mandatory: RED (`test:`) before GREEN (`feat:`/`fix:`), separate commits, RED in the PR body.
+4. Commits in the format `type: summary`, with the footer `Refs #n`.
+5. PR through the template, with `Closes #n`. Target up to 200 changed lines, ceiling of 400.
+6. Double review is mandatory before merge: reviewer A (security: I-03/I-01/I-11, always blocking) + reviewer B (correctness/contract), in parallel and with fresh context. See `docs/review-checklist.md`.
+7. Squash merge. `main` never receives a direct commit.
 
-## Revisão de PR (obrigatória)
+## PR review (mandatory)
 
-- Nenhum PR entra em `main` sem veredito registrado no próprio PR: `Revisão: APPROVE` ou `Revisão: REQUEST_CHANGES`.
-- Revisor em contexto novo: subagente ou sessão que recebe o diff e o checklist, não o raciocínio do autor.
-- Achado bloqueante cita `arquivo:linha` e um cenário concreto de falha. Achado sem isso é sugestão e não bloqueia.
-- Achado de segurança (vazamento de segredo, bypass de allowlist, escape de caminho) bloqueia sempre.
-- Após correção, a nova revisão cobre só o commit novo, não o PR inteiro.
+- No PR enters `main` without a verdict recorded in the PR itself: `Review: APPROVE` or `Review: REQUEST_CHANGES`. (PRs opened before alpha.5 used the Portuguese form `Revisão:`; the English form is the contract from now on.)
+- Reviewer in fresh context: a subagent or session that receives the diff and the checklist, not the author's reasoning.
+- A blocking finding cites `file:line` and a concrete failure scenario. A finding without that is a suggestion and does not block.
+- A security finding (secret leak, allowlist bypass, path escape) always blocks.
+- After a fix, the new review covers only the new commit, not the whole PR.
 
-## Documentação
+## Documentation
 
-Estas regras existem para reduzir o custo de tokens ao ler o projeto.
+These rules exist to reduce the token cost of reading the project.
 
-- Um assunto tem um arquivo dono. Outros arquivos linkam, não copiam.
-- Documento começa com o resumo de uma linha. Quem lê só o início decide se precisa do resto.
-- Prefira tabela e lista a prosa. Sem repetir o que já está no código ou no teste.
-- Referências por ID estável, nunca por número de linha: `D-13` (decisão), `I-03` (invariante), `#14` (issue), `ADR-0007` (decisão arquitetural).
-- Mudou comportamento, atualize o doc afetado no mesmo PR.
-- Edição pontual. Não reescreva um arquivo inteiro para mudar uma linha.
-- Limites: arquivo de doc até 150 linhas; ADR até 60 linhas. Acima disso, dividir.
-- Novo arquivo em `docs/` entra no `docs/INDEX.md` no mesmo PR.
-- Idioma: docs em português; identificadores de código em inglês; mensagens de erro para o usuário em português. Artefatos de colaboração (commits e título/corpo/comentários de PR e issue) em inglês; relatórios no chat para o usuário em português.
+- One subject has one owning file. Other files link to it, they do not copy it.
+- A document starts with a one-line summary. Someone who reads only the beginning decides whether they need the rest.
+- Prefer tables and lists over prose. Do not repeat what is already in the code or the test.
+- Reference by stable ID, never by line number: `D-13` (decision), `I-03` (invariant), `#14` (issue), `ADR-0007` (architectural decision).
+- Behaviour changed? Update the affected doc in the same PR.
+- Point edits. Do not rewrite a whole file to change one line.
+- Limits: a doc file up to 150 lines; an ADR up to 60 lines. Above that, split.
+- A new file in `docs/` enters `docs/INDEX.md` in the same PR.
+- Language: **English is the repository language** — docs, ADRs, README, UI strings and error messages. Portuguese is used only for chat explanations to the maintainer. Collaboration artifacts (commits and PR/issue titles, bodies, comments) are English; chat reports are Portuguese. New code and new comments are written in English; a legacy Portuguese comment is translated when you touch the file, never as a separate sweep (see `docs/alpha.5-roadmap.md`, P7). Sole tracked exception: the alpha.5 planning set (`docs/alpha.5-roadmap.md` and `docs/superpowers/specs/2026-11-21-*.md`) stays in Portuguese and is translated in P7 (#606), because a document that still changes is cheaper to translate once.
 
-## Não fazer
+## Do not
 
-- Não criar arquivo de estado de projeto (ex.: `progress.md`). Estado vive nas issues e milestones.
-- Não adicionar dependência de runtime sem ADR.
-- Não ler `docs/` inteiro. Use `docs/INDEX.md` e abra só o que a tarefa exige.
-- Não incluir link de sessão nem atribuição de ferramenta em commit, PR, issue, doc ou log. Menção a ferramenta só em revisão de PR, como “Claude Code”, sem modelo nem sessão.
+- Do not create a project state file (e.g. `progress.md`). State lives in issues and milestones.
+- Do not add a runtime dependency without an ADR.
+- Do not read all of `docs/`. Use `docs/INDEX.md` and open only what the task requires.
+- Do not include a session link or a tool attribution in a commit, PR, issue, doc or log. A tool mention belongs only in a PR review, as “Claude Code”, with no model and no session.
