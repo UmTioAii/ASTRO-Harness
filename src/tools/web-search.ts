@@ -2,6 +2,7 @@
  * Tool `web_search` (#57, #604): external results are untrusted (prompt
  * injection), deduplicated by canonical URL, cited by `[n]` and cached per run.
  */
+import { createHash } from "node:crypto";
 import { redactSecrets } from "../sanitize-external";
 import type { AuditLike, Tool, ToolContext, ToolResult } from "./types";
 
@@ -101,9 +102,10 @@ function result(title: unknown, url: unknown, text: unknown): SearchResult | und
 }
 
 /**
- * Canonical form used only for comparison (#604): lowercased host, no default
- * port, no fragment, no tracking parameters, sorted query and no trailing slash.
- * Anything unparsable falls back to a trimmed lowercase string, never throws.
+ * Canonical form used only for comparison (#604): http compared as https,
+ * lowercased host, no default port, no fragment, no tracking parameters, sorted
+ * query and no trailing slash. Unparsable input falls back to a trimmed
+ * lowercase string, never throws. The returned URL keeps its original scheme.
  */
 export function canonicalUrl(raw: string): string {
   let url: URL;
@@ -113,6 +115,10 @@ export function canonicalUrl(raw: string): string {
     return raw.trim().toLowerCase();
   }
   url.hash = "";
+  if (url.protocol === "http:" && url.port === "80") url.port = "";
+  if (url.protocol === "https:" && url.port === "443") url.port = "";
+  // Comparison only: the same page served over http or https is one result.
+  if (url.protocol === "http:") url.protocol = "https:";
   url.hostname = url.hostname.toLowerCase().replace(/\.$/, "");
   for (const key of [...url.searchParams.keys()]) {
     if (key.toLowerCase().startsWith("utm_") || TRACKING_PARAMS.has(key.toLowerCase())) url.searchParams.delete(key);
@@ -122,17 +128,14 @@ export function canonicalUrl(raw: string): string {
   return url.toString();
 }
 
-/** Collapses duplicates, keeping the first position and the richest snippet. */
+/** Collapses duplicates: the first position wins, url/title/snippet come from one entry. */
 function dedupe(results: SearchResult[]): SearchResult[] {
   const groups = new Map<string, SearchResult>();
   for (const item of results) {
     const key = canonicalUrl(item.url);
     const kept = groups.get(key);
-    if (kept === undefined) {
-      groups.set(key, { ...item });
-    } else if (item.snippet.length > kept.snippet.length) {
-      kept.snippet = item.snippet;
-    }
+    // `Map.set` keeps the original insertion position of the group.
+    if (kept === undefined || item.snippet.length > kept.snippet.length) groups.set(key, item);
   }
   return [...groups.values()];
 }
@@ -140,6 +143,28 @@ function dedupe(results: SearchResult[]): SearchResult[] {
 /** Case and whitespace insensitive query, for the cache key (#604). */
 function canonicalQuery(query: string): string {
   return query.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * Cache identity as a digest (#604, I-03): the query text is never retained in
+ * the `Map`, and two queries that both redact to the same display text stay
+ * distinct keys instead of collapsing into one entry.
+ */
+export function searchCacheKey(input: {
+  provider: WebSearchProvider;
+  baseUrl?: string;
+  query: string;
+  maxResults: number;
+  recencyDays?: number;
+}): string {
+  const canonical = JSON.stringify([
+    input.provider,
+    input.baseUrl ?? "",
+    canonicalQuery(input.query),
+    input.maxResults,
+    input.recencyDays ?? null,
+  ]);
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 function requestFor(config: WebSearchConfig, input: ParsedInput, key: string): { url: string; init: RequestInit } {
@@ -326,23 +351,26 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
           },
         });
       };
-      const cacheKey = JSON.stringify([
-        deps.config.provider,
-        deps.config.baseUrl ?? "",
-        canonicalQuery(parsed.query),
-        parsed.maxResults,
-        parsed.recencyDays ?? null,
-      ]);
+      // The credential is checked before the cache: a run without a key does not
+      // get results, and the attempt is audited like any other call (I-04).
+      const key = deps.env[deps.config.apiKeyEnv];
+      if (key === undefined || key === "") {
+        record(0, 0, false);
+        return failure(`credencial ausente: defina a variável de ambiente ${deps.config.apiKeyEnv}`);
+      }
+      const cacheKey = searchCacheKey({
+        provider: deps.config.provider,
+        baseUrl: deps.config.baseUrl,
+        query: parsed.query,
+        maxResults: parsed.maxResults,
+        recencyDays: parsed.recencyDays,
+      });
       const cached = cache.get(cacheKey);
       if (cached !== undefined) {
         record(cached.status, cached.results.length, true);
         return {
           output: JSON.stringify({ query: redactSecrets(parsed.query), provider: deps.config.provider, results: cached.results }),
         };
-      }
-      const key = deps.env[deps.config.apiKeyEnv];
-      if (key === undefined || key === "") {
-        return failure(`credencial ausente: defina a variável de ambiente ${deps.config.apiKeyEnv}`);
       }
       const { url, init } = requestFor(deps.config, parsed, key);
       let status = 0;
@@ -389,7 +417,9 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
         record(status, 0, false);
         return failure(`web_search falhou (${status}): ${lastMessage}`);
       }
-      const cited = dedupe(results).map((item) => ({ id: nextId++, ...item }));
+      // Cap before dedupe and cache: a provider that ignores maxResults cannot
+      // inflate the result list or what the run pins in memory.
+      const cited = dedupe(results.slice(0, parsed.maxResults)).map((item) => ({ id: nextId++, ...item }));
       record(status, cited.length, false);
       if (cache.size >= cacheBound) {
         const oldest = cache.keys().next();
@@ -402,15 +432,4 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
       };
     },
   };
-}
-
-/** RED stub (#604): the real digest lands in the next commit so the test commit replays with behavioural failures. */
-export function searchCacheKey(input: {
-  provider: WebSearchProvider;
-  baseUrl?: string;
-  query: string;
-  maxResults: number;
-  recencyDays?: number;
-}): string {
-  return JSON.stringify(input);
 }

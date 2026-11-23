@@ -26,9 +26,10 @@ Redirects are not followed (`redirect: "error"`): the key never reaches another 
 
 ## Results: canonical URL, citations and cache (#604)
 
-- **Canonical URL** — comparison only: lowercased host, default port, fragment and tracking parameters (`utm_*`, `gclid`, `fbclid`, `msclkid`, …) dropped, query sorted, trailing slash removed. The first result of a group keeps its original URL, keeps its backend position, and takes the longest snippet of the group. The backend order is preserved.
+- **Canonical URL** — comparison only: `http` is compared as `https`, host lowercased, default port, fragment and tracking parameters (`utm_*`, `gclid`, `fbclid`, `msclkid`, …) dropped, query sorted, trailing slash removed. A group keeps the position of its first occurrence; url, title and snippet always come from one entry (the longest snippet wins), never a mix. Returned URLs keep the scheme the backend sent, and backend order is preserved.
+- **Cap** — results are sliced to `maxResults` before dedupe, so a provider that ignores the limit cannot inflate the list or what the run pins in memory.
 - **Citations** — every result carries a numeric `id`, injected after dedupe. The manifest tells the model to cite `[n]`. Ids are unique inside a run and restart at 1 in a new run; a cache hit replays the same ids, so a citation always maps to a result actually returned in that run.
-- **Cache** — bounded (32 entries, oldest evicted) and in memory, keyed by provider, `baseUrl`, canonical query (case/whitespace insensitive) and the call options. An identical call inside the same run makes no backend request and the audit event has `cacheHit: true`. The cache is cleared when the tool serves a different `run`.
+- **Cache** — bounded (32 entries, oldest evicted) and in memory, keyed by a SHA-256 digest of provider, `baseUrl`, canonical query (case/whitespace insensitive) and the call options: the query text never becomes a key, so a pasted secret is not retained by the `Map`, and two queries that both redact to the same display text stay distinct. An identical call inside the same run makes no backend request and the audit event has `cacheHit: true`. A call without the configured credential fails and is audited even when an entry exists; the cache and the id counter are cleared when the tool serves a different `run`.
 - Only successful calls are cached; errors and aborted calls never are.
 
 ## Limit and backoff
