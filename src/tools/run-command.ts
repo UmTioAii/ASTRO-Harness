@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, parse, resolve, relative, isAbsolute, sep } from "node:path";
 import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
-import { resolveArtifactRoot, resolveAstroHome, setPerCallApproval, type ApprovalDetail, type PermissionMode } from "../permissions";
+import { PATH_HARD_BLOCKED, resolveArtifactRoot, resolveAstroHome, setPerCallApproval, type ApprovalDetail, type PermissionMode } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
 import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
-import { realpathPreservingDots } from "./paths";
+import { realpathPreservingDots, isWithin } from "./paths";
 import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolResult } from "./types";
 
 /** Teto da saída devolvida ao modelo (run_command e run_tests). */
@@ -756,6 +756,90 @@ export const DEFAULT_RUN_TESTS_TIMEOUT_MS = 120_000;
  */
 export const MAX_RUN_TESTS_TIMEOUT_MS = 3_600_000;
 
+/**
+ * Resolve `target` component by component, following symlinks before applying `..`.
+ * A path like `link/../x` must resolve the link first (the kernel does that); a
+ * whole-string `realpath` may normalize the dots first and hide the escape. Missing
+ * components stay literal, so a test name that does not exist is still comparable.
+ */
+function kernelRealPath(target: string, cwd: string): string {
+  const raw = isAbsolute(target) ? target : `${cwd}${sep}${target}`;
+  const root = parse(raw).root;
+  let current = root;
+  for (const part of raw.slice(root.length).split(/[\\/]+/)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      current = dirname(current);
+      continue;
+    }
+    const next = join(current, part);
+    try {
+      current = realpathSync.native(next);
+    } catch {
+      current = next;
+    }
+  }
+  return current;
+}
+
+/**
+ * The `filter` is the only model-controlled argument of `run_tests`. On the host
+ * it must not escape the project: the Docker path only mounts `cwd`. A filter that
+ * resolves outside `cwd` (or through `~`) is refused; an existing path inside is
+ * classified, so a critical path is hard-blocked exactly as any other tool (I-11).
+ */
+function filterOutsideProject(filter: string, ctx: ToolContext): ToolResult | undefined {
+  if (filter.startsWith("~")) {
+    return failureCode(
+      "external_directory: run_tests filter cannot leave the project directory",
+      "external_directory",
+    );
+  }
+  const resolved = resolve(ctx.cwd, filter);
+  const rel = relative(ctx.cwd, resolved);
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return failureCode(
+      "external_directory: run_tests filter cannot leave the project directory",
+      "external_directory",
+    );
+  }
+  // Symlinks and junctions are resolved against the deepest existing ancestor, so a
+  // link inside the project that points elsewhere is refused too, including the
+  // `link/../x` shape (the kernel follows the link before `..`). Glob segments stay
+  // literal, which keeps the static prefix comparable.
+  const real = kernelRealPath(filter, ctx.cwd);
+  if (!isWithin(kernelRealPath(ctx.cwd, ctx.cwd), real)) {
+    return failureCode(
+      "external_directory: run_tests filter cannot leave the project directory",
+      "external_directory",
+    );
+  }
+  // Classify the literal prefix before the first glob metachar, so `.env*` and
+  // `.git/*` cannot sneak past a full-existence check (the Docker path masked them).
+  const globAt = filter.search(/[*?[{]/);
+  const literal = globAt === -1 ? filter : filter.slice(0, globAt);
+  const staticTarget = literal === "" ? ctx.cwd : resolve(ctx.cwd, literal);
+  try {
+    const classify = createPathClassifier({
+      cwd: ctx.cwd,
+      astroHome: resolveAstroHome(),
+      protectedPaths: ctx.protectedPaths ?? [],
+      artifactRoot: resolveArtifactRoot(),
+      allowCritical: ctx.allowCritical ?? [],
+      allowSensitive: ctx.allowSensitive ?? [],
+    });
+    if (classify(kernelRealPath(staticTarget, ctx.cwd)) === "hard-block") {
+      return failureCode(
+        `path_hard_blocked: run_tests filter targets a critical path (${PATH_HARD_BLOCKED})`,
+        PATH_HARD_BLOCKED,
+      );
+    }
+  } catch {
+    // Nothing to classify; the path does not exist inside the project.
+  }
+  return undefined;
+}
+
 /** Seção `run.tests` (F-15, #538): comando de teste do projeto, sempre argv. */
 export interface RunTestsConfig {
   /** Executável + argumentos, um item por argumento: nunca uma string de shell. */
@@ -875,11 +959,11 @@ function serializeTestsResult(
 }
 
 /**
- * Tool `run_tests` (F-15, #538): executa o comando de teste DO PROJETO pelo
- * mesmo sandbox do `run_command`, com a mesma recusa sem sandbox (I-19). O argv
- * vem de `run.tests.command` e vai item a item para o container — sem shell,
- * sem interpolação e sem flag escolhida pelo modelo. `filter`, quando presente,
- * é um único argumento extra.
+ * Tool `run_tests` (F-15, #538): executa o comando de teste DO PROJETO no
+ * mesmo caminho do `run_command` — host com aprovação por comando (default) ou
+ * Docker explícito —, com a mesma recusa sem shell (I-19). O argv vem de
+ * `run.tests.command` e vai item a item, sem shell, sem interpolação e sem flag
+ * escolhida pelo modelo. `filter`, quando presente, é um único argumento extra.
  */
 export function createRunTestsTool(deps: RunTestsDeps): Tool {
   // Teto duro mesmo se a tool for criada sem passar pelo `validateConfig`.
@@ -904,7 +988,8 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
     manifest: {
       name: "run_tests",
       description:
-        "Executa o comando de teste do projeto (run.tests.command, argv) no mesmo sandbox Docker do run_command, " +
+        "Executa o comando de teste do projeto (run.tests.command, argv) no mesmo caminho do run_command " +
+        "(host com aprovação por comando por padrão, Docker só com sandbox:true/\"docker\"), " +
         "sem shell: `filter` vira um único argumento extra. Sem run.tests.command devolve tests_not_configured.",
       parameters: {
         type: "object",
@@ -951,24 +1036,50 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
         };
       }
 
-      // `run_tests` keeps its own rule until the host slice lands (#599): it
-      // requires explicit Docker, because the argv comes from config and runs isolated.
-      if (commandMode !== "docker") {
-        const mode = commandMode === "host"
-          ? "host (run_tests exige Docker)"
-          : "sandbox:false";
-        const error = new SandboxRequiredForShellError(mode, "run_tests");
+      // `off` disables the shell; `host` runs the configured argv directly, behind the
+      // same executor gate/approval as run_command; `docker` keeps the container path.
+      if (commandMode === "disabled") {
+        const error = new SandboxRequiredForShellError("sandbox:false", "run_tests");
         return { ...failure(error.message), code: error.code };
-      }
-      if (!(await detectDockerAvailable())) {
-        return failure(
-          "sandbox ativo (tools.run_command.sandbox) mas Docker não está disponível; instale e inicie o Docker",
-        );
       }
 
       const argv = filter === undefined ? [...command] : [...command, filter];
-      const containerName = `astro-sb-${randomUUID().slice(0, 12)}`;
       const startedAt = Date.now();
+
+      if (commandMode === "host") {
+        const executorMode = ctx.executor?.permissionMode;
+        if (ctx.executor === undefined || executorMode === undefined) {
+          return failureCode(
+            "host_shell_requires_gate: run_tests no host só executa via ToolExecutor com modo de permissão resolvido",
+            "host_shell_requires_gate",
+          );
+        }
+        const env = ctx.env ?? process.env;
+        if (executorMode === "bypass" && env[HOST_SHELL_BYPASS_CONFIRMATION_ENV] !== "1") {
+          auditHostDecision(ctx, executorMode, "deny", { reason: "bypass_confirmation_required" });
+          return failureCode(
+            `host_shell_confirmation_required: em modo bypass run_tests no host exige confirmação explícita ` +
+              `(${HOST_SHELL_BYPASS_CONFIRMATION_ENV}=1)`,
+            "host_shell_confirmation_required",
+          );
+        }
+        if (filter !== undefined) {
+          const blocked = filterOutsideProject(filter, ctx);
+          if (blocked !== undefined) return blocked;
+        }
+        // The argv comes from config, never from the model; the filter is one argv item.
+        const outcome = await runArgv(argv, ctx, timeoutMs);
+        return finishTestsResult(argv, outcome.output, outcome, startedAt, deps, ctx);
+      }
+
+      if (!(await detectDockerAvailable())) {
+        return failureCode(
+          "sandbox_required_for_shell: run_tests com sandbox ativo precisa de Docker; instale e inicie o Docker",
+          "sandbox_required_for_shell",
+        );
+      }
+
+      const containerName = `astro-sb-${randomUUID().slice(0, 12)}`;
       let docker: string[] | undefined;
       let outcome: DockerOutcome;
       try {
@@ -981,40 +1092,53 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
         if (docker !== undefined) releaseDockerArgv(docker);
       }
 
-      const durationMs = Date.now() - startedAt;
-      const failed = outcome.exit.kind !== "exit" || outcome.exit.code !== 0;
-      const keep = failed ? "tail" : "head";
-      const capped = capTestsOutput(outcome.output, keep);
-      const exitCode = outcome.exit.kind === "exit" ? outcome.exit.code : null;
-      const result: RunTestsResult = {
-        // Mesma redação do audit: o argv vem da config e pode carregar segredo (I-03).
-        command: argv.map((item) => redactSecrets(item)),
-        exitCode,
-        durationMs,
-        truncated: capped.truncated,
-        ...(outcome.exit.kind === "timeout" ? { timedOut: true } : {}),
-        ...(outcome.exit.kind === "cancelled" ? { cancelled: true } : {}),
-        output: capped.output,
-      };
-      const serialized = serializeTestsResult(result, keep);
-
-      // Audit só com o comando e o código: a saída dos testes nunca vai para o log (I-03).
-      deps.audit.append({
-        run: ctx.run,
-        agent: ctx.agent,
-        tipo: "tests.result",
-        payload: {
-          command: redactSecrets(argv.join(" ")),
-          exitCode,
-          durationMs,
-          truncated: serialized.truncated,
-          isError: failed,
-        },
-      });
-
-      return failed
-        ? { output: serialized.json, isError: true }
-        : { output: serialized.json };
+      const exit = outcome.exit.kind === "exit"
+        ? { code: outcome.exit.code, timedOut: false, cancelled: false }
+        : { code: null, timedOut: outcome.exit.kind === "timeout", cancelled: outcome.exit.kind === "cancelled" };
+      return finishTestsResult(argv, outcome.output, exit, startedAt, deps, ctx);
     },
   };
+}
+
+/** Shared tail for `run_tests`: cap, result, audit. The cap redacts before truncating. */
+function finishTestsResult(
+  argv: string[],
+  rawOutput: string,
+  exit: { code: number | null; timedOut: boolean; cancelled: boolean },
+  startedAt: number,
+  deps: RunTestsDeps,
+  ctx: ToolContext,
+): ToolResult {
+  const durationMs = Date.now() - startedAt;
+  const failed = exit.cancelled || exit.timedOut || exit.code !== 0;
+  const keep = failed ? "tail" : "head";
+  // The cap redacts, then truncates from the failure-aware side.
+  const capped = capTestsOutput(rawOutput, keep);
+  const result: RunTestsResult = {
+    // Same redaction as the audit: the argv comes from config and can carry a secret (I-03).
+    command: argv.map((item) => redactSecrets(item)),
+    exitCode: exit.code,
+    durationMs,
+    truncated: capped.truncated,
+    ...(exit.timedOut ? { timedOut: true } : {}),
+    ...(exit.cancelled ? { cancelled: true } : {}),
+    output: capped.output,
+  };
+  const serialized = serializeTestsResult(result, keep);
+
+  // Audit only the command and the code: test output never goes to the log (I-03).
+  deps.audit.append({
+    run: ctx.run,
+    agent: ctx.agent,
+    tipo: "tests.result",
+    payload: {
+      command: redactSecrets(argv.join(" ")),
+      exitCode: exit.code,
+      durationMs,
+      truncated: serialized.truncated,
+      isError: failed,
+    },
+  });
+
+  return failed ? { output: serialized.json, isError: true } : { output: serialized.json };
 }
