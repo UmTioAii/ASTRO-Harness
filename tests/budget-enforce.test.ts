@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
-import { BudgetExceededError, budgetStatus, effectiveBudget, enforceBudget } from "../src/budget";
+import { BudgetExceededError, budgetStatus, effectiveBudget, enforceBudget, outstandingReservations } from "../src/budget";
 import type { BudgetConfig } from "../src/core/config";
 import { Ledger } from "../src/ledger";
 
@@ -30,6 +31,70 @@ function base(ledger: Ledger, extra: Record<string, unknown> = {}) {
 }
 
 describe("enforcement de budget (F-05, #132 parte 3)", () => {
+  test("reserva casa por run+agent; um release de irmão não apaga a reserva maior", () => {
+    const ledger = ledgerWith(0);
+    ledger.recordBudgetReserved({ run: "r1", agent: "a", reserved: 5 });
+    ledger.recordBudgetReserved({ run: "r1", agent: "b", reserved: 1 });
+    ledger.recordBudgetReleased({ run: "r1", agent: "b", released: 1 });
+    expect(outstandingReservations(ledger)).toBe(5);
+  });
+
+  test("ceiling visto só no recheck pós-decisão também audita ceiling_hit", async () => {
+    const ledger = ledgerWith(2);
+    const opts = base(ledger, {
+      budget: budget({ limitUsd: 1, hardCeilingUsd: 100, onExceed: "ask" }),
+      reserveUsd: 0.2,
+      decide: () => {
+        opts.budget.hardCeilingUsd = 0.05;
+        return "continue_same";
+      },
+    });
+    await expect(enforceBudget(opts)).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(opts.audit.readAll().some((event) => event.tipo === "budget.ceiling_hit")).toBe(true);
+    expect(ledger.readAllEntries().some((entry) => entry.kind === "budget" && entry.event === "ceiling_hit")).toBe(true);
+  });
+
+
+  test("reserva de dois agentes soma antes da chamada e não passa do limite", async () => {
+    const ledger = ledgerWith(0);
+    const first = base(ledger, { budget: budget({ limitUsd: 1, onExceed: "stop" }), run: "r1", agent: "a", reserveUsd: 0.6 });
+    const second = base(ledger, { budget: budget({ limitUsd: 1, onExceed: "stop" }), run: "r2", agent: "b", reserveUsd: 0.6 });
+    await expect(enforceBudget(first)).resolves.toBe("continue_same");
+    await expect(enforceBudget(second)).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(ledger.readAllEntries().filter((e) => e.kind === "budget" && e.event === "reserved")).toHaveLength(1);
+  });
+
+  test("leitura e reserva acontecem sob o file lock do ledger", async () => {
+    const ledger = ledgerWith(0);
+    let depth = 0;
+    const guarded = new Proxy(ledger, {
+      get(target, prop) {
+        if (prop === "withFileLock") {
+          return (critical: () => unknown, opts?: { failClosed?: boolean }) => {
+            depth++;
+            try { return target.withFileLock(critical as never, opts); } finally { depth--; }
+          };
+        }
+        if (prop === "readAll" || prop === "readAllEntries") {
+          return (...args: unknown[]) => {
+            if (depth === 0) throw new Error(`${String(prop)} fora do file lock`);
+            return (target[prop] as (...a: unknown[]) => unknown)(...args);
+          };
+        }
+        if (prop === "recordBudgetReserved") {
+          return (...args: unknown[]) => {
+            if (depth === 0) throw new Error("recordBudgetReserved fora do file lock");
+            return (target.recordBudgetReserved as (...a: unknown[]) => unknown)(...args);
+          };
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Ledger;
+
+    await expect(enforceBudget(base(guarded, { reserveUsd: 0.2 }))).resolves.toBe("continue_same");
+  });
+
   test("sem TTY: não bloqueia esperando input, grava non_interactive e para", async () => {
     const ledger = ledgerWith(2);
     const opts = base(ledger);
@@ -387,4 +452,43 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
       stop();
     }
   });
+
+  test("dois processos com US$6 cada não commitam US$12 contra limite de US$10", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-budget-proc-"));
+    const ledgerPath = join(dir, "ledger.jsonl");
+    const auditPath = join(dir, "audit.jsonl");
+    const go = join(dir, "go");
+    const budgetUrl = pathToFileURL(join(import.meta.dir, "..", "src", "budget.ts")).href;
+    const ledgerUrl = pathToFileURL(join(import.meta.dir, "..", "src", "ledger.ts")).href;
+    const auditUrl = pathToFileURL(join(import.meta.dir, "..", "src", "audit.ts")).href;
+    const script = join(dir, "reserve.ts");
+    writeFileSync(script, [
+      `import { existsSync } from "node:fs";`,
+      `import { BudgetExceededError, enforceBudget } from ${JSON.stringify(budgetUrl)};`,
+      `import { Ledger } from ${JSON.stringify(ledgerUrl)};`,
+      `import { Auditor } from ${JSON.stringify(auditUrl)};`,
+      `const ledger = new Ledger(process.env.LEDGER);`,
+      `const audit = new Auditor(process.env.AUDIT);`,
+      `while (!existsSync(process.env.GO)) await Bun.sleep(5);`,
+      `try {`,
+      `  await enforceBudget({ budget: { scope: "day", limitUsd: 10, warnAt: 0.8, onExceed: "stop" },`,
+      `    ledger, audit, run: process.env.RUN, agent: "a", reserveUsd: 6 });`,
+      `  process.exit(0);`,
+      `} catch (error) { process.exit(error instanceof BudgetExceededError ? 2 : 3); }`,
+    ].join("\n"));
+    const spawn = (run: string) => Bun.spawn(["bun", script], {
+      env: { ...process.env, LEDGER: ledgerPath, AUDIT: auditPath, GO: go, RUN: run },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const first = spawn("r1");
+    const second = spawn("r2");
+    await Bun.sleep(100);
+    writeFileSync(go, "go");
+    const codes = (await Promise.all([first.exited, second.exited])).sort();
+    expect(codes).toEqual([0, 2]);
+    const reserved = new Ledger(ledgerPath).readAllEntries()
+      .filter((entry) => entry.kind === "budget" && entry.event === "reserved")
+      .reduce((sum, entry) => sum + (entry.kind === "budget" ? entry.reserved ?? 0 : 0), 0);
+    expect(reserved).toBe(6);
+  }, 20_000);
 });

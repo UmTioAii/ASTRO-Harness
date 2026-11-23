@@ -51,15 +51,18 @@ function inScope(ts: string, scope: BudgetConfig["scope"], now: Date): boolean {
   return scope === "day" ? sameMonth && at.getUTCDate() === now.getUTCDate() : sameMonth;
 }
 
-/** Reservas ainda sem `released` (B9), casadas por run em FIFO; filtro opcional pela janela do escopo. */
+/** Reservas ainda sem `released` (B9), casadas por `run`+`agent` em FIFO; filtro opcional pela janela do escopo. */
 export function outstandingReservations(ledger: Ledger, inWindow: (ts: string) => boolean = () => true): number {
-  const pending: Array<{ run: string; amount: number }> = [];
+  const pending: Array<{ key: string; amount: number }> = [];
   for (const entry of ledger.readAllEntries()) {
     if (entry.kind !== "budget" || !inWindow(entry.ts)) continue;
+    // ADR-0037: agents share an account, so a reservation is matched by run+agent;
+    // matching by run alone lets one agent's release erase another's reservation.
+    const key = `${entry.run}\u0000${entry.agent}`;
     if (entry.event === "reserved" && typeof entry.reserved === "number") {
-      pending.push({ run: entry.run, amount: entry.reserved });
+      pending.push({ key, amount: entry.reserved });
     } else if (entry.event === "released") {
-      const index = pending.findIndex((item) => item.run === entry.run);
+      const index = pending.findIndex((item) => item.key === key);
       if (index >= 0) pending.splice(index, 1);
     }
   }
@@ -218,11 +221,58 @@ export interface EnforceBudgetOptions {
  * esgotado pergunta só com decisor, senão registra não-interativo e para.
  */
 export async function enforceBudget(opts: EnforceBudgetOptions): Promise<BudgetChoice> {
-  const status = budgetStatus(opts.budget, opts.ledger);
   const reserveUsd = opts.reserveUsd ?? 0;
-  const committedUsd = status.spentUsd === null ? null : status.spentUsd + reserveUsd;
-  const ceilingHit = opts.budget.hardCeilingUsd !== undefined && committedUsd !== null && committedUsd >= opts.budget.hardCeilingUsd;
-  const exhausted = status.limitUsd !== null && committedUsd !== null && committedUsd >= status.limitUsd;
+  // B9/ADR-0037: read + reserve happen under the ledger file lock, so two
+  // processes sharing an account cannot both pass with the same balance. The
+  // lock is never held across `decide` (a prompt) or an audit/ledger event.
+  const attempt = (forceReserve: boolean): { status: BudgetStatus; committedUsd: number | null; reserved: boolean } =>
+    opts.ledger.withFileLock(() => {
+      const status = budgetStatus(opts.budget, opts.ledger);
+      const committedUsd = status.spentUsd === null ? null : status.spentUsd + reserveUsd;
+      const ceilingHit = opts.budget.hardCeilingUsd !== undefined && committedUsd !== null && committedUsd >= opts.budget.hardCeilingUsd;
+      if (ceilingHit) throw new BudgetExceededError("ceiling", status);
+      if (opts.budget.hardCeilingUsd !== undefined && committedUsd === null) {
+        throw new BudgetExceededError("unknown_price", status);
+      }
+      const exhausted = status.limitUsd !== null && committedUsd !== null && committedUsd >= status.limitUsd;
+      if (exhausted && !forceReserve) return { status, committedUsd, reserved: false };
+      if (reserveUsd > 0) {
+        opts.ledger.recordBudgetReserved({ run: opts.run, agent: opts.agent, reserved: reserveUsd, detail: "call" });
+      }
+      return { status, committedUsd, reserved: true };
+    }, { failClosed: true });
+
+  let current: { status: BudgetStatus; committedUsd: number | null; reserved: boolean };
+  const auditExceeded = (error: unknown): void => {
+    if (!(error instanceof BudgetExceededError)) return;
+    const payload = {
+      scope: error.status.scope,
+      spentUsd: error.status.spentUsd,
+      limitUsd: error.status.limitUsd,
+      ...(reserveUsd === 0 ? {} : { reserved: reserveUsd }),
+      ...(opts.budget.hardCeilingUsd === undefined ? {} : { hardCeilingUsd: opts.budget.hardCeilingUsd }),
+      ...(error.reason === "unknown_price" ? { reason: "unknown_price" } : {}),
+    };
+    if (error.reason === "unknown_price") {
+      opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.exceeded", payload });
+      opts.ledger.recordBudgetExceeded({ run: opts.run, agent: opts.agent, exceeded_choice: "stop" });
+    } else {
+      opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.ceiling_hit", payload });
+      opts.ledger.recordCeilingHit({ run: opts.run, agent: opts.agent, ceiling_hit: true });
+    }
+  };
+  const runAttempt = (forceReserve: boolean): typeof current => {
+    try {
+      return attempt(forceReserve);
+    } catch (error) {
+      auditExceeded(error);
+      throw error;
+    }
+  };
+  current = runAttempt(false);
+  if (current.reserved) return "continue_same";
+
+  const { status, committedUsd } = current;
   const payload = {
     scope: status.scope,
     spentUsd: status.spentUsd,
@@ -230,30 +280,6 @@ export async function enforceBudget(opts: EnforceBudgetOptions): Promise<BudgetC
     ...(reserveUsd === 0 ? {} : { reserved: reserveUsd }),
     ...(opts.budget.hardCeilingUsd === undefined ? {} : { hardCeilingUsd: opts.budget.hardCeilingUsd }),
   };
-  // B9/A11: a reserva entra na mesma seção síncrona do orçamento lido; dois
-  // filhos paralelos não podem passar com o mesmo saldo. A liberação continua
-  // no caller, depois da chamada.
-  const reserve = (): void => {
-    if (reserveUsd > 0) {
-      opts.ledger.recordBudgetReserved({ run: opts.run, agent: opts.agent, reserved: reserveUsd, detail: "call" });
-    }
-  };
-  if (ceilingHit) {
-    opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.ceiling_hit", payload });
-    opts.ledger.recordCeilingHit({ run: opts.run, agent: opts.agent, ceiling_hit: true });
-    throw new BudgetExceededError("ceiling", status);
-  }
-  // Teto físico com preço desconhecido: não dá para provar que está abaixo (B6)
-  if (opts.budget.hardCeilingUsd !== undefined && committedUsd === null) {
-    opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.exceeded",
-      payload: { ...payload, reason: "unknown_price" } });
-    opts.ledger.recordBudgetExceeded({ run: opts.run, agent: opts.agent, exceeded_choice: "stop" });
-    throw new BudgetExceededError("unknown_price", status);
-  }
-  if (!exhausted) {
-    reserve();
-    return "continue_same";
-  }
 
   if (opts.budget.onExceed === "stop" || opts.decide === undefined) {
     const nonInteractive = opts.budget.onExceed !== "stop";
@@ -303,13 +329,13 @@ export async function enforceBudget(opts: EnforceBudgetOptions): Promise<BudgetC
       ...(oldCeiling === undefined ? {} : { old_ceiling_usd: oldCeiling }),
       ...(result.hardCeilingUsd === undefined ? {} : { new_ceiling_usd: result.hardCeilingUsd, confirmed_ceiling: true }),
     });
-    reserve();
+    runAttempt(true);
     return choice;
   }
   opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.exceeded", payload: { ...payload, choice } });
   opts.ledger.recordBudgetExceeded({ run: opts.run, agent: opts.agent, exceeded_choice: choice });
   if (choice === "stop") throw new BudgetExceededError("limit", status);
-  reserve();
+  runAttempt(true);
   return choice;
 }
 
