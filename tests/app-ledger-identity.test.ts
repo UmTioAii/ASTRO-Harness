@@ -59,6 +59,7 @@ function seedUsage(dir: string, quotaDomain: string, tokensIn: number): void {
 /** Config base dos cenários: p1 (a/m1) cai para p2 (b/m2); preços bem distintos. */
 function profileConfig() {
   return {
+    preset: "control",
     providers: {
       a: provider("http://127.0.0.1:1/v1", "KEY_A", { quotaDomain: "dom-a", maxRetries: 0, retryBackoffMs: 1 }),
       b: provider("http://127.0.0.1:1/v1", "KEY_B", { quotaDomain: "dom-b" }),
@@ -172,6 +173,7 @@ test("quota esgotada no domínio de destino bloqueia antes de chamar o provider"
 
 function singleConfig(server: { port?: number }, modelId: string, pricing: Record<string, unknown> = {}) {
   return {
+    preset: "control",
     providers: { p: provider(baseUrl(server), "KEY_P", { maxRetries: 0, retryBackoffMs: 1 }) },
     models: [{ ...model("p", modelId), ...pricing }],
     agent: { model: `p/${modelId}`, maxSteps: 3, tools: [] as string[] },

@@ -56,12 +56,6 @@
     "endpoint": "https://telemetry.astro.local/v1/runs",
     "sampleRate": 1.0
   },
-  "quota": {
-    "nvidia": {
-      "dailyTokens": 200000,
-      "monthlyCostUsd": 10
-    }
-  },
   "cache": {
     "enabled": false,
     "ttlHours": 24,

@@ -20,6 +20,7 @@ function setup(opts: {
   budget?: Record<string, unknown>;
   quota?: Record<string, unknown>;
   compaction?: Record<string, unknown>;
+  preset?: "default" | "control";
 } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "astro-chat-session-"));
   const bodies: Body[] = [];
@@ -48,6 +49,7 @@ function setup(opts: {
     ...(opts.budget === undefined ? {} : { budget: opts.budget }),
     ...(opts.quota === undefined ? {} : { quota: opts.quota }),
     ...(opts.compaction === undefined ? {} : { compaction: opts.compaction }),
+    ...(opts.preset === undefined ? {} : { preset: opts.preset }),
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
   return {
@@ -398,7 +400,7 @@ describe("AgentSession resume (T2, #63)", () => {
 
   test("quota bloqueia force sem resetar o breaker", async () => {
     const { cwd, session, stop } = setup({
-      quota: { default: { dailyTokens: 30 } },
+      preset: "control", quota: { default: { dailyTokens: 30 } },
       reply: (call) => call === 1 ? toolCall() : final("ok"),
     });
     const chat = session();
@@ -408,6 +410,19 @@ describe("AgentSession resume (T2, #63)", () => {
       await expect(chat.compact(true)).rejects.toThrow(/quota/i);
       const audit = new Auditor(join(cwd, ".astro", "audit.jsonl")).readAll();
       expect(audit.some((event) => event.tipo === "compaction.manual")).toBe(false);
+    } finally {
+      chat.close();
+      stop();
+    }
+  });
+
+  test("default profile ignores a declared quota (#617)", async () => {
+    const { session, stop } = setup({ preset: "default", quota: { default: { dailyTokens: 1 } } });
+    const chat = session();
+    try {
+      const result = await chat.send("ola");
+      expect(result.final).toBe("ok");
+      expect(chat.quotaStatus()).toBeUndefined();
     } finally {
       chat.close();
       stop();
@@ -745,7 +760,7 @@ describe("AgentSession.quotaStatus (#64)", () => {
   });
 
   test("com quota do domínio ativo deriva uso e razão do ledger", async () => {
-    const { session, stop } = setup({ quota: { default: { dailyTokens: 100 } } });
+    const { session, stop } = setup({ preset: "control", quota: { default: { dailyTokens: 100 } } });
     try {
       const chat = session();
       expect(chat.quotaStatus()).toMatchObject({

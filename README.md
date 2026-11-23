@@ -223,7 +223,7 @@ These guarantees are enforced in code and covered by tests:
 | `.astro/` and `protectedPaths` cannot be written by tools, in any permission mode. | I-11 |
 | `run_command` runs on the host with per-command approval by default (#599, ADR-0034 planned); `sandbox: true`/`"docker"` forces Docker; the child environment is stripped of secret names. | I-03, I-11 |
 | Prompts are never persisted; `run.started` stores only a task hash. | I-04 |
-| Quotas and budgets block before spending, and the hard ceiling is physical. | I-17 |
+| In the Control profile, quotas and budgets block before spending, and the hard ceiling is physical; the Default profile ignores declared token quotas (#617). | I-17 |
 | Provider, model or credential changes require approval, including in `bypass`. | I-08 |
 
 Report security issues privately through the repository's security advisories, not as public issues.

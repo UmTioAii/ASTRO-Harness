@@ -472,6 +472,23 @@ export interface AstroConfig {
   paths: PathsConfig;
 }
 
+/**
+ * Token quotas are a Control governance tool (#617). The Default profile exists
+ * so the user can just use the harness; a declared quota is ignored there.
+ */
+export function quotasForPreset(
+  config: Pick<AstroConfig, "preset" | "quota">,
+): AstroConfig["quota"] {
+  return config.preset === "control" ? config.quota : undefined;
+}
+
+/** Per-agent token quotas follow the same Control-only rule (#617). */
+export function teamQuotasForPreset(
+  config: Pick<AstroConfig, "preset" | "team">,
+): NonNullable<AstroConfig["team"]>["agentQuotas"] {
+  return config.preset === "control" ? config.team?.agentQuotas : undefined;
+}
+
 /** Códigos estáveis das falhas de save da config (#470); sem código = erro legado. */
 export type ConfigErrorCode =
   | "config_not_found"
