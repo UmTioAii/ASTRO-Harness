@@ -8,9 +8,9 @@ import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
 import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
 import { realpathPreservingDots, isWithin } from "./paths";
-import { evaluateShellPolicy, approvalPattern, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
+import { evaluateShellPolicy, approvalPattern, shellCommandHash, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
 import { persistShellApproval } from "./shell-approvals";
-import { ToolError, type ApprovalSave, type AuditLike, type Tool, type ToolContext, type ToolPermissionHint, type ToolResult } from "./types";
+import { ToolError, type ApprovalSave, type AuditLike, type Tool, type ToolContext, type ToolDecisionAudit, type ToolPermissionHint, type ToolResult } from "./types";
 
 /** Teto da saída devolvida ao modelo (run_command e run_tests). */
 export const MAX_OUTPUT = 10_000;
@@ -114,6 +114,22 @@ let shellApprovals: readonly ShellRule[] = [];
 let projectConfigPath: string | undefined;
 let shellExternalDirectory: ShellExternalDirectory | undefined;
 let dockerProbe: Promise<boolean> | undefined;
+/** Shell-risk consent (#599): only an explicit decline disables the shell. */
+let shellConsent: ShellConsentState = "unrecorded";
+
+export type ShellConsentState = "accepted" | "declined" | "unrecorded";
+
+/** Stable code of a shell refused because the risk consent was declined. */
+export const SHELL_CONSENT_DECLINED = "shell_consent_declined";
+
+/**
+ * Records the shell-risk consent decided at boot (#599). A decline disables the
+ * host shell for the session; `unrecorded` (no interactive channel) keeps the
+ * per-command approval gate exactly as before.
+ */
+export function setShellConsent(state: ShellConsentState): void {
+  shellConsent = state;
+}
 
 /**
  * Só aceita engine Linux: no Windows o Docker Desktop pode estar em modo
@@ -558,13 +574,15 @@ async function runDockerProcess(
 // --- Shell no host (#474/#599: default com aprovação por comando) ---
 
 /**
- * Auditoria da decisão do host (#474): só decisão/motivo/modo/shell. O comando
- * e a saída NUNCA entram no audit (I-03; a saída já volta redigida ao modelo).
+ * Execution-stage audit of the host shell (#474, #599): a short command hash,
+ * the effect and the reason — the command and the output NEVER enter the audit
+ * (D-11, I-03; the output already returns redacted to the model).
  */
 function auditHostDecision(
   ctx: ToolContext,
   mode: PermissionMode,
-  decision: "allow" | "deny",
+  effect: "allow" | "deny",
+  command: string,
   extra: { reason?: string; shell?: string } = {},
 ): void {
   ctx.executor?.audit.append({
@@ -572,12 +590,52 @@ function auditHostDecision(
     agent: ctx.agent,
     tipo: "host_shell.decision",
     payload: {
-      decision,
+      commandHash: shellCommandHash(command.trim()),
+      effect,
+      origin: "mode",
+      stage: "execution",
       permissionMode: mode,
       ...(extra.reason === undefined ? {} : { reason: extra.reason }),
       ...(extra.shell === undefined ? {} : { shell: extra.shell }),
     },
   });
+}
+
+/**
+ * Gate-stage audit record of a shell decision (#599): the executor appends it for
+ * every decision, so `allow`, `ask`/approval, `deny`, `external_directory`,
+ * `unparsable` and `degraded` are all traceable with a command hash only.
+ */
+function shellDecisionAudit(
+  command: string | undefined,
+  outcome: ToolDecisionAudit,
+): { tipo: string; payload: Record<string, unknown> } | undefined {
+  if (command === undefined) return undefined;
+  return {
+    tipo: "host_shell.decision",
+    payload: {
+      commandHash: shellCommandHash(command.trim()),
+      effect: outcome.decision,
+      origin: outcome.origin ?? "mode",
+      transport: commandMode,
+      ...(outcome.grant === undefined ? {} : { grant: outcome.grant }),
+      ...(outcome.degraded === true ? { degraded: true } : {}),
+      ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+    },
+  };
+}
+
+/** A declined consent is a policy deny before the matrix: no prompt, no spawn (#599). */
+const CONSENT_DECLINED_MESSAGE =
+  "shell_consent_declined: the shell-risk consent was declined for this session; " +
+  "accept it at the next interactive start";
+
+function consentDenied(): ToolPermissionHint {
+  return { decision: "deny", origin: "consent", code: SHELL_CONSENT_DECLINED, message: CONSENT_DECLINED_MESSAGE };
+}
+
+function consentRefusal(): ToolResult {
+  return failureCode(CONSENT_DECLINED_MESSAGE, SHELL_CONSENT_DECLINED);
 }
 
 function failureCode(message: string, code: string): ToolResult {
@@ -668,7 +726,7 @@ async function runOnHost(
   // `bypass` não abre prompt: sem a confirmação explícita o host recusa (fail-closed).
   // O modo vem do EXECUTOR que autorizou a chamada, nunca de estado global (#474).
   if (executorMode === "bypass" && env[HOST_SHELL_BYPASS_CONFIRMATION_ENV] !== "1") {
-    auditHostDecision(ctx, executorMode, "deny", { reason: "bypass_confirmation_required" });
+    auditHostDecision(ctx, executorMode, "deny", command, { reason: "bypass_confirmation_required" });
     return failureCode(
       `host_shell_confirmation_required: em modo bypass o shell no host exige confirmação explícita ` +
         `(${HOST_SHELL_BYPASS_CONFIRMATION_ENV}=1); use o Docker ou o modo ask`,
@@ -678,10 +736,9 @@ async function runOnHost(
 
   const selection = selectHostShell(detectHostShells(), preferredShell);
   if (selection.kind === "error") {
-    auditHostDecision(ctx, executorMode, "deny", { reason: selection.code });
+    auditHostDecision(ctx, executorMode, "deny", command, { reason: selection.code });
     return failureCode(selection.message, selection.code);
   }
-  auditHostDecision(ctx, executorMode, "allow", { shell: selection.shell });
 
   const argv = hostShellArgv(selection.shell, command);
   const outcome = await runArgv(argv, ctx, timeoutMs);
@@ -713,6 +770,7 @@ const shellPolicyFor = (command: string, cwd: string): ShellPolicyResult =>
 
 /** Policy before the permission matrix (#599); `default` keeps the matrix in charge. */
 function runCommandPolicyHint(input: unknown, ctx: ToolContext): ToolPermissionHint | undefined {
+  if (shellConsent === "declined") return consentDenied();
   const command = commandOf(input);
   const policy = command === undefined ? undefined : shellPolicyFor(command, ctx.cwd);
   if (policy === undefined || policy.origin === "default") return undefined;
@@ -765,6 +823,9 @@ export const runCommandTool: Tool = {
 
   approvalDetail: runCommandDetail,
   permissionHint: runCommandPolicyHint,
+  decisionAudit(input, _ctx, outcome) {
+    return shellDecisionAudit(commandOf(input), outcome);
+  },
 
   /** `always` (#599): a prefix rule in the project layer; deny rules still win. */
   rememberApproval(input: unknown, ctx: ToolContext): ApprovalSave {
@@ -808,6 +869,10 @@ export const runCommandTool: Tool = {
       const message = error instanceof Error ? error.message : String(error);
       return failure(message);
     }
+
+    // A declined consent disables the shell for the session (#599), even on a
+    // direct call: the gate already refused it with `shell_consent_declined`.
+    if (shellConsent === "declined") return consentRefusal();
 
     // Slice 4b (I-19): `sandbox: false` NÃO executa no host - recusa sem spawnar e sem ecoar o comando.
     if (commandMode === "disabled") {
@@ -1121,6 +1186,22 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
     // pediria aprovação de shell sem mostrar o que roda (cwd é rw no sandbox).
     approvalDetail: materialCommand,
 
+    /** #599: a declined consent refuses before the prompt; the matrix asks otherwise. */
+    permissionHint: () => shellConsent === "declined" ? consentDenied() : undefined,
+
+    decisionAudit(input, _ctx, outcome) {
+      const command = deps.config?.command;
+      if (command === undefined || command.length === 0) return undefined;
+      // Input inválido não pode derrubar o audit: o argv da config já identifica a decisão.
+      let filter: string | undefined;
+      try {
+        filter = testsFilter(input);
+      } catch {
+        filter = undefined;
+      }
+      return shellDecisionAudit(filter === undefined ? command.join(" ") : [...command, filter].join(" "), outcome);
+    },
+
     async execute(input, ctx: ToolContext): Promise<ToolResult> {
       let filter: string | undefined;
       try {
@@ -1140,6 +1221,9 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
           code: TESTS_NOT_CONFIGURED,
         };
       }
+
+      // A declined consent disables the shell for the session (#599).
+      if (shellConsent === "declined") return consentRefusal();
 
       // `off` disables the shell; `host` runs the configured argv directly, behind the
       // same executor gate/approval as run_command; `docker` keeps the container path.
@@ -1161,7 +1245,7 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
         }
         const env = ctx.env ?? process.env;
         if (executorMode === "bypass" && env[HOST_SHELL_BYPASS_CONFIRMATION_ENV] !== "1") {
-          auditHostDecision(ctx, executorMode, "deny", { reason: "bypass_confirmation_required" });
+          auditHostDecision(ctx, executorMode, "deny", argv.join(" "), { reason: "bypass_confirmation_required" });
           return failureCode(
             `host_shell_confirmation_required: em modo bypass run_tests no host exige confirmação explícita ` +
               `(${HOST_SHELL_BYPASS_CONFIRMATION_ENV}=1)`,

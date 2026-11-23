@@ -165,8 +165,11 @@ describe("run_command on the host by default, approved per command (#474, #599)"
     // The host path never probes or calls Docker.
     expect(mock.calls.some((cmd) => cmd[0] === "docker")).toBe(false);
     expect(mock.runCalls).toHaveLength(0);
-    const hostEvent = auditEvents(auditPath).find((event) => event.tipo === "host_shell.decision");
-    expect(hostEvent?.payload).toMatchObject({ effect: "allow", origin: "mode", stage: "gate", permissionMode: "ask" });
+    const hostEvent = auditEvents(auditPath)
+      .find((event) => event.tipo === "host_shell.decision" && (event.payload as { effect?: string }).effect === "allow");
+    expect(hostEvent?.payload).toMatchObject({
+      effect: "allow", origin: "approval", stage: "gate", permissionMode: "ask",
+    });
     expect((hostEvent?.payload as { commandHash?: string }).commandHash).toMatch(/^[a-f0-9]{16}$/);
     expect(JSON.stringify(hostEvent)).not.toContain("astro-host-default");
   });

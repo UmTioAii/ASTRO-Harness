@@ -155,7 +155,18 @@ export interface ToolPermissionHint {
   /** Sanitized message for a deny; never the raw command. */
   message?: string;
   /** Policy origin for the audit record (#599 review). */
-  origin?: "rule" | "external_directory" | "unparsable" | "approval";
+  origin?: "rule" | "external_directory" | "unparsable" | "approval" | "consent";
+}
+
+/** Sanitized record of a tool-owned decision (#599); shell decisions hash the command. */
+export interface ToolDecisionAudit {
+  decision: "allow" | "ask" | "deny";
+  origin?: ToolPermissionHint["origin"] | "mode";
+  grant?: "once" | "always";
+  /** `always` was requested but the prefix could not be persisted. */
+  degraded?: boolean;
+  /** Stable reason code; never the command. */
+  reason?: string;
 }
 
 /** Result of persisting an `always` approval (#599); failure carries a stable reason. */
@@ -169,6 +180,16 @@ export interface Tool {
   execute(input: unknown, ctx: ToolContext): Promise<ToolResult>;
   /** Tool-owned policy before the mode matrix (#599); absent = matrix only. */
   permissionHint?(input: unknown, ctx: ToolContext): ToolPermissionHint | undefined;
+  /**
+   * Sanitized audit record of the decision the tool owns (#599): the executor
+   * appends `{ tipo, payload }` for every shell decision. The payload carries a
+   * command hash, never the command or the output (D-11, I-03).
+   */
+  decisionAudit?(
+    input: unknown,
+    ctx: ToolContext,
+    outcome: ToolDecisionAudit,
+  ): { tipo: string; payload: Record<string, unknown> } | undefined;
   /**
    * Detalhe material da chamada para o prompt de aprovação (#536, #578) quando
    * ele não está no input — `run_tests` executa o comando da config, não do
