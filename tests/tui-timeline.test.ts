@@ -71,6 +71,7 @@ describe("timeline width contract (#595)", () => {
     expect(frame({ kind: "thinking", elapsedMs: 12000 }, 80)).toContain("12s");
     expect(frame({ kind: "thinking", elapsedMs: 12000 }, 60)).not.toContain("12s");
     expect(displayWidth("漢字")).toBe(4);
+    expect(displayWidth("▸")).toBe(2); // East-Asian-Ambiguous: 2 columns in a CJK terminal
   });
 });
 
@@ -80,6 +81,7 @@ describe("timeline content contract (#595)", () => {
       for (const [name, state] of STATES) {
         const text = frame(state, width);
         expect(text, `${name} @${width}`).not.toMatch(/\b(?:step|round|tool)s?\b[^\n]*\b\d+\b/i);
+        expect(text, `${name} @${width}`).not.toMatch(/\b\d+\s+(?:step|round|tool)/i);
         expect(text, `${name} @${width}`).not.toMatch(/\b\d+\s*\/\s*\d+\b/);
       }
     }
@@ -114,5 +116,26 @@ describe("timeline content contract (#595)", () => {
     const approval = renderTimeline({ state: { kind: "approval", question: "approve?", answerHint: secret }, status }, 120).join("\n");
     expect(streaming).not.toContain(secret);
     expect(approval).not.toContain(secret);
+  });
+
+  test("block content keeps indentation and strips controls (I-03)", () => {
+    const blocks: TimelineView = {
+      ...view({ kind: "done" }),
+      expanded: { tools: true },
+      results: { "call-1": "line 1\n  indented 2\u0007" },
+      turn: {
+        ...turn,
+        status: "done",
+        entries: [
+          { kind: "answer", markdown: "```ts\nfunction f() {\n  return 1;\n}\n```" },
+          { kind: "tool", callId: "call-1", name: "read_file", arguments: '{"path":"src/a.ts"}', status: "ok" },
+        ],
+      },
+    };
+    const lines = renderTimeline(blocks, 120);
+    expect(JSON.stringify(lines)).toMatchSnapshot("block indentation");
+    expect(lines).toContain("    return 1;");
+    expect(lines).toContain("      indented 2");
+    expect(lines.join("\n")).not.toContain("\u0007");
   });
 });
