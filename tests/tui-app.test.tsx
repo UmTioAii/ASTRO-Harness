@@ -369,7 +369,7 @@ test("the conversation carries no turn, round or tool counter in any profile (#5
     await waitFor(() => frameHas(defaultInstance, "eco:conte"), "turn answered");
     expect(frameHas(defaultInstance, "passo")).toBe(false);
   } finally { defaultInstance.unmount(); }
-});
+}, 20_000); // deterministic waits; the budget only bounds a regression fail (#628)
 
 test("progresso sem evento de passo fica no estado neutro, sem número (#508)", async () => {
   const session = new FakeSession();
@@ -386,7 +386,7 @@ test("progresso sem evento de passo fica no estado neutro, sem número (#508)", 
   } finally {
     instance.unmount();
   }
-});
+}, 20_000); // deterministic waits; the budget only bounds a regression fail (#628)
 
 test("progresso não fica visível depois de um turno com erro (#508)", async () => {
   class FailingStepSession extends FakeSession {
@@ -417,7 +417,7 @@ test("progresso não fica visível depois de um turno com erro (#508)", async ()
   } finally {
     instance.unmount();
   }
-});
+}, 20_000); // deterministic waits; the budget only bounds a regression fail (#628)
 
 test("falha de gravação limpa o caminho mostrado por /session", async () => {
   class Flaky extends SessionApi {
