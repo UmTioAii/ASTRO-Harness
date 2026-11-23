@@ -3,6 +3,7 @@
  * marker, reusing `redactSecrets` (I-03) and the session cap (CMP-10).
  */
 import type { ToolContext, ToolFailure, ToolOutputCeiling, ToolResult, TruncationInfo } from "./types";
+import { ToolDeniedError, ToolError } from "./types";
 
 /** Closed taxonomy; a tool never invents a fifth code. */
 export const TOOL_FAILURES: readonly ToolFailure[] = ["denied", "failed", "timeout", "invalid"];
@@ -10,6 +11,17 @@ export const TOOL_FAILURES: readonly ToolFailure[] = ["denied", "failed", "timeo
 /** Runtime guard for plugin manifests and legacy results. */
 export function isToolFailure(value: unknown): value is ToolFailure {
   return typeof value === "string" && (TOOL_FAILURES as readonly string[]).includes(value);
+}
+
+/** Taxonomy code of a thrown error: a typed denial wins over the generic class (S6, #603). */
+export function failureCodeOf(error: unknown): ToolFailure {
+  if (error instanceof ToolDeniedError) return "denied";
+  return error instanceof ToolError ? "invalid" : "failed";
+}
+
+/** Failure result for a thrown error, classified by cause. */
+export function failureFrom(error: unknown): ToolResult {
+  return failureResult(error instanceof Error ? error.message : String(error), failureCodeOf(error));
 }
 
 /** Failure result: taxonomy code always, policy `code` only when the caller has one. */

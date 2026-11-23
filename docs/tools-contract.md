@@ -20,7 +20,8 @@ Normative spec: `docs/superpowers/specs/2026-11-21-tools-contract.md` (S6).
 
 `manifest.output` uses the same `~4 chars/token` estimator as `CMP-10`. The effective ceiling is
 `min(declared maxTokens, ctx.outputLimitTokens)`, so the session cap only lowers it; `contentBudgetChars` reserves
-`MARKER_RESERVE_CHARS` so the marker stays inside the ceiling. A skipped subtree is counted with the same depth limit,
+`MARKER_RESERVE_CHARS` so the marker stays inside the ceiling. The budget never drops below 64 characters (the minimum
+that still carries a marker), even under a tiny session cap. A skipped subtree is counted with the same depth limit,
 so `removed` is what was really omitted. A tool without `manifest.output` keeps its previous behaviour; declaring a
 ceiling is the migration step tracked by `#603`.
 
@@ -40,4 +41,5 @@ plus a `notice` with the same text, so `JSON.parse` never breaks. `ToolResult.tr
 | `failed` | Execution error or cancellation | tool or executor |
 
 The executor reclassifies any error result without a valid code as `failed`, so a plugin cannot leak a fifth code, and a
-denial never echoes the input or an absolute fs path (I-03).
+confinement denial (`ToolDeniedError`) never echoes the input or an absolute fs path (I-03). A generic `ToolError` is
+`invalid`; the executor and the tools classify by cause, never by error class.

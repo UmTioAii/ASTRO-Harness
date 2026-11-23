@@ -163,3 +163,14 @@ export class ToolError extends Error {
     this.name = "ToolError";
   }
 }
+
+/**
+ * Recusa de política (S6, #603): o caminho foi negado por confinamento, não por
+ * entrada malformada. O executor mapeia por causa, não por classe.
+ */
+export class ToolDeniedError extends ToolError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolDeniedError";
+  }
+}

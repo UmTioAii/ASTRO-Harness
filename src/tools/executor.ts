@@ -32,8 +32,8 @@ import { AllowlistInvalidError, classifyPath, type PathClass } from "../path-cla
 import { validateManifest } from "../sdk/tool";
 import { join, relative } from "node:path";
 import type { ToolCall, ToolDef } from "../providers/types";
-import { isToolFailure } from "./contract";
-import { ToolError, type Tool, type ToolContext, type ToolFailure, type ToolLifecycleEvent, type ToolResult } from "./types";
+import { failureCodeOf, isToolFailure } from "./contract";
+import { type Tool, type ToolContext, type ToolFailure, type ToolLifecycleEvent, type ToolResult } from "./types";
 
 const TIMEOUT = Symbol("timeout");
 const ABORTED = Symbol("aborted");
@@ -384,7 +384,7 @@ export class ToolExecutor {
       // Pending do gate ou pausa por não-progresso sobe e para o run em ponto seguro (I-19), não vira tool error.
       if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      return failure(`erro na tool "${call.name}": ${message}`, error instanceof ToolError ? "invalid" : "failed");
+      return failure(`erro na tool "${call.name}": ${message}`, failureCodeOf(error));
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       ctx.signal?.removeEventListener("abort", onAbort);
