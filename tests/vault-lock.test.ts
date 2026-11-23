@@ -15,11 +15,12 @@ function tmpVault() {
 
 describe("vault write lock (#605, I-03)", () => {
   test("a live lock makes create fail closed instead of losing the update", () => {
-    const { path } = tmpVault();
-    const v = new Vault(path, plainBackend);
+    const { dir, path } = tmpVault();
+    const v = new Vault(path, plainBackend, { lockTimeoutMs: 50 });
     const lockPath = `${path}.lock`;
     writeFileSync(lockPath, String(process.pid), "utf8");
     try {
+      const started = Date.now();
       let error: unknown;
       try {
         v.create({ providerId: "p", label: "l", secret: "value" });
@@ -27,11 +28,43 @@ describe("vault write lock (#605, I-03)", () => {
         error = e;
       }
       expect(error).toBeInstanceOf(FileLockError);
+      expect(Date.now() - started).toBeLessThan(800); // the override, not the 1s default
       expect(existsSync(path)).toBe(false); // nothing written without the lock
     } finally {
       rmSync(lockPath, { force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   }, { timeout: 10_000 });
+
+  test("the default timeout waits for a slow DPAPI critical section", async () => {
+    const { dir, path } = tmpVault();
+    const lockPath = `${path}.lock`;
+    const childCode = `
+import { rmSync, writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(lockPath)}, String(process.pid));
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+rmSync(${JSON.stringify(lockPath)}, { force: true });
+`;
+    const child = Bun.spawn({
+      cmd: [process.execPath, "-e", childCode],
+      cwd: process.cwd(),
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    try {
+      const deadline = Date.now() + 5_000;
+      while (!existsSync(lockPath) && Date.now() < deadline) await Bun.sleep(5);
+      expect(existsSync(lockPath)).toBe(true);
+
+      // No override: the production timeout must outlast a PowerShell cold start.
+      const created = new Vault(path, plainBackend).create({ providerId: "p", label: "l", secret: "value" });
+      expect(created.providerId).toBe("p");
+    } finally {
+      child.kill();
+      await child.exited;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, { timeout: 20_000 });
 
   test("two processes creating at the same time keep both credentials", async () => {
     const { dir, path } = tmpVault();
@@ -62,11 +95,13 @@ new Vault(path, { scheme: "plain", protect: (s) => s, unprotect: (s) => s })
       while (!existsSync(ready("p1")) || !existsSync(ready("p2"))) await Bun.sleep(5);
       writeFileSync(go, "1");
       expect(await Promise.all(children.map((child) => child.exited))).toEqual([0, 0]);
+
+      const store = loadVault(path);
+      expect(store.credentials.map((c) => c.providerId).sort()).toEqual(["p1", "p2"]);
     } finally {
       for (const child of children) child.kill();
+      await Promise.all(children.map((child) => child.exited));
+      rmSync(dir, { recursive: true, force: true });
     }
-
-    const store = loadVault(path);
-    expect(store.credentials.map((c) => c.providerId).sort()).toEqual(["p1", "p2"]);
   }, { timeout: 20_000 });
 });
