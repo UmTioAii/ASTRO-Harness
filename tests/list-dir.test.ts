@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listDirTool } from "../src/tools/list-dir";
+import { listDirTool, entryCost } from "../src/tools/list-dir";
+import { outputCeilingChars } from "../src/tools/contract";
 
 interface DirNode {
   name: string;
@@ -116,17 +117,160 @@ describe("list_dir tool (F4-2)", () => {
     expect(tree.children!.map((c) => c.name)).not.toContain("file0.txt");
   });
 
-  test("caminho fora do cwd → erro (I-11)", async () => {
+  test("caminho fora do cwd → denied, sem ecoar o caminho (I-11)", async () => {
     const cwd = setupNested(1);
     const result = await listDirTool.execute({ path: "../" }, ctx(cwd));
     expect(result.isError).toBe(true);
-    expect(result.output).toContain("fora");
+    expect(result.failure).toBe("denied");
+    expect(result.output).toBe("path outside the working directory");
+    expect(result.output).not.toContain(cwd);
   });
 
   test("path inexistente → erro claro", async () => {
     const cwd = setupNested(1);
     const result = await listDirTool.execute({ path: "ghost" }, ctx(cwd));
     expect(result.isError).toBe(true);
-    expect(result.output).toContain("não existe");
+    expect(result.output).toContain("does not exist");
+    writeFileSync(join(cwd, "plain.txt"), "x");
+    const notDir = await listDirTool.execute({ path: "plain.txt" }, ctx(cwd));
+    expect(notDir.isError).toBe(true);
+    expect(notDir.output).toContain("not a directory");
+  });
+});
+
+describe("list_dir output contract (S6, #603)", () => {
+  // Synthetic secret built at runtime (gate G6: no secret literal in the diff).
+  const SECRET = ["s", "k", "-"].join("") + "listdir-synthetic-778899aabb";
+
+  test("declares an output ceiling", () => {
+    const ceiling = listDirTool.manifest.output;
+    expect(ceiling).toBeDefined();
+    expect(ceiling!.maxTokens).toBe(4000);
+    expect(ceiling!.hint.length).toBeGreaterThan(0);
+    // A larger session cap never raises the declared ceiling.
+    expect(outputCeilingChars(ceiling, { outputLimitTokens: 100_000 })).toBe(4000 * 4);
+  });
+
+  test("a directory-heavy tree stays inside the declared ceiling", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-dirs-"));
+    for (let i = 0; i < 700; i++) mkdirSync(join(cwd, `dir-${String(i).padStart(4, "0")}`));
+    const result = await listDirTool.execute({}, ctx(cwd));
+    expect(result.isError).toBeFalsy();
+    const tree = JSON.parse(result.output) as DirNode & { truncated?: boolean };
+    expect(tree.truncated).toBe(true);
+    // A directory serializes wider than a file (`children`), so the charge must match it.
+    expect(result.output.length).toBeLessThanOrEqual(4000 * 4);
+    expect(tree.children!.length + result.truncation!.removed).toBe(700);
+    expect(result.truncation!.total).toBe(700);
+  });
+
+  test("emitted order is code-unit based, not locale dependent", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-order-"));
+    for (const name of ["a.txt", "B.txt", "c.txt"]) writeFileSync(join(cwd, name), "x");
+    const tree = JSON.parse((await listDirTool.execute({}, ctx(cwd))).output) as DirNode;
+    expect(tree.children!.map((c) => c.name)).toEqual(["B.txt", "a.txt", "c.txt"]);
+  });
+
+  test("the entry charge matches the serialized node, escapes included", () => {
+    // A name with quotes/backslashes serializes wider than its raw length.
+    expect(entryCost('a"b\\c', "file")).toBe(JSON.stringify({ name: 'a"b\\c', type: "file" }).length + 1);
+    expect(entryCost("plain", "dir")).toBe(JSON.stringify({ name: "plain", type: "dir", children: [] }).length + 1);
+    expect(entryCost('a"b\\c', "file")).toBeGreaterThan('a"b\\c'.length + 26);
+  });
+
+  test("tree above the ceiling is cut with an explicit marker and a structured field", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-cap-"));
+    mkdirSync(join(cwd, "many"));
+    for (let i = 0; i < 500; i++) {
+      writeFileSync(join(cwd, "many", `file-${String(i).padStart(4, "0")}-${"x".repeat(40)}.txt`), "x");
+    }
+    const result = await listDirTool.execute({ path: "many" }, ctx(cwd));
+    expect(result.isError).toBeFalsy();
+    const tree = JSON.parse(result.output) as DirNode & { truncated?: boolean; notice?: string };
+    expect(tree.truncated).toBe(true);
+    expect(tree.notice).toContain("omitted");
+    expect(result.truncation).toBeDefined();
+    // Exact: every one of the 500 entries is either listed or counted as omitted.
+    expect(tree.children!.length + result.truncation!.removed).toBe(500);
+    expect(result.truncation!.total).toBe(500);
+    expect(result.output.length).toBeLessThanOrEqual(16_000);
+  });
+
+  test("a secret in a name is redacted before it reaches the result (I-03)", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-secret-"));
+    writeFileSync(join(cwd, SECRET), "x");
+    const result = await listDirTool.execute({}, ctx(cwd));
+    expect(result.isError).toBeFalsy();
+    expect(result.output).not.toContain(SECRET);
+    expect(result.output).toContain("[REDACTED]");
+  });
+
+  test("a secret in a directory name is redacted at root and nested (I-03)", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-secret-dir-"));
+    mkdirSync(join(cwd, "outer", SECRET), { recursive: true });
+    writeFileSync(join(cwd, "outer", SECRET, "inner.txt"), "x");
+
+    // Nested node: the directory is emitted as a child with its own name.
+    const tree = await listDirTool.execute({}, ctx(cwd));
+    expect(tree.isError).toBeFalsy();
+    expect(tree.output).not.toContain(SECRET);
+    expect(tree.output).toContain("[REDACTED]");
+
+    // Root node: the caller points at the directory itself.
+    const root = await listDirTool.execute({ path: `outer/${SECRET}` }, ctx(cwd));
+    expect(root.isError).toBeFalsy();
+    expect(root.output).not.toContain(SECRET);
+    expect(root.output).toContain("[REDACTED]");
+  });
+
+  test("cut landing on a directory reports the exact number of hidden entries", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-count-"));
+    // A fixed root name ("tree") keeps the charged budget independent of the tmp suffix.
+    mkdirSync(join(cwd, "tree", "alpha"), { recursive: true });
+    writeFileSync(join(cwd, "tree", "alpha", "a.txt"), "x");
+    mkdirSync(join(cwd, "tree", "beta", "sub"), { recursive: true });
+    writeFileSync(join(cwd, "tree", "beta", "b1.txt"), "x");
+    writeFileSync(join(cwd, "tree", "beta", "b2.txt"), "x");
+    writeFileSync(join(cwd, "tree", "beta", "sub", "b3.txt"), "x");
+
+    // 100 tokens -> 100-char budget; the root, alpha and the marker reserve leave
+    // no room for a.txt, so the cut lands on a directory.
+    const result = await listDirTool.execute({ path: "tree" }, { ...ctx(cwd), outputLimitTokens: 100 });
+    expect((JSON.parse(result.output) as { truncated?: boolean }).truncated).toBe(true);
+    // kept: alpha. omitted: a.txt, beta, b1, b2, sub, b3.
+    expect(result.truncation).toEqual({ removed: 6, total: 7, unit: "entries", hint: listDirTool.manifest.output!.hint });
+    expect(result.output).toContain("6 of 7 entries omitted");
+
+    // Recorded decision (#621): the 64-char floor plus the additive marker make a
+    // tiny session cap (20 tokens = 80 chars) produce a slightly larger output.
+    const floored = await listDirTool.execute({ path: "tree" }, { ...ctx(cwd), outputLimitTokens: 20 });
+    expect(floored.truncation!.total).toBe(7);
+    expect(floored.output.length).toBeGreaterThan(80);
+  });
+
+  test("failure taxonomy: escape is denied, missing path failed", async () => {
+    const cwd = setupNested(1);
+    const escape = await listDirTool.execute({ path: "../" }, ctx(cwd));
+    expect(escape.isError).toBe(true);
+    expect(escape.failure).toBe("denied");
+    const missing = await listDirTool.execute({ path: "ghost" }, ctx(cwd));
+    expect(missing.isError).toBe(true);
+    expect(missing.failure).toBe("failed");
+  });
+
+  test("a non-policy resolution error is failed, not denied", async () => {
+    const cwd = setupNested(1);
+    // A null byte makes realpath throw a TypeError (not a confinement refusal).
+    const result = await listDirTool.execute({ path: "\0" }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.failure).toBe("failed");
+    expect(result.output).not.toContain(cwd);
+  });
+
+  test("a missing absolute path is not echoed (I-03)", async () => {
+    const cwd = setupNested(1);
+    const result = await listDirTool.execute({ path: join(cwd, "ghost") }, ctx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.output).not.toContain(cwd);
   });
 });
