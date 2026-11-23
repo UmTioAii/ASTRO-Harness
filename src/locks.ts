@@ -68,7 +68,7 @@ export function summarizeLocks(
   });
 }
 
-function formatLockBlock(lock: LockSummary): string {
+function formatLockBlock(lock: LockSummary, concurrent: number): string {
   const model = lock.model === undefined ? "?" : `${lock.provider ?? "?"}/${lock.model}`;
   const pid = lock.pid === undefined
     ? "desconhecido"
@@ -76,7 +76,7 @@ function formatLockBlock(lock: LockSummary): string {
   const age = lock.ageMs === undefined ? "" : `  há ${formatAge(lock.ageMs)}`;
   return [
     `  run     ${lock.run}  (agente ${lock.agent_id})`,
-    `  conta   ${lock.accountRef}`,
+    `  conta   ${lock.accountRef}${concurrent > 1 ? `  (${concurrent} execuções)` : ""}`,
     `  modelo  ${model}`,
     `  pid     ${pid}${age}`,
   ].join("\n");
@@ -84,9 +84,15 @@ function formatLockBlock(lock: LockSummary): string {
 
 /** Texto para o operador; sem valor de segredo (I-03) — só o nome da credencial. */
 export function formatLocksList(locks: readonly LockSummary[]): string {
-  if (locks.length === 0) return "nenhuma conta presa";
-  const header = locks.length === 1 ? "1 conta presa" : `${locks.length} contas presas`;
-  return `${header}:\n\n${locks.map(formatLockBlock).join("\n\n")}`;
+  if (locks.length === 0) return "nenhuma execução ativa";
+  const accounts = new Set(locks.map((lock) => lock.accountRef)).size;
+  const executions = locks.length === 1 ? "1 execução ativa" : `${locks.length} execuções ativas`;
+  const scope = accounts === 1 ? "1 conta" : `${accounts} contas`;
+  const byAccount = new Map<string, number>();
+  for (const lock of locks) byAccount.set(lock.accountRef, (byAccount.get(lock.accountRef) ?? 0) + 1);
+  return `${executions} em ${scope}:\n\n${locks
+    .map((lock) => formatLockBlock(lock, byAccount.get(lock.accountRef) ?? 1))
+    .join("\n\n")}`;
 }
 
 export interface ReleaseLocksOptions {

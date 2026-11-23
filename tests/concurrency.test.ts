@@ -143,7 +143,6 @@ describe("bounded spawn (ADR-0037)", () => {
     expect(() => config({ spawn: { maxConcurrent: 0 } })).toThrow(/maxConcurrent/);
     expect(() => config({ spawn: { maxConcurrent: 2.5 } })).toThrow(/maxConcurrent/);
   });
-  });
 
   test("two agents share one account; the third execution is refused", async () => {
     const single = config({
