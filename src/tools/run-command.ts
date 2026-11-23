@@ -961,8 +961,7 @@ function serializeTestsResult(
  * mesmo caminho do `run_command` — host com aprovação por comando (default) ou
  * Docker explícito —, com a mesma recusa sem shell (I-19). O argv vem de
  * `run.tests.command` e vai item a item, sem shell, sem interpolação e sem flag
- * escolhida pelo modelo. `filter`, quando presente, é um único argumento extra
- * é um único argumento extra.
+ * escolhida pelo modelo. `filter`, quando presente, é um único argumento extra.
  */
 export function createRunTestsTool(deps: RunTestsDeps): Tool {
   // Teto duro mesmo se a tool for criada sem passar pelo `validateConfig`.
