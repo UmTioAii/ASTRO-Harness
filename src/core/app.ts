@@ -623,10 +623,14 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     : (config.run?.maxRoundsPerTurn ?? config.agent.maxSteps);
 
   // Sandbox do run_command (F4-6): modo resolvido antes de qualquer execução
-  // (#474: `true`/ausente = Docker; `"auto"` = Docker → host com aprovação).
+  // Host é o default (#599): sem probe de Docker. `sandbox: true`/`"docker"` mantém
+  // o container explícito; `false` desliga.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
   const sandboxNotice = runCommandMode === "disabled" ? sandboxWarning(false) : undefined;
   if (sandboxNotice !== undefined && opts.suppressRunEvents !== true) console.warn(`aviso: ${sandboxNotice}`);
+  if (runCommandMode === "host" && opts.suppressRunEvents !== true) {
+    console.warn("warning: the shell runs on the host with per-command approval; the Docker sandbox is inactive (ADR-0034)");
+  }
 
   const ledgerPath = resolveFrom(cwd, config.paths.ledger);
   const auditPath = resolveFrom(cwd, config.paths.audit);
