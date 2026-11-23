@@ -2,9 +2,9 @@
 
 > Objective: present identity, conversation, activity and composer state without progress counters or layout reflow.
 
-- Status: approved design (alpha.5, phase P2)
+- Status: draft design (alpha.5, phase P2)
 - Date: 2026-11-21
-- Depends on: S1 (no counters), S5a (turn events), ADR-0035
+- Depends on: S1 (no counters), S5a (turn events), ADR-0035 (planned, shared with S5a)
 - Owner files: `src/tui/`, `docs/tui-layout.md` (rewritten by this spec)
 
 ## 1. Goal

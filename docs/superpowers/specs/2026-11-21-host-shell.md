@@ -44,10 +44,11 @@ security setting below what the file asked (ADR-0033, ADR-0028 "Guardas de segur
 | `"auto"` or absent | host with per-command approval (the alpha.5 default) |
 
 `"auto"` or absent moving from "Docker when available" to "host" is the deliberate alpha.5
-change, not an alias side effect: ADR-0034 supersedes ADR-0031, I-11 is rewritten in
-`docs/invariants.md`, and the load prints one line stating that the shell now runs on the
-host with per-command approval. A value that contradicts an explicit `shell.mode` is a
-config error, not a silent winner.
+change, not an alias side effect: ADR-0034 supersedes ADR-0031 and **amends the Shell row of
+ADR-0033** (`"auto"` and absent now mean host; `true`/`"docker"` still require Docker), I-11
+is rewritten in `docs/invariants.md`, and the load prints one line stating that the shell now
+runs on the host with per-command approval. A value that contradicts an explicit `shell.mode`
+is a config error, not a silent winner.
 
 ## 3. Rules
 

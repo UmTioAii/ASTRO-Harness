@@ -60,6 +60,8 @@ terminal.
 ## 7. Aceite
 
 - [ ] Primeira execução sem config global nem de projeto abre o wizard completo, nessa ordem.
+- [ ] O wizard absorve `ensureFirstRunConfig` (#559) e roda antes de `ensureFirstRun()`, na
+      posição do portão dos termos.
 - [ ] Global presente e projeto ausente abre só o mini-setup e não toca no global.
 - [ ] Projeto presente não abre wizard nem sobrescreve nada.
 - [ ] Sem TTY: nenhuma pergunta, nenhuma escrita, uma linha de aviso, defaults em memória.

@@ -76,7 +76,7 @@ field-level migration. This spec keeps that contract:
 
 `preset: "simple"` is accepted as an alias of `"default"` and loads unchanged; the old preset
 name must not break an existing config. `DEFAULT_PRESET` becomes `"default"`
-(`src/core/config.ts:146`). Control is reversible and shows a warning on entry.
+(`src/core/config.ts:145`). Control is reversible and shows a warning on entry.
 
 ## 7. Errors
 

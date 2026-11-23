@@ -40,7 +40,7 @@ O `smoke:packed` (TUI instalada) fica em `.github/workflows/packed-smoke.yml`, m
 
 ## Política de merge
 
-- PR só entra com `test` verde nos **dois** sistemas, `eval`, `coverage` e `secrets` verdes, mais **2 veredictos `Revisão: APPROVE`** no PR (A segurança + B correctness) (`docs/workflow.md` §6).
+- PR só entra com `test` verde nos **dois** sistemas, `eval`, `coverage` e `secrets` verdes, mais **2 veredictos `Review: APPROVE`** no PR (A segurança + B correctness) (`docs/workflow.md` §6).
 - Não usar `--admin` para contornar check vermelho. Exceção por causa externa (billing, runner) é registrada no PR com justificativa e issue de correção.
 - Falha intermitente: reexecutar o job; se repetir, abrir issue com o link do run.
 

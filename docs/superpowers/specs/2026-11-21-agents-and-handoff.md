@@ -30,7 +30,7 @@ harness heuristic: the model asks, the harness decides.
 | precedence | explicit user request > `/config` > 2 |
 | depth | **1, no grandchild**, not configurable (`src/spawn.ts:297`) |
 
-Every spawn becomes an `agent.spawn` ledger event with `requested`, `granted`, `cap`,
+Every spawn is recorded as an `agent.spawn` audit event with `requested`, `granted`, `cap`,
 `source` (`prompt` | `config` | `default`) and `reason`. Above the cap the harness grants the
 cap and says so in the tool result — "requested 8, granted 2: profile cap" — so the model
 does not repeat the request blindly and the user sees the request in `/usage`.
@@ -81,7 +81,7 @@ addressing, no broadcast, bounded messages, every message copied to the parent
 
 ## 8. Acceptance
 
-- [ ] `agent.spawn` records requested, granted, cap, source and reason.
+- [ ] `agent.spawn` records requested, granted, cap, source and reason in the audit.
 - [ ] A request above the cap is truncated and the tool result states the cut.
 - [ ] Two agents on one account run in parallel and their budget reservation is summed per
       account before each call.
