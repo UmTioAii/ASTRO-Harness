@@ -394,11 +394,14 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         const rawCredential = (providerConfig as { credentialRef?: unknown }).credentialRef;
         const keyless = providerConfig.kind === "openai-compat" &&
           (typeof rawCredential !== "string" || rawCredential.length === 0);
-        const grant = grantConcurrency(requestedConcurrency, {
-          ...spawnConcurrencyCap(deps.config),
-          // Until shared accounts (#632) admission still stops at the A4 ceiling.
-          cap: Math.min(spawnConcurrencyCap(deps.config).cap, ceiling),
-        });
+        const resolvedCap = spawnConcurrencyCap(deps.config);
+        const executableCap = Math.min(resolvedCap.cap, ceiling);
+        const grant = grantConcurrency(requestedConcurrency, { ...resolvedCap, cap: executableCap });
+        if (grant.truncated && executableCap < resolvedCap.cap) {
+          // Name the real cut, not the tier the user declared.
+          grant.reason = `requested ${grant.requested}, granted ${grant.granted}: account ceiling ` +
+            `(${resolvedCap.source} cap ${resolvedCap.cap})`;
+        }
         const agentId = deps.spawns.nextId(new Set(Object.keys(deps.config.agents ?? {})));
         const reason = [choice.reason, typeof raw.reason === "string" ? raw.reason : ""]
           .filter((part) => part.length > 0)

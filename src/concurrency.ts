@@ -4,6 +4,7 @@
  * it. An explicit declaration wins over `/config`, which wins over two.
  */
 import type { AstroConfig } from "./core/config";
+import { MAX_ACTIVE_AGENTS } from "./core/config";
 
 export const DEFAULT_MAX_CONCURRENT_PER_PROVIDER = 2;
 
@@ -39,10 +40,13 @@ export function resolveConcurrencyCap(source: { request?: number; config?: numbe
 
 /** Cap for one spawn: `agents.maxActive` is the explicit tier, `spawn.maxConcurrent` the config tier. */
 export function spawnConcurrencyCap(config: AstroConfig): ConcurrencyCap {
-  return resolveConcurrencyCap({
+  const resolved = resolveConcurrencyCap({
     ...(config.maxActive === undefined ? {} : { request: config.maxActive }),
     ...(config.spawn?.maxConcurrent === undefined ? {} : { config: config.spawn.maxConcurrent }),
   });
+  // The resolver is the single source of truth for #632 too: a stale or
+  // hand-written config cannot widen a shared credential past the physical cap.
+  return resolved.cap <= MAX_ACTIVE_AGENTS ? resolved : { ...resolved, cap: MAX_ACTIVE_AGENTS };
 }
 
 /** Truncate the request at the cap and state the cut, so the model does not ask again blindly. */

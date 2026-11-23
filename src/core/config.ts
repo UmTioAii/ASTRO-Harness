@@ -2459,7 +2459,7 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
   }
 
   if (maxActive !== undefined && maxActive > MAX_ACTIVE_AGENTS) {
-    fail(`config inválida: "agents.maxActive" excede o teto físico ${MAX_ACTIVE_AGENTS}`);
+    fail(`config inválida: "agents.maxActive" exceeds the physical ceiling ${MAX_ACTIVE_AGENTS}`);
   }
 
   // A2 (ADR-0008): cada agente ativo consome uma conta exclusiva (A4, ADR-0009).
