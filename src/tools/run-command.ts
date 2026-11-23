@@ -8,7 +8,8 @@ import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
 import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
 import { realpathPreservingDots, isWithin } from "./paths";
-import { evaluateShellPolicy, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
+import { evaluateShellPolicy, approvalPattern, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
+import { persistShellApproval } from "./shell-approvals";
 import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolPermissionHint, type ToolResult } from "./types";
 
 /** Teto da saída devolvida ao modelo (run_command e run_tests). */
@@ -107,6 +108,10 @@ let commandMode: RunCommandMode = "disabled";
 let preferredShell: string | undefined;
 /** Ordered shell rules and the external-directory decision (#599). */
 let shellRules: readonly ShellRule[] = [];
+/** Saved `always` approvals, at runtime and in the project layer (#599). */
+let shellApprovals: readonly ShellRule[] = [];
+/** Project layer written by `always`; absent = the approval covers one call. */
+let projectConfigPath: string | undefined;
 let shellExternalDirectory: ShellExternalDirectory | undefined;
 let dockerProbe: Promise<boolean> | undefined;
 
@@ -166,12 +171,18 @@ export function configureRunCommand(opts: {
   shellDefault?: string;
   /** Regras de prefixo ordenadas (#599); ausente = só a matriz de permissão. */
   rules?: readonly ShellRule[];
+  /** Aprovações salvas por `always` (#599); nunca vencem um `deny`. */
+  approvals?: readonly ShellRule[];
+  /** Camada de projeto gravada por `always` (#599); ausente = só esta chamada. */
+  configPath?: string;
   /** Decisão quando o comando sai do projeto (#599); ausente = `ask`. */
   externalDirectory?: ShellExternalDirectory;
 }): void {
   commandMode = opts.mode ?? (opts.sandbox === false ? "disabled" : opts.sandbox === true ? "docker" : "host");
   preferredShell = opts.shellDefault;
   shellRules = opts.rules ?? [];
+  shellApprovals = opts.approvals ?? [];
+  projectConfigPath = opts.configPath;
   shellExternalDirectory = opts.externalDirectory;
   // `sandbox: true` mantém o caminho Docker byte a byte; `isRunCommandSandboxEnabled`
   // segue significando "Docker", como antes.
@@ -694,7 +705,11 @@ function commandOf(input: unknown): string | undefined {
   return typeof command === "string" && command.trim().length > 0 ? command : undefined;
 }
 const shellPolicyFor = (command: string, cwd: string): ShellPolicyResult =>
-  evaluateShellPolicy(command, cwd, { rules: shellRules, externalDirectory: shellExternalDirectory });
+  evaluateShellPolicy(command, cwd, {
+    rules: shellRules,
+    approvals: shellApprovals,
+    externalDirectory: shellExternalDirectory,
+  });
 
 /** Policy before the permission matrix (#599); `default` keeps the matrix in charge. */
 function runCommandPolicyHint(input: unknown, ctx: ToolContext): ToolPermissionHint | undefined {
@@ -750,6 +765,18 @@ export const runCommandTool: Tool = {
 
   approvalDetail: runCommandDetail,
   permissionHint: runCommandPolicyHint,
+
+  /** `always` (#599): a prefix rule in the project layer; deny rules still win. */
+  rememberApproval(input: unknown, ctx: ToolContext): string | undefined {
+    const command = commandOf(input);
+    if (command === undefined || projectConfigPath === undefined) return undefined;
+    const pattern = approvalPattern(command);
+    if (pattern === undefined || !persistShellApproval(resolve(ctx.cwd, projectConfigPath), pattern)) {
+      return undefined;
+    }
+    shellApprovals = [...shellApprovals, { match: pattern, effect: "allow" }];
+    return pattern;
+  },
 
   async execute(input, ctx): Promise<ToolResult> {
     let command: string;

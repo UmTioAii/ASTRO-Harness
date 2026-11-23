@@ -11,11 +11,13 @@ export type ShellExternalDirectory = ShellRuleEffect;
 export interface ShellRule { match: string; effect: ShellRuleEffect }
 export type ShellPolicyConfig = {
   rules?: readonly ShellRule[];
+  /** Saved `always` approvals (#599); never override a rule `deny`. */
+  approvals?: readonly ShellRule[];
   externalDirectory?: ShellExternalDirectory;
 };
 export type ShellPolicyResult = {
   decision: ShellRuleEffect;
-  origin: "rule" | "external_directory" | "unparsable" | "default";
+  origin: "rule" | "external_directory" | "unparsable" | "approval" | "default";
   trigger?: string;
   code?: string;
   message?: string;
@@ -113,6 +115,16 @@ export function scanShellCommand(command: string): ShellScan {
 
 const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Prefix of a saved `always` approval: first subcommand, plus the git subcommand (#599). */
+export function approvalPattern(command: string): string | undefined {
+  const scan = scanShellCommand(command);
+  if (!scan.ok) return undefined;
+  const words = scan.words[0];
+  if (words === undefined || words.length === 0) return undefined;
+  const head = words[0] === "git" && words[1] !== undefined ? `${words[0]} ${words[1]}` : words[0];
+  return `${head} *`;
+}
+
 /** Prefix pattern, anchored; a trailing ` *` also matches the bare prefix. */
 function matches(pattern: string, part: string): boolean {
   const normalized = pattern.trim().replace(/\s+/g, " ");
@@ -177,7 +189,9 @@ function externalPart(parts: readonly (readonly string[])[], cwd: string): strin
 /**
  * Evaluate rules and external_directory before the permission matrix. Every
  * subcommand is evaluated; the last matching rule wins. A `deny` is returned as
- * such, so no mode or saved approval can lift it.
+ * such, so no mode or saved approval can lift it. A saved approval only covers a
+ * subcommand whose rule decision is not `allow` (or every subcommand when no
+ * rules are configured), and never a `deny`.
  */
 export function evaluateShellPolicy(
   command: string,
@@ -187,25 +201,36 @@ export function evaluateShellPolicy(
   const scan = scanShellCommand(command);
   if (!scan.ok) return { decision: "deny", origin: "unparsable", code: scan.code, message: scan.message };
   const rules = policy.rules ?? [];
+  const approvals = policy.approvals ?? [];
+  const perPart = scan.parts.map((part) => {
+    let effect: ShellRuleEffect | undefined;
+    for (const rule of rules) if (matches(rule.match, part)) effect = rule.effect;
+    return { part, effect };
+  });
+  for (const { part, effect } of perPart) {
+    if (effect === "deny") {
+      return {
+        decision: "deny", origin: "rule", trigger: part, code: SHELL_RULE_DENIED,
+        message: "shell_rule_denied: the command matches an explicit deny rule in shell.rules; " +
+          "remove or reorder the rule to allow it",
+      };
+    }
+  }
+  const saved = (part: string): boolean =>
+    approvals.some((rule) => rule.effect === "allow" && matches(rule.match, part));
+  // Parts without an explicit allow; with no rules, every part needs a saved approval.
+  const gated = perPart.filter(({ effect }) => rules.length > 0 ? effect !== "allow" : true);
+  const uncovered = gated.filter(({ part }) => !saved(part));
   let decision: ShellRuleEffect = "allow";
   let trigger: string | undefined;
   let origin: ShellPolicyResult["origin"] = "default";
-  if (rules.length > 0) {
+  if (gated.length > 0 && uncovered.length === 0) {
+    origin = "approval";
+  } else if (rules.length > 0) {
     origin = "rule";
-    for (const part of scan.parts) {
-      let partDecision: ShellRuleEffect | undefined;
-      for (const rule of rules) if (matches(rule.match, part)) partDecision = rule.effect;
-      if (partDecision === "deny") {
-        return {
-          decision: "deny", origin: "rule", trigger: part, code: SHELL_RULE_DENIED,
-          message: "shell_rule_denied: the command matches an explicit deny rule in shell.rules; " +
-            "remove or reorder the rule to allow it",
-        };
-      }
-      if (partDecision !== "allow" && decision === "allow") {
-        decision = "ask";
-        trigger = part;
-      }
+    if (uncovered.length > 0) {
+      decision = "ask";
+      trigger = uncovered[0]?.part;
     }
   }
   const external = externalPart(scan.words, cwd);

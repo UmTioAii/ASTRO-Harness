@@ -364,7 +364,9 @@ export class ToolExecutor {
         timer = setTimeout(() => resolve(TIMEOUT), tool.manifest.timeoutMs);
       });
       const outcome = await Promise.race([
-        tool.execute(input, { ...ctx, signal: controller.signal, executor: this, permission: this.agentPermission }),
+        tool.execute(input, {
+          ...ctx, signal: controller.signal, executor: this, permission: this.agentPermission,
+        }),
         timeout,
         aborted,
       ]);
@@ -471,6 +473,7 @@ export class ToolExecutor {
           ? "allow"
           : permissionDecision(this.mode, action);
     let effective: PermissionDecision = decision;
+    let rejectReason: string | undefined;
     const grantKey = PermissionGrants.key(action, call.name);
     if (decision === "ask" && this.permissionGrants.has(grantKey) && !requiresPerCallApproval(action)) {
       // Grant de sessão ainda vale (PERM-05, #266): allow sem perguntar de novo.
@@ -525,10 +528,22 @@ export class ToolExecutor {
         if (outcome === ABORTED) {
           return failure(`cancelado: a tool "${call.name}" foi interrompida`, "failed");
         }
-        // Fail-closed: sem aprovador, `ask` vira deny (#262).
-        if (outcome === "session") {
-          this.permissionGrants.grant(grantKey);
+        // Fail-closed: sem aprovador, `ask` vira deny (#262). `reject` also
+        // cancels every pending approval of the session (#599).
+        if (outcome === "session" || outcome === "always") {
+          // Shell on the host is per call (#474), so `always` saves a prefix rule
+          // in the project layer instead of a grant; without the hook it covers
+          // this call only.
+          if (requiresPerCallApproval(action)) {
+            tool.rememberApproval?.(input, ctx);
+          } else {
+            this.permissionGrants.grant(grantKey);
+          }
           effective = "allow";
+        } else if (outcome === "reject") {
+          this.permissionGrants.clear();
+          effective = "deny";
+          rejectReason = "rejected";
         } else {
           effective = outcome === undefined || outcome === false ? "deny" : "allow"; // true | "once"
         }
@@ -555,7 +570,9 @@ export class ToolExecutor {
         payload: {
           name: call.name, action, mode: this.mode, decision: effective,
           ...(hint?.origin === undefined ? {} : { origin: hint.origin }),
-          ...(hint?.code === undefined ? {} : { reason: hint.code }),
+          ...(rejectReason !== undefined
+            ? { reason: rejectReason }
+            : hint?.code === undefined ? {} : { reason: hint.code }),
         },
       });
     }

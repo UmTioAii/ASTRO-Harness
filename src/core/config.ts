@@ -238,6 +238,8 @@ export interface ShellConfig {
   mode?: "host" | "off";
   /** Ordered prefix rules; the last match wins (#599). */
   rules?: ShellRule[];
+  /** Saved `always` approvals (#599); they never override a `deny` rule. */
+  approvals?: ShellRule[];
   /** Decision when the command or an inferred target leaves the project (#599). */
   externalDirectory?: ShellExternalDirectory;
 }
@@ -1692,7 +1694,7 @@ function validateShell(value: unknown, legacySandbox?: boolean | "auto" | "docke
   const result: ShellConfig = Object.create(null);
   const effects: readonly unknown[] = ["allow", "ask", "deny"];
   for (const key of Object.keys(raw)) {
-    if (key !== "default" && key !== "mode" && key !== "rules" && key !== "externalDirectory") {
+    if (key !== "default" && key !== "mode" && key !== "rules" && key !== "approvals" && key !== "externalDirectory") {
       fail(`config inválida: "shell.${key}" desconhecido`);
     }
   }
@@ -1707,21 +1709,23 @@ function validateShell(value: unknown, legacySandbox?: boolean | "auto" | "docke
   const mode = raw.mode ?? (legacySandbox === false ? "off" : undefined);
   if (mode !== undefined && mode !== "host" && mode !== "off") fail('config inválida: "shell.mode" deve ser "host" ou "off"');
   if (mode !== undefined) result.mode = mode;
-  if (raw.rules !== undefined) {
-    if (!Array.isArray(raw.rules)) fail('config inválida: "shell.rules" deve ser uma lista');
-    result.rules = raw.rules.map((item: unknown, index: number): ShellRule => {
-      const label = `shell.rules[${index}]`;
-      if (!isPlainObject(item)) fail(`config inválida: "${label}" deve ser um objeto`);
+  const rules = (value: unknown, label: string): ShellRule[] => {
+    if (!Array.isArray(value)) fail(`config inválida: "${label}" deve ser uma lista`);
+    return (value as unknown[]).map((item: unknown, index: number): ShellRule => {
+      const entry = `${label}[${index}]`;
+      if (!isPlainObject(item)) fail(`config inválida: "${entry}" deve ser um objeto`);
       if (Object.keys(item).some((key) => key !== "match" && key !== "effect")) {
-        fail(`config inválida: "${label}" tem chave desconhecida`);
+        fail(`config inválida: "${entry}" tem chave desconhecida`);
       }
       if (typeof item.match !== "string" || item.match.trim().length === 0) {
-        fail(`config inválida: "${label}.match" deve ser uma string não vazia`);
+        fail(`config inválida: "${entry}.match" deve ser uma string não vazia`);
       }
-      if (!effects.includes(item.effect)) fail(`config inválida: "${label}.effect" deve ser "allow", "ask" ou "deny"`);
+      if (!effects.includes(item.effect)) fail(`config inválida: "${entry}.effect" deve ser "allow", "ask" ou "deny"`);
       return { match: item.match, effect: item.effect as ShellRuleEffect };
     });
-  }
+  };
+  if (raw.rules !== undefined) result.rules = rules(raw.rules, "shell.rules");
+  if (raw.approvals !== undefined) result.approvals = rules(raw.approvals, "shell.approvals");
   if (raw.externalDirectory !== undefined) {
     if (!effects.includes(raw.externalDirectory)) {
       fail('config inválida: "shell.externalDirectory" deve ser "allow", "ask" ou "deny"');
@@ -1979,7 +1983,7 @@ const CONFIG_SHAPE: ConfigShape = {
       values: { keys: NAMED_AGENT_KEYS, children: { modelRouting: { keys: ["cheapModel", "strongModel"] } } },
     },
     tools: { keys: ["run_command"], children: { run_command: { keys: ["sandbox"] } } },
-    shell: { keys: ["default", "mode", "rules", "externalDirectory"], children: { rules: { items: { keys: ["match", "effect"] } } } },
+    shell: { keys: ["default", "mode", "rules", "approvals", "externalDirectory"], children: { rules: { items: { keys: ["match", "effect"] } }, approvals: { items: { keys: ["match", "effect"] } } } },
     telemetry: { keys: ["enabled", "endpoint", "sampleRate"] },
     quota: { values: { keys: QUOTA_KEYS } },
     budget: { keys: ["scope", "limitUsd", "warnAt", "onExceed", "hardCeilingUsd"] },

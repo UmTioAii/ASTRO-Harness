@@ -69,6 +69,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
     mode: runCommandMode,
     ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
     ...(config.shell?.rules === undefined ? {} : { rules: config.shell.rules }),
+    ...(config.shell?.approvals === undefined ? {} : { approvals: config.shell.approvals }),
+    configPath: opts.configPath,
     ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
   });
   const auditPath = resolve(opts.cwd, config.paths.audit);
@@ -112,6 +114,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         mode: runCommandMode,
         ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
         ...(config.shell?.rules === undefined ? {} : { rules: config.shell.rules }),
+        ...(config.shell?.approvals === undefined ? {} : { approvals: config.shell.approvals }),
+        configPath: opts.configPath,
         ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
       });
       const executor = new ToolExecutor({
