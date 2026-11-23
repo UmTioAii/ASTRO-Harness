@@ -243,28 +243,33 @@ export async function enforceBudget(opts: EnforceBudgetOptions): Promise<BudgetC
     }, { failClosed: true });
 
   let current: { status: BudgetStatus; committedUsd: number | null; reserved: boolean };
-  try {
-    current = attempt(false);
-  } catch (error) {
-    if (error instanceof BudgetExceededError) {
-      const payload = {
-        scope: error.status.scope,
-        spentUsd: error.status.spentUsd,
-        limitUsd: error.status.limitUsd,
-        ...(reserveUsd === 0 ? {} : { reserved: reserveUsd }),
-        ...(opts.budget.hardCeilingUsd === undefined ? {} : { hardCeilingUsd: opts.budget.hardCeilingUsd }),
-        ...(error.reason === "unknown_price" ? { reason: "unknown_price" } : {}),
-      };
-      if (error.reason === "unknown_price") {
-        opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.exceeded", payload });
-        opts.ledger.recordBudgetExceeded({ run: opts.run, agent: opts.agent, exceeded_choice: "stop" });
-      } else {
-        opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.ceiling_hit", payload });
-        opts.ledger.recordCeilingHit({ run: opts.run, agent: opts.agent, ceiling_hit: true });
-      }
+  const auditExceeded = (error: unknown): void => {
+    if (!(error instanceof BudgetExceededError)) return;
+    const payload = {
+      scope: error.status.scope,
+      spentUsd: error.status.spentUsd,
+      limitUsd: error.status.limitUsd,
+      ...(reserveUsd === 0 ? {} : { reserved: reserveUsd }),
+      ...(opts.budget.hardCeilingUsd === undefined ? {} : { hardCeilingUsd: opts.budget.hardCeilingUsd }),
+      ...(error.reason === "unknown_price" ? { reason: "unknown_price" } : {}),
+    };
+    if (error.reason === "unknown_price") {
+      opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.exceeded", payload });
+      opts.ledger.recordBudgetExceeded({ run: opts.run, agent: opts.agent, exceeded_choice: "stop" });
+    } else {
+      opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.ceiling_hit", payload });
+      opts.ledger.recordCeilingHit({ run: opts.run, agent: opts.agent, ceiling_hit: true });
     }
-    throw error;
-  }
+  };
+  const runAttempt = (forceReserve: boolean): typeof current => {
+    try {
+      return attempt(forceReserve);
+    } catch (error) {
+      auditExceeded(error);
+      throw error;
+    }
+  };
+  current = runAttempt(false);
   if (current.reserved) return "continue_same";
 
   const { status, committedUsd } = current;
@@ -324,15 +329,13 @@ export async function enforceBudget(opts: EnforceBudgetOptions): Promise<BudgetC
       ...(oldCeiling === undefined ? {} : { old_ceiling_usd: oldCeiling }),
       ...(result.hardCeilingUsd === undefined ? {} : { new_ceiling_usd: result.hardCeilingUsd, confirmed_ceiling: true }),
     });
-    // Re-check under the lock: the recheck covers the ceiling/unknown-price;
-    // the soft limit was explicitly continued or raised by the decision above.
-    attempt(true);
+    runAttempt(true);
     return choice;
   }
   opts.audit.append({ run: opts.run, agent: opts.agent, tipo: "budget.exceeded", payload: { ...payload, choice } });
   opts.ledger.recordBudgetExceeded({ run: opts.run, agent: opts.agent, exceeded_choice: choice });
   if (choice === "stop") throw new BudgetExceededError("limit", status);
-  attempt(true);
+  runAttempt(true);
   return choice;
 }
 
