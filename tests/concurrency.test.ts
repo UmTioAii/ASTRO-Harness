@@ -120,6 +120,42 @@ describe("bounded spawn (ADR-0037)", () => {
     expect(() => config({ spawn: { maxConcurrent: 2.5 } })).toThrow(/maxConcurrent/);
   });
 
+  test("agents.maxActive is the explicit tier and wins over spawn.maxConcurrent", async () => {
+    const cfg = config({
+      providers: {
+        p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "KEY1" },
+        p2: { kind: "openai-compat", baseUrl: "http://p2/v1", credentialRef: "KEY2" },
+        p3: { kind: "openai-compat", baseUrl: "http://p3/v1", credentialRef: "KEY3" },
+        p4: { kind: "openai-compat", baseUrl: "http://p4/v1", credentialRef: "KEY4" },
+      },
+      models: [
+        { provider: "p1", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+        { provider: "p2", id: "m2", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+        { provider: "p3", id: "m3", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+        { provider: "p4", id: "m4", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+      ],
+      agents: { maxActive: 4 },
+      spawn: { maxConcurrent: 2 },
+    });
+    expect(cfg.maxActive).toBe(4);
+    const { tool, ctx } = setup(cfg);
+    const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 4 }, ctx);
+    expect(JSON.parse(result.output).concurrency).toMatchObject({ granted: 4, cap: 4, source: "request" });
+  });
+
+  test("concurrency rejects negative and fractional values", async () => {
+    const { tool, ctx } = setup();
+    for (const concurrency of [-1, 2.5]) {
+      const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency }, ctx);
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.output).message).toContain("must be an integer >= 1");
+    }
+  });
+
+  test("agents.maxActive above the physical cap is refused", () => {
+    expect(() => config({ agents: { maxActive: 1000 } })).toThrow(/maxActive/);
+  });
+
   test("a child cannot spawn a grandchild", async () => {
     const { spawns, tool, ctx } = setup();
     expect((await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx)).isError).toBe(false);
