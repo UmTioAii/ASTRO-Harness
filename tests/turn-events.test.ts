@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { TurnEventStream, type TurnEvent } from "../src/chat/turn-events";
+import { MAX_TURN_ARGUMENT_CHARS, TurnEventStream, type TurnEvent } from "../src/chat/turn-events";
 
 /** Stream with an injectable clock; the observer records every delivered event. */
 function collect() {
@@ -46,6 +46,25 @@ describe("TurnEventStream (#600)", () => {
     stream.toolStart("c1", "read_file", "{}");
     expect(kinds(events)).toEqual(["round.start", "tool.start", "tool.end"]);
     expect(events[2]).toMatchObject({ isError: true, durationMs: 12 });
+  });
+
+  test("strips control characters and bounds oversized arguments", () => {
+    const { events, stream } = collect();
+    stream.roundStart(1);
+    const long = "y".repeat(MAX_TURN_ARGUMENT_CHARS * 2);
+    stream.toolStart("c1", "write_file", `{"path":"a.txt","content":"x\u001b]52;c;ZGF0YQ==\u0007${long}"}`);
+    const start = events[1]!;
+    if (start.kind !== "tool.start") throw new Error("expected tool.start");
+    expect(start.arguments).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(start.arguments.length).toBeLessThanOrEqual(MAX_TURN_ARGUMENT_CHARS);
+  });
+
+  test("turn.end clears a buffered end whose start never arrived", () => {
+    const { events, stream } = collect();
+    stream.roundStart(1);
+    stream.toolEnd("orphan", true, "orphan");
+    stream.turnEnd("failed", { inputTokens: 0, outputTokens: 0 });
+    expect(kinds(events)).toEqual(["round.start", "turn.end"]);
   });
 
   test("marks every running tool as failed when the turn is cancelled", () => {

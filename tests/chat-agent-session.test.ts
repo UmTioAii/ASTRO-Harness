@@ -95,7 +95,7 @@ describe("AgentSession (T1, #62)", () => {
     try {
       const events: TurnEvent[] = [];
       await chat.send("x", undefined, undefined, undefined, {
-        observer: (event) => events.push(event),
+        observer: (event) => { events.push(event); },
       });
       expect(events.map((event) => event.kind)).toEqual(["round.start", "turn.end"]);
       expect(events[0]).toMatchObject({ roundIndex: 1 });

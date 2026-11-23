@@ -69,10 +69,34 @@ describe("round.start no loop single-agent (#508, #600)", () => {
     });
   });
 
-  test("observador que lança não muda o desfecho do turno", async () => {
+  test("tool.end.resultKey é o toolCallId da mensagem de histórico", async () => {
+    const s = singleSetup([resp({ toolCalls: [writeCall("c1")] }), resp({ content: "pronto" })]);
+    const events: TurnEvent[] = [];
+    s.opts.onTurnEvent = (event) => { events.push(event); };
+    const result = await runSession(s.opts, "tarefa");
+    const toolMessage = result.messages.find((message) => message.role === "tool");
+    const toolCallId = toolMessage?.toolCallId;
+    if (toolCallId === undefined) throw new Error("expected tool message");
+    const end = events.find((event) => event.kind === "tool.end");
+    if (end?.kind !== "tool.end") throw new Error("expected tool.end");
+    expect(end.callId).toBe("c1");
+    expect(end.resultKey).toBe(toolCallId);
+    expect(toolCallId).toBe("c1");
+  });
+
+  test("observador async que lança não muda o desfecho do turno", async () => {
     const s = singleSetup([resp({ content: "ok" })]);
-    s.opts.onTurnEvent = () => { throw new Error("consumer bug"); };
-    expect((await runSession(s.opts, "tarefa")).final).toBe("ok");
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      s.opts.onTurnEvent = async () => { throw new Error("consumer bug"); };
+      expect((await runSession(s.opts, "tarefa")).final).toBe("ok");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   test("turno cancelado termina com turn.end cancelled", async () => {

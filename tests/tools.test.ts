@@ -70,7 +70,17 @@ test("emite tool.start antes da execução e tool.end com a duração (#600)", a
     execute: async () => { during = [...events]; return { output: "ok" }; },
   };
   const ex = new ToolExecutor({ approveTool: () => true, tools: [probe], allow: ["probe"], audit: new Auditor(join(cwd, ".astro", "audit.jsonl")) });
-  await ex.run({ ...ctx(cwd), onToolEvent: (event) => events.push(event) }, { id: "c1", name: "probe", arguments: "{}" });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await ex.run({ ...ctx(cwd), onToolEvent: async (event) => { events.push(event); throw new Error("consumer bug"); } },
+      { id: "c1", name: "probe", arguments: "{}" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
   expect(during.map((event) => event.phase)).toEqual(["start"]);
   expect(events.map((event) => event.phase)).toEqual(["start", "end"]);
   expect(events[0]).toMatchObject({ callId: "c1", name: "probe" });
