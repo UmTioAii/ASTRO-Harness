@@ -53,11 +53,11 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     bridge.subscribe((question) => seen.push(question?.text));
     const decision = bridge.approveTool(req);
     expect(seen.at(-1)).toContain("write_file");
-    expect(seen.at(-1)).toMatch(/\[s\].*\[n\].*\[S\]/);
+    expect(seen.at(-1)).toMatch(/\[s\].*\[a\].*\[r\]/);
     expect(seen.at(-1)).not.toContain("[o]");
     expect(bridge.current()?.text).toBe(seen.at(-1));
     bridge.answer("S");
-    expect(await decision).toBe("session");
+    expect(await decision).toBe("always");
     expect(bridge.current()).toBeUndefined();
 
     const odd = createApprovalBridge();
@@ -68,7 +68,7 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     const yes = createApprovalBridge();
     const dYes = yes.approveTool(req);
     yes.answer("s");
-    expect(await dYes).toBe(true);
+    expect(await dYes).toBe("once");
 
     const no = createApprovalBridge();
     const dNo = no.approveTool(req);
@@ -90,7 +90,7 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     expect(bridge.current()?.text).toContain("edit");
     expect(bridge.current()?.diff).toEqual(diff);
     bridge.answer("s");
-    expect(await decision).toBe(true);
+    expect(await decision).toBe("once");
     expect(bridge.current()).toBeUndefined();
   });
 
@@ -104,7 +104,7 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     expect(bridge.current()?.text).toBe(toolPrompt(req));
     expect(bridge.current()?.text).toContain("npm test");
     bridge.answer("s");
-    expect(await decision).toBe(true);
+    expect(await decision).toBe("once");
 
     const pathReq = {
       name: "move_path", action: "delete" as const, mode: "ask" as const,

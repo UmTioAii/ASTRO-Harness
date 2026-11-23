@@ -511,7 +511,7 @@ test("pergunta de aprovação de edit abre o overlay de diff com tab e a respost
     });
     instance.stdin.write("s");
     instance.stdin.write("\r");
-    expect(await decision).toBe(true);
+    expect(await decision).toBe("once");
     await waitFor(() => instance.lastFrame()?.includes("tab ver diff") === false);
   } finally {
     instance.unmount();

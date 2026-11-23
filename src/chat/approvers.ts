@@ -33,32 +33,38 @@ export function budgetPrompt(status: BudgetStatus): string {
 
 /**
  * Prompt de aprovação de tool/file (PERM-04, #265): três opções na mesma linha.
- * `s` vale para esta chamada; `S` grava um grant em memória até o fim da sessão.
- * O argumento material (`request.detail`, #536) entra entre parênteses: sem ele
- * o prompt é exatamente o antigo. O grant de `S` é por ação+tool, então a opção
- * nomeia a tool - nunca o comando mostrado. Quando a ação exige aprovação por
- * chamada (#474, shell no host), `S` não é oferecido: o grant seria ignorado.
+ * `s` vale para esta chamada; `a` (ou `S`, por compatibilidade) grava um grant
+ * na sessão — no shell do host vira uma regra de prefixo salva no projeto
+ * (#599). O argumento material (`request.detail`, #536) entra entre parênteses:
+ * sem ele o prompt é exatamente o antigo. Quando a ação exige aprovação por
+ * chamada (#474, shell no host), `always` não é oferecido: o host pergunta a
+ * cada execução, então a opção seria ignorada.
  */
 export function toolPrompt(request: ToolPermissionRequest): string {
   const detail = request.detail === undefined
     ? ""
     : `, ${request.detail.kind === "command" ? "comando" : "caminho"} \`${request.detail.value}\``;
   const choices = request.perCall === true
-    ? "[s] aprovar, [n] negar (aprovação por comando: o host pergunta a cada execução)"
-    : `[s] aprovar, [n] negar, [S] aprovar toda chamada "${request.name}" nesta sessão`;
+    ? "[s] once, [a] always (saves a prefix rule), [r] reject, [n] deny"
+    : "[s] once, [a] always, [r] reject, [n] deny";
   return `tool "${request.name}" (ação ${request.action}, modo ${request.mode}${detail}). ${choices}: `;
 }
 
 /**
- * Mapeia a resposta do prompt de tool (PERM-04, #265). `S` maiúsculo é sessão;
- * `s` minúsculo é aprovação única (true no gate). O vocabulário é exatamente o
- * do prompt: qualquer outra resposta nega (fail-closed, #546). Em `perCall`,
- * onde o prompt não oferece `S`, `S` vale só para a chamada (não vira grant).
+ * Mapeia a resposta do prompt de tool (PERM-04, #265, #599). `s`/`once` aprova
+ * uma vez; `a`/`always` aprova sempre (regra salva no shell, grant na sessão);
+ * `S` é o sinônimo legado, mas em `perCall` fica limitado à chamada — só
+ * `always` pode gravar a camada de projeto; `r`/`reject` nega e cancela as
+ * aprovações pendentes da sessão. Qualquer outra resposta nega (fail-closed,
+ * #546).
  */
 export function toolChoice(answer: string | null, perCall = false): PermissionApproval {
   const raw = (answer ?? "").trim();
-  if (raw === "S") return perCall ? true : "session";
-  if (raw === "s") return true;
+  const word = raw.toLowerCase();
+  if (word === "a" || word === "always") return "always";
+  if (raw === "S") return perCall ? true : "always";
+  if (raw === "s" || word === "once") return "once";
+  if (word === "r" || word === "reject") return "reject";
   return false;
 }
 

@@ -9,7 +9,7 @@ import {
   isRunCommandSandboxEnabled,
   resolveRunCommandMode,
 } from "../src/tools/run-command";
-import { installDockerSpawnMock, type DockerMock } from "./helpers/docker-mock";
+import { installDockerSpawnMock, installNoDockerSpawnMock, type DockerMock } from "./helpers/docker-mock";
 
 // Slice 4b: os testes rodam só via docker (mock) — o host nunca executa o comando.
 let mock: DockerMock;
@@ -220,4 +220,68 @@ test("abortar mata o processo filho, não só o shell", async () => {
   expect(result.output).toContain("cancelado");
   await new Promise((resolve) => setTimeout(resolve, 400));
   expect(() => process.kill(childPid!, 0)).toThrow();
+});
+describe("!cmd always approval reloads the project layer (#599)", () => {
+  test("one runner: the second identical command does not prompt", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false, "ask");
+    writeFileSync(configPath, JSON.stringify({
+      ...JSON.parse(readFileSync(configPath, "utf8")),
+      shell: { rules: [{ match: "*", effect: "ask" }] },
+    }));
+    let prompts = 0;
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: () => { prompts++; return "always"; },
+    });
+    const first = await shell.run("echo ok");
+    expect(first.isError).toBe(false);
+    expect(prompts).toBe(1);
+    const saved = JSON.parse(readFileSync(configPath, "utf8")) as { shell?: { approvals?: unknown } };
+    expect(saved.shell?.approvals).toEqual([{ match: "echo *", effect: "allow" }]);
+    const second = await shell.run("echo ok");
+    expect(second.isError).toBe(false);
+    expect(prompts).toBe(1); // the runner sees the saved approval; no second prompt
+  });
+});
+
+describe("!cmd reload falls back to the last good config (#599)", () => {
+  test("a narrowed config survives a corrupt read: the denied command never runs", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const write = (shell: unknown): void => writeFileSync(configPath, JSON.stringify({
+      ...JSON.parse(readFileSync(configPath, "utf8")),
+      shell,
+    }));
+    write({ rules: [{ match: "*", effect: "allow" }] });
+    const shell = createShellRunner({ configPath, cwd, env: process.env });
+    write({ rules: [{ match: "*", effect: "ask" }, { match: "echo *", effect: "deny" }] });
+    const narrowed = await shell.run("echo ok");
+    expect(narrowed.isError).toBe(true);
+    expect(narrowed.output).toContain("shell_rule_denied");
+    writeFileSync(configPath, "{ broken");
+    const corrupted = await shell.run("echo ok");
+    expect(corrupted.isError).toBe(true);
+    expect(corrupted.output).toContain("shell_rule_denied");
+  });
+
+  test("switching shell.mode to off mid-session refuses the next command", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const write = (shell: unknown): void => writeFileSync(configPath, JSON.stringify({
+      ...JSON.parse(readFileSync(configPath, "utf8")),
+      shell,
+    }));
+    write({ rules: [{ match: "*", effect: "allow" }] });
+    const shell = createShellRunner({ configPath, cwd, env: process.env });
+    const before = await shell.run("echo ok");
+    expect(before.isError).toBe(false);
+    write({ mode: "off", rules: [{ match: "*", effect: "allow" }] });
+    const after = await shell.run("echo ok");
+    expect(after.isError).toBe(true);
+    expect(after.output).toContain("sandbox_required_for_shell");
+  });
 });

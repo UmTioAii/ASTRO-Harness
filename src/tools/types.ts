@@ -155,8 +155,13 @@ export interface ToolPermissionHint {
   /** Sanitized message for a deny; never the raw command. */
   message?: string;
   /** Policy origin for the audit record (#599 review). */
-  origin?: "rule" | "external_directory" | "unparsable";
+  origin?: "rule" | "external_directory" | "unparsable" | "approval";
 }
+
+/** Result of persisting an `always` approval (#599); failure carries a stable reason. */
+export type ApprovalSave =
+  | { ok: true; pattern: string }
+  | { ok: false; reason: string };
 
 /** Contrato de uma tool executável pelo agente. */
 export interface Tool {
@@ -171,6 +176,12 @@ export interface Tool {
    * prompt; devolver `undefined` volta ao mapeamento por nome.
    */
   approvalDetail?(input: unknown, ctx?: ToolContext): ApprovalDetail | undefined;
+  /**
+   * Persists an `always` approval for this call (#599) and returns the stored
+   * prefix pattern. Only tools whose policy owns a saved list implement it.
+   * `session` never reaches this hook: only an explicit `always` may persist.
+   */
+  rememberApproval?(input: unknown, ctx: ToolContext): ApprovalSave | undefined;
 }
 
 /** Erro de validação ou de política de uma tool. */

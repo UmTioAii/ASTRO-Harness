@@ -1193,6 +1193,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     mode: runCommandMode,
     ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
     ...(config.shell?.rules === undefined ? {} : { rules: config.shell.rules }),
+    ...(config.shell?.approvals === undefined ? {} : { approvals: config.shell.approvals }),
+    configPath: opts.configPath,
     ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
   });
   // `bypass` é perigoso: avisa uma vez e deixa a ativação no audit sanitizado (I-04, #268).

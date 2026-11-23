@@ -69,6 +69,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
     mode: runCommandMode,
     ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
     ...(config.shell?.rules === undefined ? {} : { rules: config.shell.rules }),
+    ...(config.shell?.approvals === undefined ? {} : { approvals: config.shell.approvals }),
+    configPath: opts.configPath,
     ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
   });
   const auditPath = resolve(opts.cwd, config.paths.audit);
@@ -89,6 +91,9 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
   secretEnvNames.push(...webSearchSecretEnvNames(config));
   const modelEntry = config.models.find((model) => `${model.provider}/${model.id}` === config.agent.model);
   let loadAudited = false;
+  // Last successfully loaded view. A transient read error (or a mid-save write)
+  // must not resurrect an allow that the file already removed (#599).
+  let lastGood = config;
   return {
     enabled: true,
     run: async (command, signal) => {
@@ -107,12 +112,28 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
         config.permissions.mode,
       );
+      // Reload the shell layer per run: `always` writes `shell.approvals` to the
+      // project file after the runner was created, and a narrowed config (deny,
+      // `mode: "off"`) must apply to the next command. A failed read keeps the
+      // last good view, never the creation snapshot.
+      try {
+        lastGood = loadEffectiveConfig(opts.configPath, {
+          allowMissing: opts.allowMissingConfig === true,
+          ...(opts.env === undefined ? {} : { env: opts.env }),
+        }).config;
+      } catch {
+        // lastGood stays the previous successful load.
+      }
+      const shellConfig = lastGood.shell;
+      const effectiveRunCommandMode = resolveRunCommandMode(lastGood.tools?.run_command?.sandbox);
       // #474: o modo do executor decide a confirmação extra do host em `bypass`.
       configureRunCommand({
-        mode: runCommandMode,
-        ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
-        ...(config.shell?.rules === undefined ? {} : { rules: config.shell.rules }),
-        ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
+        mode: effectiveRunCommandMode,
+        ...(shellConfig?.default === undefined ? {} : { shellDefault: shellConfig.default }),
+        ...(shellConfig?.rules === undefined ? {} : { rules: shellConfig.rules }),
+        ...(shellConfig?.approvals === undefined ? {} : { approvals: shellConfig.approvals }),
+        configPath: opts.configPath,
+        ...(shellConfig?.externalDirectory === undefined ? {} : { externalDirectory: shellConfig.externalDirectory }),
       });
       const executor = new ToolExecutor({
         tools: [runCommandTool],

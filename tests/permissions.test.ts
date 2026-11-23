@@ -997,6 +997,6 @@ describe("argumento material no pedido de aprovação (#536)", () => {
     expect(prompts[0]).toContain("rm -rf build");
     expect(prompts[0]).toContain("[REDACTED]");
     expect(prompts[0]).not.toContain(SYNTH);
-    expect(prompts[0]).toMatch(/\[s\].*\[n\].*\[S\]/);
+    expect(prompts[0]).toMatch(/\[s\].*\[a\].*\[r\]/);
   });
 });

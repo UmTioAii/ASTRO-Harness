@@ -116,15 +116,21 @@ export function requiresPerCallApproval(action: ActionClass): boolean {
   return PER_CALL_ACTIONS.has(action);
 }
 
-/** Escopo de uma aprovação humana (PERM-05, #266). */
-export type PermissionGrant = "once" | "session";
+/** Escopo de uma aprovação humana (PERM-05, #266): one call or every matching call. */
+export type PermissionGrant = "once" | "always";
 
-/** Resposta do aprovador: `true`/`"once"` valem para a chamada; `"session"` até o fim. */
-export type PermissionApproval = boolean | PermissionGrant;
+/**
+ * Approver answer: `true`/`"once"` cover the call; `"always"` persists a prefix
+ * rule for a shell command or grants the session for other tools; `"reject"`
+ * denies and cancels the pending approvals of the session (#599). `"session"`
+ * is the legacy spelling of `"always"`.
+ */
+export type PermissionApproval = boolean | PermissionGrant | "reject" | "session";
 
 /**
  * Grants em memória por sessão (PERM-05): nada vai para o disco. `once` não é
- * registrado; `session` fica até `clear()` (fim da sessão/run).
+ * registrado; `always` (antes `session`) fica até `clear()` (fim da
+ * sessão/run) ou até um `reject`.
  */
 export class PermissionGrants {
   readonly #session = new Set<string>();

@@ -8,8 +8,9 @@ import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
 import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
 import { realpathPreservingDots, isWithin } from "./paths";
-import { evaluateShellPolicy, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
-import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolPermissionHint, type ToolResult } from "./types";
+import { evaluateShellPolicy, approvalPattern, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
+import { persistShellApproval } from "./shell-approvals";
+import { ToolError, type ApprovalSave, type AuditLike, type Tool, type ToolContext, type ToolPermissionHint, type ToolResult } from "./types";
 
 /** Teto da saída devolvida ao modelo (run_command e run_tests). */
 export const MAX_OUTPUT = 10_000;
@@ -107,6 +108,10 @@ let commandMode: RunCommandMode = "disabled";
 let preferredShell: string | undefined;
 /** Ordered shell rules and the external-directory decision (#599). */
 let shellRules: readonly ShellRule[] = [];
+/** Saved `always` approvals, at runtime and in the project layer (#599). */
+let shellApprovals: readonly ShellRule[] = [];
+/** Project layer written by `always`; absent = the approval covers one call. */
+let projectConfigPath: string | undefined;
 let shellExternalDirectory: ShellExternalDirectory | undefined;
 let dockerProbe: Promise<boolean> | undefined;
 
@@ -166,12 +171,18 @@ export function configureRunCommand(opts: {
   shellDefault?: string;
   /** Regras de prefixo ordenadas (#599); ausente = só a matriz de permissão. */
   rules?: readonly ShellRule[];
+  /** Aprovações salvas por `always` (#599); nunca vencem um `deny`. */
+  approvals?: readonly ShellRule[];
+  /** Camada de projeto gravada por `always` (#599); ausente = só esta chamada. */
+  configPath?: string;
   /** Decisão quando o comando sai do projeto (#599); ausente = `ask`. */
   externalDirectory?: ShellExternalDirectory;
 }): void {
   commandMode = opts.mode ?? (opts.sandbox === false ? "disabled" : opts.sandbox === true ? "docker" : "host");
   preferredShell = opts.shellDefault;
   shellRules = opts.rules ?? [];
+  shellApprovals = opts.approvals ?? [];
+  projectConfigPath = opts.configPath;
   shellExternalDirectory = opts.externalDirectory;
   // `sandbox: true` mantém o caminho Docker byte a byte; `isRunCommandSandboxEnabled`
   // segue significando "Docker", como antes.
@@ -694,7 +705,11 @@ function commandOf(input: unknown): string | undefined {
   return typeof command === "string" && command.trim().length > 0 ? command : undefined;
 }
 const shellPolicyFor = (command: string, cwd: string): ShellPolicyResult =>
-  evaluateShellPolicy(command, cwd, { rules: shellRules, externalDirectory: shellExternalDirectory });
+  evaluateShellPolicy(command, cwd, {
+    rules: shellRules,
+    approvals: shellApprovals,
+    externalDirectory: shellExternalDirectory,
+  });
 
 /** Policy before the permission matrix (#599); `default` keeps the matrix in charge. */
 function runCommandPolicyHint(input: unknown, ctx: ToolContext): ToolPermissionHint | undefined {
@@ -750,6 +765,40 @@ export const runCommandTool: Tool = {
 
   approvalDetail: runCommandDetail,
   permissionHint: runCommandPolicyHint,
+
+  /** `always` (#599): a prefix rule in the project layer; deny rules still win. */
+  rememberApproval(input: unknown, ctx: ToolContext): ApprovalSave {
+    const command = commandOf(input);
+    if (command === undefined) return { ok: false, reason: "invalid_input (no command to derive a prefix from)" };
+    const policy = shellPolicyFor(command, ctx.cwd);
+    // Save the subcommand that actually triggered the ask, and only when it is
+    // the single uncovered part: a prefix for a part the user never saw would
+    // grant the wrong command.
+    if (policy.origin === "unparsable" || policy.origin === "external_directory") {
+      return { ok: false, reason: `${policy.origin} (always cannot save this decision)` };
+    }
+    const parts = policy.uncovered ?? [];
+    if (parts.length !== 1) {
+      return {
+        ok: false,
+        reason: parts.length === 0
+          ? "nothing_to_save (no subcommand needs a prefix)"
+          : "multiple_parts (always saves one subcommand; approve once and run it again)",
+      };
+    }
+    const pattern = approvalPattern(parts[0] as string);
+    if (pattern === undefined) {
+      return {
+        ok: false,
+        reason: "unsafe_pattern (the command starts with a wildcard or cannot be parsed, so it cannot be saved as a prefix)",
+      };
+    }
+    if (projectConfigPath === undefined) return { ok: false, reason: "no_config (no project config file to write)" };
+    const saved = persistShellApproval(resolve(ctx.cwd, projectConfigPath), pattern);
+    if (!saved.ok) return saved;
+    shellApprovals = [...shellApprovals, { match: pattern, effect: "allow" }];
+    return saved;
+  },
 
   async execute(input, ctx): Promise<ToolResult> {
     let command: string;

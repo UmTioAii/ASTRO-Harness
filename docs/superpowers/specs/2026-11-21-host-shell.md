@@ -26,6 +26,7 @@ Docker keeps that requirement (§2).
     { "match": "git diff *",  "effect": "allow" },
     { "match": "*",           "effect": "ask" }
   ],
+  "approvals": [],                      // written by `always`; never beats a deny
   "externalDirectory": "ask"
 }
 ```
@@ -74,7 +75,7 @@ runtime dependency (ADR-0001).
 | Choice | Effect |
 |---|---|
 | `once` | approves this invocation only |
-| `always` | writes the prefix rule in the **project** layer; a configured `deny` is never overridden by a saved approval |
+| `always` | writes the prefix rule in the **project** layer (`shell.approvals`); a configured `deny` is never overridden by a saved approval |
 | `reject` | cancels every pending approval in the session |
 
 `external_directory` triggers its own decision when the working directory or inferred target

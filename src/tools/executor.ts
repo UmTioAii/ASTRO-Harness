@@ -343,7 +343,8 @@ export class ToolExecutor {
       return failure(`argumentos ilegíveis para a tool "${call.name}": JSON inválido`, "invalid");
     }
 
-    const blocked = await this.permissionGate(ctx, tool, call, input);
+    const gate: { notice?: string } = {};
+    const blocked = await this.permissionGate(ctx, tool, call, input, gate);
     if (blocked !== undefined) return blocked;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -364,7 +365,9 @@ export class ToolExecutor {
         timer = setTimeout(() => resolve(TIMEOUT), tool.manifest.timeoutMs);
       });
       const outcome = await Promise.race([
-        tool.execute(input, { ...ctx, signal: controller.signal, executor: this, permission: this.agentPermission }),
+        tool.execute(input, {
+          ...ctx, signal: controller.signal, executor: this, permission: this.agentPermission,
+        }),
         timeout,
         aborted,
       ]);
@@ -379,7 +382,9 @@ export class ToolExecutor {
       if (outcome === ABORTED) {
         return failure(`cancelado: a tool "${call.name}" foi interrompida`, "failed");
       }
-      return this.limitOutput(ctx, call, outcome);
+      const limited = this.limitOutput(ctx, call, outcome);
+      // A degraded `always` must be visible to the user, not silently ignored.
+      return gate.notice === undefined ? limited : { ...limited, output: `${limited.output}\n${gate.notice}` };
     } catch (error) {
       // Pending do gate ou pausa por não-progresso sobe e para o run em ponto seguro (I-19), não vira tool error.
       if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
@@ -451,6 +456,7 @@ export class ToolExecutor {
     tool: Tool,
     call: ToolCall,
     input: unknown,
+    gate: { notice?: string },
   ): Promise<ToolResult | undefined> {
     // Hard-block de path (ADR-0027, #391 slice 1): precedência sobre a MATRIX —
     // `hard-block` é deny em todos os modos, inclusive `bypass`.
@@ -471,11 +477,14 @@ export class ToolExecutor {
           ? "allow"
           : permissionDecision(this.mode, action);
     let effective: PermissionDecision = decision;
+    let rejectReason: string | undefined;
+    let grant: "once" | "always" | undefined;
     const grantKey = PermissionGrants.key(action, call.name);
     if (decision === "ask" && this.permissionGrants.has(grantKey) && !requiresPerCallApproval(action)) {
       // Grant de sessão ainda vale (PERM-05, #266): allow sem perguntar de novo.
       // Exceção #474: shell no host exige prompt por comando, sem grant de sessão.
       effective = "allow";
+      grant = "always";
     } else if (decision === "ask") {
       try {
         const annex = editDiffAnnex(call, input);
@@ -525,12 +534,44 @@ export class ToolExecutor {
         if (outcome === ABORTED) {
           return failure(`cancelado: a tool "${call.name}" foi interrompida`, "failed");
         }
-        // Fail-closed: sem aprovador, `ask` vira deny (#262).
-        if (outcome === "session") {
-          this.permissionGrants.grant(grantKey);
+        // Fail-closed: sem aprovador, `ask` vira deny (#262). `reject` also
+        // cancels every pending approval of the session (#599).
+        if (outcome === "session" || outcome === "always") {
+          // Shell on the host is per call (#474). Only an explicit `always` may
+          // persist a prefix rule; the legacy `session` spelling stays call-scoped.
+          if (requiresPerCallApproval(action)) {
+            if (outcome === "always") {
+              const saved = tool.rememberApproval?.(input, ctx);
+              if (saved?.ok === true) {
+                grant = "always";
+                this.auditRef.append({
+                  run: ctx.run, agent: ctx.agent, tipo: "shell.approval.saved",
+                  payload: { pattern: redactSecrets(saved.pattern), origin: "approval" },
+                });
+              } else {
+                grant = "once";
+                const reason = saved?.ok === false ? saved.reason : "unsupported (the tool cannot save approvals)";
+                gate.notice = `note: "always" was not saved (${reason}); this command was approved once`;
+                this.auditRef.append({
+                  run: ctx.run, agent: ctx.agent, tipo: "shell.approval.degraded",
+                  payload: { name: call.name, action, reason },
+                });
+              }
+            } else {
+              grant = "once";
+            }
+          } else {
+            this.permissionGrants.grant(grantKey);
+            grant = "always";
+          }
           effective = "allow";
+        } else if (outcome === "reject") {
+          this.permissionGrants.clear();
+          effective = "deny";
+          rejectReason = "rejected";
         } else {
           effective = outcome === undefined || outcome === false ? "deny" : "allow"; // true | "once"
+          if (effective === "allow") grant = "once";
         }
       } catch (error) {
         // Sem TTY o aprovador não pode perguntar: pending, auditado e run para (I-08/I-19).
@@ -554,8 +595,11 @@ export class ToolExecutor {
         tipo: "permission.decision",
         payload: {
           name: call.name, action, mode: this.mode, decision: effective,
+          ...(grant === undefined ? {} : { grant }),
           ...(hint?.origin === undefined ? {} : { origin: hint.origin }),
-          ...(hint?.code === undefined ? {} : { reason: hint.code }),
+          ...(rejectReason !== undefined
+            ? { reason: rejectReason }
+            : hint?.code === undefined ? {} : { reason: hint.code }),
         },
       });
     }
