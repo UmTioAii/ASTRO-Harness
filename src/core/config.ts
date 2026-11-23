@@ -974,6 +974,11 @@ function expectCheckpointName(name: string, field: string): string {
   return name;
 }
 
+function validateStepsCeiling(value: number, field: string): number {
+  if (value > MAX_RUN_LIMIT) fail(`config invalid: "${field}" must be <= ${MAX_RUN_LIMIT} (physical round cap)`);
+  return value;
+}
+
 function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>): AgentConfig {
   const raw = expectObject(value, "agent");
   const systemPrompt =
@@ -990,7 +995,7 @@ function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>
     return {
       model,
       profile,
-      maxSteps: raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"),
+      maxSteps: validateStepsCeiling(raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"), "agent.maxSteps"),
       tools: raw.tools === undefined ? [...DEFAULT_AGENT_TOOLS] : expectStringArray(raw.tools, "agent.tools"),
       entryAgent,
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
@@ -999,7 +1004,7 @@ function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>
 
   return {
     model: expectString(raw.model, "agent.model"),
-    maxSteps: raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"),
+    maxSteps: validateStepsCeiling(raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"), "agent.maxSteps"),
     tools: raw.tools === undefined ? [...DEFAULT_AGENT_TOOLS] : expectStringArray(raw.tools, "agent.tools"),
     entryAgent,
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
@@ -1079,7 +1084,7 @@ function validateNamedAgent(
   const raw = expectObject(value, field);
 
   const systemPrompt = raw.systemPrompt === undefined ? undefined : expectString(raw.systemPrompt, `${field}.systemPrompt`);
-  const maxSteps = raw.maxSteps === undefined ? baseAgent.maxSteps : expectPositiveInteger(raw.maxSteps, `${field}.maxSteps`);
+  const maxSteps = validateStepsCeiling(raw.maxSteps === undefined ? baseAgent.maxSteps : expectPositiveInteger(raw.maxSteps, `${field}.maxSteps`), `${field}.maxSteps`);
   const permission = raw.permission === undefined ? undefined : expectAgentPermission(raw.permission, `${field}.permission`);
   let tools = baseAgent.tools;
   if (raw.tools !== undefined) {
@@ -1314,9 +1319,14 @@ function validateRunTests(value: unknown): RunTestsConfig {
   return { command, timeoutMs };
 }
 
+/** Hard physical bound for a declared or unlimited round limit (I-17). */
+export const MAX_RUN_LIMIT = 100_000;
+
 function validateRunLimit(value: unknown, field: string, choices: readonly number[]): RunLimit {
-  if (value === "unlimited" || (typeof value === "number" && choices.includes(value))) return value;
-  return fail(`config inválida: "${field}" deve ser ${choices.join(" / ")} / unlimited`);
+  // The /config menu offers the choices; a hand-written config may use any positive
+  // integer (the acceptance of #594 exercises maxTurns: 1), bounded by the physical cap.
+  if (value === "unlimited" || (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_RUN_LIMIT)) return value;
+  return fail(`config inválida: "${field}" deve ser um inteiro entre 1 e ${MAX_RUN_LIMIT} / ${choices.join(" / ")} / unlimited`);
 }
 interface DerivedRunLimits { maxTurns?: RunLimit; maxRoundsPerTurn?: RunLimit; roundAlias?: boolean; legacyGuards: boolean; }
 /** Non-serializable metadata makes validation idempotent without weakening raw input checks. */
@@ -1369,7 +1379,15 @@ function validateRun(value: unknown, legacyRounds: number): RunConfig {
   const omitted = value === undefined, raw = omitted ? {} : expectObject(value, "run");
   const turnsDerived = raw.maxTurns === undefined || isDerivedRunLimit(raw, "maxTurns"), roundsDerived = raw.maxRoundsPerTurn === undefined || isDerivedRunLimit(raw, "maxRoundsPerTurn");
   const previous = derivedRunLimits(raw), roundAlias = roundsDerived && previous?.roundAlias === true, maxTurns = raw.maxTurns === undefined ? 500 : turnsDerived ? raw.maxTurns as RunLimit : validateRunLimit(raw.maxTurns, "run.maxTurns", [250, 500, 1000]);
-  const maxRoundsPerTurn = raw.maxRoundsPerTurn === undefined ? legacyRounds : roundsDerived ? raw.maxRoundsPerTurn as RunLimit : validateRunLimit(raw.maxRoundsPerTurn, "run.maxRoundsPerTurn", [100, 200, 500]);
+  const maxRoundsPerTurn = raw.maxRoundsPerTurn === undefined
+    ? (legacyRounds > MAX_RUN_LIMIT
+      ? fail(`config invalid: "agent.maxSteps" must be <= ${MAX_RUN_LIMIT} (physical round cap)`) as never
+      : legacyRounds)
+    : roundsDerived
+      ? (typeof raw.maxRoundsPerTurn === "number" && raw.maxRoundsPerTurn > MAX_RUN_LIMIT
+        ? fail(`config invalid: "agent.maxSteps" must be <= ${MAX_RUN_LIMIT} (physical round cap)`) as never
+        : raw.maxRoundsPerTurn as RunLimit)
+      : validateRunLimit(raw.maxRoundsPerTurn, "run.maxRoundsPerTurn", [100, 200, 500]);
   const declaresGuard = ["checkpointAt", "noProgressSegments", "judge", "tests"].some((key) => Object.hasOwn(raw, key)), legacyGuards = omitted ? false : previous === undefined || previous.legacyGuards || declaresGuard;
   const metadata: DerivedRunLimits = { ...(turnsDerived ? { maxTurns } : {}), ...(roundsDerived ? { maxRoundsPerTurn } : {}), ...(roundAlias ? { roundAlias: true } : {}), legacyGuards };
   if (!legacyGuards) return withDerivedRunLimits({ maxTurns, maxRoundsPerTurn }, metadata);

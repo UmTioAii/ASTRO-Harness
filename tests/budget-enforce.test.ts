@@ -231,7 +231,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
       expect(ledger.readStates().find((s) => s.state === "interrupted")?.reason).toBe("budget_exceeded");
       expect(ledger.readAllEntries().some((e) => e.kind === "budget" && e.event === "non_interactive")).toBe(true);
       await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" }, resume: ledger.readStates()[0]!.run,
-        onBudgetExceeded: () => "continue_same" })).rejects.toThrow(/excedeu 4 passos/);
+        onBudgetExceeded: () => "continue_same" })).rejects.toThrow(/reached 4 rounds/);
       expect(calls()).toBeGreaterThan(1);
     } finally {
       stop();
@@ -309,7 +309,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
         if (raised) return "stop";
         raised = true;
         return { choice: "raise", limitUsd: 15 };
-      } })).rejects.toThrow(/excedeu 4 passos/);
+      } })).rejects.toThrow(/reached 4 rounds/);
       expect(calls()).toBe(4);
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       expect(ledger.readAllEntries().some((e) => e.kind === "budget" && e.event === "raised"
@@ -363,7 +363,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
         if (raised) return "continue_same";
         raised = true;
         return { choice: "raise", limitUsd: 5, hardCeilingUsd: 8, confirmedCeiling: true };
-      } })).rejects.toThrow(/excedeu 2 passos/);
+      } })).rejects.toThrow(/reached 2 rounds/);
       const entries = new Ledger(join(cwd, ".astro", "ledger.jsonl")).readAllEntries();
       expect(entries.some((e) => e.kind === "budget" && e.event === "ceiling_hit")).toBe(false);
       const raisedEntry = entries.find((e) => e.kind === "budget" && e.event === "raised") as

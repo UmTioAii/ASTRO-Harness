@@ -6,7 +6,7 @@ Schema 1 overloaded turns and rounds, while Simple/Control left the default prof
 | Topic | Contract |
 |---|---|
 | Units | A turn is one user request through its final response or stop; a round is one provider call and its subsequent tool processing, per turn and agent visit. |
-| Limits | `run.maxTurns` accepts `250`, `500`, `1000` or `unlimited`; `run.maxRoundsPerTurn` accepts `100`, `200`, `500` or `unlimited`. Both default to `500` when no legacy round alias exists. |
+| Limits | `/config` offers `250`, `500`, `1000` or `unlimited` for `run.maxTurns` and `100`, `200`, `500` or `unlimited` for `run.maxRoundsPerTurn`; a hand-written config may declare any positive integer up to the physical cap `MAX_RUN_LIMIT` (100000), because the limits must be testable at small values. Both default to `500` when no legacy round alias exists. |
 | Schema | The supported document is `2.0.0`. Unversioned/`1.x` input declaring `run.maxTurns` is refused; `/config run.maxTurns` explicitly opts into schema 2 without downgrading a newer version. |
 | Aliases | Readable `agent.maxSteps`/`agents.<name>.maxSteps` retain their round meaning; explicit `run.maxRoundsPerTurn` wins. Spawn/task `maxSteps` is rejected with migration guidance. |
 | Precedence | Derived defaults never override declared limits or aliases. Project aliases may narrow declared global ceilings; no omitted global limit creates an implicit `500` ceiling. |

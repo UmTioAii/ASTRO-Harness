@@ -11,7 +11,7 @@ import { readFileTool } from "../src/tools/read-file";
 import { writeFileTool } from "../src/tools/write-file";
 import { runCommandTool } from "../src/tools/run-command";
 import type { Tool } from "../src/tools/types";
-import { runMultiAgentSession, MaxStepsError, type MultiAgentSessionOptions } from "../src/core/session";
+import { runMultiAgentSession, MaxRoundsError, type MultiAgentSessionOptions } from "../src/core/session";
 import { handoffTool } from "../src/tools/handoff";
 import type { AgentEntry } from "../src/core/registry";
 
@@ -74,7 +74,7 @@ describe("runMultiAgentSession supervisor (F3-4)", () => {
     const err = await runMultiAgentSession(opts, "loop")
       .then(() => null)
       .catch((e) => e as Error);
-    expect(err).toBeInstanceOf(MaxStepsError);
+    expect(err).toBeInstanceOf(MaxRoundsError);
     expect(err!.message).toContain("coder");
     expect(callCount).toBe(2); // parou no limite do agent, não no global
   });
@@ -115,7 +115,7 @@ describe("runMultiAgentSession supervisor (F3-4)", () => {
     const err = await runMultiAgentSession(opts, "ping-pong")
       .then(() => null)
       .catch((e) => e as Error);
-    expect(err).toBeInstanceOf(MaxStepsError);
+    expect(err).toBeInstanceOf(MaxRoundsError);
     expect(step).toBe(5); // parou no global, não no per-agent
   });
 

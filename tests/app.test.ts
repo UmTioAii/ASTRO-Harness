@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { maxStepsMessage, runTask } from "../src/core/app";
+import { maxRoundsMessage, runTask } from "../src/core/app";
 import { testEnv } from "./setup";
 
 async function withMockProvider(handler: (call: number) => unknown, fn: (baseUrl: string) => Promise<void>) {
@@ -132,34 +132,64 @@ async function limitMessage(over: Record<string, unknown>): Promise<string> {
   }
 }
 
-test("limite de passos atingido nomeia o limite, o valor e a setting (#473)", async () => {
+test("round limit names the limit, the value and the setting (#473)", async () => {
   const message = await limitMessage({});
-  expect(message).toMatch(/excedeu 1 passos/);
-  expect(message).toContain('limite "agent.maxSteps" = 1');
-  expect(message).toContain('ajuste "agent.maxSteps"');
+  expect(message).toMatch(/reached 1 rounds/);
+  expect(message).toContain('limit "run.maxRoundsPerTurn" = 1');
+  expect(message).toContain('raise it in /config');
 });
 
-test("P4: o limite é sempre agent.maxSteps, nunca um campo removido", () => {
+test("P0: a mensagem nomeia run.maxRoundsPerTurn, o teto do turno", () => {
   const config = {
     preset: "control" as const,
     agent: { model: "p/m", maxSteps: 1000, tools: [] as string[] },
   };
-  const message = maxStepsMessage(config, { maxSteps: 1000 });
-  expect(message).toContain('limite "agent.maxSteps" = 1000');
-  expect(message).toContain('ajuste "agent.maxSteps"');
+  const message = maxRoundsMessage(config, { limit: 1000, rounds: 1000 });
+  expect(message).toContain('limit "run.maxRoundsPerTurn" = 1000');
+  expect(message).toContain('raise it in /config');
   expect(message).not.toContain("run.maxTurns");
 });
 
-test("P4: agente nomeado nomeia agents.<nome>.maxSteps", () => {
-  const config = { preset: "control" as const, agent: { model: "p/m", maxSteps: 10, tools: [] as string[] } };
-  expect(maxStepsMessage(config, { maxSteps: 4, agentName: "coder" }))
-    .toContain('limite "agents.coder.maxSteps" = 4');
+test("P0: unlimited stop cites the physical cap, not a declared value", () => {
+  const config = {
+    preset: "control" as const,
+    agent: { model: "p/m", maxSteps: 500, tools: [] as string[] },
+    run: { maxTurns: 500 as const, maxRoundsPerTurn: "unlimited" as const },
+  };
+  const plain = maxRoundsMessage(config, { limit: 100_000, rounds: 100_000 });
+  expect(plain).toContain("physical cap of 100000");
+  expect(plain).toContain("unlimited");
+  const cut = maxRoundsMessage(config, { limit: 50_000, rounds: 50_000, budgetCut: true });
+  expect(cut).toContain("lowered to 50000");
+  expect(cut).not.toContain("= 500 lowered");
 });
 
-test("P4: mensagem separa o limite declarado do teto efetivo cortado pelo budget", () => {
-  const config = { preset: "control" as const, agent: { model: "p/m", maxSteps: 4, tools: [] as string[] } };
-  const message = maxStepsMessage(config, { maxSteps: 3 });
-  expect(message).toContain('limite "agent.maxSteps" = 4');
-  expect(message).toContain("caiu para 3");
-  expect(message).toContain("aumente o budget");
+test("P0: agente nomeado nomeia agents.<nome>.maxSteps", () => {
+  const config = { preset: "control" as const, agent: { model: "p/m", maxSteps: 10, tools: [] as string[] } };
+  expect(maxRoundsMessage(config, { limit: 4, rounds: 4, agentName: "coder" }))
+    .toContain('limit "agents.coder.maxSteps" = 4');
+});
+
+test("P0: the declared ceiling comes from run.maxRoundsPerTurn, not the legacy alias", () => {
+  const config = {
+    preset: "control" as const,
+    agent: { model: "p/m", maxSteps: 500, tools: [] as string[] },
+    run: { maxTurns: 500 as const, maxRoundsPerTurn: 4 as const },
+  };
+  const message = maxRoundsMessage(config, { limit: 4, rounds: 4 });
+  expect(message).toContain('limit "run.maxRoundsPerTurn" = 4');
+  expect(message).not.toContain("lowered");
+  expect(message).not.toContain("agent.maxSteps");
+});
+
+test("P0: mensagem separa o limite declarado do teto efetivo cortado pelo budget", () => {
+  const config = {
+    preset: "control" as const,
+    agent: { model: "p/m", maxSteps: 500, tools: [] as string[] },
+    run: { maxTurns: 500 as const, maxRoundsPerTurn: 4 as const },
+  };
+  const message = maxRoundsMessage(config, { limit: 3, rounds: 3, budgetCut: true });
+  expect(message).toContain('limit "run.maxRoundsPerTurn" = 4');
+  expect(message).toContain("lowered to 3");
+  expect(message).toContain("raise the budget");
 });

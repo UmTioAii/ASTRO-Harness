@@ -4,7 +4,7 @@ import { Auditor } from "../src/audit"; import { Ledger } from "../src/ledger";
 import { type HandoffDraft } from "../src/handoff/types";
 import type { CompletionRequest, CompletionResponse, Provider } from "../src/providers/types";
 import type { AgentEntry, ModelEntry } from "../src/core/registry";
-import { MaxStepsError, runMultiAgentSession, type MultiAgentSessionOptions } from "../src/core/session";
+import { MaxRoundsError, runMultiAgentSession, type MultiAgentSessionOptions } from "../src/core/session";
 import { ToolExecutor } from "../src/tools/executor"; import { handoffTool } from "../src/tools/handoff";
 import type { Tool } from "../src/tools/types";
 
@@ -57,7 +57,7 @@ describe("handoff durável na sessão multi-agent (F-23)", () => {
     let calls = 0;
     const provider: Provider = { complete: async () => { calls++; return handoffCall(name); } };
     const err = await runMultiAgentSession(sessionOpts(self, provider, undefined, name), "plan").then(() => { throw new Error("esperava erro"); }, (e: Error) => e);
-    expect(err).toBeInstanceOf(MaxStepsError);
+    expect(err).toBeInstanceOf(MaxRoundsError);
     expect(calls).toBe(1);
     expect(err.message).not.toContain(NV);
   });

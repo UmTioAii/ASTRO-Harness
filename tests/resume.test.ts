@@ -147,7 +147,7 @@ describe("reconstrução da árvore de agentes (F-22, #131)", () => {
     await expect(runSession(opts, "tarefa")).rejects.toBeDefined();
     const tree = rebuildAgentTree(ledger, "r-max");
     expect(tree.active).toBeUndefined();
-    expect(tree.nodes[0]!.reason).toBe("max_steps");
+    expect(tree.nodes[0]!.reason).toBe("max_rounds");
     expect(planResume(ledger, "r-max").agent.agent_id).toBe("default");
   });
   test("reabertura: handoff de volta a agente já usado o deixa ativo (sem duplicar nó)", () => {
