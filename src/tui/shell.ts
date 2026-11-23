@@ -91,6 +91,9 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
   secretEnvNames.push(...webSearchSecretEnvNames(config));
   const modelEntry = config.models.find((model) => `${model.provider}/${model.id}` === config.agent.model);
   let loadAudited = false;
+  // Last successfully loaded view. A transient read error (or a mid-save write)
+  // must not resurrect an allow that the file already removed (#599).
+  let lastGood = config;
   return {
     enabled: true,
     run: async (command, signal) => {
@@ -110,20 +113,22 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         config.permissions.mode,
       );
       // Reload the shell layer per run: `always` writes `shell.approvals` to the
-      // project file after the runner was created, and re-applying the captured
-      // view would reset the in-memory approvals and ask again (#599).
-      let shellConfig = config.shell;
+      // project file after the runner was created, and a narrowed config (deny,
+      // `mode: "off"`) must apply to the next command. A failed read keeps the
+      // last good view, never the creation snapshot.
       try {
-        shellConfig = loadEffectiveConfig(opts.configPath, {
+        lastGood = loadEffectiveConfig(opts.configPath, {
           allowMissing: opts.allowMissingConfig === true,
           ...(opts.env === undefined ? {} : { env: opts.env }),
-        }).config.shell;
+        }).config;
       } catch {
-        // Keep the view loaded at creation; the command still runs behind the gate.
+        // lastGood stays the previous successful load.
       }
+      const shellConfig = lastGood.shell;
+      const effectiveRunCommandMode = resolveRunCommandMode(lastGood.tools?.run_command?.sandbox);
       // #474: o modo do executor decide a confirmação extra do host em `bypass`.
       configureRunCommand({
-        mode: runCommandMode,
+        mode: effectiveRunCommandMode,
         ...(shellConfig?.default === undefined ? {} : { shellDefault: shellConfig.default }),
         ...(shellConfig?.rules === undefined ? {} : { rules: shellConfig.rules }),
         ...(shellConfig?.approvals === undefined ? {} : { approvals: shellConfig.approvals }),
