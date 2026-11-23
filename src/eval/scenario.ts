@@ -546,11 +546,17 @@ function assertEffectiveLoopback(config: AstroConfig): void {
     if (typeof server.url === "string") assertLoopbackUrl(server.url, `mcpServers.${name}.url`);
   }
   if (config.webSearch !== undefined) {
-    const base = config.webSearch.baseUrl ?? WEB_SEARCH_DEFAULT_BASE[config.webSearch.provider];
-    if (base === undefined || base === "") {
-      throw new Error(`cenário com webSearch.baseUrl ausente; o endpoint não é loopback`);
+    const check = (field: string, base: string | undefined): void => {
+      if (base === undefined || base === "") {
+        throw new Error(`cenário com ${field} ausente; o endpoint não é loopback`);
+      }
+      assertLoopbackUrl(base, field);
+    };
+    check("webSearch.baseUrl", config.webSearch.baseUrl ?? WEB_SEARCH_DEFAULT_BASE[config.webSearch.provider]);
+    // The whole chain is a fixture surface, not only the primary (#604).
+    for (const [index, entry] of (config.webSearch.fallback ?? []).entries()) {
+      check(`webSearch.fallback[${index}].baseUrl`, WEB_SEARCH_DEFAULT_BASE[entry.provider]);
     }
-    assertLoopbackUrl(base, "webSearch.baseUrl");
   }
   if (config.team?.auditWebhook !== undefined) {
     assertLoopbackUrl(config.team.auditWebhook, "team.auditWebhook");

@@ -1,6 +1,7 @@
 /**
  * Tool `web_search` (#57, #604): external results are untrusted (prompt
- * injection), deduplicated by canonical URL, cited by `[n]` and cached per run.
+ * injection), deduplicated by canonical URL, cited by `[n]`, cached per run and
+ * tried across a declared backend chain on transport failure.
  */
 import { createHash } from "node:crypto";
 import { redactSecrets } from "../sanitize-external";
@@ -13,7 +14,6 @@ export interface WebSearchBackendConfig {
   provider: WebSearchProvider;
   /** Name of the env var with the key; absent = the backend is skipped. */
   apiKeyEnv?: string;
-  baseUrl?: string;
 }
 
 /** Configuração `webSearch` (validação em `src/core/config.ts`). */
@@ -41,6 +41,10 @@ export interface WebSearchDeps {
 type SearchResult = { title: string; url: string; snippet: string };
 type CitedResult = SearchResult & { id: number };
 type CachedSearch = { status: number; results: CitedResult[] };
+
+/** Bounded audit code for a backend that did not answer (#604); never a message or URL. */
+type BackendReason = "credential_missing" | "network" | "invalid_body" | `http_${number}`;
+type BackendAudit = { provider: WebSearchProvider; status: number; durationMs: number; reason?: BackendReason };
 
 const DEFAULT_MAX_RESULTS = 5;
 const MAX_RESULTS_LIMIT = 10;
@@ -177,9 +181,9 @@ export function searchCacheKey(input: {
   return createHash("sha256").update(canonical).digest("hex");
 }
 
-function requestFor(config: WebSearchConfig, input: ParsedInput, key: string): { url: string; init: RequestInit } {
-  const base = (config.baseUrl ?? DEFAULT_BASE[config.provider]).replace(/\/$/, "");
-  if (config.provider === "brave") {
+function requestFor(backend: Pick<WebSearchConfig, "provider" | "baseUrl">, input: ParsedInput, key: string): { url: string; init: RequestInit } {
+  const base = (backend.baseUrl ?? DEFAULT_BASE[backend.provider]).replace(/\/$/, "");
+  if (backend.provider === "brave") {
     const url = new URL(`${base}/res/v1/web/search`);
     url.searchParams.set("q", input.query);
     url.searchParams.set("count", String(input.maxResults));
@@ -192,7 +196,7 @@ function requestFor(config: WebSearchConfig, input: ParsedInput, key: string): {
       },
     };
   }
-  if (config.provider === "google") {
+  if (backend.provider === "google") {
     const url = new URL(base);
     url.searchParams.set("key", key);
     url.searchParams.set("q", input.query);
@@ -203,7 +207,7 @@ function requestFor(config: WebSearchConfig, input: ParsedInput, key: string): {
       init: { method: "GET", headers: { accept: "application/json" }, redirect: "error" },
     };
   }
-  if (config.provider === "custom") {
+  if (backend.provider === "custom") {
     return {
       url: base,
       init: {
@@ -236,13 +240,13 @@ function requestFor(config: WebSearchConfig, input: ParsedInput, key: string): {
   };
 }
 
-function parseResponse(config: WebSearchConfig, body: unknown): SearchResult[] {
+function parseResponse(provider: WebSearchProvider, body: unknown): SearchResult[] {
   const raw = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
-  if (config.provider === "brave") {
+  if (provider === "brave") {
     const web = (typeof raw.web === "object" && raw.web !== null ? raw.web : {}) as Record<string, unknown>;
     return list(web.results).flatMap((entry) => one(entry.title, entry.url, entry.description));
   }
-  if (config.provider === "google") {
+  if (provider === "google") {
     return list(raw.items).flatMap((entry) => one(entry.title, entry.link, entry.snippet));
   }
   return list(raw.results).flatMap((entry) => one(
@@ -291,15 +295,78 @@ function backoffMs(attempt: number, random: () => number): number {
   return Math.round(base * (0.75 + random() * 0.5));
 }
 
-/** Nomes de variáveis que o shell e filhos não devem ver (#57, I-03). */
+/** Primary first, then the declared chain (#604); order is the declared order. */
+function backendChain(config: WebSearchConfig): Array<WebSearchBackendConfig & { baseUrl?: string }> {
+  return [{
+    provider: config.provider, apiKeyEnv: config.apiKeyEnv,
+    ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
+  }, ...(config.fallback ?? [])];
+}
+
+type RequestIo = Required<Pick<WebSearchDeps, "fetchImpl" | "sleep" | "random">>;
+
+type BackendOutcome =
+  | { kind: "aborted" }
+  | { kind: "ok"; status: number; results: SearchResult[] }
+  | { kind: "error"; status: number; reason: BackendReason; message: string };
+
+/** One backend with its own retry budget; a failure is returned, never thrown. */
+async function requestBackend(
+  backend: WebSearchBackendConfig & { baseUrl?: string },
+  input: ParsedInput, key: string, ctx: ToolContext, io: RequestIo,
+): Promise<BackendOutcome> {
+  const { url, init } = requestFor(backend, input, key);
+  let status = 0;
+  let lastMessage = "";
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    let retryAfter: number | undefined;
+    try {
+      const response = await io.fetchImpl(url, { ...init, signal: ctx.signal });
+      status = response.status;
+      retryAfter = retryAfterMs(response.headers.get("retry-after"));
+      if (response.ok) {
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch {
+          return { kind: "error", status, reason: "invalid_body", message: `web_search: resposta inválida do provider (${status})` };
+        }
+        return { kind: "ok", status, results: parseResponse(backend.provider, body) };
+      }
+      lastMessage = redactSecrets((await response.text()).slice(0, 300));
+      if (!RETRYABLE.has(status)) break;
+    } catch (error) {
+      if (ctx.signal?.aborted === true) return { kind: "aborted" };
+      status = 0;
+      lastMessage = redactSecrets(error instanceof Error ? error.message : String(error));
+    }
+    if (attempt < MAX_ATTEMPTS - 1) {
+      await io.sleep(retryAfter ?? backoffMs(attempt, io.random), ctx.signal);
+      if (ctx.signal?.aborted === true) return { kind: "aborted" };
+    }
+  }
+  return {
+    kind: "error",
+    status,
+    reason: status === 0 ? "network" : `http_${status}`,
+    message: `web_search falhou (${status}): ${lastMessage}`,
+  };
+}
+
+/** Nomes de variáveis que o shell e filhos não devem ver (#57, #604, I-03). */
 export function webSearchSecretEnvNames(config: { webSearch?: WebSearchConfig }): string[] {
-  return config.webSearch === undefined ? [] : [config.webSearch.apiKeyEnv];
+  if (config.webSearch === undefined) return [];
+  // Only names reach here: a value in `apiKeyEnv` is refused at config load.
+  const names = [config.webSearch.apiKeyEnv, ...(config.webSearch.fallback ?? []).map((entry) => entry.apiKeyEnv)];
+  return [...new Set(names.filter((name): name is string => name !== undefined && name !== ""))];
 }
 
 export function createWebSearchTool(deps: WebSearchDeps): Tool {
-  const fetchImpl = deps.fetchImpl ?? fetch;
-  const sleep = deps.sleep ?? defaultSleep;
-  const random = deps.random ?? Math.random;
+  const io: RequestIo = {
+    fetchImpl: deps.fetchImpl ?? fetch,
+    sleep: deps.sleep ?? defaultSleep,
+    random: deps.random ?? Math.random,
+  };
   const cache = new Map<string, CachedSearch>();
   const cacheBound = Math.max(1, deps.cacheMaxEntries ?? MAX_CACHE_ENTRIES);
   let run: string | undefined;
@@ -346,100 +413,94 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
         cache.clear();
       }
       const started = Date.now();
-      const record = (finalStatus: number, count: number, cacheHit: boolean): void => {
+      const backends: BackendAudit[] = [];
+      const record = (final: { provider: WebSearchProvider; status: number; resultsCount: number; cacheHit: boolean }): void => {
         deps.audit.append({
           run: ctx.run,
           agent: ctx.agent,
           tipo: "web.search",
           payload: {
             query: redactSecrets(parsed.query),
-            provider: deps.config.provider,
-            resultsCount: count,
+            provider: final.provider,
+            resultsCount: final.resultsCount,
             duration: Date.now() - started,
-            status: finalStatus,
-            cacheHit,
+            status: final.status,
+            cacheHit: final.cacheHit,
+            backends,
+            backendsTotal: backends.length,
           },
         });
       };
-      // The credential is checked before the cache: a run without a key does not
-      // get results, and the attempt is audited like any other call (I-04).
-      const key = deps.env[deps.config.apiKeyEnv];
-      if (key === undefined || key === "") {
-        record(0, 0, false);
-        return failure(`credencial ausente: defina a variável de ambiente ${deps.config.apiKeyEnv}`);
-      }
-      const cacheKey = searchCacheKey({
-        provider: deps.config.provider,
-        baseUrl: deps.config.baseUrl,
-        query: parsed.query,
-        maxResults: parsed.maxResults,
-        recencyDays: parsed.recencyDays,
+      const respond = (provider: WebSearchProvider, results: CitedResult[]): ToolResult => ({
+        // ADR-0027: query redigida no output (a query pode conter segredo colado).
+        output: JSON.stringify({ query: redactSecrets(parsed.query), provider, results }),
       });
-      const cached = cache.get(cacheKey);
-      if (cached !== undefined) {
-        record(cached.status, cached.results.length, true);
-        return {
-          output: JSON.stringify({ query: redactSecrets(parsed.query), provider: deps.config.provider, results: cached.results }),
-        };
-      }
-      const { url, init } = requestFor(deps.config, parsed, key);
-      let status = 0;
-      let results: SearchResult[] = [];
-      let lastMessage = "";
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-        let retryAfter: number | undefined;
-        try {
-          const response = await fetchImpl(url, { ...init, signal: ctx.signal });
-          status = response.status;
-          retryAfter = retryAfterMs(response.headers.get("retry-after"));
-          if (response.ok) {
-            let body: unknown;
-            try {
-              body = await response.json();
-            } catch {
-              record(status, 0, false);
-              return failure(`web_search: resposta inválida do provider (${status})`);
-            }
-            results = parseResponse(deps.config, body);
-            lastMessage = "";
-            break;
-          }
-          lastMessage = redactSecrets((await response.text()).slice(0, 300));
-          if (!RETRYABLE.has(status)) break;
-        } catch (error) {
-          if (ctx.signal?.aborted === true) {
-            record(0, 0, false);
-            return failure("web_search cancelada");
-          }
-          status = 0;
-          lastMessage = redactSecrets(error instanceof Error ? error.message : String(error));
+
+      let lastFailure: { provider: WebSearchProvider; status: number; message: string } | undefined;
+      const missing: string[] = [];
+      for (const backend of backendChain(deps.config)) {
+        // The credential is checked before the cache: a run without a key does not
+        // get results, and the skip is audited like any other call (I-04).
+        if (backend.apiKeyEnv === undefined) {
+          backends.push({ provider: backend.provider, status: 0, durationMs: 0, reason: "credential_missing" });
+          continue;
         }
-        if (attempt < MAX_ATTEMPTS - 1) {
-          await sleep(retryAfter ?? backoffMs(attempt, random), ctx.signal);
-          if (ctx.signal?.aborted === true) {
-            record(0, 0, false);
-            return failure("web_search cancelada");
-          }
+        const key = deps.env[backend.apiKeyEnv];
+        if (key === undefined || key === "") {
+          missing.push(backend.apiKeyEnv);
+          backends.push({ provider: backend.provider, status: 0, durationMs: 0, reason: "credential_missing" });
+          continue;
         }
+        // Cache identity includes the resolved backend (#604): a fallback result is
+        // stored and read under its own provider, never served as a primary hit.
+        const cacheKey = searchCacheKey({
+          provider: backend.provider,
+          baseUrl: backend.baseUrl,
+          query: parsed.query,
+          maxResults: parsed.maxResults,
+          recencyDays: parsed.recencyDays,
+        });
+        const cached = cache.get(cacheKey);
+        if (cached !== undefined) {
+          backends.push({ provider: backend.provider, status: cached.status, durationMs: 0 });
+          record({ provider: backend.provider, status: cached.status, resultsCount: cached.results.length, cacheHit: true });
+          return respond(backend.provider, cached.results);
+        }
+        const backendStarted = Date.now();
+        const outcome = await requestBackend(backend, parsed, key, ctx, io);
+        if (outcome.kind === "aborted") {
+          record({ provider: backend.provider, status: 0, resultsCount: 0, cacheHit: false });
+          return failure("web_search cancelada");
+        }
+        backends.push({
+          provider: backend.provider,
+          status: outcome.status,
+          durationMs: Date.now() - backendStarted,
+          ...(outcome.kind === "ok" ? {} : { reason: outcome.reason }),
+        });
+        if (outcome.kind === "ok") {
+          // Cap before dedupe and cache: a provider that ignores maxResults cannot
+          // inflate the result list or what the run pins in memory.
+          const cited = dedupe(outcome.results.slice(0, parsed.maxResults)).map((item) => ({ id: nextId++, ...item }));
+          record({ provider: backend.provider, status: outcome.status, resultsCount: cited.length, cacheHit: false });
+          if (cache.size >= cacheBound) {
+            const oldest = cache.keys().next();
+            if (oldest.done !== true) cache.delete(oldest.value);
+          }
+          cache.set(cacheKey, { status: outcome.status, results: cited });
+          return respond(backend.provider, cited);
+        }
+        lastFailure = { provider: backend.provider, status: outcome.status, message: outcome.message };
       }
 
-      if (status < 200 || status >= 300) {
-        record(status, 0, false);
-        return failure(`web_search falhou (${status}): ${lastMessage}`);
+      if (lastFailure !== undefined) {
+        record({ provider: lastFailure.provider, status: lastFailure.status, resultsCount: 0, cacheHit: false });
+        return failure(lastFailure.message);
       }
-      // Cap before dedupe and cache: a provider that ignores maxResults cannot
-      // inflate the result list or what the run pins in memory.
-      const cited = dedupe(results.slice(0, parsed.maxResults)).map((item) => ({ id: nextId++, ...item }));
-      record(status, cited.length, false);
-      if (cache.size >= cacheBound) {
-        const oldest = cache.keys().next();
-        if (oldest.done !== true) cache.delete(oldest.value);
-      }
-      cache.set(cacheKey, { status, results: cited });
-      return {
-        // ADR-0027: query redigida no output (a query pode conter segredo colado).
-        output: JSON.stringify({ query: redactSecrets(parsed.query), provider: deps.config.provider, results: cited }),
-      };
+      record({ provider: deps.config.provider, status: 0, resultsCount: 0, cacheHit: false });
+      return failure(missing.length === 0
+        ? "credencial ausente: nenhum backend da cadeia declarou apiKeyEnv"
+        : `credencial ausente: defina a variável de ambiente ${missing.join(", ")}`);
     },
   };
 }
