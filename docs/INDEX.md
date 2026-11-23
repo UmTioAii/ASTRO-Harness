@@ -21,7 +21,8 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/adr/` | Decisão arquitetural nova ou revisão de uma antiga | 1 por arquivo |
 | `docs/adr/0029-config-global-home.md` | Configuração global, precedência e migração de `$ASTRO_HOME` (#401) | S1 |
 | `docs/adr/0030-presets-simple-control-e-nome-de-profile.md` | Presets Simple/Control e a fronteira entre `profile` e `preset` (#478) | ~45 |
-| `docs/adr/0031-shell-no-host-com-aprovacao-por-comando.md` | `auto` como default do shell: Docker quando disponível, host com aprovação como fallback, e o que se perde sem Docker (#474) | ~35 |
+| `docs/adr/0031-shell-no-host-com-aprovacao-por-comando.md` | `auto` como default do shell: Docker quando disponível, host com aprovação como fallback, e o que se perde sem Docker (#474); **superseded by ADR-0034** | ~35 |
+| `docs/adr/0034-host-shell-default-consent-audit.md` | Host shell as the default path: ordered rules, scanner, approvals, risk consent and hashed audit (#599) | ~60 |
 | `docs/adr/0033-turn-round-limits-and-profiles.md` | Turn/round limits, schema 2 aliases and Default/Control precedence (#594) | ~30 |
 | `docs/adr/0035-tui-timeline.md` | Timeline contract shared by the pure renderer and turn events: entries, ordering, labels, redaction, width bands (#595) | ~45 |
 | `docs/adr/0037-per-account-concurrency-and-bounded-agents.md` | Per-account concurrency, bounded spawn and shared-account budget (#602) | ~45 |
