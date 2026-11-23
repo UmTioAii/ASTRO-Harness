@@ -26,6 +26,7 @@ Sem rede: o texto vive no repositório e nunca é buscado. `TERMS_VERSION` sobe 
 | `astro chat` com TTY | mesma pergunta, antes de qualquer escrita e do readline do REPL (`bootChat` em `src/chat/boot.ts`); recusa sai 1 sem abrir sessão |
 | `astro chat` sem TTY (stdin em pipe, CI) | não pergunta: um aviso no stderr e a sessão segue, sem registrar aceite; o readline do REPL nasce depois do portão |
 | `astro run`, `eval`, `bench`, `serve` | nunca consultam os termos: run não interativo nunca é bloqueado |
+| `astro setup` | não pergunta os termos: comando explícito de configuração (como `config migrate`); grava a camada que faltar e, sem TTY, não pergunta nem grava |
 | `/terms` (TUI e REPL) | texto completo, versão corrente e a data do aceite, ou "ainda não aceito"; `state.json` ilegível vira aviso que cita só o caminho e a sessão continua |
 
 Um só readline por vez em `process.stdin`: o portão dos termos pergunta antes de o REPL/TUI criar o seu, porque dois `Interface` de terminal no mesmo stream disputam o mesmo chunk e o `close()` do portão pausa o stdin.

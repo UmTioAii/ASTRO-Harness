@@ -71,11 +71,15 @@ function writeProjectLayer(configPath: string, layer: Record<string, unknown>, e
 
 /** Global exists, project does not: preset + active global model; the global stays untouched. */
 async function setupProjectLayer(configPath: string, env: NodeJS.ProcessEnv, opts: SetupOptions): Promise<SetupOutcome> {
+  const model = defaultModelRef(env);
+  // A global layer without providers (`{}`, the pre-#611 template) cannot back a project layer:
+  // do not ask for a preset that cannot be written; the provider setup creates it later.
+  if (model === undefined) {
+    return noWrites("project", { notice: "global config has no provider yet; the project layer is created once one is set" });
+  }
   const preset = await resolvePreset(opts.io, opts.acceptDefaults);
   if (preset === undefined) return noWrites("cancelled", { notice: "setup cancelled; nothing written" });
-  const model = defaultModelRef(env);
-  const layer = { preset, ...(model === undefined ? {} : { agent: { model } }) };
-  return { flow: "project", globalCreated: false, projectCreated: writeProjectLayer(configPath, layer, env), preset };
+  return { flow: "project", globalCreated: false, preset, projectCreated: writeProjectLayer(configPath, { preset, agent: { model } }, env) };
 }
 
 /** No layer at all: reuses the linear provider wizard (`/provider add`), then writes the project layer. */
@@ -85,7 +89,14 @@ async function setupFull(configPath: string, env: NodeJS.ProcessEnv, opts: Setup
   if (opts.io === undefined || opts.acceptDefaults === true) {
     return noWrites("full", { preset, notice: "no default provider available: run `astro setup` without --yes to choose one" });
   }
-  const saved = await runProviderWizard(opts.io, new ProfileManager({ env }), { mode: "add" });
+  const manager = new ProfileManager({ env });
+  const saved = await runProviderWizard(opts.io, manager, {
+    mode: "add",
+    // Fail closed: a ref the environment does not provide would 401 on the first request.
+    validate: (draft) => draft.credentialRef !== undefined && !manager.credentialPresent(draft.credentialRef)
+      ? `${draft.credentialRef} is not set; export it or paste the key in the provider screen (vault)`
+      : undefined,
+  });
   if (saved === undefined) return noWrites("cancelled", { notice: "setup cancelled; nothing written" });
   const model = `${saved.id}/${saved.models[0]!.id}`;
   return { flow: "full", globalCreated: true, preset, projectCreated: writeProjectLayer(configPath, { preset, agent: { model } }, env) };
@@ -100,11 +111,10 @@ async function setupFromEnvironment(configPath: string, env: NodeJS.ProcessEnv, 
     if (answer === null) return noWrites("cancelled", { notice: "setup cancelled; nothing written" });
     if (/^(y|yes|s|sim)$/i.test(answer.trim())) return setupFull(configPath, env, opts);
   }
-  const preset = await resolvePreset(opts.io, opts.acceptDefaults);
-  if (preset === undefined) return noWrites("cancelled", { notice: "setup cancelled; nothing written" });
+  // Nothing is persisted, so there is no preset to ask for: the profile choice would be lost.
   return {
-    flow: "short", globalCreated: false, projectCreated: false, preset,
-    notice: `${source} (nothing written; set ASTRO_PROVIDER or run the full setup to persist a provider)`,
+    flow: "short", globalCreated: false, projectCreated: false,
+    notice: `${source} (the environment owns it; nothing written — run \`astro setup\` to store a provider)`,
   };
 }
 
@@ -128,15 +138,21 @@ export async function runSetup(configPath: string, opts: SetupOptions = {}): Pro
   }
 }
 
-/** Terminal channel of the wizard; one readline, closed before the TUI mounts Ink. */
+/** Terminal channel of the wizard; one readline and one close listener, closed before Ink mounts. */
 export function ttySetupIO(): { io: WizardIO; close: () => void } {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const io: WizardIO = {
-    read: (prompt) => new Promise<string | null>((resolve) => {
-      rl.once("close", () => resolve(null)); // EOF (Ctrl-D) cancels
-      rl.question(prompt, resolve);
-    }),
-    write: (text) => { process.stdout.write(`${text}\n`); },
+  let closed = false;
+  let pending: ((value: string | null) => void) | undefined;
+  rl.once("close", () => { closed = true; pending?.(null); });
+  return {
+    io: {
+      read: (prompt) => new Promise<string | null>((resolve) => {
+        if (closed) { resolve(null); return; }
+        pending = resolve;
+        rl.question(prompt, (answer) => { pending = undefined; resolve(answer); }); // EOF resolves null above
+      }),
+      write: (text) => { process.stdout.write(`${text}\n`); },
+    },
+    close: () => rl.close(),
   };
-  return { io, close: () => rl.close() };
 }

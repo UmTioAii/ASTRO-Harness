@@ -14,6 +14,8 @@ export interface WizardOptions {
   /** Nome inicial vindo de `/provider add <nome>`. */
   initialName?: string;
   onUse?: (id: string) => void;
+  /** Last check before saving; a returned message aborts without writing. */
+  validate?: (draft: ProfileDraft) => string | undefined;
 }
 
 const DEFAULT_CONTEXT = 128_000;
@@ -100,7 +102,7 @@ export async function runProviderWizard(
     for (;;) {
       credentialRef = await ask(
         io,
-        "variável da chave (vazio = sem chave)",
+        "key variable NAME (blank = no key; the key itself belongs in the vault)",
         current?.credentialRef ?? entry?.credentialRef ?? "",
       );
       if (credentialRef === undefined) return undefined;
@@ -109,7 +111,8 @@ export async function runProviderWizard(
         break;
       }
       if (ENV_NAME.test(credentialRef)) break;
-      io.write(`nome de variável inválido: "${credentialRef}" (maiúsculas, números e _, começando com letra ou _)`);
+      // Never echo the answer: a pasted key must not reach a log, audit or prompt (I-03).
+      io.write("invalid key variable: enter an environment variable NAME (e.g. OPENAI_API_KEY), not the key");
     }
   }
 
@@ -136,6 +139,12 @@ export async function runProviderWizard(
     ...(quotaDomain === undefined ? {} : { quotaDomain }),
     ...(current?.headers === undefined ? {} : { headers: current.headers }),
   };
+
+  const invalid = opts.validate?.(draft);
+  if (invalid !== undefined) {
+    io.write(invalid);
+    return undefined;
+  }
 
   io.write([
     `${opts.mode === "edit" ? "editar" : "novo"} provider: ${draft.name}`,
