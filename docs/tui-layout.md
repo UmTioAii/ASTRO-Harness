@@ -85,7 +85,7 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 
 ## Progresso
 
-- `pensando… passo n/max`, com `max` = teto efetivo do loop (`agent.maxSteps`, já resolvido por config). Em multi-agent o denominador é **por visita** ao agente: `agentSteps` zera a cada handoff, inclusive ao voltar a um agente já usado, e o teto global restante limita o total.
+- `pensando… passo n/max` aparece só no preset efetivo `control`, com `max` = teto efetivo do loop (`run.maxRoundsPerTurn`, com `agent.maxSteps` como alias legado). No Default fica só `pensando…`. Em multi-agent o denominador é **por visita** ao agente: `agentSteps` zera a cada handoff, inclusive ao voltar a um agente já usado, e o teto global restante limita o total.
 - O evento `onStep(step, maxSteps)` vem antes de cada chamada ao provider e carrega só números. A linha some quando o turno termina (sucesso, erro ou abort), porque o progresso só renderiza com turno em andamento.
 - Sem evento de passo — o intervalo entre o início do turno e o 1º evento, ou uma execução single-shot sem o callback — fica só `pensando…`: nunca um número inventado. Cada `send` começa um loop novo no passo 1.
 
