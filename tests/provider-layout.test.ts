@@ -58,6 +58,7 @@ describe("per-provider layout (#553)", () => {
       expect(card.id.length).toBeGreaterThan(0);
       expect(Array.isArray(card.tags)).toBe(true);
       expect(card.context).toBeGreaterThan(0);
+      expect(card.maxOutput).toBeLessThanOrEqual(card.context);
       expect(["active", "deprecated", "disabled"]).toContain(card.status);
       expect(typeof card.reasoning).toBe("boolean");
       expect(["chat-completions", "responses"]).toContain(card.callMethod);

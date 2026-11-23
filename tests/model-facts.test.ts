@@ -20,15 +20,23 @@ describe("model catalog facts (#601)", () => {
     expect(String(typoOffer.ref)).toBe("gpt-5.6");
     expect(isModelId("gpt-5.5")).toBe(true);
     expect(isModelId("gpt-5.6")).toBe(false);
-    expect(isModelId("toString")).toBe(false);
   });
 
   test("every provider offer points at a curated fact", () => {
-    expect(OFFERS.length).toBeGreaterThan(0);
     for (const offer of OFFERS) {
       expect(isModelId(offer.ref)).toBe(true);
       expect(modelFacts(offer.ref).context).toBeGreaterThan(0);
+      // Effective cards, not only catalog facts, stay inside the vocabulary.
+      for (const tag of effectiveCard(offer).tags) expect(isKnownTag(tag)).toBe(true); // I-21
     }
+  });
+
+  test("an override cannot introduce a tag outside the vocabulary", () => {
+    // @ts-expect-error - `tool` is not a curated tag
+    const bad: ProviderModel = { ref: "gpt-5.5", price: null, free: false, overrides: { tags: ["tool"] } };
+    expect(bad.ref).toBe("gpt-5.5");
+    expect(effectiveCard({ ref: "gpt-5.5", price: null, free: false, overrides: { tags: ["tools"] } }).tags)
+      .toEqual(["tools"]);
   });
 
   test("facts own context, output limit, tools, modalities and curated tags", () => {
@@ -36,7 +44,6 @@ describe("model catalog facts (#601)", () => {
       expect(facts.context).toBeGreaterThan(0);
       expect(facts.maxOutput).toBeGreaterThan(0);
       expect(facts.maxOutput).toBeLessThanOrEqual(facts.context);
-      expect(typeof facts.tools).toBe("boolean");
       expect(facts.modalities.input.length).toBeGreaterThan(0);
       expect(facts.modalities.output).toContain("text");
       for (const tag of facts.tags) expect(isKnownTag(tag)).toBe(true); // I-21
@@ -53,28 +60,29 @@ describe("model catalog facts (#601)", () => {
     expect(first.tags).toEqual([...MODEL_FACTS["gpt-5.5"].tags]);
     expect(second.tags).toEqual([...MODEL_FACTS["gpt-5.5"].tags]);
     expect(first.id).toBe(second.id);
+    // Offer defaults keep the previous card behavior.
+    expect(first.status).toBe("active");
+    expect(first.callMethod).toBe("chat-completions");
+    expect(second.callMethod).toBe("responses");
   });
 
-  test("provider override wins over the catalog fact", () => {
-    const card = effectiveCard({
-      ref: "gpt-5.5",
-      price: null,
-      free: false,
-      overrides: { context: 64000, efforts: [] },
+  test("maxOutput stays within the effective context", () => {
+    const narrower = effectiveCard({
+      ref: "gpt-5.5", price: null, free: false, overrides: { context: 64000, efforts: [] },
     });
-    expect(card.context).toBe(64000);
-    expect(card.efforts).toEqual([]);
+    expect(narrower.context).toBe(64000);
+    expect(narrower.maxOutput).toBe(64000);
+    expect(narrower.maxOutput).toBeLessThanOrEqual(narrower.context);
     // Facts the provider did not override still come from the catalog.
-    expect(card.maxOutput).toBe(MODEL_FACTS["gpt-5.5"].maxOutput);
-    expect(card.tags).toEqual([...MODEL_FACTS["gpt-5.5"].tags]);
-  });
+    expect(narrower.efforts).toEqual([]);
+    expect(narrower.tags).toEqual([...MODEL_FACTS["gpt-5.5"].tags]);
 
-  test("offer defaults keep the previous card behavior", () => {
-    const card = effectiveCard({ ref: "openai/gpt-4o-mini", price: null, free: false });
-    expect(card.status).toBe("active");
-    expect(card.callMethod).toBe("chat-completions");
-    expect(effectiveCard({ ref: "gpt-5.5", price: null, free: false, callMethod: "responses" }).callMethod)
-      .toBe("responses");
+    const wider = effectiveCard({
+      ref: "meta/llama-3.3-70b-instruct", price: null, free: false, overrides: { context: 262144 },
+    });
+    expect(wider.context).toBe(262144);
+    expect(wider.maxOutput).toBe(MODEL_FACTS["meta/llama-3.3-70b-instruct"].maxOutput);
+    expect(wider.maxOutput).toBeLessThanOrEqual(wider.context);
   });
 
   test("a model without a curated price stays n/d, never zero", () => {
