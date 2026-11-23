@@ -3,12 +3,19 @@ import { basename, join } from "node:path";
 import { redactSecrets } from "../sanitize-external";
 import { contentBudgetChars, failureResult, truncationReport } from "./contract";
 import { resolveWithin } from "./paths";
-import { type Tool, type ToolResult } from "./types";
+import { ToolDeniedError, type Tool, type ToolResult } from "./types";
 
 const DEFAULT_DEPTH = 3;
 const MAX_DEPTH = 10;
-/** Conservative JSON cost per entry: `{"name":"","type":"file"},`. */
-const ENTRY_OVERHEAD = 32;
+
+/**
+ * Serialized cost of one node, comma included (S6, #603): the envelope and the
+ * JSON escaping are real bytes, so names with quotes or backslashes cost more.
+ */
+export function entryCost(name: string, kind: "file" | "dir"): number {
+  const node = kind === "dir" ? { name, type: "dir" as const, children: [] } : { name, type: "file" as const };
+  return JSON.stringify(node).length + 1;
+}
 
 interface ListDirInput {
   path: string;
@@ -45,8 +52,8 @@ function parseInput(input: unknown): ListDirInput {
 }
 
 /** Accounts one entry; false once the budget is exhausted (later entries count as omitted). */
-function take(name: string, budget: Budget): boolean {
-  const cost = name.length + ENTRY_OVERHEAD;
+function take(name: string, kind: "file" | "dir", budget: Budget): boolean {
+  const cost = entryCost(name, kind);
   if (budget.truncated || budget.chars + cost > budget.cap) {
     budget.truncated = true;
     budget.omitted++;
@@ -76,7 +83,7 @@ function countHidden(dir: string, depth: number, budget: Budget): void {
   }
 }
 
-/** Constrói a árvore de diretórios a partir de `dir`, até `depth` níveis. */
+/** Builds the directory tree from `dir`, up to `depth` levels. */
 function buildTree(dir: string, name: string, depth: number, budget: Budget): DirNode {
   const children: DirNode[] = [];
   let entries;
@@ -92,10 +99,10 @@ function buildTree(dir: string, name: string, depth: number, budget: Budget): Di
   for (const entry of entries) {
     // I-03: redact at the source, before any cut can leave a partial value.
     const entryName = redactSecrets(entry.name);
-    // Não segue symlink nem diretórios ignorados
+    // No symlink follows, no ignored directories.
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
-      if (!take(entryName, budget)) {
+      if (!take(entryName, "dir", budget)) {
         if (depth > 1) countHidden(join(dir, entry.name), depth - 1, budget);
         continue;
       }
@@ -105,13 +112,13 @@ function buildTree(dir: string, name: string, depth: number, budget: Budget): Di
         children.push({ name: entryName, type: "dir" });
       }
     } else if (entry.isFile()) {
-      if (!take(entryName, budget)) continue;
+      if (!take(entryName, "file", budget)) continue;
       children.push({ name: entryName, type: "file" });
     }
-    // symlinks e outros tipos são omitidos
+    // symlinks and other types are omitted
   }
 
-  children.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
+  children.sort((a, b) => (a.type === b.type ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.type === "dir" ? -1 : 1));
   return { name, type: "dir", children };
 }
 
@@ -150,25 +157,28 @@ export const listDirTool: Tool = {
       let root: string;
       try {
         root = resolveWithin(ctx.cwd, path);
-      } catch {
-        // I-11 + I-03: a fixed denial, never the input or an absolute fs path.
-        return failureResult(OUTSIDE_MESSAGE, "denied");
+      } catch (error) {
+        // I-11: confinement is a denial; any other resolution error is a failure.
+        if (error instanceof ToolDeniedError) return failureResult(OUTSIDE_MESSAGE, "denied");
+        return failureResult("could not resolve the directory", "failed");
       }
 
-      // Caminho precisa existir e ser diretório
+      // The path must exist and be a directory (fixed text: never echoes the input, I-03).
       let stats;
       try {
         stats = statSync(root);
       } catch {
-        return failureResult(`caminho não existe: ${path}`, "failed");
+        return failureResult("path does not exist", "failed");
       }
       if (!stats.isDirectory()) {
-        return failureResult(`caminho não é um diretório: ${path}`, "failed");
+        return failureResult("path is not a directory", "failed");
       }
 
       const ceiling = listDirTool.manifest.output!;
-      const budget: Budget = { cap: contentBudgetChars(ceiling, ctx), chars: 0, kept: 0, omitted: 0, truncated: false };
-      const tree = buildTree(root, redactSecrets(basename(root)), depth, budget);
+      const rootName = redactSecrets(basename(root));
+      // The root node is always emitted, so it is charged before the walk.
+      const budget: Budget = { cap: contentBudgetChars(ceiling, ctx), chars: entryCost(rootName, "dir") - 1, kept: 0, omitted: 0, truncated: false };
+      const tree = buildTree(root, rootName, depth, budget);
       if (!budget.truncated) return { output: JSON.stringify(tree) };
 
       const { field, marker } = truncationReport({
@@ -180,7 +190,7 @@ export const listDirTool: Tool = {
       return { output: JSON.stringify({ ...tree, truncated: true, notice: marker }), truncation: field };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return failureResult(`erro ao listar diretório: ${message}`, "failed");
+      return failureResult(`could not list the directory: ${message}`, "failed");
     }
   },
 };

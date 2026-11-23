@@ -225,22 +225,27 @@ describe("list_dir output contract (S6, #603)", () => {
 
   test("cut landing on a directory reports the exact number of hidden entries", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-count-"));
-    mkdirSync(join(cwd, "alpha"));
-    writeFileSync(join(cwd, "alpha", "a.txt"), "x");
-    mkdirSync(join(cwd, "beta", "sub"), { recursive: true });
-    writeFileSync(join(cwd, "beta", "b1.txt"), "x");
-    writeFileSync(join(cwd, "beta", "b2.txt"), "x");
-    writeFileSync(join(cwd, "beta", "sub", "b3.txt"), "x");
+    // A fixed root name ("tree") keeps the charged budget independent of the tmp suffix.
+    mkdirSync(join(cwd, "tree", "alpha"), { recursive: true });
+    writeFileSync(join(cwd, "tree", "alpha", "a.txt"), "x");
+    mkdirSync(join(cwd, "tree", "beta", "sub"), { recursive: true });
+    writeFileSync(join(cwd, "tree", "beta", "b1.txt"), "x");
+    writeFileSync(join(cwd, "tree", "beta", "b2.txt"), "x");
+    writeFileSync(join(cwd, "tree", "beta", "sub", "b3.txt"), "x");
 
-    // 20 tokens -> 64-char budget: only alpha fits, so the cut lands on a directory.
-    const result = await listDirTool.execute({}, { ...ctx(cwd), outputLimitTokens: 20 });
+    // 100 tokens -> 100-char budget; the root, alpha and the marker reserve leave
+    // no room for a.txt, so the cut lands on a directory.
+    const result = await listDirTool.execute({ path: "tree" }, { ...ctx(cwd), outputLimitTokens: 100 });
     expect((JSON.parse(result.output) as { truncated?: boolean }).truncated).toBe(true);
     // kept: alpha. omitted: a.txt, beta, b1, b2, sub, b3.
     expect(result.truncation).toEqual({ removed: 6, total: 7, unit: "entries", hint: listDirTool.manifest.output!.hint });
     expect(result.output).toContain("6 of 7 entries omitted");
+
     // Recorded decision (#621): the 64-char floor plus the additive marker make a
     // tiny session cap (20 tokens = 80 chars) produce a slightly larger output.
-    expect(result.output.length).toBeGreaterThan(80);
+    const floored = await listDirTool.execute({ path: "tree" }, { ...ctx(cwd), outputLimitTokens: 20 });
+    expect(floored.truncation!.total).toBe(7);
+    expect(floored.output.length).toBeGreaterThan(80);
   });
 
   test("failure taxonomy: escape is denied, missing path failed", async () => {
