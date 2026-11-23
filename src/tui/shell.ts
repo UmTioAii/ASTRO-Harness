@@ -109,14 +109,26 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
         config.permissions.mode,
       );
+      // Reload the shell layer per run: `always` writes `shell.approvals` to the
+      // project file after the runner was created, and re-applying the captured
+      // view would reset the in-memory approvals and ask again (#599).
+      let shellConfig = config.shell;
+      try {
+        shellConfig = loadEffectiveConfig(opts.configPath, {
+          allowMissing: opts.allowMissingConfig === true,
+          ...(opts.env === undefined ? {} : { env: opts.env }),
+        }).config.shell;
+      } catch {
+        // Keep the view loaded at creation; the command still runs behind the gate.
+      }
       // #474: o modo do executor decide a confirmação extra do host em `bypass`.
       configureRunCommand({
         mode: runCommandMode,
-        ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
-        ...(config.shell?.rules === undefined ? {} : { rules: config.shell.rules }),
-        ...(config.shell?.approvals === undefined ? {} : { approvals: config.shell.approvals }),
+        ...(shellConfig?.default === undefined ? {} : { shellDefault: shellConfig.default }),
+        ...(shellConfig?.rules === undefined ? {} : { rules: shellConfig.rules }),
+        ...(shellConfig?.approvals === undefined ? {} : { approvals: shellConfig.approvals }),
         configPath: opts.configPath,
-        ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
+        ...(shellConfig?.externalDirectory === undefined ? {} : { externalDirectory: shellConfig.externalDirectory }),
       });
       const executor = new ToolExecutor({
         tools: [runCommandTool],
