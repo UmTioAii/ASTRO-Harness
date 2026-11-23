@@ -459,7 +459,17 @@ export class ToolExecutor {
 
     const action = actionClassOf(tool, { name: call.name, input }, (path) =>
       classifyPath({ realPath: path, cwd: ctx.cwd, astroHome: resolveAstroHome(), protectedPaths: ctx.protectedPaths ?? [], artifactRoot: resolveArtifactRoot(), allowCritical: ctx.allowCritical ?? [], allowSensitive: ctx.allowSensitive ?? [] }));
-    const decision = permissionDecision(this.mode, action);
+    // Tool-owned policy (#599): ordered shell rules and the scanner decide before
+    // the matrix. `deny` is final in every mode; `ask` survives `ask`/`allow-edits`
+    // and `bypass` asks nothing, as before.
+    const hint = tool.permissionHint?.(input, ctx);
+    const decision: PermissionDecision = hint?.decision === "deny"
+      ? "deny"
+      : hint?.decision === "ask" && this.mode !== "bypass"
+        ? "ask"
+        : hint?.decision === "allow"
+          ? "allow"
+          : permissionDecision(this.mode, action);
     let effective: PermissionDecision = decision;
     const grantKey = PermissionGrants.key(action, call.name);
     if (decision === "ask" && this.permissionGrants.has(grantKey) && !requiresPerCallApproval(action)) {
@@ -473,7 +483,7 @@ export class ToolExecutor {
         // ser informada. Só o argumento material; conteúdo e env nunca entram.
         // #578: a tool que conhece o comando fora do input (`run_tests`) fornece
         // o próprio detalhe, normalizado aqui antes de chegar ao prompt.
-        const supplied = tool.approvalDetail?.(input);
+        const supplied = tool.approvalDetail?.(input, ctx);
         const detail = supplied === undefined
           ? approvalDetailOf({ name: call.name, input })
           : normalizeApprovalDetail(supplied);
@@ -536,12 +546,17 @@ export class ToolExecutor {
       }
     }
     // `allow` automático só é auditado em bypass (#268): nele toda decisão fica rastreável.
-    if (decision !== "allow" || this.mode === "bypass") {
+    // A rule allow also carries its origin (#599 review): the source is auditable.
+    if (decision !== "allow" || this.mode === "bypass" || hint?.origin !== undefined) {
       this.auditRef.append({
         run: ctx.run,
         agent: ctx.agent,
         tipo: "permission.decision",
-        payload: { name: call.name, action, mode: this.mode, decision: effective },
+        payload: {
+          name: call.name, action, mode: this.mode, decision: effective,
+          ...(hint?.origin === undefined ? {} : { origin: hint.origin }),
+          ...(hint?.code === undefined ? {} : { reason: hint.code }),
+        },
       });
     }
     if (effective !== "deny") return undefined;
@@ -551,8 +566,12 @@ export class ToolExecutor {
       run: ctx.run,
       agent: ctx.agent,
       tipo: "tool.denied",
-      payload: { name: call.name, reason },
+      payload: { name: call.name, reason, ...(hint?.code === undefined ? {} : { code: hint.code }) },
     });
+    // A tool policy deny carries its own sanitized guidance (#599); no raw command.
+    if (hint?.decision === "deny" && hint.message !== undefined) {
+      return { ...failure(hint.message, "denied"), ...(hint.code === undefined ? {} : { code: hint.code }) };
+    }
     return failure(reason, "denied");
   }
 
