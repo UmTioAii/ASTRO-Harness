@@ -96,7 +96,7 @@ Regras:
 |-------|---------|
 | TypeScript strict; `bun run typecheck` sem erros | `tsconfig.json` strict |
 | Zero dependências de runtime (D-02); exceção só com ADR | `import ... from "node:fs"` |
-| Identificadores em inglês; mensagens de erro ao usuário em pt-BR | `resolveWithin(cwd, path)` |
+| English everywhere: identifiers, comments, UI strings and error messages (Portuguese only in chat) | `resolveWithin(cwd, path)` |
 | Testes espelham `src/` em `tests/` | `src/tools/paths.ts` → `tests/tools.test.ts` |
 | Erro classificado, nunca `Error` genérico | `throw new ProviderError("outage", ...)` (D-18) |
 | Segredo só via `credentialRef`/cofre; nunca em código, teste, log (I-03) | `env[cfg.credentialRef]` |
