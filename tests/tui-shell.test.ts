@@ -9,7 +9,7 @@ import {
   isRunCommandSandboxEnabled,
   resolveRunCommandMode,
 } from "../src/tools/run-command";
-import { installDockerSpawnMock, type DockerMock } from "./helpers/docker-mock";
+import { installDockerSpawnMock, installNoDockerSpawnMock, type DockerMock } from "./helpers/docker-mock";
 
 // Slice 4b: os testes rodam só via docker (mock) — o host nunca executa o comando.
 let mock: DockerMock;
@@ -34,8 +34,7 @@ function config(tools: string[], credentialRef = "KEY", sandbox = true, withTool
 
 const slowCommand = process.platform === "win32" ? "ping -n 10 127.0.0.1" : "sleep 5";
 
-describe("!cmd da TUI (T2, #63)", () => {
-  afterEach(() => {
+describe("!cmd da TUI (T2, #63)", () => {  afterEach(() => {
     configureRunCommand({ sandbox: false });
   });
 
@@ -220,4 +219,28 @@ test("abortar mata o processo filho, não só o shell", async () => {
   expect(result.output).toContain("cancelado");
   await new Promise((resolve) => setTimeout(resolve, 400));
   expect(() => process.kill(childPid!, 0)).toThrow();
+});
+describe("!cmd always approval reloads the project layer (#599)", () => {
+  test("one runner: the second identical command does not prompt", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false, "ask");
+    writeFileSync(configPath, JSON.stringify({
+      ...JSON.parse(readFileSync(configPath, "utf8")),
+      shell: { rules: [{ match: "*", effect: "ask" }] },
+    }));
+    let prompts = 0;
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: () => { prompts++; return "always"; },
+    });
+    const first = await shell.run("echo ok");
+    expect(first.isError).toBe(false);
+    expect(prompts).toBe(1);
+    const saved = JSON.parse(readFileSync(configPath, "utf8")) as { shell?: { approvals?: unknown } };
+    expect(saved.shell?.approvals).toEqual([{ match: "echo *", effect: "allow" }]);
+    const second = await shell.run("echo ok");
+    expect(second.isError).toBe(false);
+    expect(prompts).toBe(1); // the runner sees the saved approval; no second prompt
+  });
 });
