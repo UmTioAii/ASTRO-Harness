@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
-import { grantConcurrency, resolveConcurrencyCap } from "../src/concurrency";
+import { grantConcurrency, resolveConcurrencyCap, spawnConcurrencyCap } from "../src/concurrency";
 import { validateConfig, type AstroConfig } from "../src/core/config";
 import { Ledger } from "../src/ledger";
 import { resetCandidateSnapshots } from "../src/model-choice";
@@ -154,6 +154,21 @@ describe("bounded spawn (ADR-0037)", () => {
 
   test("agents.maxActive above the physical cap is refused", () => {
     expect(() => config({ agents: { maxActive: 1000 } })).toThrow(/maxActive/);
+    expect(() => config({ agents: { maxActive: 1000 } })).toThrow(/physical ceiling/);
+  });
+
+  test("spawn.maxConcurrent is also clamped to the physical cap", () => {
+    const cfg = config({ spawn: { maxConcurrent: 1000 } });
+    expect(spawnConcurrencyCap(cfg).cap).toBe(8);
+    expect(spawnConcurrencyCap(cfg).source).toBe("config");
+  });
+
+  test("a cut by the A4 account ceiling names that ceiling", async () => {
+    const { tool, ctx } = setup(config({ spawn: { maxConcurrent: 3 } }));
+    const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 3 }, ctx);
+    const body = JSON.parse(result.output) as { concurrency: { reason: string }; note?: string };
+    expect(body.concurrency.reason).toContain("account ceiling");
+    expect(body.note).toContain("account ceiling");
   });
 
   test("a child cannot spawn a grandchild", async () => {
