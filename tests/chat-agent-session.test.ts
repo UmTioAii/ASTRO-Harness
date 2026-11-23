@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { AgentSession } from "../src/chat/agent-session";
+import type { TurnEvent } from "../src/chat/turn-events";
 import type { LoadedAttachment } from "../src/attachments/model";
 import { loadConfig, loadConfigRaw } from "../src/core/config";
 import type { PermissionMode } from "../src/permissions";
@@ -88,15 +89,17 @@ describe("AgentSession (T1, #62)", () => {
       stop();
     }
   });
-  test("SendTurnOptions.onStep chega ao loop com o teto da config (#508)", async () => {
+  test("SendTurnOptions.observer recebe round.start e turn.end (#600)", async () => {
     const { session, stop } = setup();
     const chat = session();
     try {
-      const events: Array<[number, number]> = [];
+      const events: TurnEvent[] = [];
       await chat.send("x", undefined, undefined, undefined, {
-        onStep: (step, maxSteps) => events.push([step, maxSteps]),
+        observer: (event) => events.push(event),
       });
-      expect(events).toEqual([[1, 3]]);
+      expect(events.map((event) => event.kind)).toEqual(["round.start", "turn.end"]);
+      expect(events[0]).toMatchObject({ roundIndex: 1 });
+      expect(events[1]).toMatchObject({ status: "done" });
     } finally {
       chat.close();
       stop();

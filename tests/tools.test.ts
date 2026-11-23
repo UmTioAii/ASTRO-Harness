@@ -61,6 +61,23 @@ test("timeout devolve erro", async () => {
   expect(r.output.toLowerCase()).toContain("timeout");
 });
 
+test("emite tool.start antes da execução e tool.end com a duração (#600)", async () => {
+  const cwd = dir();
+  const events: Array<{ phase: string; callId: string; isError?: boolean; durationMs?: number }> = [];
+  let during: typeof events = [];
+  const probe: Tool = {
+    manifest: { name: "probe", description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs: 1000, retryable: false, idempotent: false, sideEffects: "none", class: "read_common" },
+    execute: async () => { during = [...events]; return { output: "ok" }; },
+  };
+  const ex = new ToolExecutor({ approveTool: () => true, tools: [probe], allow: ["probe"], audit: new Auditor(join(cwd, ".astro", "audit.jsonl")) });
+  await ex.run({ ...ctx(cwd), onToolEvent: (event) => events.push(event) }, { id: "c1", name: "probe", arguments: "{}" });
+  expect(during.map((event) => event.phase)).toEqual(["start"]);
+  expect(events.map((event) => event.phase)).toEqual(["start", "end"]);
+  expect(events[0]).toMatchObject({ callId: "c1", name: "probe" });
+  expect(events[1]).toMatchObject({ callId: "c1", isError: false });
+  expect(typeof events[1]!.durationMs).toBe("number");
+});
+
 test("run_command captura a saída", async () => {
   const cwd = dir();
   const ex = mkExec(cwd);
