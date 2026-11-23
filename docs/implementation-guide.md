@@ -63,14 +63,14 @@ Nenhum PR entra na `main` sem **dois** vereditos no próprio PR.
 Formato do veredito (primeira linha do comentário no PR):
 
 ```
-Revisão: APPROVE
+Review: APPROVE
 1. [sugestão] src/foo.ts:42 — ...
 ```
 
 ou
 
 ```
-Revisão: REQUEST_CHANGES
+Review: REQUEST_CHANGES
 1. [bloqueante] src/tools/run-command.ts:42 — `env` herda `process.env`; cenário: modelo chama `cat ~/.codex/auth.json`. Correção: env sanitizado.
 2. [sugestão] tests/session.test.ts — falta caso maxSteps = 0.
 ```
@@ -86,7 +86,7 @@ Regras:
 | Pré-condição | Verificação |
 |--------------|-------------|
 | CI verde | `test` (Linux + Windows), `eval`, `secrets` |
-| 2 aprovações | `Revisão: APPROVE` dos dois revisores no PR |
+| 2 aprovações | `Review: APPROVE` dos dois revisores no PR |
 | Docs | docs afetados no mesmo PR; arquivo novo em `docs/` entra no `docs/INDEX.md` |
 | Merge | **squash merge** apenas. Branch apagada automaticamente. `main` nunca recebe commit direto. |
 

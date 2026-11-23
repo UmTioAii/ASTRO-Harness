@@ -65,7 +65,7 @@ events and is never rendered.
 - Provider emits reasoning → `▸ reasoning · 4s`, collapsed by default, `ctrl+t` expands.
 - Provider does not emit it → the line does not exist. No placeholder, no fake timer.
 
-## 7. States
+## 6. States
 
 | State | Zone 2 | Zone 3 | Zone 4 |
 |---|---|---|---|
@@ -79,7 +79,7 @@ events and is never rendered.
 Forbidden in every state: step, round and tool counters. Duration and cost are allowed and
 are not progress counters.
 
-## 8. Widths
+## 7. Widths
 
 | Width | Content | Changes |
 |---|---|---|
@@ -92,7 +92,7 @@ The logo is three lines of half-block letters (`█▀▄`), all ASCII-safe for 
 Nothing is centered by terminal width alone; centering is computed from the measured logo
 width so a 60-column window never wraps it.
 
-## 9. Components
+## 8. Components
 
 | File | Role | State |
 |---|---|---|
@@ -110,14 +110,14 @@ Existing components keep their contract: `markdown.tsx`, `diff-viewer.tsx`, `the
 `keybinds.ts`, `commands.ts`, `session-picker.tsx`, `model-picker.tsx`, `config-screen.tsx`,
 `provider-screen.tsx`.
 
-## 10. Keybindings
+## 9. Keybindings
 
 `ctrl+o` expand the last tool (control profile: all tools in the turn) · `ctrl+t` expand
 reasoning · `esc` cancel the turn and mark running entries as failed · `ctrl+c` twice to
 exit · `!cmd` shell · `/` commands. No new binding outside this list; all of them appear in
 `/help`.
 
-## 11. Acceptance
+## 10. Acceptance
 
 - [ ] Snapshots at 120, 80 and 60 columns for the six states.
 - [ ] Property test: no rendered line exceeds the given width, for widths 40–200.
@@ -131,7 +131,7 @@ exit · `!cmd` shell · `/` commands. No new binding outside this list; all of t
 - [ ] A 60-column terminal never wraps a rendered line at any state.
 - [ ] `banner.tsx` is gone and `app.tsx` is under 400 lines.
 
-## 12. Out of scope
+## 11. Out of scope
 
 Subagent tree in the timeline (P4 adds a single `⤷ 2 subagents` line with `ctrl+o`), themes
 beyond the existing tokens, mouse support, image rendering, i18n of the UI (it is written in

@@ -4,7 +4,7 @@
 
 - Status: draft (alpha.5, phase P4)
 - Date: 2026-11-21
-- ADR: 0036 (agents and handoff) and 0037 (per-account concurrency, supersedes ADR-0009 A4)
+- ADR: 0036 (agents and handoff) and 0037 (per-account concurrency, supersedes ADR-0009 A4); both planned for this phase, not yet written
 - Depends on: S1 (profiles, limits), S3 (model routing)
 - Owner files: `src/spawn.ts`, `src/fan-out.ts`, `src/handoff/`, `src/agent-lock.ts`
 

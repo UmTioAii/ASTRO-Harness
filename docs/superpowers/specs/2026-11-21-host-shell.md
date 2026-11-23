@@ -4,7 +4,7 @@
 
 - Status: draft (alpha.5, phase P0.5)
 - Date: 2026-11-21
-- ADR: 0034 (supersedes ADR-0031, accepted 2026-11-20)
+- ADR: 0034 (supersedes ADR-0031; planned for this phase, not yet written)
 - Depends on: S1 (aliases, profiles)
 - Owner files: `src/tools/run-command.ts`, `src/tools/host-shell.ts`,
   `docs/security-threat-matrix.md`
@@ -29,10 +29,20 @@ the fallback, not a requirement.
 }
 ```
 
-`mode` accepts only `"host"` and `"off"` in alpha.5; absent means `"host"`. The Docker path
-stays in `src/tools/run-command.ts`, unreachable from config, with its own tests still
-running, so it does not rot and coverage does not drop. `sandbox` loads as an alias with a
-warning (S1 §5).
+`mode` accepts only `"host"` and `"off"` in alpha.5; absent means `"host"`. No new key can
+select Docker, and the Docker path stays in `src/tools/run-command.ts`, with its own tests
+still running, so it does not rot and coverage does not drop.
+
+A legacy `tools.run_command.sandbox` keeps its schema-1 meaning; the alias never lowers a
+security setting (ADR-0033, ADR-0028 §31):
+
+| Legacy value | Effective behavior |
+|---|---|
+| `false` | `shell.mode: "off"`; `run_command` refuses |
+| `true` / `"docker"` | Docker required; without a Docker binary the tool refuses with `sandbox_required_for_shell` instead of falling back to the host |
+| `"auto"` or absent | host with per-command approval (the alpha.5 default) |
+
+A value that contradicts an explicit `shell.mode` is a config error, not a silent winner.
 
 ## 3. Rules
 
@@ -62,7 +72,9 @@ runtime dependency (ADR-0001).
 `external_directory` triggers its own decision when the working directory or inferred target
 leaves the project. `bypass` asks nothing, so it warns: entering requires explicit consent,
 a persistent on-screen warning stays visible while active, and the switch is recorded in the
-audit log.
+audit log. The `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1` environment gate stays (ADR-0031 §22): in
+`bypass`, a model-requested host command without that variable is refused with
+`host_shell_confirmation_required`. No config layer replaces the gate.
 
 ## 6. Risk consent
 
@@ -91,7 +103,10 @@ supersedes ADR-0031.
 - [ ] An unparsable command is refused with instructions on how to allow it.
 - [ ] `always` writes the prefix rule in the project and the second invocation does not ask.
 - [ ] A command outside the allowlist is asked, even when it looks dangerous.
-- [ ] `bypass` requires consent, shows a persistent warning and records the switch.
+- [ ] `sandbox: true` or `"docker"` without a Docker binary refuses with
+      `sandbox_required_for_shell`; it never runs on the host.
+- [ ] `bypass` requires consent, shows a persistent warning and records the switch; without
+      `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1` the host command is refused.
 - [ ] Every decision is audited with `commandHash`, effect and origin (rule/approval/mode);
       raw command and output never enter audit or ledger (D-11, I-03).
 - [ ] The full suite passes on a machine without Docker, and the Docker path keeps its own

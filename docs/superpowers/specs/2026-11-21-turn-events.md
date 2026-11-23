@@ -4,7 +4,7 @@
 
 - Status: draft (alpha.5, phase P1)
 - Date: 2026-11-21
-- ADR: 0035 (shared with the TUIX spec)
+- ADR: 0035 (shared with the TUIX spec; planned for this phase, not yet written)
 - Depends on: S1 (round naming)
 - Owner files: `src/chat/agent-session.ts`, `src/tools/executor.ts`, `src/chat/hooks.ts`
 
@@ -39,7 +39,7 @@ type TurnEvent =
 
 | Rule | Why |
 |---|---|
-| payload sanitized at the source | I-03, same discipline as `src/chat/hooks.ts` |
+| payload sanitized at the source | I-03, same discipline as `src/chat/hooks.ts`; `tool.start` redacts `arguments` before delivery, so path, query or value content never reaches the observer raw |
 | large results travel by `resultKey` | an event is a signal, not a transport |
 | an observer error never aborts the turn | the observer is a consumer, not a dependency |
 | `roundIndex` is internal | it orders; it is never rendered |
@@ -69,7 +69,8 @@ consumers, not the timeline. The new observer is an additional, optional callbac
 - [ ] `tool.start` reaches the observer before the tool executes and `tool.end` carries its
       real duration and error flag.
 - [ ] A turn cancelled mid-tool marks every pending entry as `failed`.
-- [ ] A tool whose result contains a secret emits a redacted payload (I-03).
+- [ ] A tool whose result contains a secret emits a redacted payload (I-03), and
+      `tool.start.arguments` goes through the same sanitizer before it reaches the observer.
 - [ ] An observer that throws does not change the turn outcome.
 - [ ] A provider without a reasoning channel emits no reasoning event.
 - [ ] `onStep` is gone; `round.start` carries the same timing without exposing a counter.

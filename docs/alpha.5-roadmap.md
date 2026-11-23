@@ -25,10 +25,9 @@ diferentes.
 | Configura em `/config` | modelo, provider, tema, permissão, pasta confiável | tudo do Default **mais** budget, quota, teto de turnos, rodadas (avançado), fallback, multi-agente |
 | Default do produto | **é ele** | precisa escolher explicitamente |
 
-**Decisão de produto:** hoje o default é `preset: "control"` (`src/core/config.ts:146`),
-ou seja, o usuário normal nasce vendo a parafernália. Isso inverte a missão. O default
-passa a ser **Default** (`preset: "default"`), e Control é opt-in explícito, com aviso no
-`/config` de que ele expõe limites e custo.
+**Decisão de produto:** o default do produto é **Default**. #607 já entregou a troca
+(`DEFAULT_PRESET = "default"`, `src/core/config.ts:145`); Control é opt-in explícito, com
+aviso no `/config` de que ele expõe limites e custo.
 
 ### Trocar de perfil
 
@@ -41,44 +40,10 @@ passa a ser **Default** (`preset: "default"`), e Control é opt-in explícito, c
 
 ### Setup inicial (primeira execução)
 
-Roda na primeira execução, **sempre** — é o único caminho que cria config. Nada de config
-criada em silêncio por outro passo.
-
-**Quando roda, por camada:**
-
-| Estado | O que acontece |
-|---|---|
-| sem config global **e** sem config de projeto | wizard completo |
-| global existe, projeto não | mini-setup do projeto (perfil + pasta confiável), reaproveitando providers do global |
-| projeto existe | não roda; nunca sobrescreve |
-
-**Fluxo completo:** termos → perfil → provider → modelo → chave → TUI.
-**Fluxo curto** (provider veio do ambiente): termos → perfil → TUI, com a linha
-*"usando `<provider>` de `$OPENROUTER_API_KEY` — trocar?"* e uma tecla para cair no fluxo
-completo.
-
-**Precedência quando há mais de uma variável:** a ordem do catálogo, e o wizard sempre diz
-qual escolheu. Nunca escolhe silenciosamente entre duas.
-
-**Nunca bloqueia máquina:** sem TTY (CI, pipe, `astro run` em script) não pergunta nada —
-uma linha de aviso, defaults em memória, **nenhuma escrita**. `astro setup` reabre o wizard;
-`--yes` aceita os defaults num terminal.
-
-**O que cada camada ganha:**
-- **global** (`$ASTRO_HOME/config.json`): providers, modelos e `credentialRef`;
-- **projeto** (`astro.config.json`): `preset` e o modelo escolhido;
-- **chave**: cofre (DPAPI no Windows, arquivo `0600` no POSIX) ou `credentialRef` para
-  ambiente — **nunca** no config, em nenhuma das duas camadas.
-
-**Integração obrigatória:** o wizard absorve o `ensureFirstRunConfig` (#559) e roda na
-mesma posição do portão dos termos (`src/tui/run.tsx:212`, antes de `ensureFirstRun()`).
-Se rodar depois, nunca verá "sem config" — outro passo já criou.
-
-**Não criar um terceiro fluxo de provider (auditoria).** Já existem dois: o wizard linear
-de `/provider add|edit` (`src/chat/provider-wizard.ts`, usado pelo REPL) e a tela cheia da
-TUI (`src/tui/provider-screen.tsx`, 706 linhas). O setup **reusa** o primeiro e o segundo
-passa a chamá-lo, em vez de nascer uma terceira implementação de "escolher provider e
-gravar chave".
+Contrato completo e critérios de aceite em
+`docs/superpowers/specs/2026-11-21-setup-wizard.md` (#611). Resumo: roda sempre na primeira
+execução e por camada (global/projeto), absorve o `ensureFirstRunConfig` (#559), não escreve
+nada sem TTY e reusa o wizard de provider existente em vez de criar um terceiro fluxo.
 
 ## 3. O modelo de limites, mastigado
 
@@ -189,7 +154,8 @@ documento que ainda muda é desperdício).
 
 | ID/fase | Issue | Status | Spec | Depende de |
 |---|---|---|---|---|
-| S1/P0 | #594 | **em andamento** | `2026-11-21-limits-and-profiles.md` | — |
+| S1/P0 | #594 | **em andamento** — schema 2.0.0 e UI do `/config` mergeados em #607/#608; runtime, spawn e `/usage` na issue | `2026-11-21-limits-and-profiles.md` | — |
+| S1b/P0 | #611 | planejado | `2026-11-21-setup-wizard.md` | #594 |
 | S2/P0.5 | #599 | planejado | `2026-11-21-host-shell.md` | #594 |
 | S5a/P1 | #600 | planejado | `2026-11-21-turn-events.md` | #594 |
 | S5/P2 | #595 | planejado | `2026-11-21-tuix-design.md` | #594, #600 |
@@ -197,7 +163,7 @@ documento que ainda muda é desperdício).
 | S4/P4 | #602 | planejado | `2026-11-21-agents-and-handoff.md` | #594, #601 |
 | S6/P5 | #603 | planejado | `2026-11-21-tools-contract.md` | — |
 | S7/P5.5 | #604 | planejado | `2026-11-21-web-tools.md` | #603 |
-| P6 | #605 | planejado | carry-over abaixo | #604 |
+| P6 | #605 | planejado | `2026-11-21-carry-over.md` | #604 |
 | S8/P7 | #606 | planejado | `2026-11-21-docs-and-public-repo.md` | todas |
 
 Specs em `docs/superpowers/specs/`. Todas as issues estão abertas para planejamento; só as
@@ -205,11 +171,9 @@ marcadas **em andamento** estão em execução. Aceite e ADR ficam na spec/issue
 
 ### P6 — Carry-over verificado
 
-1. `src/vault.ts` sem lock no read-modify-write (`withFileLock` existe e é usado em
-   `audit`, `ledger`, `agent-lock`).
-2. `src/sanitize-external.ts:54` redige valor só até o primeiro espaço.
-3. `src/vault.ts:76` chama `powershell` pelo PATH.
-4. CI sem execução em tag e sem `bun audit`.
+Critérios de aceite em `docs/superpowers/specs/2026-11-21-carry-over.md`. Quatro itens:
+lock no read-modify-write do cofre, redação no primeiro espaço, `powershell` pelo PATH e CI
+sem execução em tag nem `bun audit`.
 
 Descartados após verificação: IPv4 alternativo no guard de URL (o `URL` canonicaliza),
 `bypass` sem prompt (exige `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1`), "AGENTS diz zero deps"
@@ -220,7 +184,9 @@ Descartados após verificação: IPv4 alternativo no guard de URL (o `URL` canon
 | Documento | O que muda |
 |---|---|
 | `docs/adr/0014` e `docs/adr/0030` | perdem "turno é unidade de interação, não de limite" (P0, ADR-0033) |
-| `docs/adr/0031` | supersededo: host é o único caminho ativo, Docker inativo (P0.5, ADR-0034) |
+| `docs/adr/0031` | superado: shell no host por padrão; Docker fica inativo e só o alias legado mantém o sentido antigo (P0.5, ADR-0034) |
+| `docs/adr/0033` | linha do shell: `shell.mode` é `host`/`off`, e `sandbox` legado mantém o sentido de schema 1 (P0.5, ADR-0034) |
+| `docs/adr/0028` §31 | nenhum alias ou migração rebaixa o valor efetivo de uma chave de segurança; o alias do shell obedece (P0.5) |
 | `docs/adr/0009` A4 | revogado: concorrência por conta com reserva somada (P4, ADR-0037) |
 | `docs/adr/0008` | o alias `maxTurns` do filho passa a significar turnos (P0) |
 | `docs/tui-layout.md` | reescrito no PR de P2, não no P7 |
@@ -254,8 +220,8 @@ Resolvidas:
 6. **Scanner de shell**: tokenizer próprio, sem dependência.
 7. **`always`**: grava a regra de prefixo no **projeto**.
 8. **Shell e permissão**: allowlist pré-aprova, todo o resto pergunta (inclusive perigoso);
-   o harness não impede, avisa; consentimento de risco no setup; `bypass` exige aceite e
-   mostra aviso persistente.
+   o harness não impede, avisa; consentimento de risco no setup; `bypass` exige aceite,
+   aviso persistente e `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1`.
 9. **TUIX**: reescrever `src/tui` no lugar, sem `v2` atrás de flag.
 10. **Catálogo**: TS tipado, em três camadas — `src/models/catalog.ts` (fatos do modelo,
     arquivo único) + `src/providers/<p>/<p>_models.ts` (oferta/preço + `overrides`, nome
@@ -281,12 +247,15 @@ Resolvidas pela auditoria:
 18. **Alias, não reescrita**: chave antiga (`agent.maxSteps`, `sandbox`) carrega com aviso;
     `config migrate` não reescreve valor do usuário (contrato do ADR-0028 mantido).
 19. **Docker inativo**: `shell.mode` só aceita `"host"` ou `"off"` no alpha.5; o caminho
-    Docker fica no código, sem ser selecionável, com testes. Reativar ou remover é issue pós-release.
+    Docker fica no código, sem ser selecionável, com testes. Um `sandbox` legado mantém o
+    sentido de schema 1 (`true`/`"docker"` recusa sem Docker), porque alias nunca rebaixa
+    segurança. Reativar ou remover é issue pós-release.
 20. **Concorrência revoga ADR-0009/A4**: exclusividade por credencial vira concorrência
     controlada por conta, com reserva de budget somada por conta. ADR-0037.
 21. **Idioma**: inglês é a língua do repositório — docs, ADRs, README, UI, erros e código
     novo. Só a conversa fica em pt-BR. Comentário legado se traduz ao tocar no arquivo, sem
-    onda dedicada; não bloqueia release nem anúncio.
+    onda dedicada; não bloqueia release nem anúncio. Exceção única e rastreada: este roadmap
+    e as specs `2026-11-21-*.md` ficam em português até a tradução do P7 (#606).
 
 Nenhuma decisão pendente. O roadmap está fechado para virar issue.
 
@@ -296,10 +265,11 @@ Método: cada referência conferida no arquivo e na linha; cada contrato afirmad
 com o ADR/doc que é dono do assunto; viabilidade checada contra o código real; sustentabilidade
 medida (tamanho, testes, acoplamento).
 
-**Referências: 14 de 14 corretas.** `agent-session.ts:200`, `config.ts:146`,
-`session.ts:503`, `fan-out.ts:94`, `openai-compat.ts:314`, `sanitize-external.ts:54`,
-`task.ts:3`, `run.tsx:212`, `vault.ts:76`, `compact.ts:16`, `spawn.ts:297`, mais
-`config.ts:105-125`, `config.ts:1325-1338`, `session.ts:196-204`.
+**Referências conferidas no commit do planejamento e atualizadas quando #607/#608 moveram o
+código.** `agent-session.ts:200`, `config.ts:145`, `session.ts:503`, `fan-out.ts:94`,
+`openai-compat.ts:314`, `sanitize-external.ts:54`, `task.ts:3`, `run.tsx:212`, `vault.ts:76`,
+`compact.ts:16`, `spawn.ts:297`, mais `config.ts:105-125`, `config.ts:1325-1338`,
+`session.ts:196-204`.
 
 **Corrigido neste documento:** duas fases **ausentes** do pacote apesar de pedidas — web
 (`web_search`/`web_fetch`, agora P5.5) e docs/README/repo público (agora P7); colisão

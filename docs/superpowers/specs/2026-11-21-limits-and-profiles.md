@@ -2,7 +2,7 @@
 
 > Objective: make turns the primary limit, rounds the loop valve, and Default the product profile.
 
-- Status: draft (alpha.5, phase P0)
+- Status: in progress (schema 2.0.0 and the `/config` exposure merged in #607/#608)
 - Date: 2026-11-21
 - ADR: 0033 (supersedes the "turn is not a limit" decision in ADR-0014 and ADR-0030)
 - Depends on: none
@@ -61,7 +61,9 @@ meaning silently reinterprets existing configs, so:
 field-level migration. This spec keeps that contract:
 
 - `agent.maxSteps` loads as an alias of `run.maxRoundsPerTurn` with a warning on load;
-- `sandbox` loads as an alias of `shell.mode` with a warning on load;
+- `sandbox` keeps its schema-1 meaning for the shell; the alias table is owned by
+  `2026-11-21-host-shell.md` §2, because mapping `true`/`"docker"` to the host would lower a
+  security setting;
 - no command rewrites a value the user wrote. A field-level migration is a separate issue.
 
 ## 6. Profiles
@@ -104,12 +106,21 @@ curated price shows `n/d` once and never breaks the sum.
       `/config` and reports.
 - [ ] `step` no longer appears in code or diagnostics; `round` replaces it.
 
-## 10. RED that already exists
+## 10. What #607 and #608 already merged
 
-Five tests pin the current refusal of `run.maxTurns` and must flip in the same PR:
-`tests/config.test.ts:651`, `tests/config-preset.test.ts:69`,
-`tests/budget-config.test.ts:53`, `tests/config-overlay.test.ts:548`,
-`tests/config-edit.test.ts:31`. The spawn alias flips at `tests/spawn.test.ts:67`.
+Schema 2.0.0, both limit keys, their defaults (500 / 500), the unlimited warnings, the
+`simple` alias and the `/config` exposure landed in #607 and #608. Those contract tests
+already assert the new behaviour; #594 must not "flip" them again.
+
+Remaining RED for #594, written before the code:
+
+| Behaviour | Test to add or update |
+|---|---|
+| a turn with 12 rounds and 40 tool calls completes | new `tests/limits-turn.test.ts` |
+| `run.maxTurns: 1` lets the first turn finish and refuses the second with a human message | `tests/chat-agent-session.test.ts` |
+| `run.maxRoundsPerTurn` stops an unconverging turn with `MaxRoundsError` | new `tests/limits-round.test.ts` |
+| spawn maps `maxTurns` to turns, `maxRounds` to rounds and rejects `maxSteps` | `tests/spawn.test.ts:67` |
+| Default renders no turn, round or tool counter in the conversation or `/usage` | `tests/chat-usage.test.ts`, `tests/tui-banner.test.tsx` |
 
 ## 11. Out of scope
 

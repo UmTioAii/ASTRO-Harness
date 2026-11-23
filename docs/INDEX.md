@@ -26,7 +26,8 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/superpowers/plans/` | Ao executar uma frente do planejamento; roadmap de issues abertas em `2026-11-01-roadmap-execucao-issues-abertas.md` | 1 por frente |
 | `docs/superpowers/specs/` | Antes de implementar uma frente aprovada; anexos em `2026-11-08-anexos-attachments-design.md` (#392) | 1 por frente |
 | `docs/alpha.5-roadmap.md` | Ordem, dependências e decisões do pacote alpha.5 | ~317, exceção temporária registrada no próprio roadmap |
-| `docs/superpowers/specs/2026-11-21-limits-and-profiles.md` | S1/P0: limites, schema 2.0.0 e perfis Default/Control | ~112 |
+| `docs/superpowers/specs/2026-11-21-limits-and-profiles.md` | S1/P0: limites, schema 2.0.0 e perfis Default/Control | ~120 |
+| `docs/superpowers/specs/2026-11-21-setup-wizard.md` | S1b/P0: setup da primeira execução por camada (#611) | ~78 |
 | `docs/superpowers/specs/2026-11-21-host-shell.md` | S2/P0.5: shell no host, scanner e aprovações | ~99 |
 | `docs/superpowers/specs/2026-11-21-turn-events.md` | S5a/P1: eventos ao vivo do turno e canal de raciocínio | ~78 |
 | `docs/superpowers/specs/2026-11-21-tuix-design.md` | S5/P2: timeline TUIX em fluxo contínuo | ~140 |
@@ -34,6 +35,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/superpowers/specs/2026-11-21-agents-and-handoff.md` | S4/P4: agentes, concorrência e handoff | ~93 |
 | `docs/superpowers/specs/2026-11-21-tools-contract.md` | S6/P5: contrato de saída das tools | ~44 |
 | `docs/superpowers/specs/2026-11-21-web-tools.md` | S7/P5.5: busca, fetch, cache e citações | ~62 |
+| `docs/superpowers/specs/2026-11-21-carry-over.md` | P6: fechamento dos quatro gaps de segurança e CI (#605) | ~42 |
 | `docs/superpowers/specs/2026-11-21-docs-and-public-repo.md` | S8/P7: tradução, README e higiene do repositório | ~69 |
 | `docs/roadmap.md` | Histórico das fases concluídas (F0–F7) | ~70 |
 | `docs/roadmap-complementar.md` | Itens planejados das camadas 0–3 (F-xx, T, C, P) | ~120 |

@@ -32,7 +32,7 @@ Details and IDs in `docs/invariants.md`.
 
 - A secret only enters through the local vault (ADR-0019) or a named environment variable. It never appears in a log, audit, ledger, error or prompt (I-03).
 - Deny by default: a tool outside the allowlist does not run (I-01).
-- A file path stays inside the `cwd` unless a rule explicitly allows otherwise (I-11).
+- A file path stays inside the `cwd` unless a rule explicitly allows otherwise (I-11, filesystem sandbox clause; the shell boundary is the rest of I-11).
 - The user prompt is never persisted. Only `taskHash`.
 - A behaviour change requires a test that fails first (RED) and passes after (GREEN). The RED goes into the PR description.
 
@@ -70,7 +70,7 @@ These rules exist to reduce the token cost of reading the project.
 - Point edits. Do not rewrite a whole file to change one line.
 - Limits: a doc file up to 150 lines; an ADR up to 60 lines. Above that, split.
 - A new file in `docs/` enters `docs/INDEX.md` in the same PR.
-- Language: **English is the repository language** — docs, ADRs, README, UI strings and error messages. Portuguese is used only for chat explanations to the maintainer. Collaboration artifacts (commits and PR/issue titles, bodies, comments) are English; chat reports are Portuguese. New code and new comments are written in English; a legacy Portuguese comment is translated when you touch the file, never as a separate sweep (see `docs/alpha.5-roadmap.md`, P7).
+- Language: **English is the repository language** — docs, ADRs, README, UI strings and error messages. Portuguese is used only for chat explanations to the maintainer. Collaboration artifacts (commits and PR/issue titles, bodies, comments) are English; chat reports are Portuguese. New code and new comments are written in English; a legacy Portuguese comment is translated when you touch the file, never as a separate sweep (see `docs/alpha.5-roadmap.md`, P7). Sole tracked exception: the alpha.5 planning set (`docs/alpha.5-roadmap.md` and `docs/superpowers/specs/2026-11-21-*.md`) stays in Portuguese and is translated in P7 (#606), because a document that still changes is cheaper to translate once.
 
 ## Do not
 
