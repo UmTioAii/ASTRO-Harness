@@ -172,18 +172,11 @@ describe("list_dir output contract (S6, #603)", () => {
     writeFileSync(join(cwd, "beta", "b2.txt"), "x");
     writeFileSync(join(cwd, "beta", "sub", "b3.txt"), "x");
 
-    // 20 tokens -> 64-char budget: only the first entry fits, the cut lands on
-    // a directory (alpha is taken, its file is not, beta and its subtree are not).
+    // 20 tokens -> 64-char budget: only alpha fits, so the cut lands on a directory.
     const result = await listDirTool.execute({}, { ...ctx(cwd), outputLimitTokens: 20 });
-    const body = JSON.parse(result.output) as { truncated?: boolean };
-    expect(body.truncated).toBe(true);
+    expect((JSON.parse(result.output) as { truncated?: boolean }).truncated).toBe(true);
     // kept: alpha. omitted: a.txt, beta, b1, b2, sub, b3.
-    expect(result.truncation).toEqual({
-      removed: 6,
-      total: 7,
-      unit: "entries",
-      hint: listDirTool.manifest.output!.hint,
-    });
+    expect(result.truncation).toEqual({ removed: 6, total: 7, unit: "entries", hint: listDirTool.manifest.output!.hint });
     expect(result.output).toContain("6 of 7 entries omitted");
   });
 

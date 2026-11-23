@@ -256,11 +256,7 @@ export class ToolExecutor {
     return result;
   }
 
-  /**
-   * Um erro nunca sai sem código da taxonomia fechada (S6, #603): resultado de
-   * plugin ou tool legada sem `failure` vira `failed`; um código inventado
-   * também, para o contrato não vazar valores fora do vocabulário.
-   */
+  /** A result without a valid taxonomy code is `failed` (S6, #603), so a plugin cannot leak one. */
   private classify(result: ToolResult): ToolResult {
     if (result.isError !== true) return result;
     return isToolFailure(result.failure) ? result : { ...result, failure: "failed" };

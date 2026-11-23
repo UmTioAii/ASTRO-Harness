@@ -1,11 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { failureResult } from "./contract";
 import { resolveWritableWithin } from "./paths";
 import { ToolError, type Tool, type ToolResult } from "./types";
-
-function failure(message: string): ToolResult {
-  return { output: message, isError: true };
-}
 
 function writeInput(input: unknown): { path: string; content: string } {
   if (typeof input !== "object" || input === null) {
@@ -50,15 +47,27 @@ export const writeFileTool: Tool = {
   },
 
   async execute(input, ctx): Promise<ToolResult> {
+    let path: string;
+    let content: string;
     try {
-      const { path, content } = writeInput(input);
-      const target = resolveWritableWithin(ctx.cwd, path, ctx.protectedPaths ?? []);
+      ({ path, content } = writeInput(input));
+    } catch (error) {
+      return failureResult(error instanceof Error ? error.message : String(error), "invalid");
+    }
+    let target: string;
+    try {
+      target = resolveWritableWithin(ctx.cwd, path, ctx.protectedPaths ?? []);
+    } catch (error) {
+      // I-11: a confinement or reserved-path refusal is a denial, not a failure.
+      return failureResult(error instanceof Error ? error.message : String(error), "denied");
+    }
+    try {
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, content, "utf8");
       return { output: `arquivo escrito: ${path}` };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return failure(`erro ao escrever arquivo: ${message}`);
+      return failureResult(`erro ao escrever arquivo: ${message}`, "failed");
     }
   },
 };

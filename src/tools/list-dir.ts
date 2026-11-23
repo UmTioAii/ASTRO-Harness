@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { redactSecrets } from "../sanitize-external";
 import { contentBudgetChars, failureResult, truncationReport } from "./contract";
 import { resolveWithin } from "./paths";
-import { ToolError, type Tool, type ToolResult } from "./types";
+import { type Tool, type ToolResult } from "./types";
 
 const DEFAULT_DEPTH = 3;
 const MAX_DEPTH = 10;
@@ -32,11 +32,11 @@ interface Budget {
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".astro", "dist", "coverage", ".worktrees"]);
 
+/** Fixed denial text: never echoes the input or an absolute path from a fs error. */
+const OUTSIDE_MESSAGE = "path outside the working directory";
+
 function parseInput(input: unknown): ListDirInput {
-  const raw = (typeof input === "object" && input !== null ? input : {}) as {
-    path?: unknown;
-    depth?: unknown;
-  };
+  const raw = (typeof input === "object" && input !== null ? input : {}) as { path?: unknown; depth?: unknown };
   const path = typeof raw.path === "string" && raw.path.length > 0 ? raw.path : ".";
   let depth = typeof raw.depth === "number" && Number.isFinite(raw.depth) ? raw.depth : DEFAULT_DEPTH;
   if (depth < 1) depth = 1;
@@ -57,37 +57,62 @@ function take(name: string, budget: Budget): boolean {
   return true;
 }
 
+/** Counts a skipped directory's subtree, same depth limit, so `removed` is not one entry. */
+function countHidden(dir: string, depth: number, budget: Budget): void {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      budget.omitted++;
+      if (depth > 1) countHidden(join(dir, entry.name), depth - 1, budget);
+    } else if (entry.isFile()) {
+      budget.omitted++;
+    }
+  }
+}
+
 /** Constrói a árvore de diretórios a partir de `dir`, até `depth` níveis. */
-function buildTree(dir: string, depth: number, budget: Budget): DirNode {
+function buildTree(dir: string, name: string, depth: number, budget: Budget): DirNode {
   const children: DirNode[] = [];
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch {
-    return { name: basename(dir), type: "dir" };
+    return { name, type: "dir" };
   }
+  // Deterministic order before the cut: same entries inside the ceiling on every OS.
+  entries.sort((a, b) =>
+    a.isDirectory() === b.isDirectory() ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.isDirectory() ? -1 : 1);
 
   for (const entry of entries) {
     // I-03: redact at the source, before any cut can leave a partial value.
-    const name = redactSecrets(entry.name);
+    const entryName = redactSecrets(entry.name);
     // Não segue symlink nem diretórios ignorados
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
-      if (!take(name, budget)) continue;
+      if (!take(entryName, budget)) {
+        if (depth > 1) countHidden(join(dir, entry.name), depth - 1, budget);
+        continue;
+      }
       if (depth > 1) {
-        children.push(buildTree(join(dir, entry.name), depth - 1, budget));
+        children.push(buildTree(join(dir, entry.name), entryName, depth - 1, budget));
       } else {
-        children.push({ name, type: "dir" });
+        children.push({ name: entryName, type: "dir" });
       }
     } else if (entry.isFile()) {
-      if (!take(name, budget)) continue;
-      children.push({ name, type: "file" });
+      if (!take(entryName, budget)) continue;
+      children.push({ name: entryName, type: "file" });
     }
     // symlinks e outros tipos são omitidos
   }
 
   children.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
-  return { name: basename(dir), type: "dir", children };
+  return { name, type: "dir", children };
 }
 
 /** Lista a árvore de diretórios com profundidade configurável, confinada ao cwd. */
@@ -125,9 +150,9 @@ export const listDirTool: Tool = {
       let root: string;
       try {
         root = resolveWithin(ctx.cwd, path);
-      } catch (error) {
-        // I-11: a confinement refusal is a denial, not a crash.
-        return failureResult(error instanceof Error ? error.message : String(error), "denied");
+      } catch {
+        // I-11 + I-03: a fixed denial, never the input or an absolute fs path.
+        return failureResult(OUTSIDE_MESSAGE, "denied");
       }
 
       // Caminho precisa existir e ser diretório
@@ -143,7 +168,7 @@ export const listDirTool: Tool = {
 
       const ceiling = listDirTool.manifest.output!;
       const budget: Budget = { cap: contentBudgetChars(ceiling, ctx), chars: 0, kept: 0, omitted: 0, truncated: false };
-      const tree = buildTree(root, depth, budget);
+      const tree = buildTree(root, redactSecrets(basename(root)), depth, budget);
       if (!budget.truncated) return { output: JSON.stringify(tree) };
 
       const { field, marker } = truncationReport({
@@ -154,7 +179,6 @@ export const listDirTool: Tool = {
       });
       return { output: JSON.stringify({ ...tree, truncated: true, notice: marker }), truncation: field };
     } catch (error) {
-      if (error instanceof ToolError) return failureResult(error.message, "invalid");
       const message = error instanceof Error ? error.message : String(error);
       return failureResult(`erro ao listar diretório: ${message}`, "failed");
     }

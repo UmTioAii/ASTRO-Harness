@@ -124,6 +124,12 @@ test("tool.result do journal (dedup) também carrega durationMs", async () => {
 });
 
 // S6 (#603): the executor classifies every failure with the closed taxonomy.
+/** Minimal tool with the required manifest fields. */
+const toolOf = (name: string, execute: Tool["execute"], timeoutMs = 1000): Tool => ({
+  manifest: { name, description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs, retryable: false, idempotent: true, sideEffects: "none", class: "read_common" },
+  execute,
+});
+
 test("taxonomy: unknown tool and allowlist denial are denied, bad arguments are invalid", async () => {
   const cwd = dir();
   const ex = mkExec(cwd);
@@ -135,38 +141,20 @@ test("taxonomy: unknown tool and allowlist denial are denied, bad arguments are 
 
 test("taxonomy: a tool timeout is timeout", async () => {
   const cwd = dir();
-  const slow: Tool = {
-    manifest: { name: "slow", description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs: 30, retryable: false, idempotent: true, sideEffects: "none", class: "read_common" },
-    execute: () => new Promise<ToolResult>(() => {}),
-  };
+  const slow = toolOf("slow", () => new Promise<ToolResult>(() => {}), 30);
   const ex = new ToolExecutor({ approveTool: () => true, tools: [slow], allow: ["slow"], audit: new Auditor(join(cwd, ".astro", "a4.jsonl")) });
   expect((await ex.run(ctx(cwd), { id: "1", name: "slow", arguments: "{}" })).failure).toBe("timeout");
 });
 
-test("taxonomy: a thrown error is failed and an unclassified failure defaults to failed", async () => {
+test("taxonomy: a throw, an unclassified result and an unknown code are failed", async () => {
   const cwd = dir();
-  const boom: Tool = {
-    manifest: { name: "boom", description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs: 1000, retryable: false, idempotent: true, sideEffects: "none", class: "read_common" },
-    execute: () => { throw new Error("boom"); },
-  };
-  const plain: Tool = {
-    manifest: { name: "plain", description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs: 1000, retryable: false, idempotent: true, sideEffects: "none", class: "read_common" },
-    execute: async () => ({ output: "no", isError: true }),
-  };
-  const bogus: Tool = {
-    manifest: { name: "bogus", description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs: 1000, retryable: false, idempotent: true, sideEffects: "none", class: "read_common" },
-    execute: async () => ({ output: "no", isError: true, failure: "bogus" }) as unknown as ToolResult,
-  };
-  const ex = new ToolExecutor({
-    approveTool: () => true,
-    tools: [boom, plain, bogus],
-    allow: ["boom", "plain", "bogus"],
-    audit: new Auditor(join(cwd, ".astro", "a5.jsonl")),
-  });
-  expect((await ex.run(ctx(cwd), { id: "1", name: "boom", arguments: "{}" })).failure).toBe("failed");
-  expect((await ex.run(ctx(cwd), { id: "2", name: "plain", arguments: "{}" })).failure).toBe("failed");
-  // A code outside the closed set never reaches the caller.
-  expect((await ex.run(ctx(cwd), { id: "3", name: "bogus", arguments: "{}" })).failure).toBe("failed");
+  const boom = toolOf("boom", () => { throw new Error("boom"); });
+  const plain = toolOf("plain", async () => ({ output: "no", isError: true }));
+  const bogus = toolOf("bogus", async () => ({ output: "no", isError: true, failure: "bogus" }) as unknown as ToolResult);
+  const ex = new ToolExecutor({ approveTool: () => true, tools: [boom, plain, bogus], allow: ["boom", "plain", "bogus"], audit: new Auditor(join(cwd, ".astro", "a5.jsonl")) });
+  for (const name of ["boom", "plain", "bogus"]) {
+    expect((await ex.run(ctx(cwd), { id: name, name, arguments: "{}" })).failure).toBe("failed");
+  }
 });
 
 test("taxonomy: write_file confinement refusal is denied, bad input is invalid", async () => {
