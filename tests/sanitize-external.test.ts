@@ -143,6 +143,13 @@ test("redaction stops at the next assignment so the following secret is still re
   expect(out).toBe('x-api-key: [REDACTED] TOKEN="[REDACTED]"');
 });
 
+test("redaction is idempotent for the [REDACTED] marker (#605)", () => {
+  const once = redactSecrets("password=value with spaces");
+  expect(once).toBe("password=[REDACTED]");
+  expect(redactSecrets(once)).toBe(once);
+  expect(redactSecrets(redactSecrets(once))).toBe(once);
+});
+
 test("sanitizePromptText remove C1 (CSI), bidi, ZWSP e surrogate solto (#536)", () => {
   const csi = sanitizePromptText("echo ok\u009b2J\u009bHrm -rf build");
   expect(csi).not.toContain("\u009b");
