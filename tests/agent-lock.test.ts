@@ -56,7 +56,7 @@ describe("lock exclusivo de conta por agente ativo (A4, PS-5)", () => {
     expect(JSON.stringify(audit.readAll())).not.toContain("sk-");
   });
 
-  test("segunda aquisição da mesma conta falha com account_locked e nomeia o dono", () => {
+  test("duas execuções compartilham a conta; a terceira falha com account_locked e nomeia o dono", () => {
     const { ledger, audit } = setup();
     acquireAgentLock(ledger, audit, {
       run: "r1",
@@ -65,13 +65,20 @@ describe("lock exclusivo de conta por agente ativo (A4, PS-5)", () => {
       provider: "nvidia",
       credentialRef: "NVIDIA_API_KEY",
     });
+    acquireAgentLock(ledger, audit, {
+      run: "r2",
+      agent_id: "coder",
+      session_id: "r2",
+      provider: "nvidia",
+      credentialRef: "NVIDIA_API_KEY",
+    });
 
     let error: unknown;
     try {
       acquireAgentLock(ledger, audit, {
-        run: "r2",
-        agent_id: "coder",
-        session_id: "r2",
+        run: "r3",
+        agent_id: "reviewer",
+        session_id: "r3",
         provider: "nvidia",
         credentialRef: "NVIDIA_API_KEY",
       });
@@ -81,13 +88,12 @@ describe("lock exclusivo de conta por agente ativo (A4, PS-5)", () => {
 
     expect(error).toBeInstanceOf(AccountLockedError);
     expect((error as AccountLockedError).code).toBe("account_locked");
-    expect((error as Error).message).toContain("planner");
-    expect((error as Error).message).toContain("r1");
-    expect(ledger.readAllEntries().filter((e) => e.kind === "agent")).toHaveLength(1);
+    expect((error as Error).message).toContain("2 execuções");
+    expect(ledger.readAllEntries().filter((e) => e.kind === "agent")).toHaveLength(2);
     const denied = audit.readAll().filter((e) => e.tipo === "agent.lock.denied");
     expect(denied).toHaveLength(1);
     expect(denied[0]!.payload).toMatchObject({
-      agent_id: "coder",
+      agent_id: "reviewer",
       accountRef: "NVIDIA_API_KEY",
       holder: { run: "r1", agent_id: "planner" },
     });
@@ -146,12 +152,13 @@ describe("lock exclusivo de conta por agente ativo (A4, PS-5)", () => {
   test("provider sem credencial usa o provider como conta; providers distintos não colidem", () => {
     const { ledger, audit } = setup();
     acquireAgentLock(ledger, audit, { run: "r1", agent_id: "a", session_id: "r1", provider: "local" });
+    acquireAgentLock(ledger, audit, { run: "r1", agent_id: "b", session_id: "r1", provider: "local" });
 
     expect(() =>
-      acquireAgentLock(ledger, audit, { run: "r1", agent_id: "b", session_id: "r1", provider: "local" }),
+      acquireAgentLock(ledger, audit, { run: "r1", agent_id: "c", session_id: "r1", provider: "local" }),
     ).toThrow(AccountLockedError);
     expect(() =>
-      acquireAgentLock(ledger, audit, { run: "r1", agent_id: "c", session_id: "r1", provider: "other" }),
+      acquireAgentLock(ledger, audit, { run: "r1", agent_id: "d", session_id: "r1", provider: "other" }),
     ).not.toThrow();
     expect(accountRefOf({ provider: "local" })).toBe("provider:local");
   });
@@ -372,14 +379,16 @@ describe("lock exclusivo de conta por agente ativo (A4, PS-5)", () => {
     })).not.toThrow();
   });
 
-  test("mover para conta ocupada falha e preserva o lock atual", () => {
+  test("mover para conta no limite falha e preserva o lock atual", () => {
     const { ledger, audit } = setup();
     acquireAgentLock(ledger, audit, {
       run: "r1", agent_id: "planner", session_id: "r1", provider: "nvidia", credentialRef: "A_KEY",
     });
-    acquireAgentLock(ledger, audit, {
-      run: "r2", agent_id: "coder", session_id: "r2", provider: "openrouter", credentialRef: "B_KEY",
-    });
+    for (const [run, agent] of [["r2", "coder"], ["r3", "reviewer"]] as const) {
+      acquireAgentLock(ledger, audit, {
+        run, agent_id: agent, session_id: run, provider: "openrouter", credentialRef: "B_KEY",
+      });
+    }
 
     expect(() => moveAgentLock(ledger, audit, {
       run: "r1", agent_id: "planner", provider: "openrouter", model: "m2", credentialRef: "B_KEY", reason: "outage",

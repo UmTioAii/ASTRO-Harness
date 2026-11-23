@@ -71,7 +71,7 @@ function cli(dir: string, cfgPath: string, args: string[]) {
 }
 
 describe("astro locks (#527)", () => {
-  test("lista a conta presa com run, agente, conta, pid e idade", async () => {
+  test("lista a execução ativa com run, agente, conta, pid e idade", async () => {
     const { dir, cfgPath } = setup([
       { run: "run-a", agent: "default", pid: process.pid, provider: "proj", model: "p1", credentialRef: "SENTINEL_KEY" },
     ]);
@@ -87,13 +87,13 @@ describe("astro locks (#527)", () => {
     expect(out).toContain("há ");
   });
 
-  test("sem conta presa sai 0 com mensagem clara", async () => {
+  test("sem execução ativa sai 0 com mensagem clara", async () => {
     const { dir, cfgPath } = setup();
 
     const { out, code } = await cli(dir, cfgPath, ["locks"]);
 
     expect(code).toBe(0);
-    expect(out).toContain("nenhuma conta presa");
+    expect(out).toContain("nenhuma execução ativa");
   });
 
   test("--json devolve array sem valor de segredo", async () => {

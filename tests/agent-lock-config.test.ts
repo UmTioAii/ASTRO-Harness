@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ConfigError, validateConfig } from "../src/core/config";
+import { validateConfig } from "../src/core/config";
 
 function cfg(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -16,13 +16,12 @@ function cfg(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-describe("teto de agentes ativos vs contas declaradas (A2, ADR-0008)", () => {
-  test("agents nomeados exigem ao menos 2 contas: max_active_exceeds_accounts", () => {
+describe("teto de agentes ativos e contas compartilhadas (ADR-0037)", () => {
+  test("agents nomeados carregam com uma única conta: contas são compartilhadas até o limite", () => {
     const one = cfg({
       providers: { p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "P1_KEY" } },
     });
-    expect(() => validateConfig(one)).toThrow(ConfigError);
-    expect(() => validateConfig(one)).toThrow(/max_active_exceeds_accounts/);
+    expect(() => validateConfig(one)).not.toThrow();
   });
 
   test("duas contas declaradas passam e maxActive fica ausente", () => {
@@ -31,14 +30,14 @@ describe("teto de agentes ativos vs contas declaradas (A2, ADR-0008)", () => {
     expect(parsed.maxActive).toBeUndefined();
   });
 
-  test("credenciais repetidas contam como uma única conta", () => {
+  test("credenciais repetidas não barram a config: a conta é compartilhada", () => {
     const shared = cfg({
       providers: {
         p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "SAME_KEY" },
         p2: { kind: "openai-compat", baseUrl: "http://p2/v1", credentialRef: "SAME_KEY" },
       },
     });
-    expect(() => validateConfig(shared)).toThrow(/max_active_exceeds_accounts/);
+    expect(() => validateConfig(shared)).not.toThrow();
   });
 
   test("provider sem credencial conta como conta própria por provider", () => {
@@ -54,12 +53,12 @@ describe("teto de agentes ativos vs contas declaradas (A2, ADR-0008)", () => {
     expect(() => validateConfig(keyless)).not.toThrow();
   });
 
-  test("maxActive=2 com duas contas passa (teto efetivo da v1)", () => {
+  test("maxActive=2 com duas contas passa", () => {
     const parsed = validateConfig(cfg({ agents: { maxActive: 2, planner: { model: "p1/m1" } } }));
     expect(parsed.maxActive).toBe(2);
   });
 
-  test("maxActive declarado é validado contra as contas (v2: 4)", () => {
+  test("maxActive declarado não é mais limitado pelo número de contas", () => {
     const three = cfg({
       providers: {
         p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "P1_KEY" },
@@ -68,20 +67,7 @@ describe("teto de agentes ativos vs contas declaradas (A2, ADR-0008)", () => {
       },
       agents: { maxActive: 4, planner: { model: "p1/m1" } },
     });
-    expect(() => validateConfig(three)).toThrow(/max_active_exceeds_accounts/);
-
-    const four = cfg({
-      providers: {
-        p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "P1_KEY" },
-        p2: { kind: "openai-compat", baseUrl: "http://p2/v1", credentialRef: "P2_KEY" },
-        p3: { kind: "openai-compat", baseUrl: "http://p3/v1", credentialRef: "P3_KEY" },
-        p4: { kind: "openai-compat", baseUrl: "http://p4/v1", credentialRef: "P4_KEY" },
-      },
-      agents: { maxActive: 4, planner: { model: "p1/m1" } },
-    });
-    const parsed = validateConfig(four);
-    expect(parsed.maxActive).toBe(4);
-    expect(Object.keys(parsed.agents ?? {})).toEqual(["planner"]);
+    expect(validateConfig(three).maxActive).toBe(4);
   });
 
   test("maxActive inválido falha na validação da config", () => {
