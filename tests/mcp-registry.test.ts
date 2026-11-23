@@ -25,9 +25,15 @@ process.stdin.on("data", (chunk) => {
     if (msg.method === "initialize") {
       if (process.env.PID_FILE !== undefined) appendFileSync(process.env.PID_FILE, process.pid + "\\n");
       // Parks the handshake until the gate file appears / while the hold file exists, so a test that
-      // closes mid-connect never races a fixed delay (#628).
-      while (process.env.INIT_GATE !== undefined && !existsSync(process.env.INIT_GATE)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-      while (process.env.INIT_HOLD !== undefined && existsSync(process.env.INIT_HOLD)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      // closes mid-connect never races a fixed delay (#628). Bounded: a test that dies before
+      // releasing it must not leave a child spinning on Atomics.wait forever (#628).
+      const until = Date.now() + 15_000;
+      while (Date.now() < until) {
+        if (process.env.INIT_GATE !== undefined && !existsSync(process.env.INIT_GATE)) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); continue; }
+        if (process.env.INIT_HOLD !== undefined && existsSync(process.env.INIT_HOLD)) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); continue; }
+        break;
+      }
+      if (Date.now() >= until) process.exit(0); // nobody released it: leave no CPU-burning orphan
       if (process.env.INIT_DELAY !== undefined) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.INIT_DELAY));
       reply({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stdio-registry", version: "1" } } });
     } else if (msg.method === "tools/list") reply({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "echo" }, { name: "boom" }, { name: "suicide" }] } });
@@ -174,12 +180,19 @@ test("close durante reconexão não deixa órfão e classifica o erro", async ()
 
   writeFileSync(hold, "1"); // o próximo initialize fica parado até o arquivo sair
   const inFlight = registry.call("fs", "echo", {});
-  await waitFor(() => pids(pidFile).length === 2, "reconexão spawnou (initialize parado no hold)");
-  registry.close();
-  // The reconnect can only finish after close(), so no fixed window decides the outcome (#628).
-  rmSync(hold);
-  await expect(inFlight).rejects.toThrow(/fechado/);
-  await expect(waitDead(pids(pidFile)[1]!)).resolves.toBe(true); // cliente pós-close é fechado
+  try {
+    await waitFor(() => pids(pidFile).length === 2, "reconexão spawnou (initialize parado no hold)");
+    registry.close();
+    // The reconnect can only finish after close(), so no fixed window decides the outcome (#628).
+    rmSync(hold);
+    await expect(inFlight).rejects.toThrow(/fechado/);
+    await expect(waitDead(pids(pidFile)[1]!)).resolves.toBe(true); // cliente pós-close é fechado
+  } finally {
+    // A failed wait above must not leave the reconnect parked: close first, then release the hold (#628).
+    registry.close();
+    rmSync(hold, { force: true });
+    await inFlight.catch(() => {});
+  }
 }, 20_000);
 
 test("close durante connectAll não deixa órfãos", async () => {
@@ -189,14 +202,23 @@ test("close durante connectAll não deixa órfãos", async () => {
   const gate = join(dir, "init-gate");
   const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile), lento: stdioCfg(slowPidFile, { gate }) }, warn: () => {} });
   const inFlight = registry.connectAll();
-  await waitFor(() => pids(slowPidFile).length === 1, "fs conectou e o lento está no initialize");
-  // close lands while the handshake is still parked (never inside a fixed window) and the handshake
-  // only finishes after it, so the assertion below cannot depend on runner speed (#628).
-  registry.close();
-  writeFileSync(gate, "go");
-  await expect(inFlight).rejects.toThrow(/fechado/);
-  await expect(waitDead(pids(slowPidFile)[0]!)).resolves.toBe(true);
-  await expect(waitDead(pids(pidFile)[0]!)).resolves.toBe(true); // o servidor que já tinha conectado também morre
+  try {
+    await waitFor(() => pids(pidFile).length === 1, "fs connected");
+    expect(pids(pidFile)).toHaveLength(1); // the already-connected server exists before close
+    await waitFor(() => pids(slowPidFile).length === 1, "the slow server is parked in initialize");
+    // close lands while the handshake is still parked (never inside a fixed window) and the handshake
+    // only finishes after it, so the assertion below cannot depend on runner speed (#628).
+    registry.close();
+    writeFileSync(gate, "go");
+    await expect(inFlight).rejects.toThrow(/fechado/);
+    await expect(waitDead(pids(slowPidFile)[0]!)).resolves.toBe(true);
+    await expect(waitDead(pids(pidFile)[0]!)).resolves.toBe(true); // o servidor que já tinha conectado também morre
+  } finally {
+    // A failed wait above must not leak the parked child: close first, then release the handshake (#628).
+    registry.close();
+    writeFileSync(gate, "go");
+    await inFlight.catch(() => {});
+  }
 }, 20_000);
 
 test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e reseta no sucesso", async () => {
