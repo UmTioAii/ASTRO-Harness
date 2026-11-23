@@ -11,9 +11,10 @@
 
 ## 1. Goal
 
-Agent shell commands run on the host with the user's authority, protected by ordered rules,
-a fail-closed scanner, explicit approval and audit. Docker is inactive: not the default, not
-the fallback, not a requirement.
+Agent shell commands run on the host with the user's authority, protected by ordered rules, a
+fail-closed scanner, explicit approval and audit. Docker is not the default and no new key
+selects it: `shell.mode` offers only `host` and `off`, while a legacy `sandbox` that names
+Docker keeps that requirement (§2).
 
 ## 2. Config
 
@@ -34,7 +35,7 @@ select Docker, and the Docker path stays in `src/tools/run-command.ts`, with its
 still running, so it does not rot and coverage does not drop.
 
 A legacy `tools.run_command.sandbox` keeps its schema-1 meaning; the alias never lowers a
-security setting (ADR-0033, ADR-0028 §31):
+security setting below what the file asked (ADR-0033, ADR-0028 "Guardas de segurança"):
 
 | Legacy value | Effective behavior |
 |---|---|
@@ -42,7 +43,11 @@ security setting (ADR-0033, ADR-0028 §31):
 | `true` / `"docker"` | Docker required; without a Docker binary the tool refuses with `sandbox_required_for_shell` instead of falling back to the host |
 | `"auto"` or absent | host with per-command approval (the alpha.5 default) |
 
-A value that contradicts an explicit `shell.mode` is a config error, not a silent winner.
+`"auto"` or absent moving from "Docker when available" to "host" is the deliberate alpha.5
+change, not an alias side effect: ADR-0034 supersedes ADR-0031, I-11 is rewritten in
+`docs/invariants.md`, and the load prints one line stating that the shell now runs on the
+host with per-command approval. A value that contradicts an explicit `shell.mode` is a
+config error, not a silent winner.
 
 ## 3. Rules
 
@@ -72,9 +77,10 @@ runtime dependency (ADR-0001).
 `external_directory` triggers its own decision when the working directory or inferred target
 leaves the project. `bypass` asks nothing, so it warns: entering requires explicit consent,
 a persistent on-screen warning stays visible while active, and the switch is recorded in the
-audit log. The `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1` environment gate stays (ADR-0031 §22): in
-`bypass`, a model-requested host command without that variable is refused with
-`host_shell_confirmation_required`. No config layer replaces the gate.
+audit log. The `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1` environment gate stays (ADR-0031,
+"Decisão"): in `bypass`, **every** host command — a model tool call or the human `!cmd`
+channel — is refused with `host_shell_confirmation_required` without that variable. No
+config layer replaces the gate.
 
 ## 6. Risk consent
 
@@ -106,7 +112,7 @@ supersedes ADR-0031.
 - [ ] `sandbox: true` or `"docker"` without a Docker binary refuses with
       `sandbox_required_for_shell`; it never runs on the host.
 - [ ] `bypass` requires consent, shows a persistent warning and records the switch; without
-      `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1` the host command is refused.
+      `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1` every host command, including `!cmd`, is refused.
 - [ ] Every decision is audited with `commandHash`, effect and origin (rule/approval/mode);
       raw command and output never enter audit or ledger (D-11, I-03).
 - [ ] The full suite passes on a machine without Docker, and the Docker path keeps its own
