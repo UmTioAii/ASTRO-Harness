@@ -15,7 +15,7 @@ import {
 } from "../src/loop-guard";
 import type { CompletionRequest, CompletionResponse, Provider } from "../src/providers/types";
 import type { ModelEntry } from "../src/core/registry";
-import { runSession, MaxStepsError, type SessionOptions } from "../src/core/session";
+import { runSession, MaxRoundsError, type SessionOptions } from "../src/core/session";
 import { ToolExecutor } from "../src/tools/executor";
 import { writeFileTool } from "../src/tools/write-file";
 
@@ -235,14 +235,14 @@ describe("wiring no runSession (#135 fatia B)", () => {
     s.opts.maxSteps = 3;
     s.opts.checkpointAt = 0.8; // ceil(3*0.8)=3: checkpoint no turno do limite
     const err = await runSession(s.opts, "loop").catch((e) => e as Error);
-    expect(err).toBeInstanceOf(MaxStepsError);
+    expect(err).toBeInstanceOf(MaxRoundsError);
     expect(existsSync(checkpointPath(s.cwd, "r1", "default"))).toBe(true);
     const events = s.audit.readAll().filter((e) => e.tipo === "loop.checkpoint");
     expect(events).toHaveLength(1);
     expect(events[0]?.payload).toMatchObject({ step: 3, trigger: "steps" });
     const state = s.ledger.lastState("r1");
     expect(state?.state).toBe("interrupted");
-    expect(state?.reason).toBe("MaxStepsError"); // razão estável do interruptReason
+    expect(state?.reason).toBe("MaxRoundsError"); // razão estável do interruptReason
   });
 
   test("changedFiles do checkpoint passa por redactSecrets (path com cara de segredo, I-03)", async () => {

@@ -1315,8 +1315,10 @@ function validateRunTests(value: unknown): RunTestsConfig {
 }
 
 function validateRunLimit(value: unknown, field: string, choices: readonly number[]): RunLimit {
-  if (value === "unlimited" || (typeof value === "number" && choices.includes(value))) return value;
-  return fail(`config inválida: "${field}" deve ser ${choices.join(" / ")} / unlimited`);
+  // The /config menu offers the choices; a hand-written config may use any positive
+  // integer (the acceptance of #594 exercises maxTurns: 1).
+  if (value === "unlimited" || (typeof value === "number" && Number.isInteger(value) && value >= 1)) return value;
+  return fail(`config inválida: "${field}" deve ser um inteiro >= 1 / ${choices.join(" / ")} / unlimited`);
 }
 interface DerivedRunLimits { maxTurns?: RunLimit; maxRoundsPerTurn?: RunLimit; roundAlias?: boolean; legacyGuards: boolean; }
 /** Non-serializable metadata makes validation idempotent without weakening raw input checks. */

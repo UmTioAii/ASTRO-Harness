@@ -34,7 +34,7 @@ import { readAgentsMd } from "../spawn";
 import { DEFAULT_MEMORY_MAX_CHARS, loadMemory, memoryPrompt } from "../memory";
 import { forceCompaction, recordCompactionSuccess } from "../compaction/breaker";
 import { assertWithinQuota, quotaStatus, type QuotaStatus } from "../quota";
-import { DEFAULT_SYSTEM_PROMPT, safePrompt } from "../core/session";
+import { DEFAULT_SYSTEM_PROMPT, MaxTurnsError, safePrompt } from "../core/session";
 import { guardContext } from "./context-guard";
 import { isFatalSessionError } from "./session-errors";
 import { runHealthCheck, testProvider as probeProvider, type HealthCheck, type HealthReport } from "../health";
@@ -784,6 +784,10 @@ export class AgentSession {
   ): Promise<TurnResult> {
     if (this.#closed || this.#fatal) throw new Error("sessão de chat encerrada");
     if (this.#busy) throw new Error("turno já em andamento");
+    // #594: the turn is the session limit; the first turn beyond `run.maxTurns` is refused
+    // before any provider call, with the setting named so the user can raise it.
+    const maxTurns = this.#config.run?.maxTurns ?? 500;
+    if (maxTurns !== "unlimited" && this.#turns >= maxTurns) throw new MaxTurnsError(maxTurns, this.#turns);
     this.#busy = true;
     try {
       const before = this.#messages;

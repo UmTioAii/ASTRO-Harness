@@ -63,7 +63,7 @@ describe("#594 turn and round limits", () => {
     try {
       const result = await chat.send("leia tudo");
       expect(result.final).toBe("done");
-      expect(result.rounds).toBe(11);
+      expect(result.steps).toBe(11);
       expect(chat.snapshot()).toMatchObject({ turns: 1 });
       expect(join(cwd, "a.txt")).toBeString();
     } finally {
@@ -119,7 +119,7 @@ describe("#594 turn and round limits", () => {
     try {
       const result = await chat.send("converge no fim");
       expect(result.final).toBe("done");
-      expect(result.rounds).toBe(12);
+      expect(result.steps).toBe(12);
     } finally {
       chat.close();
       stop();

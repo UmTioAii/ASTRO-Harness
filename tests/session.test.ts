@@ -6,7 +6,7 @@ import { Auditor } from "../src/audit";
 import { Ledger, LEDGER_SCHEMA_VERSION } from "../src/ledger";
 import type { CompletionRequest, CompletionResponse, Provider } from "../src/providers/types";
 import type { ModelEntry } from "../src/core/registry";
-import { MaxStepsError, runSession, type SessionOptions } from "../src/core/session";
+import { MaxRoundsError, runSession, type SessionOptions } from "../src/core/session";
 import { ToolExecutor } from "../src/tools/executor";
 import { readFileTool } from "../src/tools/read-file";
 import { writeFileTool } from "../src/tools/write-file";
@@ -71,13 +71,13 @@ test("erro de tool volta ao modelo como mensagem e a sessão segue", async () =>
   expect(last.content.length).toBeGreaterThan(0);
 });
 
-test("estoura maxSteps → MaxStepsError", async () => {
+test("estoura maxSteps → MaxRoundsError", async () => {
   const tc = resp({ toolCalls: [{ id: "c1", name: "write_file", arguments: JSON.stringify({ path: "a.txt", content: "x" }) }] });
   const s = setup([tc, tc]);
   s.opts.executor = new ToolExecutor({ approveTool: () => true, tools: [writeFileTool], allow: ["write_file"], audit: s.opts.audit });
   s.opts.maxSteps = 2;
   const err = await runSession(s.opts, "loop").catch((e) => e as Error);
-  expect(err).toBeInstanceOf(MaxStepsError);
+  expect(err).toBeInstanceOf(MaxRoundsError);
 });
 
 describe("estado de execução e callHashes no ledger (F-02)", () => {
@@ -105,7 +105,7 @@ describe("estado de execução e callHashes no ledger (F-02)", () => {
     await runSession(s.opts, "loop").catch(() => undefined);
     const st = s.ledger.lastState("r1")!;
     expect(st.state).toBe("interrupted");
-    expect(st.reason).toBe("MaxStepsError");
+    expect(st.reason).toBe("MaxRoundsError");
   });
 
   test("HandoffSignal não grava estado de execução", async () => {

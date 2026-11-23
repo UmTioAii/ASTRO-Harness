@@ -5,7 +5,7 @@ import { buildHandoffArtifact, handoffId, HandoffError, type HandoffArtifactV1, 
 import { ackHandoff, scanHandoffs } from "../src/handoff/lifecycle";
 import type { CompletionRequest, CompletionResponse, Provider } from "../src/providers/types";
 import type { AgentEntry, ModelEntry } from "../src/core/registry";
-import { MaxStepsError, runMultiAgentSession, type MultiAgentSessionOptions } from "../src/core/session";
+import { MaxRoundsError, runMultiAgentSession, type MultiAgentSessionOptions } from "../src/core/session";
 import { ToolExecutor } from "../src/tools/executor"; import { handoffTool } from "../src/tools/handoff";
 
 const model: ModelEntry = { provider: "openai", id: "gpt-4o-mini", tags: ["writing-code"], context: 128000, status: "active" };
@@ -35,9 +35,9 @@ describe("handoff com ack e retomada (F-24)", () => {
     expect(scanHandoffs(ledger, "r1")[0].state).toBe("pending");
     ledger.recordHandoff("handoff.received", "r1", a1, { agent: "coder", receiverAgent: "coder" });
     expect(scanHandoffs(ledger, "r1")[0].state).toBe("completed");
-    ledger.recordHandoff("handoff.failed", "r1", a1, { agent: "coder", reason: "MaxStepsError" });
+    ledger.recordHandoff("handoff.failed", "r1", a1, { agent: "coder", reason: "MaxRoundsError" });
     const failed = scanHandoffs(ledger, "r1")[0];
-    expect(failed.state).toBe("failed"); expect(failed.reason).toBe("MaxStepsError");
+    expect(failed.state).toBe("failed"); expect(failed.reason).toBe("MaxRoundsError");
     ledger.recordHandoff("handoff.ack_timeout", "r2", a2, { agent: "planner", reason: "sem ack em 5ms" });
     expect(scanHandoffs(ledger, "r2")[0].state).toBe("pending"); // ack_timeout volta a pending
     const other = new Ledger(join(dir(), "ledger.jsonl")); // ledger de outro cwd
@@ -101,23 +101,23 @@ describe("handoff com ack e retomada (F-24)", () => {
     const o = opts(dir(), { complete: async () => { throw new Error("receptor não deveria rodar"); } });
     const a = seed(o.ledger);
     o.ledger.recordHandoff("handoff.received", "r1", a, { agent: "coder", receiverAgent: "coder" });
-    o.ledger.recordHandoff("handoff.failed", "r1", a, { agent: "coder", reason: "MaxStepsError" });
+    o.ledger.recordHandoff("handoff.failed", "r1", a, { agent: "coder", reason: "MaxRoundsError" });
     const err = await runMultiAgentSession(o, "plan").then(() => null, (e) => e as Error);
     expect(err).toBeInstanceOf(HandoffError); // D-18: erro classificado, não Error cru
     expect((err as HandoffError).code).toBe("handoff_mismatch");
     expect(err?.message).toContain(handoffId(a));
-    expect(err?.message).toContain("MaxStepsError");
+    expect(err?.message).toContain("MaxRoundsError");
     expect(o.ledger.readHandoffs().filter((e) => e.kind === "handoff.received")).toHaveLength(1);
   });
 
   test("falha pós-ack grava handoff.failed com reason", async () => {
     let calls = 0;
-    const o = opts(dir(), { complete: async () => { calls++; if (calls === 1) return handoffCall(); throw new MaxStepsError(5, "agente parou"); } });
+    const o = opts(dir(), { complete: async () => { calls++; if (calls === 1) return handoffCall(); throw new MaxRoundsError(5, 5); } });
     const err = await runMultiAgentSession(o, "plan").then(() => null, (e) => e as Error);
-    expect(err).toBeInstanceOf(MaxStepsError);
+    expect(err).toBeInstanceOf(MaxRoundsError);
     const events = o.ledger.readHandoffs();
     expect(events.map((e) => e.kind)).toEqual(["handoff.created", "handoff.received", "handoff.failed"]);
-    expect(events[2].reason).toBe("MaxStepsError");
+    expect(events[2].reason).toBe("MaxRoundsError");
     expect(scanHandoffs(o.ledger, "r1")[0].state).toBe("failed");
   });
 

@@ -27,7 +27,7 @@ import { CredentialMissingError, resolveCredentialValue } from "../credential-re
 import { Vault, vaultPath } from "../vault";
 import type { AuditEvent } from "../audit";
 import { budgetStatus, effectiveBudget, raiseDeniedLabel, restrictBudget, BudgetExceededError, type BudgetDecider, type BudgetStatus } from "../budget";
-import { MaxStepsError, runSession, runMultiAgentSession, type EffectiveIdentity, type IdentityResolver, type MultiAgentSessionOptions } from "./session";
+import { MaxRoundsError, runSession, runMultiAgentSession, type EffectiveIdentity, type IdentityResolver, type MultiAgentSessionOptions } from "./session";
 import { assertResumeIdentity, planResume, ReplayIncompleteError } from "../resume";
 import { activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks } from "../agent-lock";
 import type { CallSelection } from "../call-profile";
@@ -70,25 +70,24 @@ import { ensureTrustedCwd, type TrustAsk } from "../trust";
 import type { NoProgressDecider } from "../loop-guard";
 
 /**
- * Mensagem do limite de passos (#473, #515): nomeia o limite que disparou e o
- * campo que o controla. O limite é único e contado em passos (P4).
+ * Message for the round limit (#473, #515): names the limit that fired and the
+ * setting that controls it. A turn is one prompt; rounds are the loop valve.
  */
-export function maxStepsMessage(
+export function maxRoundsMessage(
   config: Pick<AstroConfig, "agent">,
-  error: { maxSteps: number; agentName?: string },
+  error: { limit: number; rounds: number; agentName?: string },
 ): string {
   if (error.agentName !== undefined) {
     const field = `agents.${redactSecrets(error.agentName)}.maxSteps`;
-    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "${field}" = ${error.maxSteps}; ajuste "${field}" na configuração`;
+    return `stopped here: this task did not converge — the agent reached ${error.rounds} rounds, limit "${field}" = ${error.limit}; raise "${field}" in the configuration or /config to continue`;
   }
-  // O teto efetivo pode ser menor que o declarado quando a decisão de budget
-  // "baixar esforço" corta os passos restantes (L5/B4): a mensagem cita o valor
-  // declarado (o campo que o usuário controla) e o teto efetivo no parêntese.
+  // The effective ceiling can be lower than declared when the budget decision
+  // "lower effort" cuts the remaining rounds (L5/B4): cite the declared value.
   const declared = config.agent.maxSteps;
-  if (error.maxSteps < declared) {
-    return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "agent.maxSteps" = ${declared}, mas o teto efetivo caiu para ${error.maxSteps} pela decisão de budget "baixar esforço"; aumente o budget ou revise "agent.maxSteps" na configuração`;
+  if (error.limit < declared) {
+    return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "agent.maxSteps" = ${declared} lowered to ${error.limit} by the budget decision "lower effort"; raise the budget or the limit in /config to continue`;
   }
-  return `a tarefa excedeu ${error.maxSteps} passos sem resposta final - limite "agent.maxSteps" = ${declared}; ajuste "agent.maxSteps" na configuração`;
+  return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "run.maxRoundsPerTurn" = ${error.limit}; raise it in /config to continue`;
 }
 
 export interface RunOptions {
@@ -610,8 +609,12 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       ...(identity.credentialRef === undefined ? {} : { credentialRef: identity.credentialRef }),
     };
   };
-  /** Limite único de trabalho (P4): passos por tarefa/agente, sem cap de turnos. */
-  const sessionMaxSteps = config.agent.maxSteps;
+  /** Round ceiling for a turn (P0): `run.maxRoundsPerTurn`, unlimited when set.
+   * "unlimited" still stops at a physical cap so a pathological loop cannot run forever
+   * (I-17); a human turn never reaches it. */
+  const sessionMaxRounds = config.run?.maxRoundsPerTurn === "unlimited"
+    ? 100_000
+    : (config.run?.maxRoundsPerTurn ?? config.agent.maxSteps);
 
   // Sandbox do run_command (F4-6): modo resolvido antes de qualquer execução
   // (#474: `true`/ausente = Docker; `"auto"` = Docker → host com aprovação).
@@ -1214,7 +1217,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         baseExecutor,
         ledger,
         audit,
-        baseMaxSteps: sessionMaxSteps,
+        baseMaxSteps: sessionMaxRounds,
         baseSystemPrompt: systemPromptBase,
         ...(memorySection === undefined ? {} : { memorySection }),
         entryAgent,
@@ -1280,7 +1283,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           executor: baseExecutor,
           ledger,
           audit,
-          maxSteps: sessionMaxSteps,
+          maxSteps: sessionMaxRounds,
           taskHash: shortTaskHash(opts.task),
           ...(config.run?.checkpointAt === undefined
             ? {}
@@ -1328,17 +1331,16 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       );
     }
   } catch (error) {
-    if (error instanceof MaxStepsError) {
+    if (error instanceof MaxRoundsError) {
       audit.append({
         run,
         agent: AGENT_NAME,
         tipo: "run.stopped",
-        payload: { reason: "max_steps" },
+        payload: { reason: "max_rounds" },
       });
-      // #473: a mensagem nomeia o limite que disparou, o valor e a setting.
-      // Multi-agent: o teto do agent nomeado (`agents.<nome>.maxSteps`) vem no erro.
-      // Limite único: passos por tarefa/agente (P4); turnos são unidade de UI.
-      throw new Error(maxStepsMessage(config, error), { cause: error });
+      // #473: the message names the limit that fired, the value and the setting.
+      // Multi-agent: the named agent ceiling (`agents.<name>.maxSteps`) comes in the error.
+      throw new MaxRoundsError(error.limit, error.rounds, error.agentName, maxRoundsMessage(config, error));
     }
 
     // Cancelamento explícito (F-06): o estado interrupted já foi gravado pela sessão

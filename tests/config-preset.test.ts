@@ -65,7 +65,11 @@ describe("preset simple/control (#515)", () => {
 
   test("Default accepts published turn choices and retains advanced declarations", () => {
     const withTurns = { ...base(), version: "2.0.0", preset: "simple" };
-    expect(validateConfig({ ...withTurns, run: { maxTurns: 1000 } }).run).toMatchObject({ maxTurns: 1000 }); expect(() => validateConfig({ ...withTurns, run: { maxTurns: 600 } })).toThrow(/run\.maxTurns.*250.*500.*1000.*unlimited/);
+    expect(validateConfig({ ...withTurns, run: { maxTurns: 1000 } }).run).toMatchObject({ maxTurns: 1000 });
+    // The /config menu offers 250/500/1000, but a hand-written config may use any
+    // positive integer (#594 exercises maxTurns: 1).
+    expect(validateConfig({ ...withTurns, run: { maxTurns: 600 } }).run).toMatchObject({ maxTurns: 600 });
+    expect(() => validateConfig({ ...withTurns, run: { maxTurns: 0 } })).toThrow(/run\.maxTurns.*inteiro >= 1/);
     expect(validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } }).run).toMatchObject({ maxRoundsPerTurn: 100 });
   });
 

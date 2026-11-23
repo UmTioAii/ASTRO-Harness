@@ -60,7 +60,7 @@ describe("escalada em runTask (#451)", () => {
     })));
     try {
       await expect(runTask({ configPath, runId: "r1", task: "t", cwd, env: effortEnv({ KEY: "k" }) }))
-        .rejects.toThrow(/passos/);
+        .rejects.toThrow(/rounds/);
       const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
       expect(ledger.lastState("r1")?.state).toBe("interrupted");
       expect(ledger.lastEffortJump("r1", "default")).toMatchObject({ from: 2, to: 3 });

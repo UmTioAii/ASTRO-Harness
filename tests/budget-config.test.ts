@@ -115,8 +115,8 @@ describe("limite único de passos no runtime (P4, F-05/#132 parte 1)", () => {
   test("limita a sessão e conta 1 chamada", async () => {
     const { calls, message } = await callsFor({}, 1);
     expect(calls).toBe(1);
-    expect(message).toMatch(/excedeu 1 passos/);
-    expect(message).toContain('limite "agent.maxSteps"');
+    expect(message).toMatch(/reached 1 rounds/);
+    expect(message).toContain('limit "run.maxRoundsPerTurn"');
   });
 
   test("budget alto não eleva o limite de passos", async () => {
@@ -149,7 +149,7 @@ describe("limite único de passos no runtime (P4, F-05/#132 parte 1)", () => {
         },
         agents,
       }));
-      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })).rejects.toThrow(/excedeu 5 passos/);
+      await expect(runTask({ configPath, task: "x", cwd, env: { KEY: "k" } })).rejects.toThrow(/reached 5 rounds/);
       expect(calls).toBe(5);
     } finally {
       server.stop(true);

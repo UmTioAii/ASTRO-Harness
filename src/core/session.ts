@@ -128,7 +128,7 @@ export interface SessionOptions {
   compaction?: CompactionConfig;
   /** Recebe deltas de texto quando o provider suporta streaming (T3). */
   onToken?: (text: string) => void;
-  /** Progresso do loop (#508): passo e teto efetivo, antes de cada chamada ao provider. */
+  /** Progresso do loop: passo e teto efetivo, antes de cada chamada ao provider. */
   onStep?: (step: number, maxSteps: number) => void;
   executor: ToolExecutor;
   ledger: Ledger;
@@ -196,16 +196,34 @@ export interface SessionOptions {
 export const DEFAULT_SYSTEM_PROMPT =
   "Você é um agente de código; use as tools para inspecionar e alterar arquivos no diretório de trabalho.";
 
-/** Erro lançado quando a sessão esgota `maxSteps` sem uma resposta final. */
-export class MaxStepsError extends Error {
-  readonly maxSteps: number;
-  /** Agent nomeado cujo teto disparou (multi-agent); ausente no agent principal. */
+/** Typed round limit: the turn ran out of rounds before a final answer. */
+export class MaxRoundsError extends Error {
+  readonly limit: number;
+  readonly rounds: number;
+  /** Named agent whose ceiling fired (multi-agent); absent for the main agent. */
   readonly agentName?: string;
-  constructor(maxSteps: number, message?: string, agentName?: string) {
-    super(message ?? `sessão excedeu o limite de ${maxSteps} passos sem resposta final`);
-    this.name = "MaxStepsError";
-    this.maxSteps = maxSteps;
-    this.agentName = agentName;
+  readonly action: string;
+  constructor(limit: number, rounds: number, agentName?: string, message?: string) {
+    const where = agentName === undefined ? "run.maxRoundsPerTurn" : `agents.${redactSecrets(agentName)}.maxSteps`;
+    super(message ?? `stopped here: this task did not converge — the turn reached its round limit "${where}" = ${limit} after ${rounds} rounds; raise the limit in /config to continue`);
+    this.name = "MaxRoundsError";
+    this.limit = limit;
+    this.rounds = rounds;
+    this.action = `raise "${where}" in /config to continue`;
+    if (agentName !== undefined) this.agentName = agentName;
+  }
+}
+
+/** Typed turn limit: the session reached `run.maxTurns` before this prompt. */
+export class MaxTurnsError extends Error {
+  readonly limit: number;
+  readonly turns: number;
+  readonly action = 'raise "run.maxTurns" in /config to continue';
+  constructor(limit: number, turns: number) {
+    super(`stopped here: this task did not converge — the session reached its turn limit "run.maxTurns" = ${limit} after ${turns} turns; raise it in /config to continue`);
+    this.name = "MaxTurnsError";
+    this.limit = limit;
+    this.turns = turns;
   }
 }
 
@@ -499,8 +517,8 @@ export async function runSession(
 
   let failed = false;
   try {
-    let effectiveMaxSteps = opts.maxSteps;
-    for (let step = 1; step <= effectiveMaxSteps; step++) {
+    let effectiveMaxRounds = opts.maxSteps;
+    for (let step = 1; step <= effectiveMaxRounds; step++) {
       throwIfAborted(opts.signal); // ponto seguro: não inicia step após cancelamento (F-06)
       // Quota (F6-3): bloqueia a chamada antes de gastar
       assertWithinQuota(opts.ledger, opts.quotaLimits ?? {}, opts.quotaDomain);
@@ -524,7 +542,7 @@ export async function runSession(
         });
         // "baixar esforço" (B4): metade dos passos **restantes**, ao menos um
         if (choice === "lower_effort") {
-          effectiveMaxSteps = Math.min(effectiveMaxSteps, step + Math.max(1, Math.floor((effectiveMaxSteps - step) / 2)));
+          effectiveMaxRounds = Math.min(effectiveMaxRounds, step + Math.max(1, Math.floor((effectiveMaxRounds - step) / 2)));
         }
       }
       const releaseReserve = (): void => {
@@ -534,7 +552,7 @@ export async function runSession(
       };
       // Progresso (#508): o mesmo contador do loop e o teto já efetivo (budget pode
       // ter baixado o esforço); só números, nunca prompt nem tool.
-      opts.onStep?.(step, effectiveMaxSteps);
+      opts.onStep?.(step, effectiveMaxRounds);
       const stepSpan = tracer?.start("step", { step, agent: redactSecrets(opts.agent) }, rootSpan);
       const providerSpan = tracer?.start(
         "provider.complete",
@@ -614,7 +632,7 @@ export async function runSession(
         // um run que começa com o escopo já acima da fração precisa do checkpoint
         const scope = runBudget === undefined ? undefined : budgetStatus(runBudget, opts.ledger);
         const limitUsd = runBudget?.limitUsd ?? runBudget?.hardCeilingUsd ?? undefined;
-        const stepDue = stepCheckpointDue(step, effectiveMaxSteps, opts.checkpointAt);
+        const stepDue = stepCheckpointDue(step, effectiveMaxRounds, opts.checkpointAt);
         const budgetDue = limitUsd !== undefined && scope?.spentUsd !== null && scope?.spentUsd !== undefined
           && budgetCheckpointDue(scope.spentUsd, limitUsd, opts.checkpointAt);
         if (stepDue || budgetDue) {
@@ -644,7 +662,7 @@ export async function runSession(
         if (verdict?.verdict === "continue") {
           // O juiz disse "não concluído": a próxima completion volta ao juiz (não todo turno).
           judgeSignal = true;
-          if (step >= effectiveMaxSteps) {
+          if (step >= effectiveMaxRounds) {
             tracer?.end(stepSpan, { "tool.calls": 0, judge: "continue_exhausted" });
             throw new JudgeContinueError();
           }
@@ -692,7 +710,7 @@ export async function runSession(
             journal,
             knownAgents,
             allow: [...opts.executor.allow],
-            maxSteps: effectiveMaxSteps,
+            maxSteps: effectiveMaxRounds,
             outputLimitTokens: effectiveOutputCap(opts.outputLimit, opts.model.context),
             ...(opts.signal === undefined ? {} : { signal: opts.signal }),
             ...(opts.env === undefined ? {} : { env: opts.env }),
@@ -760,8 +778,8 @@ export async function runSession(
       }
       tracer?.end(stepSpan);
     }
-    tracer?.end(rootSpan, { status: "max_steps" });
-    throw new MaxStepsError(effectiveMaxSteps);
+    tracer?.end(rootSpan, { status: "max_rounds" });
+    throw new MaxRoundsError(effectiveMaxRounds, effectiveMaxRounds);
   } catch (error) {
     failed = true;
     // HandoffSignal transfere o controle ao caller e não grava run_state:
@@ -835,9 +853,9 @@ function interruptReason(error: unknown, signal?: AbortSignal): string {
   return error instanceof Error ? error.name : String(error);
 }
 
-/** Razão do `agent.destroyed` ao liberar a conta; MaxSteps tem nome estável. */
+/** Reason for `agent.destroyed` when the account is released; MaxRounds has a stable name. */
 function lockReason(error: unknown, signal?: AbortSignal): string {
-  if (error instanceof MaxStepsError) return "max_steps";
+  if (error instanceof MaxRoundsError) return "max_rounds";
   return interruptReason(error, signal);
 }
 
@@ -1308,12 +1326,8 @@ export async function runMultiAgentSession(
       throwIfAborted(opts.signal); // ponto seguro: não inicia step após cancelamento (F-06)
       // Verificar limite do agent atual
       if (agentSteps >= currentMaxSteps) {
-        tracer?.end(rootSpan, { status: "error", "error.class": "MaxStepsError" });
-        throw new MaxStepsError(
-          currentMaxSteps,
-          `agent "${redactSecrets(currentAgentName)}" excedeu o limite de ${currentMaxSteps} passos sem resposta final`,
-          currentAgentName,
-        );
+        tracer?.end(rootSpan, { status: "error", "error.class": "MaxRoundsError" });
+        throw new MaxRoundsError(currentMaxSteps, agentSteps, currentAgentName);
       }
 
       step++;
@@ -1593,8 +1607,8 @@ export async function runMultiAgentSession(
     tracer?.end(stepSpan);
     }
 
-    tracer?.end(rootSpan, { status: "max_steps" });
-    throw new MaxStepsError(effectiveBaseMaxSteps);
+    tracer?.end(rootSpan, { status: "max_rounds" });
+    throw new MaxRoundsError(effectiveBaseMaxSteps, step);
   } catch (error) {
     failed = true;
     // Falha pós-ack é terminal para o handoff: grava handoff.failed (F-24, I-19).
