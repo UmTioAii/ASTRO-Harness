@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
-import { BudgetExceededError, budgetStatus, effectiveBudget, enforceBudget } from "../src/budget";
+import { BudgetExceededError, budgetStatus, effectiveBudget, enforceBudget, outstandingReservations } from "../src/budget";
 import type { BudgetConfig } from "../src/core/config";
 import { Ledger } from "../src/ledger";
 
@@ -31,6 +31,30 @@ function base(ledger: Ledger, extra: Record<string, unknown> = {}) {
 }
 
 describe("enforcement de budget (F-05, #132 parte 3)", () => {
+  test("reserva casa por run+agent; um release de irmão não apaga a reserva maior", () => {
+    const ledger = ledgerWith(0);
+    ledger.recordBudgetReserved({ run: "r1", agent: "a", reserved: 5 });
+    ledger.recordBudgetReserved({ run: "r1", agent: "b", reserved: 1 });
+    ledger.recordBudgetReleased({ run: "r1", agent: "b", released: 1 });
+    expect(outstandingReservations(ledger)).toBe(5);
+  });
+
+  test("ceiling visto só no recheck pós-decisão também audita ceiling_hit", async () => {
+    const ledger = ledgerWith(2);
+    const opts = base(ledger, {
+      budget: budget({ limitUsd: 1, hardCeilingUsd: 100, onExceed: "ask" }),
+      reserveUsd: 0.2,
+      decide: () => {
+        opts.budget.hardCeilingUsd = 0.05;
+        return "continue_same";
+      },
+    });
+    await expect(enforceBudget(opts)).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(opts.audit.readAll().some((event) => event.tipo === "budget.ceiling_hit")).toBe(true);
+    expect(ledger.readAllEntries().some((entry) => entry.kind === "budget" && entry.event === "ceiling_hit")).toBe(true);
+  });
+
+
   test("reserva de dois agentes soma antes da chamada e não passa do limite", async () => {
     const ledger = ledgerWith(0);
     const first = base(ledger, { budget: budget({ limitUsd: 1, onExceed: "stop" }), run: "r1", agent: "a", reserveUsd: 0.6 });
@@ -440,7 +464,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
     const script = join(dir, "reserve.ts");
     writeFileSync(script, [
       `import { existsSync } from "node:fs";`,
-      `import { enforceBudget } from ${JSON.stringify(budgetUrl)};`,
+      `import { BudgetExceededError, enforceBudget } from ${JSON.stringify(budgetUrl)};`,
       `import { Ledger } from ${JSON.stringify(ledgerUrl)};`,
       `import { Auditor } from ${JSON.stringify(auditUrl)};`,
       `const ledger = new Ledger(process.env.LEDGER);`,
@@ -450,7 +474,7 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
       `  await enforceBudget({ budget: { scope: "day", limitUsd: 10, warnAt: 0.8, onExceed: "stop" },`,
       `    ledger, audit, run: process.env.RUN, agent: "a", reserveUsd: 6 });`,
       `  process.exit(0);`,
-      `} catch { process.exit(2); }`,
+      `} catch (error) { process.exit(error instanceof BudgetExceededError ? 2 : 3); }`,
     ].join("\n"));
     const spawn = (run: string) => Bun.spawn(["bun", script], {
       env: { ...process.env, LEDGER: ledgerPath, AUDIT: auditPath, GO: go, RUN: run },
