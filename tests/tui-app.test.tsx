@@ -1630,30 +1630,28 @@ test("/provider abre a tela, seta direita lista modelos e enter troca o modelo d
 });
 
 test("digitar durante o turno enfileira e envia ao fim do turno (#560)", async () => {
-  class Slow extends FakeSession {
-    override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      return super.send(prompt, signal);
-    }
-  }
-  const session = new Slow();
+  const session = new FakeSession();
+  const gate = new TurnGate();
+  session.gate = gate; // the turn parks: the queue frames cannot be missed (#628)
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-queue-"));
   const instance = render(<TuiApp session={session} cwd={cwd} />);
   try {
     instance.stdin.write("demora");
     instance.stdin.write("\r");
-    await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
+    await waitFor(() => gate.parked === 1 && frameHas(instance, "pensando…"), "first turn in flight");
     instance.stdin.write("outra");
     instance.stdin.write("\r");
     // RED: hoje o input durante o turno é descartado; com a fila aparece o indicador
-    await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
-    await waitFor(() => session.sent.includes("outra") === true);
+    await waitFor(() => frameHas(instance, "fila: 1"), "queued line counted");
+    gate.release();
+    await waitFor(() => gate.parked === 1 && session.sent.includes("outra"), "queued line sent at the end of the turn");
     expect(session.sent).toEqual(["demora", "outra"]);
-    await waitFor(() => instance.lastFrame()?.includes("eco:outra") === true);
+    gate.release();
+    await waitFor(() => frameHas(instance, "eco:outra"), "queued turn answered");
   } finally {
     instance.unmount();
   }
-});
+}, 20_000); // deterministic waits; the budget only bounds a regression fail (#628)
 
 test("blocos visuais distintos: user, shell (comando/cwd/exit) e resposta (#560)", async () => {
   const shell = {
@@ -1688,25 +1686,27 @@ test("bloco thinking (stream) é visível durante o turno e recolhe com ctrl+t (
       onToken?: (text: string) => void,
     ): Promise<TurnResult> {
       onToken?.("raciocínio parcial");
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      return super.send(prompt, signal);
+      return super.send(prompt, signal); // parks on the gate (#628): the thinking block stays observable
     }
   }
   const session = new Stream();
+  const gate = new TurnGate();
+  session.gate = gate;
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-thinking-"));
   const instance = render(<TuiApp session={session} cwd={cwd} />);
   try {
     instance.stdin.write("oi");
     instance.stdin.write("\r");
-    await waitFor(() => instance.lastFrame()?.includes("raciocínio parcial") === true);
+    await waitFor(() => gate.parked === 1 && frameHas(instance, "raciocínio parcial"), "thinking stream visible");
     instance.stdin.write("\u0014"); // ctrl+t recolhe o bloco thinking
-    await waitFor(() => instance.lastFrame()?.includes("recolhido") === true); // RED: sem recolhimento hoje
+    await waitFor(() => frameHas(instance, "recolhido"), "thinking block collapsed by ctrl+t");
     expect(instance.lastFrame()).not.toContain("raciocínio parcial");
-    await waitFor(() => instance.lastFrame()?.includes("eco:oi") === true);
+    gate.release();
+    await waitFor(() => frameHas(instance, "eco:oi"), "turn answered");
   } finally {
     instance.unmount();
   }
-});
+}, 20_000); // deterministic waits; the budget only bounds a regression fail (#628)
 
 test("Enter aplica a completion e o próximo Enter roda; linha exata roda no 1º (#471, #560)", async () => {
   const session = new FakeSession();
