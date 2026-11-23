@@ -137,9 +137,13 @@ describe("setup wizard — one layer per run (#611)", () => {
     expect(existsSync(join(cwd, "astro.config.json")) || existsSync(join(home, "config.json"))).toBe(false);
 
     const switched = join(tempDir("astro-setup-switch-"), "astro.config.json");
-    const outcome = await run(switched, { env, allowMissing: true, io: fakeIO(["y", "", "nvidia", "", "", "", "", "", ""]).io });
+    const outcome = await run(switched, {
+      env: { ...env, LOCAL_API_KEY: "sk-sentinel-do-not-store" },
+      allowMissing: true,
+      io: fakeIO(["y", "", "custom", "Local", "https://local.example/v1", "LOCAL_API_KEY", "m1", "", ""]).io,
+    });
     expect(outcome.flow).toBe("full");
-    expect(JSON.parse(readFileSync(switched, "utf8")).agent.model).toBe("nvidia/meta/llama-3.3-70b-instruct");
+    expect(JSON.parse(readFileSync(switched, "utf8")).agent.model).toBe("local/m1");
   });
 
   test("--yes takes the defaults without asking and cannot invent a provider", async () => {
@@ -159,6 +163,30 @@ describe("setup wizard — one layer per run (#611)", () => {
     expect(bare).toMatchObject({ globalCreated: false, projectCreated: false });
     expect(bare.notice).toContain("provider");
     expect(existsSync(join(empty, "astro.config.json"))).toBe(false);
+  });
+
+  test("astro setup never fabricates an explicit --config", async () => {
+    const cwd = tempDir("astro-setup-cli-explicit-");
+    const proc = Bun.spawn(["bun", join(root, "src", "cli.ts"), "setup", "--config", "custom.json"], {
+      cwd, env: { ...process.env, ASTRO_HOME: tempDir("astro-setup-cli-explicit-home-") },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    proc.stdin.end();
+    expect(await proc.exited).toBe(0);
+    expect(await new Response(proc.stdout).text()).toContain("never fabricates");
+    expect(existsSync(join(cwd, "custom.json"))).toBe(false);
+  });
+
+  test("astro setup with the global layer disabled reports the real reason", async () => {
+    const cwd = tempDir("astro-setup-cli-noglobal-");
+    const proc = Bun.spawn(["bun", join(root, "src", "cli.ts"), "setup", "--no-global-config"], {
+      cwd, env: { ...process.env, ASTRO_HOME: tempDir("astro-setup-cli-noglobal-home-") },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    proc.stdin.end();
+    expect(await proc.exited).toBe(0);
+    expect(await new Response(proc.stdout).text()).toContain("global layer is disabled");
+    expect(existsSync(join(cwd, "astro.config.json"))).toBe(false);
   });
 
   test("astro setup without a TTY prints one warning and exits 0", async () => {

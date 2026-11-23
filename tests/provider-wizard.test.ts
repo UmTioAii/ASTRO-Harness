@@ -110,6 +110,16 @@ test("credentialRef inválido é re-perguntado até virar nome de variável vál
   expect(out.join(" ")).toContain("nome de variável inválido");
 });
 
+test("chave colada no prompt de variável não vaza na mensagem (I-03)", async () => {
+  const { manager } = setup();
+  const secret = "sk-sentinel-do-not-store";
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", secret]);
+  const view = await runProviderWizard(io, manager, { mode: "add" });
+  expect(view).toBeUndefined();
+  expect(out.join("\n")).not.toContain(secret);
+  expect(out.join("\n")).toContain("environment variable");
+});
+
 test("credentialRef vazio continua sem chave (#286)", async () => {
   const { manager } = setup();
   const { io } = fakeIO(["custom", "Local", "http://localhost:1/v1", "", "m1", "S", "n"]);
