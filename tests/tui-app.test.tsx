@@ -340,47 +340,49 @@ test("the conversation carries no turn, round or tool counter in any profile (#5
       turn?: SendTurnOptions,
     ): Promise<TurnResult> {
       this.stepped = true;
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      return super.send(prompt, signal);
+      return super.send(prompt, signal); // parks on the gate (#628)
     }
   }
-  const instance = render(<TuiApp session={new StepSession()} cwd="/tmp/astro" />);
+  const session = new StepSession(); const gate = new TurnGate(); session.gate = gate;
+  const instance = render(<TuiApp session={session} cwd="/tmp/astro" />);
   try {
     instance.stdin.write("conte");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "pensando…"));
+    await waitFor(() => session.stepped && gate.parked === 1 && frameHas(instance, "pensando…"), "turn in flight");
     expect(frameHas(instance, "passo")).toBe(false);
-    await waitFor(() => frameHas(instance, "eco:conte"));
+    gate.release();
+    await waitFor(() => frameHas(instance, "eco:conte"), "turn answered");
     expect(frameHas(instance, "passo")).toBe(false);
     expect(frameHas(instance, "step(s)")).toBe(false);
     expect(frameHas(instance, "pensando…")).toBe(false);
   } finally {
     instance.unmount();
   }
-  const defaultSession = new StepSession(); defaultSession.preset = "default"; const defaultInstance = render(<TuiApp session={defaultSession} cwd="/tmp/astro" />);
+  const defaultSession = new StepSession(); defaultSession.preset = "default";
+  const defaultGate = new TurnGate(); defaultSession.gate = defaultGate;
+  const defaultInstance = render(<TuiApp session={defaultSession} cwd="/tmp/astro" />);
   try {
     defaultInstance.stdin.write("conte"); defaultInstance.stdin.write("\r");
-    await waitFor(() => defaultSession.stepped && frameHas(defaultInstance, "pensando…"));
+    await waitFor(() => defaultSession.stepped && defaultGate.parked === 1 && frameHas(defaultInstance, "pensando…"), "turn in flight");
     expect(frameHas(defaultInstance, "passo")).toBe(false);
-    await waitFor(() => frameHas(defaultInstance, "eco:conte"));
+    defaultGate.release();
+    await waitFor(() => frameHas(defaultInstance, "eco:conte"), "turn answered");
     expect(frameHas(defaultInstance, "passo")).toBe(false);
   } finally { defaultInstance.unmount(); }
 });
 
 test("progresso sem evento de passo fica no estado neutro, sem número (#508)", async () => {
-  class NoStepSession extends FakeSession {
-    override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      return super.send(prompt, signal);
-    }
-  }
-  const instance = render(<TuiApp session={new NoStepSession()} cwd="/tmp/astro" />);
+  const session = new FakeSession();
+  const gate = new TurnGate();
+  session.gate = gate;
+  const instance = render(<TuiApp session={session} cwd="/tmp/astro" />);
   try {
     instance.stdin.write("conte");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "pensando…"));
+    await waitFor(() => gate.parked === 1 && frameHas(instance, "pensando…"), "turn in flight");
     expect(frameHas(instance, "passo")).toBe(false);
-    await waitFor(() => frameHas(instance, "eco:conte"));
+    gate.release();
+    await waitFor(() => frameHas(instance, "eco:conte"), "turn answered");
   } finally {
     instance.unmount();
   }
@@ -396,16 +398,20 @@ test("progresso não fica visível depois de um turno com erro (#508)", async ()
       _attachments?: Parameters<ChatSession["send"]>[3],
       turn?: SendTurnOptions,
     ): Promise<TurnResult> {
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      await this.gate!.enter(); // parks on the gate, then fails (#628)
       throw new Error("falhou");
     }
   }
-  const instance = render(<TuiApp session={new FailingStepSession()} cwd="/tmp/astro" />);
+  const session = new FailingStepSession();
+  const gate = new TurnGate();
+  session.gate = gate;
+  const instance = render(<TuiApp session={session} cwd="/tmp/astro" />);
   try {
     instance.stdin.write("conte");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "pensando…"));
-    await waitFor(() => frameHas(instance, "erro: falhou"));
+    await waitFor(() => gate.parked === 1 && frameHas(instance, "pensando…"), "turn in flight");
+    gate.release();
+    await waitFor(() => frameHas(instance, "erro: falhou"), "failed turn reported");
     expect(frameHas(instance, "passo")).toBe(false);
     expect(frameHas(instance, "pensando…")).toBe(false);
   } finally {
@@ -1750,32 +1756,31 @@ test("/log mostra as lanes separadas por prefixo [lane] (#560)", async () => {
 });
 
 test("turno com erro não fatal não engole a fila: drena ao fim do turno (#561)", async () => {
-  class Flaky extends FakeSession {
-    override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      return super.send(prompt, signal);
-    }
-  }
-  const session = new Flaky();
+  const session = new FakeSession();
+  const gate = new TurnGate();
+  session.gate = gate; // the turn parks: the queue frames cannot be missed (#628)
   session.failNext = true; // 1º turno quebra com erro não fatal
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-queue-err-"));
   const instance = render(<TuiApp session={session} cwd={cwd} />);
   try {
     instance.stdin.write("falha");
     instance.stdin.write("\r");
-    await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
+    await waitFor(() => gate.parked === 1 && frameHas(instance, "pensando…"), "first turn in flight");
     instance.stdin.write("depois");
     instance.stdin.write("\r");
-    await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
-    await waitFor(() => instance.lastFrame()?.includes("erro: boom") === true);
+    await waitFor(() => frameHas(instance, "fila: 1"), "queued line counted");
+    gate.release();
+    await waitFor(() => frameHas(instance, "erro: boom"), "failed turn reported");
     // caminho de falha: o erro do turno não pode descartar o enfileirado
-    await waitFor(() => instance.lastFrame()?.includes("eco:depois") === true);
+    await waitFor(() => gate.parked === 1, "queued prompt started its turn");
+    gate.release();
+    await waitFor(() => frameHas(instance, "eco:depois"), "queued prompt answered");
     expect(session.sent).toEqual(["falha", "depois"]);
-    await waitFor(() => (instance.lastFrame() ?? "").includes("fila:") === false); // indicador limpa
+    await waitFor(() => !(instance.lastFrame() ?? "").includes("fila:"), "queue indicator cleared");
   } finally {
     instance.unmount();
   }
-});
+}, 20_000); // deterministic waits; the budget only bounds a regression fail (#628)
 
 test("fila com comando de barra + prompt drena em ordem FIFO após o turno (#561)", async () => {
   const session = new FakeSession();
@@ -1807,24 +1812,26 @@ test("fila com comando de barra + prompt drena em ordem FIFO após o turno (#561
 test("erro fatal com item na fila encerra a sessão sem enviar o enfileirado (#561)", async () => {
   class FatalSlow extends FakeSession {
     override async send(prompt: string): Promise<TurnResult> {
-      await new Promise((resolve) => setTimeout(resolve, 120));
       this.sent.push(prompt);
+      await this.gate!.enter(); // parks on the gate, then fails fatally (#628)
       throw new Error("budget", { cause: new BudgetExceededError("limit", {} as never) });
     }
   }
   let exits = 0;
   const session = new FatalSlow();
+  const gate = new TurnGate();
+  session.gate = gate;
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-queue-fatal-"));
   const instance = render(<TuiApp session={session} cwd={cwd} onExit={() => { exits++; }} />);
   try {
     instance.stdin.write("vai falhar");
     instance.stdin.write("\r");
-    await waitFor(() => instance.lastFrame()?.includes("pensando…") === true);
+    await waitFor(() => gate.parked === 1 && frameHas(instance, "pensando…"), "first turn in flight");
     instance.stdin.write("nao envia");
     instance.stdin.write("\r");
-    await waitFor(() => instance.lastFrame()?.includes("fila: 1") === true);
-    await waitFor(() => exits === 1);
-    await waitFor(() => instance.lastFrame()?.includes("erro: budget") === true);
+    await waitFor(() => frameHas(instance, "fila: 1"), "queued line counted");
+    gate.release();
+    await waitFor(() => exits === 1 && frameHas(instance, "erro: budget"), "fatal turn closed the session");
     expect(session.sent).toEqual(["vai falhar"]); // fila descartada junto com a sessão
     expect(instance.lastFrame()).toContain("erro: budget");
   } finally {

@@ -24,9 +24,10 @@ process.stdin.on("data", (chunk) => {
     const reply = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n");
     if (msg.method === "initialize") {
       if (process.env.PID_FILE !== undefined) appendFileSync(process.env.PID_FILE, process.pid + "\\n");
-      // Parks the handshake until the gate file appears or the process dies, so a test that closes
-      // mid-connect never races a fixed delay (#628).
+      // Parks the handshake until the gate file appears / while the hold file exists, so a test that
+      // closes mid-connect never races a fixed delay (#628).
       while (process.env.INIT_GATE !== undefined && !existsSync(process.env.INIT_GATE)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      while (process.env.INIT_HOLD !== undefined && existsSync(process.env.INIT_HOLD)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       if (process.env.INIT_DELAY !== undefined) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.INIT_DELAY));
       reply({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stdio-registry", version: "1" } } });
     } else if (msg.method === "tools/list") reply({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "echo" }, { name: "boom" }, { name: "suicide" }] } });
@@ -71,12 +72,13 @@ const waitObservedDeath = async (pid: number, closed: () => boolean): Promise<bo
 };
 // `process.execPath` é o próprio binário bun: não passa pelo shim `.cmd` do PATH (um processo menos
 // por spawn). 15000ms cobre spawn real + handshake; 3000ms estourava sob a carga da suíte (#540).
-const stdioCfg = (pidFile: string, opts: { delay?: number; gate?: string } = {}): MCPServerConfig => ({
+const stdioCfg = (pidFile: string, opts: { delay?: number; gate?: string; hold?: string } = {}): MCPServerConfig => ({
   transport: "stdio", command: process.execPath, args: [writeStub(join(pidFile, ".."))], timeoutMs: 15_000, enabled: true,
   env: {
     PID_FILE: pidFile,
     ...(opts.delay === undefined ? {} : { INIT_DELAY: String(opts.delay) }),
     ...(opts.gate === undefined ? {} : { INIT_GATE: opts.gate }),
+    ...(opts.hold === undefined ? {} : { INIT_HOLD: opts.hold }),
   },
 });
 
@@ -162,16 +164,20 @@ test("chamadas concorrentes em cliente morto: MCPError e uma reconexão", async 
 test("close durante reconexão não deixa órfão e classifica o erro", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
   const pidFile = pidFileOf(dir);
-  const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile, { delay: 400 }) }, warn: () => {} });
+  const hold = join(dir, "init-hold");
+  const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile, { hold }) }, warn: () => {} });
   await registry.connectAll();
   const dead = pids(pidFile)[0];
   expect(dead).toBeDefined();
   process.kill(dead!);
   await expect(waitObservedDeath(dead!, () => registry.isClosed("fs"))).resolves.toBe(true);
 
+  writeFileSync(hold, "1"); // o próximo initialize fica parado até o arquivo sair
   const inFlight = registry.call("fs", "echo", {});
-  await waitFor(() => pids(pidFile).length === 2, "reconexão spawnou (initialize lento em voo)");
+  await waitFor(() => pids(pidFile).length === 2, "reconexão spawnou (initialize parado no hold)");
   registry.close();
+  // The reconnect can only finish after close(), so no fixed window decides the outcome (#628).
+  rmSync(hold);
   await expect(inFlight).rejects.toThrow(/fechado/);
   await expect(waitDead(pids(pidFile)[1]!)).resolves.toBe(true); // cliente pós-close é fechado
 }, 20_000);
