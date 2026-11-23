@@ -47,6 +47,7 @@ import type { BudgetChoice, BudgetDecider, BudgetStatus } from "./budget";
 import { trustChoice, trustPrompt, type TrustAsk } from "./trust";
 import { ttyTermsAsk, TERMS_UNATTENDED_NOTICE } from "./terms";
 import { bootChat } from "./chat/boot";
+import { runSetup, ttySetupIO } from "./chat/setup";
 import { continueTask, findCheckpointAgents, loadCheckpoint, type NoProgressDecider } from "./loop-guard";
 
 /** Aprovação interativa de troca (F-19); sem TTY retorna undefined (runtime nega/pending). */
@@ -200,6 +201,7 @@ const USAGE = `Uso:
   astro serve [--port <n>]
   astro replay <run-id> --task "<pedido>" [--config <path>] [--cwd <dir>]
   astro chat [--config <path>] [--cwd <dir>] [--provider <name>] [--permission-mode <modo>] [--artifact-root <dir>]
+  astro setup [--yes] [--config <path>]
   astro resume <run-id> --task "<pedido>" [--config <path>] [--cwd <dir>]
   astro continue <run-id> [--task "<pedido>"] [--agent <name>] [--config <path>] [--cwd <dir>]
   astro health [--config <path>]
@@ -405,6 +407,7 @@ type ParsedCommand =
   | { kind: "chat"; options: ChatCommand }
   | { kind: "tui"; options: TuiCommand }
   | { kind: "health"; options: HealthCommand }
+  | { kind: "setup"; options: { configPath: string; yes: boolean; configExplicit: boolean } }
   | { kind: "doctor"; options: DoctorCommand }
   | { kind: "providers"; options: ProvidersCommand }
   | { kind: "pool"; options: PoolCommand }
@@ -581,7 +584,7 @@ function parseArgs(argv: string[]): ParsedCommand {
     };
   }
   const { command, rest } = route;
-  const commands = ["run", "eval", "bench", "serve", "replay", "resume", "continue", "chat", "health", "doctor", "providers", "handoff", "cost", "pool", "agents", "locks", "models", "config", "skills", "mcp"];
+  const commands = ["run", "eval", "bench", "serve", "replay", "resume", "continue", "chat", "health", "doctor", "providers", "handoff", "cost", "pool", "agents", "locks", "models", "config", "skills", "mcp", "setup"];
   if (command !== undefined && !commands.includes(command)) {
     throw new UsageError(`comando desconhecido: "${command}"`);
   }
@@ -768,6 +771,26 @@ function parseArgs(argv: string[]): ParsedCommand {
         ...(allowPlugins ? { allowPlugins } : {}),
       },
     };
+  }
+
+  if (command === "setup") {
+    let configPath = "astro.config.json";
+    let yes = false;
+    let configExplicit = false;
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i] as string;
+      if (arg === "--yes" || arg === "-y") { yes = true; continue; }
+      if (arg === "--config") {
+        const value = rest.at(i + 1);
+        if (value === undefined || value.startsWith("-")) throw new UsageError("falta o valor de --config");
+        i++;
+        configPath = value;
+        configExplicit = true;
+        continue;
+      }
+      throw new UsageError(`opção desconhecida: "${arg}"`);
+    }
+    return { kind: "setup", options: { configPath, yes, configExplicit } };
   }
 
   if (command === "health") {
@@ -1231,6 +1254,35 @@ async function main(argv: string[]): Promise<number> {
   if (parsed.kind === "version") {
     console.log(versionLine());
     return 0;
+  }
+
+  // #611: `astro setup` reopens the wizard; no TTY asks/writes nothing, `--yes` takes defaults in a terminal.
+  if (parsed.kind === "setup") {
+    const o = parsed.options;
+    const channel = process.stdin.isTTY === true && process.stdout.isTTY === true ? ttySetupIO() : undefined;
+    try {
+      const outcome = await runSetup(resolve(o.configPath), {
+        allowMissing: !o.configExplicit,
+        ...(channel === undefined ? {} : { io: channel.io, acceptDefaults: o.yes }),
+      });
+      if (outcome.notice !== undefined) console.error(`aviso: ${outcome.notice}`);
+      if (outcome.flow === "skip") {
+        const reason = o.configExplicit
+          ? "--config is explicit and setup never fabricates it"
+          : process.env.ASTRO_NO_GLOBAL_CONFIG === "1"
+            ? "the global layer is disabled (--no-global-config / ASTRO_NO_GLOBAL_CONFIG=1)"
+            : `${o.configPath} already exists`;
+        console.log(`nothing created: ${reason}`);
+      } else if (outcome.projectCreated || outcome.globalCreated) {
+        console.log(`setup: ${outcome.flow} · global ${outcome.globalCreated ? "created" : "kept"} · project ${outcome.projectCreated ? "created" : "kept"}`);
+      }
+      return 0;
+    } catch (error) {
+      console.error(cliErrorLine(error));
+      return 1;
+    } finally {
+      channel?.close();
+    }
   }
 
   if (parsed.kind === "doctor") {

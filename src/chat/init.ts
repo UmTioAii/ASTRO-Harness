@@ -43,8 +43,8 @@ export function initAgents(cwd: string): string {
 /** Template do `config.json` global criado no first-run (#559): vazio; providers entram depois via store. */
 export const GLOBAL_CONFIG_TEMPLATE = "{}\n";
 
-/** Cria `path` com `contents` só se não existir (`wx`, 0600); EEXIST devolve false. */
-function createFileExclusive(path: string, contents: string): boolean {
+/** Creates `path` with `contents` only if it does not exist (`wx`, 0600); EEXIST returns false. */
+export function createFileExclusive(path: string, contents: string): boolean {
   try {
     const fd = openSync(path, "wx", 0o600);
     try {
@@ -61,13 +61,8 @@ function createFileExclusive(path: string, contents: string): boolean {
   }
 }
 
-/**
- * Modelo ativo da camada global crua (`activeProfileId` ou primeiro provider),
- * no formato `provider/id`; `undefined` quando não dá para derivar (global
- * ausente/inválido/sem providers) — nesse caso não existe config de projeto
- * válida para gravar (#559).
- */
-function activeModelRefFromGlobal(raw: Record<string, unknown>): string | undefined {
+/** Active model of the raw global layer (`activeProfileId` or first provider) as `provider/id`; `undefined` when it cannot be derived. */
+export function activeModelRefFromGlobal(raw: Record<string, unknown>): string | undefined {
   const providers = isPlainObject(raw.providers) ? raw.providers : undefined;
   if (providers === undefined) return undefined;
   const active = typeof raw.activeProfileId === "string" && isPlainObject(providers[raw.activeProfileId])
@@ -87,6 +82,9 @@ export interface FirstRunConfigResult {
 }
 
 /**
+ * @deprecated #611: replaced by the setup wizard (`src/chat/setup.ts`), which is
+ * the only writer at the TUI terms gate; removal is a follow-up.
+ *
  * First-run da TUI (#559): com config implícita (`allowMissing`), garante o
  * `config.json` global (template vazio, `wx` 0600) e cria o
  * `astro.config.json` se ausente **e** houver um modelo derivável na camada

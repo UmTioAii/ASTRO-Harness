@@ -63,15 +63,13 @@ describe("boot da TUI: portão dos termos antes de qualquer escrita (#479)", () 
     expect(existsSync(home)).toBe(false);
   });
 
-  test("runTui: o portão roda antes de ensureFirstRun e de openSessionApi (#591)", () => {
+  test("runTui: o portão roda antes do setup e de openSessionApi (#591)", () => {
     // O boot real precisa de TTY, Ink e sessão; o pin é sobre a ordem no arquivo.
-    // `ensureFirstRun` cria `$ASTRO_HOME/config.json` com `allowMissing: true`,
-    // então mover o portão para depois dele faria a recusa deixar config para trás
-    // (contradiz docs/terms.md) e ainda assim passaria nos testes acima.
+    // O setup wizard (#611) grava config, então a recusa tem de acontecer antes dele.
     const source = readFileSync(join(import.meta.dir, "..", "src", "tui", "run.tsx"), "utf8");
     const gate = source.indexOf("bootTuiTerms({");
     expect(gate).toBeGreaterThan(-1);
-    expect(gate).toBeLessThan(source.indexOf("ensureFirstRun();"));
+    expect(gate).toBeLessThan(source.indexOf("runSetup("));
     expect(gate).toBeLessThan(source.indexOf("openSessionApi("));
   });
 });

@@ -54,7 +54,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | `--allow-critical`/`--allow-sensitive`/`--i-understand` | invocação | entrada | herda | herda | CLI-only: allowlist é ato explícito (ADR-0027) |
 | `--artifact-root` | invocação de `chat`/TUI | entrada | herda | herda | CLI-only na entrada, compartilhado na sessão |
 | `config push/pull`, `providers vault-import`, `doctor --fix`, `config migrate` | camada 3/2, `$ASTRO_HOME` | executa | não expõe | não expõe | CLI-only: operação administrativa |
-| primeiro run / setup de provider | TUI cria `astro.config.json` (só `agent.model` do perfil global ativo) e `$ASTRO_HOME/config.json` se ausentes, sempre `wx` 0600 — sem provider ainda, só o global nasce e o setup cria os dois juntos (#559) | `run` exige config | abre setup automático | erro com instrução | contrato comum quando S3 (#469) definir a criação |
+| primeiro run / setup de provider | wizard de setup (#611) roda no portão dos termos, antes de qualquer leitura: sem global e sem projeto → wizard completo (perfil → provider → modelo); global presente e projeto ausente → mini-setup do projeto (perfil + modelo ativo do global), sem tocar no global; projeto presente → não roda. Cada camada nasce uma vez (`wx` 0600), nunca sobrescreve. Sem TTY não pergunta e não grava (uma linha de aviso, defaults em memória); `astro setup` reabre e `--yes` aceita os defaults num terminal; provider vindo do ambiente gera o fluxo curto, sem gravar camada | `run` exige config | abre setup automático | erro com instrução | contrato comum quando S3 (#469) definir a criação |
 
 ## Flag versus valor gravado (Q-10)
 
