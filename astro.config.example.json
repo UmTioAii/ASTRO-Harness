@@ -1,4 +1,5 @@
 {
+  "version": "2.0.0",
   "providers": {
     "nvidia": {
       "kind": "openai-compat",
@@ -47,10 +48,8 @@
     "maxSteps": 50,
     "tools": ["read_file", "write_file", "run_command", "grep", "glob", "list_dir", "edit", "lsp", "pipeline"]
   },
-  "tools": {
-    "run_command": {
-      "sandbox": "auto"
-    }
+  "shell": {
+    "mode": "host"
   },
   "telemetry": {
     "enabled": false,

@@ -198,7 +198,7 @@ export const HOST_SHELL_BYPASS_CONFIRMATION_ENV = "ASTRO_HOST_SHELL_CONFIRM_BYPA
 
 /**
  * Shell ligado salvo opt-out explícito (`sandbox: false`, I-19). O default é
- * `auto` (#474): Docker quando disponível, senão host com aprovação por comando.
+ * host com aprovação por comando (#599); `true`/`"docker"` exige Docker.
  */
 export function resolveSandboxSetting(configured: boolean | "auto" | "docker" | undefined): boolean {
   // `"auto"` conta como shell ligado; só `false` desliga.

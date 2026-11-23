@@ -62,7 +62,7 @@ import { deletePathTool } from "../tools/delete-path";
 import { movePathTool } from "../tools/move-path";
 import { lspTool } from "../tools/lsp";
 import { pipelineTool } from "../tools/pipeline";
-import { configureRunCommand, resolveRunCommandMode, sandboxWarning } from "../tools/run-command";
+import { configureRunCommand, resolveRunCommandMode, sandboxWarning, type RunCommandMode } from "../tools/run-command";
 import { allowlistLoadEvents } from "../allowlists";
 import type { Tool } from "../tools/types";
 import { resolvePermissionMode, mostRestrictive, type ActionClass, type PermissionMode } from "../permissions";
@@ -599,6 +599,12 @@ function projectSystemPrompt(config: AstroConfig, cwd: string, memory?: string):
   return parts.length === 0 ? undefined : parts.join("\n\n");
 }
 
+/** One-line notice for a CLI run whose shell executes on the host (ADR-0034, planned). */
+export function hostShellNotice(tools: readonly string[], mode: RunCommandMode, suppressed?: boolean): string | undefined {
+  if (suppressed === true || mode !== "host" || !tools.includes("run_command")) return undefined;
+  return "the shell runs on the host with per-command approval; the Docker sandbox is inactive (ADR-0034)";
+}
+
 export async function runTask(opts: RunOptions): Promise<RunReport> {
   const cwd = opts.cwd ?? process.cwd();
   const env = opts.env ?? process.env;
@@ -628,8 +634,9 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
   const sandboxNotice = runCommandMode === "disabled" ? sandboxWarning(false) : undefined;
   if (sandboxNotice !== undefined && opts.suppressRunEvents !== true) console.warn(`aviso: ${sandboxNotice}`);
-  if (runCommandMode === "host" && config.agent.tools.includes("run_command") && opts.suppressRunEvents !== true) {
-    console.warn("warning: the shell runs on the host with per-command approval; the Docker sandbox is inactive (ADR-0034)");
+  if (runCommandMode === "host") {
+    const notice = hostShellNotice(config.agent.tools, runCommandMode, opts.suppressRunEvents);
+    if (notice !== undefined) console.warn(notice);
   }
 
   const ledgerPath = resolveFrom(cwd, config.paths.ledger);

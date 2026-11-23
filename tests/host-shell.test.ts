@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
+import { hostShellNotice } from "../src/core/app";
 import { validateConfig, ConfigError } from "../src/core/config";
 import { parseConfigEditValue } from "../src/core/config-edit";
 import { ToolExecutor } from "../src/tools/executor";
@@ -102,10 +103,19 @@ describe("config do shell: host é o default; o alias legado seleciona Docker (#
     expect(() => parseConfigEditValue("shell.default", "fish")).toThrow(ConfigError);
   });
 
-  test("astro.config.example.json documents the host and does not teach sandbox:false", () => {
+  test("hostShellNotice only fires for a host-mode agent that has run_command", () => {
+    expect(hostShellNotice(["run_command"], "host")).toContain("per-command approval");
+    expect(hostShellNotice(["run_command"], "host", true)).toBeUndefined();
+    expect(hostShellNotice([], "host")).toBeUndefined();
+    expect(hostShellNotice(["run_command"], "docker")).toBeUndefined();
+    expect(hostShellNotice(["run_command"], "disabled")).toBeUndefined();
+  });
+
+  test("the example config documents the host default through shell.mode", () => {
     const example = JSON.parse(readFileSync("astro.config.example.json", "utf8")) as Record<string, unknown>;
-    expect(JSON.stringify(example)).not.toContain('"sandbox": false');
-    expect((example.tools as { run_command: { sandbox: string } }).run_command.sandbox).toBe("auto");
+    expect(example.version).toBe("2.0.0");
+    expect(example.shell).toEqual({ mode: "host" });
+    expect(JSON.stringify(example)).not.toContain('"sandbox"');
   });
 });
 

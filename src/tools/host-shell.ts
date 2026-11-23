@@ -1,8 +1,7 @@
 /**
- * Shell do host (#474): vocabulário fechado, detecção dos shells presentes e
- * argv para executar o comando do modelo. Só entra no caminho quando
- * `tools.run_command.sandbox` é `"auto"` E o Docker não está disponível; o
- * caminho Docker do ADR-0027 não usa este módulo.
+ * Shell do host (#474, #599): vocabulário fechado, detecção dos shells presentes
+ * e argv para executar o comando do modelo. É o caminho default do `run_command`
+ * desde #599; o caminho Docker do ADR-0027 não usa este módulo.
  */
 
 /** Shells que o `/shell` lista; fora daqui não é aceito na config (#474). */
