@@ -73,14 +73,22 @@ export interface ProviderFact {
   credentialsReadable?: boolean;
 }
 
-/** Active model override facts (#625); absent when nothing changed and no offer is malformed. */
+/** Active model override facts (#625); absent when nothing changed. */
 export interface ModelFact {
   /** `provider/id` of the active model. */
   ref: string;
   /** Overridden facts, effective value next to the catalog value. */
   overrides: OverrideNote[];
-  /** Malformed override recorded at composition; the offer contributes no card. */
-  overrideError?: { field: string; reason: string };
+}
+
+/** A malformed offer recorded at composition; the offer contributes no card (#638). */
+export interface ModelErrorFact {
+  /** `provider/id` of the dropped offer. */
+  ref: string;
+  field: string;
+  reason: string;
+  /** Layer named by the error: a catalog fact or a provider override. */
+  source: "catalog" | "override";
 }
 
 /** Seção `mcpServers` já validada pela config; só nomes de env, nunca valores (I-03). */
@@ -151,6 +159,8 @@ export interface DoctorFacts {
   attachments: AttachmentFacts;
   /** Overrides over the active model; absent without one or when config is unusable. */
   model?: ModelFact;
+  /** Every malformed offer recorded at composition, active or not; absent when none. */
+  modelErrors?: ModelErrorFact[];
   skills?: SkillsFact;
   disk?: DiskFact;
   env: Record<string, string | undefined>;
@@ -291,20 +301,38 @@ function formatBytes(bytes: number): string {
 }
 
 function modelCheck(fact: ModelFact): Check {
-  if (fact.overrideError !== undefined) {
-    return {
-      name: "model",
-      level: "fail",
-      label: "model",
-      detail: `${fact.ref}: malformed provider override at "${fact.overrideError.field}": ${fact.overrideError.reason}`,
-    };
-  }
   return {
     name: "model",
     level: "ok",
     label: "model",
     detail: `${fact.ref}: ${formatOverrideNotes(fact.overrides)}`,
   };
+}
+
+/** One `fail` per recorded malformed offer, so a non-active model is not silent (#638). */
+function modelErrorCheck(fact: ModelErrorFact): Check {
+  const source = fact.source === "catalog" ? "malformed catalog fact" : "malformed provider override";
+  return {
+    name: `model:${fact.ref}`,
+    level: "fail",
+    label: `model ${fact.ref}`,
+    detail: `${source} at "${fact.field}": ${fact.reason}`,
+  };
+}
+
+/**
+ * Every malformed offer recorded at composition (#638), across all providers.
+ * Reads the composed catalog, never the network; pure.
+ */
+export function modelErrorFacts(entries: readonly CatalogEntry[] = PROVIDER_CATALOG): ModelErrorFact[] {
+  return entries.flatMap((entry) =>
+    (entry.overrideErrors ?? []).map((error) => ({
+      ref: `${entry.key}/${error.ref}`,
+      field: error.field,
+      reason: error.reason,
+      source: error.source,
+    })),
+  );
 }
 
 /**
@@ -321,10 +349,6 @@ export function modelFactFor(
   const id = ref.slice(slash + 1);
   const entry = entries.find((item) => item.key === provider);
   if (entry === undefined) return undefined;
-  const error = entry.overrideErrors?.find((item) => item.ref === id);
-  if (error !== undefined) {
-    return { ref, overrides: [], overrideError: { field: error.field, reason: error.reason } };
-  }
   const card = entry.cards.find((item) => item.id === id);
   const overrides = card === undefined ? [] : overrideNotes(card);
   return overrides.length === 0 ? undefined : { ref, overrides };
@@ -375,6 +399,7 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
 
   const model = facts.model;
   if (model !== undefined) checks.push(modelCheck(model));
+  for (const error of facts.modelErrors ?? []) checks.push(modelErrorCheck(error));
 
   const globalConfig = facts.config.global;
   if (globalConfig !== undefined && globalConfig.present) {
@@ -891,6 +916,8 @@ export function collectFacts(
     projectSkillsRoot?: string;
     /** Raiz de skills do usuário; default é a do runtime (`$ASTRO_HOME/skills`). */
     userSkillsRoot?: string;
+    /** Composed provider catalog; default is `PROVIDER_CATALOG` (injectable for tests). */
+    catalog?: readonly CatalogEntry[];
   } = {},
 ): DoctorFacts {
   const env = options.env ?? process.env;
@@ -905,7 +932,9 @@ export function collectFacts(
   // (mesma base do loader de skills), nunca contra o projeto.
   const userSkillsRoot = resolve(options.userSkillsRoot ?? skillsUserRoot(env));
   const effective = readEffectiveConfig(configPath, env);
-  const model = effective.status === "ok" ? modelFactFor(effective.agentModel) : undefined;
+  const catalog = options.catalog ?? PROVIDER_CATALOG;
+  const model = effective.status === "ok" ? modelFactFor(effective.agentModel, catalog) : undefined;
+  const modelErrors = modelErrorFacts(catalog);
   return {
     bunVersion: Bun.version,
     nodeVersion: readNodeVersion(),
@@ -916,6 +945,7 @@ export function collectFacts(
     astroHome: readAstroHome(env),
     attachments: collectAttachmentFacts(env, effective, projectCwd, options.checkPrivate, options.probeWritable, options.artifactRoot),
     ...(model === undefined ? {} : { model }),
+    ...(modelErrors.length === 0 ? {} : { modelErrors }),
     skills: collectSkillFacts(projectSkillsRoot, userSkillsRoot),
     disk: collectDiskFacts(env, projectCwd),
     env,

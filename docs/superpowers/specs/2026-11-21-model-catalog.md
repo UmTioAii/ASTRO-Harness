@@ -46,9 +46,9 @@ Gateways truncate context, hide reasoning, drop `effort` or change `maxOutput`. 
 carries `overrides?: Partial<ModelFacts>`:
 
 ```ts
-{ ref: "deepseek/deepseek-v3.3",
+{ ref: "gpt-5.5",
   price: { inputPerM: 0.27, outputPerM: 1.1 },
-  overrides: { maxOutput: 8192, efforts: [] } }   // this gateway exposes no effort
+  overrides: { maxOutput: 8192, reasoning: false, efforts: [] } }   // this gateway exposes no effort
 ```
 
 Precedence: **provider override > catalog fact > code default**. The override is visible:
