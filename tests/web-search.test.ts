@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { validateConfig } from "../src/core/config";
-import { createWebSearchTool, webSearchSecretEnvNames, type WebSearchConfig, type WebSearchDeps } from "../src/tools/web-search";
+import { canonicalUrl, createWebSearchTool, webSearchSecretEnvNames, type WebSearchConfig, type WebSearchDeps } from "../src/tools/web-search";
 
 const HOST_SECRET = ["s", "k", "-"].join("") + "host-secret-123456";
 const WEB_SECRET = "web-secret-value";
@@ -27,8 +27,15 @@ const ctx = (cwd: string) => ({ cwd, run: "r1", agent: "plan" });
 const parse = (output: string) => JSON.parse(output) as {
   query: string;
   provider: string;
-  results: Array<{ title: string; url: string; snippet: string }>;
+  results: Array<{ id: number; title: string; url: string; snippet: string }>;
 };
+
+type FetchImpl = NonNullable<WebSearchDeps["fetchImpl"]>;
+
+/** Mocked transport: the suite never opens a socket for the #604 cases. */
+function mockFetch(handler: (url: string) => Response): FetchImpl {
+  return async (input: string | URL | Request) => handler(String(input));
+}
 
 const base = {
   providers: { p: { kind: "openai-compat", baseUrl: "https://example.test/v1", credentialRef: "P_KEY" } },
@@ -117,7 +124,7 @@ describe("web_search exa (#57)", () => {
       const body = parse(result.output);
       expect(body.provider).toBe("exa");
       expect(body.results).toEqual([
-        { title: "A", url: "https://a.test", snippet: "trecho A" },
+        { id: 1, title: "A", url: "https://a.test", snippet: "trecho A" },
       ]);
       expect(requests[0]?.method).toBe("POST");
       expect(requests[0]?.url).toBe(`${server.url.origin}/search`);
@@ -190,7 +197,92 @@ describe("web_search exa (#57)", () => {
   });
 });
 
+describe("web_search canonical dedupe, citations and cache (#604)", () => {
+  test("canonicalUrl normalizes scheme/host, default port, trailing slash, tracking params, order and fragment", () => {
+    expect(canonicalUrl("HTTPS://Example.TEST:443/post/?utm_source=x&b=1&a=2#top"))
+      .toBe("https://example.test/post?a=2&b=1");
+    expect(canonicalUrl("https://example.test/")).toBe("https://example.test/");
+    expect(canonicalUrl("not a url")).toBe("not a url");
+  });
+
+  test("collapses duplicates by canonical URL keeping the best snippet and the first position", async () => {
+    const fetchImpl = mockFetch(() => Response.json({
+      results: [
+        { title: "A", url: "https://Example.test/post/?utm_source=x#top", text: "curto" },
+        { title: "A2", url: "https://example.test/post?utm_source=y", text: "um trecho bem mais completo" },
+        { title: "C", url: "https://other.test/", text: "outro" },
+      ],
+    }));
+    const { tool, audit, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY" }, { fetchImpl });
+    const result = await tool.execute({ query: "astro" }, ctx(cwd));
+    const body = parse(result.output);
+    expect(body.results.map((item) => item.url)).toEqual([
+      "https://Example.test/post/?utm_source=x#top",
+      "https://other.test/",
+    ]);
+    expect(body.results.map((item) => item.snippet)).toEqual(["um trecho bem mais completo", "outro"]);
+    expect(body.results.map((item) => item.id)).toEqual([1, 2]);
+    expect(audit.readAll().find((item) => item.tipo === "web.search")?.payload)
+      .toMatchObject({ resultsCount: 2, cacheHit: false });
+  });
+
+  test("manifest tells the model to cite results by [n]", () => {
+    const { tool } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY" });
+    expect(tool.manifest.description).toContain("[n]");
+  });
+
+  test("an identical canonical query and options is served from the bounded cache and audited as a hit", async () => {
+    let calls = 0;
+    const fetchImpl = mockFetch(() => {
+      calls += 1;
+      return Response.json({ results: [{ title: "A", url: "https://a.test/p", text: "trecho" }] });
+    });
+    const { tool, audit, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY" }, { fetchImpl });
+    const first = parse((await tool.execute({ query: "astro harness", maxResults: 5 }, ctx(cwd))).output);
+    const second = parse((await tool.execute({ query: "  ASTRO   harness ", maxResults: 5 }, ctx(cwd))).output);
+    expect(calls).toBe(1);
+    expect(second).toMatchObject({ results: first.results });
+    const events = audit.readAll().filter((item) => item.tipo === "web.search");
+    expect(events.map((item) => item.payload?.cacheHit)).toEqual([false, true]);
+    expect(events[1]?.payload).toMatchObject({ cacheHit: true, status: 200, resultsCount: 1 });
+    // Different options are a different key: no false hit.
+    await tool.execute({ query: "astro harness", maxResults: 4 }, ctx(cwd));
+    expect(calls).toBe(2);
+  });
+
+  test("ids are unique inside a run and restart in a new run, and the cache never crosses runs", async () => {
+    let calls = 0;
+    const fetchImpl = mockFetch(() => {
+      calls += 1;
+      return Response.json({ results: [{ title: "A", url: "https://a.test/p", text: "trecho" }] });
+    });
+    const { tool, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY" }, { fetchImpl });
+    expect(parse((await tool.execute({ query: "astro" }, ctx(cwd))).output).results[0]?.id).toBe(1);
+    expect(parse((await tool.execute({ query: "other" }, ctx(cwd))).output).results[0]?.id).toBe(2);
+    const restarted = parse((await tool.execute({ query: "astro" }, { ...ctx(cwd), run: "r2" })).output);
+    expect(restarted.results[0]?.id).toBe(1);
+    expect(calls).toBe(3);
+  });
+
+  test("cache eviction keeps the cache bounded", async () => {
+    let calls = 0;
+    const fetchImpl = mockFetch(() => {
+      calls += 1;
+      return Response.json({ results: [{ title: "A", url: "https://a.test/p", text: "trecho" }] });
+    });
+    const { tool, cwd } = setup(
+      { provider: "exa", apiKeyEnv: "WEB_KEY" },
+      { fetchImpl, cacheMaxEntries: 1 },
+    );
+    await tool.execute({ query: "one" }, ctx(cwd));
+    await tool.execute({ query: "two" }, ctx(cwd));
+    await tool.execute({ query: "one" }, ctx(cwd));
+    expect(calls).toBe(3);
+  });
+});
+
 describe("web_search redação de url/query no output (ADR-0027, I-03)", () => {
+
   // Segredo sintético construído em runtime (gate G6: sem literal de segredo no diff).
   const SEARCH_SECRET = ["s", "k", "-"].join("") + "slice3a-search-synthetic-77aa88";
 
