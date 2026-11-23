@@ -63,10 +63,10 @@ describe("preset simple/control (#515)", () => {
     expect(() => validateConfig({ ...raised, preset: "simple" })).toThrow(/preset.*control/);
   });
 
-  test("Default accepts only published turn choices and hides the advanced round knob", () => {
+  test("Default accepts published turn choices and retains advanced declarations", () => {
     const withTurns = { ...base(), version: "2.0.0", preset: "simple" };
     expect(validateConfig({ ...withTurns, run: { maxTurns: 1000 } }).run).toMatchObject({ maxTurns: 1000 }); expect(() => validateConfig({ ...withTurns, run: { maxTurns: 600 } })).toThrow(/run\.maxTurns.*250.*500.*1000.*unlimited/);
-    expect(() => validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } })).toThrow(/run\.maxRoundsPerTurn.*preset.*control/);
+    expect(validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } }).run).toMatchObject({ maxRoundsPerTurn: 100 });
   });
 
   test("simple aceita 500 explícito, que é o próprio teto", () => {

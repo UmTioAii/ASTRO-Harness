@@ -82,9 +82,10 @@ describe("comandos de sessão e estilo do chat (T1.5, #173)", () => {
   });
 
   test("/config <chave> <valor> vira comando de edição persistida; /config sozinho segue resumo (#558)", () => {
-    expect(parseCommand("/config agent.maxSteps 200")).toEqual({ kind: "config", key: "agent.maxSteps", rawValue: "200" } as never);
+    expect(parseCommand("/config run.maxTurns 1000")).toEqual({ kind: "config", key: "run.maxTurns", rawValue: "1000" } as never);
     expect(parseCommand("/config")).toEqual({ kind: "config" });
-    expect(HELP_TEXT).toContain("/config agent.maxSteps");
+    expect(HELP_TEXT).toContain("/config run.maxTurns 1000");
+    expect(HELP_TEXT).not.toContain("/config agent.maxSteps");
   });
 
   test("/session mostra id, início, modelo, turnos, tokens, custo e arquivo", async () => {

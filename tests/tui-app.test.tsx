@@ -332,8 +332,12 @@ test("enfileira Enter durante o turno (#560) e atualiza o status após /model", 
   }
 });
 
-test("progresso mostra passo n/max durante o turno e não fica visível no fim (#508)", async () => {
+const progressSummary = (preset: "default" | "control"): ConfigSummary => ({ configPath: "/tmp/astro.config.json", maxSteps: 7, permissionMode: "ask", approvalTimeoutMs: "300000 (default)", costs: [], budget: "sem budget", knobs: [{ key: "preset", value: preset }] });
+
+test("live counters follow the effective profile and disappear at turn end (#508, #594)", async () => {
   class StepSession extends FakeSession {
+    preset: "default" | "control" = "control"; stepped = false;
+    configSummary(): ConfigSummary { return progressSummary(this.preset); }
     override async send(
       prompt: string,
       signal?: AbortSignal,
@@ -341,7 +345,7 @@ test("progresso mostra passo n/max durante o turno e não fica visível no fim (
       _attachments?: Parameters<ChatSession["send"]>[3],
       turn?: SendTurnOptions,
     ): Promise<TurnResult> {
-      turn?.onStep?.(2, 7);
+      turn?.onStep?.(2, 7); this.stepped = true;
       await new Promise((resolve) => setTimeout(resolve, 80));
       return super.send(prompt, signal);
     }
@@ -357,6 +361,14 @@ test("progresso mostra passo n/max durante o turno e não fica visível no fim (
   } finally {
     instance.unmount();
   }
+  const defaultSession = new StepSession(); defaultSession.preset = "default";
+  const defaultInstance = render(<TuiApp session={defaultSession} cwd="/tmp/astro" />);
+  try {
+    defaultInstance.stdin.write("conte"); defaultInstance.stdin.write("\r");
+    await waitFor(() => defaultSession.stepped && frameHas(defaultInstance, "pensando…"));
+    expect(frameHas(defaultInstance, "passo")).toBe(false);
+    await waitFor(() => frameHas(defaultInstance, "eco:conte"));
+  } finally { defaultInstance.unmount(); }
 });
 
 test("progresso sem evento de passo fica no estado neutro, sem número (#508)", async () => {
@@ -380,6 +392,7 @@ test("progresso sem evento de passo fica no estado neutro, sem número (#508)", 
 
 test("progresso não fica visível depois de um turno com erro (#508)", async () => {
   class FailingStepSession extends FakeSession {
+    configSummary(): ConfigSummary { return progressSummary("control"); }
     override async send(
       _prompt: string,
       _signal?: AbortSignal,
