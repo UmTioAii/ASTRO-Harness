@@ -8,12 +8,22 @@ import type { AuditLike, Tool, ToolContext, ToolResult } from "./types";
 
 export type WebSearchProvider = "exa" | "brave" | "google" | "custom";
 
+/** One declared backend of the `webSearch.fallback` chain (#604). */
+export interface WebSearchBackendConfig {
+  provider: WebSearchProvider;
+  /** Name of the env var with the key; absent = the backend is skipped. */
+  apiKeyEnv?: string;
+  baseUrl?: string;
+}
+
 /** Configuração `webSearch` (validação em `src/core/config.ts`). */
 export interface WebSearchConfig {
   provider: WebSearchProvider;
   apiKeyEnv: string;
   baseUrl?: string;
   defaultMaxResults?: number;
+  /** Ordered chain tried after the primary on transport failure (#604). */
+  fallback?: WebSearchBackendConfig[];
 }
 
 export interface WebSearchDeps {
