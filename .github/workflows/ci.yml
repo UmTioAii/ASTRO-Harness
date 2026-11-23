@@ -1,9 +1,13 @@
 name: ci
 
 on:
+  # PRs and main pushes run the full suite. Release tags (v<version>) rerun the
+  # same jobs so the published commit has its own green run; no separate
+  # workflow, so the tag never duplicates coverage.
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -38,6 +42,18 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Coverage gate (80% total and per C1-C4 slice)
         run: bun run test:coverage
+
+  audit:
+    # Cheap single-runner registry check (#605): any advisory fails the run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - name: Dependency audit (fail on any known vulnerability)
+        run: bun audit
 
   eval:
     runs-on: ubuntu-latest

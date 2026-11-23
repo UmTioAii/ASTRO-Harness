@@ -7,8 +7,9 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, win32 } from "node:path";
 import { astroHomePath } from "./astro-home";
+import { withFileLock } from "./file-lock";
 import { isVaultId, looksLikeSecret } from "./secrets";
 
 export type VaultScheme = "dpapi" | "plain";
@@ -34,6 +35,9 @@ export interface VaultStore {
   version: 1;
   credentials: VaultCredential[];
 }
+
+/** DPAPI shells out to PowerShell; a cold start can exceed the 1s file-lock default. */
+export const VAULT_LOCK_TIMEOUT_MS = 60_000;
 
 export function vaultPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(astroHomePath(env), "vault.json");
@@ -71,9 +75,43 @@ const DPAPI_UNPROTECT_SCRIPT =
   "[System.Text.Encoding]::UTF8.GetBytes($env:ASTRO_VAULT_ENTROPY), " +
   "[System.Security.Cryptography.DataProtectionScope]::CurrentUser))";
 
+const WINDOWS_ROOT = "C:\\Windows";
+
+/**
+ * Trusted system roots for PowerShell: the drive of the running binary (which
+ * the environment cannot spoof) and the conventional `C:\Windows`. `SystemRoot`
+ * and `windir` are deliberately ignored because a repo `.env` can set them
+ * (#605, I-03); if neither root has the binary, resolution refuses.
+ */
+function defaultSystemRoots(): string[] {
+  const drive = /^([A-Za-z]:)[\\/]/.exec(process.execPath)?.[1];
+  return drive === undefined || drive.toUpperCase() === "C:"
+    ? [WINDOWS_ROOT]
+    : [win32.join(`${drive}\\`, "Windows"), WINDOWS_ROOT];
+}
+
+/**
+ * Resolves the Windows PowerShell executable from a trusted system root. PATH,
+ * the cwd, `SystemRoot` and `windir` are never consulted: a planted
+ * `powershell.exe` must not receive the DPAPI secret (#605, I-03).
+ */
+export function resolvePowerShell(
+  opts: { platform?: NodeJS.Platform; roots?: readonly string[] } = {},
+): string {
+  const platform = opts.platform ?? process.platform;
+  if (platform !== "win32") throw new Error("PowerShell is only used for DPAPI on Windows");
+  const roots = opts.roots ?? defaultSystemRoots();
+  for (const root of roots) {
+    if (!isAbsolute(root)) throw new Error(`PowerShell not found: system root "${root}" is not absolute`);
+    const exe = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    if (existsSync(exe)) return exe;
+  }
+  throw new Error(`PowerShell not found under ${roots.join(", ")}`);
+}
+
 function runDpapi(script: string, envExtra: Record<string, string>): string {
   if (process.platform !== "win32") throw new Error("DPAPI só existe no Windows (cofre usa modo plain fora dele)");
-  return execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+  return execFileSync(resolvePowerShell(), ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
     maxBuffer: 1 << 20,
     stdio: ["ignore", "pipe", "ignore"], // stderr pode conter o segredo (I-03)
@@ -228,10 +266,25 @@ export class Vault {
   constructor(
     readonly path: string = vaultPath(),
     readonly backend: VaultBackend = defaultBackend(),
+    private readonly options: { lockTimeoutMs?: number } = {},
   ) {}
 
   #load(): VaultStore {
     return loadVault(this.path);
+  }
+
+  /**
+   * Serializes read-modify-write across processes (#605, I-03). The lock lives
+   * next to the vault, like audit/ledger, and is created with the owning PID;
+   * a live holder makes the write fail closed instead of losing an update.
+   * The wait covers a PowerShell cold start because `create`/`rotate` protect
+   * the secret inside this section on Windows.
+   */
+  #write<T>(critical: () => T): T {
+    mkdirSync(dirname(this.path), { recursive: true });
+    return withFileLock(`${this.path}.lock`, critical, {
+      timeoutMs: this.options.lockTimeoutMs ?? VAULT_LOCK_TIMEOUT_MS,
+    });
   }
 
   /** Listagem sem o campo secreto (seguro para TUI/log). */
@@ -243,57 +296,65 @@ export class Vault {
   create(input: { providerId: string; label: string; secret: string }, now: Date = new Date()): VaultPublic {
     if (input.secret.trim() === "") throw new Error("segredo vazio não entra no cofre");
     if (looksLikeSecret(input.label)) throw new Error(`"label" parece conter segredo; não é gravado (I-03)`);
-    const store = this.#load();
-    const ts = now.toISOString();
-    const cred: VaultCredential = {
-      id: `cred-${randomUUID()}`,
-      providerId: input.providerId,
-      label: input.label,
-      scheme: this.backend.scheme,
-      secret: this.backend.protect(input.secret),
-      createdAt: ts,
-      lastUsedAt: ts,
-      active: true,
-    };
-    for (const c of store.credentials) {
-      if (c.providerId === input.providerId) c.active = false;
-    }
-    store.credentials.push(cred);
-    saveVault(store, this.path);
-    const { secret: _secret, ...pub } = cred;
-    return pub;
+    return this.#write(() => {
+      const store = this.#load();
+      const ts = now.toISOString();
+      const cred: VaultCredential = {
+        id: `cred-${randomUUID()}`,
+        providerId: input.providerId,
+        label: input.label,
+        scheme: this.backend.scheme,
+        secret: this.backend.protect(input.secret),
+        createdAt: ts,
+        lastUsedAt: ts,
+        active: true,
+      };
+      for (const c of store.credentials) {
+        if (c.providerId === input.providerId) c.active = false;
+      }
+      store.credentials.push(cred);
+      saveVault(store, this.path);
+      const { secret: _secret, ...pub } = cred;
+      return pub;
+    });
   }
 
   /** Re-cifra o segredo de uma credencial existente. */
   rotate(id: string, secret: string, now: Date = new Date()): void {
     if (secret.trim() === "") throw new Error("segredo vazio não entra no cofre");
-    const store = this.#load();
-    const cred = store.credentials.find((c) => c.id === id);
-    if (cred === undefined) throw new Error("credencial não encontrada no cofre");
-    cred.scheme = this.backend.scheme;
-    cred.secret = this.backend.protect(secret);
-    cred.lastUsedAt = now.toISOString();
-    saveVault(store, this.path);
+    this.#write(() => {
+      const store = this.#load();
+      const cred = store.credentials.find((c) => c.id === id);
+      if (cred === undefined) throw new Error("credencial não encontrada no cofre");
+      cred.scheme = this.backend.scheme;
+      cred.secret = this.backend.protect(secret);
+      cred.lastUsedAt = now.toISOString();
+      saveVault(store, this.path);
+    });
   }
 
   /** Deixa `id` ativa e desativa as demais do mesmo provider (uma ativa por provider). */
   activate(id: string): void {
-    const store = this.#load();
-    const cred = store.credentials.find((c) => c.id === id);
-    if (cred === undefined) throw new Error("credencial não encontrada no cofre");
-    for (const c of store.credentials) {
-      if (c.providerId === cred.providerId) c.active = c.id === id;
-    }
-    saveVault(store, this.path);
+    this.#write(() => {
+      const store = this.#load();
+      const cred = store.credentials.find((c) => c.id === id);
+      if (cred === undefined) throw new Error("credencial não encontrada no cofre");
+      for (const c of store.credentials) {
+        if (c.providerId === cred.providerId) c.active = c.id === id;
+      }
+      saveVault(store, this.path);
+    });
   }
 
   /** Remove a credencial; retorna false se não existia. */
   remove(id: string): boolean {
-    const store = this.#load();
-    const next = store.credentials.filter((c) => c.id !== id);
-    if (next.length === store.credentials.length) return false;
-    saveVault({ version: 1, credentials: next }, this.path);
-    return true;
+    return this.#write(() => {
+      const store = this.#load();
+      const next = store.credentials.filter((c) => c.id !== id);
+      if (next.length === store.credentials.length) return false;
+      saveVault({ version: 1, credentials: next }, this.path);
+      return true;
+    });
   }
 
   /** Resolve a credencial ATIVA do provider; valor só em memória (I-03). */

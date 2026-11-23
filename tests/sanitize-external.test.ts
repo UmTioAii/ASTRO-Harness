@@ -121,6 +121,47 @@ test("redactSecrets redige a senha de userinfo de URL e mantém usuário/host (#
   expect(redis).toContain("redis://:[REDACTED]@cache.test:6379");
 });
 
+test("redactSecrets redacts an unquoted value with spaces to the end of the line (#605)", () => {
+  const secret = ["alpha", "beta", "gamma"].join(" ");
+  const out = redactSecrets(`TOKEN=${secret}\nnext line stays`);
+  expect(out).not.toContain("alpha");
+  expect(out).not.toContain("beta");
+  expect(out).not.toContain("gamma");
+  expect(out).toBe("TOKEN=[REDACTED]\nnext line stays");
+});
+
+test("redactSecrets redacts a quoted value containing a newline (#605)", () => {
+  const secret = ["first-fragment", "second-fragment"].join("\n");
+  const out = redactSecrets(`apiKey="${secret}"\nafter`);
+  expect(out).not.toContain("first-fragment");
+  expect(out).not.toContain("second-fragment");
+  expect(out).toBe(`apiKey="[REDACTED]"\nafter`);
+});
+
+test("redaction stops at the next assignment so the following secret is still redacted (#605)", () => {
+  const out = redactSecrets('x-api-key: value with spaces TOKEN="following-secret"');
+  expect(out).toBe('x-api-key: [REDACTED] TOKEN="[REDACTED]"');
+});
+
+test("redactSecrets redacts single-quoted values with spaces and newlines (#605)", () => {
+  expect(redactSecrets("TOKEN='alpha beta'")).toBe("TOKEN='[REDACTED]'");
+  expect(redactSecrets("export API_TOKEN='sk live xyz'")).toBe("export API_TOKEN='[REDACTED]'");
+  expect(redactSecrets("apiKey='first-fragment\nsecond-fragment'")).toBe("apiKey='[REDACTED]'");
+});
+
+test("redactSecrets redacts unbalanced quoted values to the end of the line (#605)", () => {
+  expect(redactSecrets('TOKEN="alpha beta\nnext line')).toBe("TOKEN=[REDACTED]\nnext line");
+  expect(redactSecrets("TOKEN='alpha beta\nnext line")).toBe("TOKEN=[REDACTED]\nnext line");
+  expect(redactSecrets("TOKEN=abc'def ghi")).toBe("TOKEN=[REDACTED]");
+});
+
+test("redaction is idempotent for the [REDACTED] marker (#605)", () => {
+  const once = redactSecrets("password=value with spaces");
+  expect(once).toBe("password=[REDACTED]");
+  expect(redactSecrets(once)).toBe(once);
+  expect(redactSecrets(redactSecrets(once))).toBe(once);
+});
+
 test("sanitizePromptText remove C1 (CSI), bidi, ZWSP e surrogate solto (#536)", () => {
   const csi = sanitizePromptText("echo ok\u009b2J\u009bHrm -rf build");
   expect(csi).not.toContain("\u009b");
