@@ -36,6 +36,14 @@ export interface VaultStore {
   credentials: VaultCredential[];
 }
 
+/** DPAPI shells out to PowerShell; a cold start can exceed the 1s file-lock default. */
+export const VAULT_LOCK_TIMEOUT_MS = 60_000;
+
+export interface VaultOptions {
+  /** Test seam: shorten the lock wait; production uses `VAULT_LOCK_TIMEOUT_MS`. */
+  lockTimeoutMs?: number;
+}
+
 export function vaultPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(astroHomePath(env), "vault.json");
 }
@@ -249,6 +257,7 @@ export class Vault {
   constructor(
     readonly path: string = vaultPath(),
     readonly backend: VaultBackend = defaultBackend(),
+    private readonly options: VaultOptions = {},
   ) {}
 
   #load(): VaultStore {
@@ -259,10 +268,14 @@ export class Vault {
    * Serializes read-modify-write across processes (#605, I-03). The lock lives
    * next to the vault, like audit/ledger, and is created with the owning PID;
    * a live holder makes the write fail closed instead of losing an update.
+   * The wait covers a PowerShell cold start because `create`/`rotate` protect
+   * the secret inside this section on Windows.
    */
   #write<T>(critical: () => T): T {
     mkdirSync(dirname(this.path), { recursive: true });
-    return withFileLock(`${this.path}.lock`, critical);
+    return withFileLock(`${this.path}.lock`, critical, {
+      timeoutMs: this.options.lockTimeoutMs ?? VAULT_LOCK_TIMEOUT_MS,
+    });
   }
 
   /** Listagem sem o campo secreto (seguro para TUI/log). */
