@@ -39,18 +39,18 @@ describe("!cmd da TUI (T2, #63)", () => {
     configureRunCommand({ sandbox: false });
   });
 
-  test("sem seção tools: auto por padrão, Docker quando disponível (#474)", async () => {
+  test("sem seção tools: host por padrão, sem probe de Docker (#474, #599)", async () => {
     const { cwd, configPath } = config(["run_command"], "KEY", false, false);
     // approveTool permite atravessar o gate fail-closed (#259)
     const shell = createShellRunner({ approveTool: () => true, configPath, cwd, env: process.env });
     expect(shell.enabled).toBe(true);
-    expect(isRunCommandSandboxEnabled()).toBe(false); // `auto` ainda não é "Docker-only"
-    expect(resolveRunCommandMode(undefined)).toBe("auto");
-    // Docker do mock responde sem spawn real: o teste não depende do daemon.
+    expect(isRunCommandSandboxEnabled()).toBe(false); // host não é "Docker-only"
+    expect(resolveRunCommandMode(undefined)).toBe("host");
+    // Docker do mock está disponível, mas o host não o usa.
     mock.restore();
-    mock = installDockerSpawnMock(() => "astro-shell-default");
+    mock = installDockerSpawnMock(() => "docker-should-not-run");
     const result = await shell.run("echo astro-shell-default");
-    expect(mock.runCalls.length).toBeGreaterThan(0); // Docker do mock foi usado
+    expect(mock.runCalls).toHaveLength(0);
     expect(result.isError).toBeFalsy();
     expect(result.output).toContain("astro-shell-default");
   });

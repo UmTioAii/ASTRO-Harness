@@ -64,13 +64,13 @@ const ctxOf = (dir: string, extra: Partial<ToolContext> = {}): ToolContext => ({
   cwd: dir, run: "r1", agent: "coder", env: { ...process.env }, secretEnvNames: ["OPENAI_API_KEY"], ...extra,
 });
 
-describe("config do shell: 'auto' é o default (Docker quando disponível) (#474)", () => {
-  test("ausente e 'auto' = auto; true e 'docker' = Docker; false desliga", () => {
+describe("config do shell: host é o default; o alias legado seleciona Docker (#474, #599)", () => {
+  test("ausente e 'auto' = host; true e 'docker' = Docker; false desliga", () => {
     const cfg = validateConfig(structuredClone(baseConfig));
     expect(cfg.tools?.run_command?.sandbox).toBeUndefined();
-    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("auto");
-    expect(resolveRunCommandMode(undefined)).toBe("auto");
-    expect(resolveRunCommandMode("auto")).toBe("auto");
+    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("host");
+    expect(resolveRunCommandMode(undefined)).toBe("host");
+    expect(resolveRunCommandMode("auto")).toBe("host");
     expect(resolveRunCommandMode(true)).toBe("docker");
     expect(resolveRunCommandMode("docker")).toBe("docker");
     expect(resolveRunCommandMode(false)).toBe("disabled");
@@ -102,7 +102,7 @@ describe("config do shell: 'auto' é o default (Docker quando disponível) (#474
     expect(() => parseConfigEditValue("shell.default", "fish")).toThrow(ConfigError);
   });
 
-  test("astro.config.example.json documenta o host ('auto') e não ensina sandbox:false", () => {
+  test("astro.config.example.json documents the host and does not teach sandbox:false", () => {
     const example = JSON.parse(readFileSync("astro.config.example.json", "utf8")) as Record<string, unknown>;
     expect(JSON.stringify(example)).not.toContain('"sandbox": false');
     expect((example.tools as { run_command: { sandbox: string } }).run_command.sandbox).toBe("auto");
@@ -135,11 +135,11 @@ describe("detecção e argv de shell do host (#474)", () => {
   });
 });
 
-describe("run_command no host por default, aprovado por comando (#474)", () => {
-  test("default (auto) sem Docker cai no host depois da aprovação, com o comando no prompt", async () => {
+describe("run_command on the host by default, approved per command (#474, #599)", () => {
+  test("the default mode runs on the host without probing Docker, with the command in the prompt", async () => {
     mock = installNoDockerSpawnMock({ stdout: "astro-host-default\n" });
     const mod = await isolatedRunCommand("host-default-approve");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor, requests, auditPath } = await hostExecutor(mod, { cwd: dir });
     const result = await executor.run(ctxOf(dir), {
@@ -151,39 +151,37 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
     expect((requests[0] as { detail?: { kind: string; value: string } }).detail).toEqual({
       kind: "command", value: "echo astro-host-default",
     });
-    // `auto` consulta o Docker e, sem daemon, nenhum `docker run` acontece.
-    expect(mock.calls.some((cmd) => cmd[0] === "docker" && cmd.includes("info"))).toBe(true);
+    // The host path never probes or calls Docker.
+    expect(mock.calls.some((cmd) => cmd[0] === "docker")).toBe(false);
     expect(mock.runCalls).toHaveLength(0);
     const hostEvent = auditEvents(auditPath).find((event) => event.tipo === "host_shell.decision");
     expect(hostEvent?.payload).toMatchObject({ decision: "allow", permissionMode: "ask" });
     expect(JSON.stringify(hostEvent)).not.toContain("astro-host-default");
   });
 
-  test("auto com Docker disponível usa o Docker e NÃO vai ao host", async () => {
+  test("the default host ignores an available Docker daemon", async () => {
     mock = installDockerSpawnMock(() => "docker-ok");
-    const mod = await isolatedRunCommand("auto-docker-available");
-    // `sandbox` ausente = auto.
-    mod.configureRunCommand({ mode: "auto" });
+    const mod = await isolatedRunCommand("host-default-ignores-docker");
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor, requests } = await hostExecutor(mod, { cwd: dir });
     const result = await executor.run(ctxOf(dir), {
-      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo oi" }),
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo host-ok" }),
     });
     expect(result.isError).toBeFalsy();
-    expect(result.output).toContain("docker-ok");
+    expect(result.output).toContain("host-ok");
     expect(requests).toHaveLength(1); // o gate continua perguntando por comando
-    expect(mock.runCalls.length).toBeGreaterThan(0);
-    expect(mock.calls.every((cmd) => cmd[0] === "docker")).toBe(true); // nada no host
+    expect(mock.runCalls).toHaveLength(0);
+    expect(mock.calls.some((cmd) => cmd[0] === "docker")).toBe(false);
   });
 
-  test("'auto' explícito com Docker disponível também usa só o Docker", async () => {
+  test("the legacy 'auto' value also runs on the host", async () => {
     mock = installDockerSpawnMock(() => "docker-ok");
-    const mod = await isolatedRunCommand("auto-explicit-docker");
-    mod.configureRunCommand({ mode: "auto" });
+    const mod = await isolatedRunCommand("auto-explicit-host");
+    mod.configureRunCommand({ mode: "host" });
     const result = await mod.runCommandTool.execute({ command: "echo oi" }, ctxOf(cwd()));
-    expect(result.output).toContain("docker-ok");
-    expect(mock.runCalls.length).toBeGreaterThan(0);
-    expect(mock.calls.every((cmd) => cmd[0] === "docker")).toBe(true);
+    expect(result.output).not.toContain("docker-ok");
+    expect(mock.runCalls).toHaveLength(0);
   });
 
   test("sandbox:true segue no Docker e só spawna docker", async () => {
@@ -229,7 +227,7 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
   test("negar a aprovação não executa nada e o audit registra a decisão sem o comando", async () => {
     mock = installNoDockerSpawnMock();
     const mod = await isolatedRunCommand("host-deny");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor, auditPath } = await hostExecutor(mod, { cwd: dir, approve: () => false });
     const result = await executor.run(ctxOf(dir), {
@@ -247,7 +245,7 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
   test("grant de sessão não pula a aprovação por comando no host", async () => {
     mock = installNoDockerSpawnMock({ stdout: "ok\n" });
     const mod = await isolatedRunCommand("host-session-grant");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor, requests } = await hostExecutor(mod, { cwd: dir, approve: () => "session" });
     const call = () => executor.run(ctxOf(dir), {
@@ -261,7 +259,7 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
   test("bypass usa o modo do EXECUTOR, não estado global: recusa sem confirmação e executa com ela", async () => {
     mock = installNoDockerSpawnMock({ stdout: "bypass-ok\n" });
     const mod = await isolatedRunCommand("host-bypass");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor, auditPath } = await hostExecutor(mod, { cwd: dir, mode: "bypass" });
     const denied = await executor.run(ctxOf(dir), {
@@ -285,7 +283,7 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
   test("hard-block vence: comando que toca caminho protegido não chega ao host", async () => {
     mock = installNoDockerSpawnMock();
     const mod = await isolatedRunCommand("host-hard-block");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor } = await hostExecutor(mod, { cwd: dir });
     const result = await executor.run(ctxOf(dir), {
@@ -300,7 +298,7 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
     const secret = "AKIAABCDEFGHIJKLMNOP";
     mock = installNoDockerSpawnMock({ stdout: `token=${secret}\n` });
     const mod = await isolatedRunCommand("host-redact");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor } = await hostExecutor(mod, { cwd: dir });
     const result = await executor.run(ctxOf(dir), {
@@ -313,7 +311,7 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
   test("env do host é sanitizado: nomes de segredo somem, PATH e identidade git ficam", async () => {
     mock = installNoDockerSpawnMock({ stdout: "ok\n" });
     const mod = await isolatedRunCommand("host-env-sanitized");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor } = await hostExecutor(mod, { cwd: dir });
     const result = await executor.run(
@@ -343,7 +341,7 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
     const secret = "AKIAABCDEFGHIJKLMNOP";
     mock = installNoDockerSpawnMock({ stdout: `${"x".repeat(MAX_OUTPUT - 10)}${secret}\n` });
     const mod = await isolatedRunCommand("host-redact-boundary");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const { executor } = await hostExecutor(mod, { cwd: dir });
     const result = await executor.run(ctxOf(dir), {
@@ -358,7 +356,7 @@ describe("run_command no host por default, aprovado por comando (#474)", () => {
   test("shell.default ausente na máquina falha fechado", async () => {
     mock = installNoDockerSpawnMock({ stdout: "ok\n" });
     const mod = await isolatedRunCommand("host-shell-default");
-    mod.configureRunCommand({ mode: "auto", shellDefault: "bash" });
+    mod.configureRunCommand({ mode: "host", shellDefault: "bash" });
     const dir = cwd();
     const { executor } = await hostExecutor(mod, { cwd: dir });
     const result = await executor.run(ctxOf(dir), {
@@ -392,17 +390,17 @@ describe("limites do host (#474)", () => {
   test("chamada direta sem executor não roda no host (exige allowlist/gate)", async () => {
     mock = installNoDockerSpawnMock({ stdout: "não deveria rodar\n" });
     const mod = await isolatedRunCommand("host-no-executor");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const result = await mod.runCommandTool.execute({ command: "echo x" }, ctxOf(cwd()));
     expect(result.code).toBe("host_shell_requires_gate");
     expect(mock.runCalls).toHaveLength(0);
     expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
   });
 
-  test("run_tests continua exigindo Docker explícito, mesmo com auto no default", async () => {
+  test("run_tests requires Docker until the host slice lands", async () => {
     mock = installNoDockerSpawnMock();
     const mod = await isolatedRunCommand("host-run-tests");
-    mod.configureRunCommand({ mode: "auto" });
+    mod.configureRunCommand({ mode: "host" });
     const tool = mod.createRunTestsTool({
       config: { command: ["echo", "test"] },
       audit: { append: () => ({}) },
@@ -411,6 +409,19 @@ describe("limites do host (#474)", () => {
     expect(result.code).toBe("sandbox_required_for_shell");
     expect(result.output).toContain("run_tests");
     expect(result.output).toContain("Docker");
+    expect(mock.calls).toHaveLength(0);
+  });
+
+  test("run_tests refuses when the shell is off", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("host-run-tests-off");
+    mod.configureRunCommand({ sandbox: false });
+    const tool = mod.createRunTestsTool({
+      config: { command: ["echo", "test"] },
+      audit: { append: () => ({}) },
+    });
+    const result = await tool.execute({}, ctxOf(cwd()));
+    expect(result.code).toBe("sandbox_required_for_shell");
     expect(mock.calls).toHaveLength(0);
   });
 
