@@ -1330,6 +1330,7 @@ export async function runMultiAgentSession(
     agentsUsed.push(currentAgentName);
 
     let effectiveBaseMaxSteps = opts.baseMaxSteps;
+    let baseBudgetCut = false;
     while (step < effectiveBaseMaxSteps) {
       throwIfAborted(opts.signal); // ponto seguro: não inicia step após cancelamento (F-06)
       // Verificar limite do agent atual
@@ -1367,7 +1368,11 @@ export async function runMultiAgentSession(
           ...(opts.budgetDecide === undefined ? {} : { decide: opts.budgetDecide }),
         });
         if (choice === "lower_effort") {
-          effectiveBaseMaxSteps = Math.min(effectiveBaseMaxSteps, step + Math.max(1, Math.floor((effectiveBaseMaxSteps - step) / 2)));
+          const lowered = Math.min(effectiveBaseMaxSteps, step + Math.max(1, Math.floor((effectiveBaseMaxSteps - step) / 2)));
+          if (lowered < effectiveBaseMaxSteps) {
+            effectiveBaseMaxSteps = lowered;
+            baseBudgetCut = true;
+          }
         }
       }
       const releaseReserve = (): void => {
@@ -1616,7 +1621,7 @@ export async function runMultiAgentSession(
     }
 
     tracer?.end(rootSpan, { status: "max_rounds" });
-    throw new MaxRoundsError(effectiveBaseMaxSteps, step);
+    throw new MaxRoundsError(effectiveBaseMaxSteps, step, undefined, baseBudgetCut);
   } catch (error) {
     failed = true;
     // Falha pós-ack é terminal para o handoff: grava handoff.failed (F-24, I-19).
