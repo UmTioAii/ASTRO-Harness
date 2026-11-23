@@ -1378,7 +1378,11 @@ function validateRun(value: unknown, legacyRounds: number): RunConfig {
     ? (legacyRounds > MAX_RUN_LIMIT
       ? fail(`config inválida: "agent.maxSteps" deve ser <= ${MAX_RUN_LIMIT} (teto físico de rodadas)`) as never
       : legacyRounds)
-    : roundsDerived ? raw.maxRoundsPerTurn as RunLimit : validateRunLimit(raw.maxRoundsPerTurn, "run.maxRoundsPerTurn", [100, 200, 500]);
+    : roundsDerived
+      ? (typeof raw.maxRoundsPerTurn === "number" && raw.maxRoundsPerTurn > MAX_RUN_LIMIT
+        ? fail(`config inválida: "agent.maxSteps" deve ser <= ${MAX_RUN_LIMIT} (teto físico de rodadas)`) as never
+        : raw.maxRoundsPerTurn as RunLimit)
+      : validateRunLimit(raw.maxRoundsPerTurn, "run.maxRoundsPerTurn", [100, 200, 500]);
   const declaresGuard = ["checkpointAt", "noProgressSegments", "judge", "tests"].some((key) => Object.hasOwn(raw, key)), legacyGuards = omitted ? false : previous === undefined || previous.legacyGuards || declaresGuard;
   const metadata: DerivedRunLimits = { ...(turnsDerived ? { maxTurns } : {}), ...(roundsDerived ? { maxRoundsPerTurn } : {}), ...(roundAlias ? { roundAlias: true } : {}), legacyGuards };
   if (!legacyGuards) return withDerivedRunLimits({ maxTurns, maxRoundsPerTurn }, metadata);

@@ -72,6 +72,9 @@ describe("preset simple/control (#515)", () => {
     expect(validateConfig({ ...withTurns, run: { maxTurns: 100000 } }).run).toMatchObject({ maxTurns: 100000 });
     expect(() => validateConfig({ ...withTurns, run: { maxTurns: 100001 } })).toThrow(/run\.maxTurns.*100000/);
     expect(() => validateConfig({ ...withTurns, run: { maxTurns: 0 } })).toThrow(/run\.maxTurns.*inteiro entre 1 e 100000/);
+    // The legacy alias feeds run.maxRoundsPerTurn, so it obeys the same physical cap.
+    expect(() => validateConfig({ ...withTurns, preset: "control", agent: { ...withTurns.agent, maxSteps: 100001 } })).toThrow(/agent\.maxSteps.*100000/);
+    expect(validateConfig({ ...withTurns, preset: "control", agent: { ...withTurns.agent, maxSteps: 100000 } }).run).toMatchObject({ maxRoundsPerTurn: 100000 });
     expect(validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } }).run).toMatchObject({ maxRoundsPerTurn: 100 });
   });
 

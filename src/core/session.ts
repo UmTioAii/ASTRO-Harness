@@ -546,8 +546,11 @@ export async function runSession(
         });
         // "baixar esforço" (B4): metade dos passos **restantes**, ao menos um
         if (choice === "lower_effort") {
-          effectiveMaxRounds = Math.min(effectiveMaxRounds, step + Math.max(1, Math.floor((effectiveMaxRounds - step) / 2)));
-          budgetCut = true;
+          const lowered = Math.min(effectiveMaxRounds, step + Math.max(1, Math.floor((effectiveMaxRounds - step) / 2)));
+          if (lowered < effectiveMaxRounds) {
+            effectiveMaxRounds = lowered;
+            budgetCut = true;
+          }
         }
       }
       const releaseReserve = (): void => {

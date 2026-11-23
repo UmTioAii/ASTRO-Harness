@@ -156,9 +156,12 @@ test("P0: unlimited stop cites the physical cap, not a declared value", () => {
     agent: { model: "p/m", maxSteps: 500, tools: [] as string[] },
     run: { maxTurns: 500 as const, maxRoundsPerTurn: "unlimited" as const },
   };
-  const message = maxRoundsMessage(config, { limit: 100_000, rounds: 100_000 });
-  expect(message).toContain("physical cap of 100000");
-  expect(message).toContain("unlimited");
+  const plain = maxRoundsMessage(config, { limit: 100_000, rounds: 100_000 });
+  expect(plain).toContain("physical cap of 100000");
+  expect(plain).toContain("unlimited");
+  const cut = maxRoundsMessage(config, { limit: 50_000, rounds: 50_000, budgetCut: true });
+  expect(cut).toContain("lowered to 50000");
+  expect(cut).not.toContain("= 500 lowered");
 });
 
 test("P0: agente nomeado nomeia agents.<nome>.maxSteps", () => {

@@ -83,10 +83,12 @@ export function maxRoundsMessage(
   }
   // `run.maxRoundsPerTurn` is the enforced key; `agent.maxSteps` is only its legacy
   // source when the new key is absent. Cite the value that actually controls the stop.
-  const declared = typeof config.run?.maxRoundsPerTurn === "number"
-    ? config.run.maxRoundsPerTurn
-    : config.agent.maxSteps;
-  if (error.budgetCut === true) {
+  const declared = config.run?.maxRoundsPerTurn === "unlimited"
+    ? MAX_RUN_LIMIT
+    : typeof config.run?.maxRoundsPerTurn === "number"
+      ? config.run.maxRoundsPerTurn
+      : config.agent.maxSteps;
+  if (error.budgetCut === true && error.limit < declared) {
     return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "run.maxRoundsPerTurn" = ${declared} lowered to ${error.limit} by the budget decision "lower effort"; raise the budget or the limit in /config to continue`;
   }
   if (config.run?.maxRoundsPerTurn === "unlimited") {
