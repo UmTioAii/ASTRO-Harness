@@ -1314,11 +1314,14 @@ function validateRunTests(value: unknown): RunTestsConfig {
   return { command, timeoutMs };
 }
 
+/** Hard physical bound for a declared or unlimited round limit (I-17). */
+export const MAX_RUN_LIMIT = 100_000;
+
 function validateRunLimit(value: unknown, field: string, choices: readonly number[]): RunLimit {
   // The /config menu offers the choices; a hand-written config may use any positive
-  // integer (the acceptance of #594 exercises maxTurns: 1).
-  if (value === "unlimited" || (typeof value === "number" && Number.isInteger(value) && value >= 1)) return value;
-  return fail(`config inválida: "${field}" deve ser um inteiro >= 1 / ${choices.join(" / ")} / unlimited`);
+  // integer (the acceptance of #594 exercises maxTurns: 1), bounded by the physical cap.
+  if (value === "unlimited" || (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_RUN_LIMIT)) return value;
+  return fail(`config inválida: "${field}" deve ser um inteiro entre 1 e ${MAX_RUN_LIMIT} / ${choices.join(" / ")} / unlimited`);
 }
 interface DerivedRunLimits { maxTurns?: RunLimit; maxRoundsPerTurn?: RunLimit; roundAlias?: boolean; legacyGuards: boolean; }
 /** Non-serializable metadata makes validation idempotent without weakening raw input checks. */

@@ -55,15 +55,15 @@ const reads = (count: number, prefix: string): Response => Response.json({
 });
 
 describe("#594 turn and round limits", () => {
-  test("a turn with 40 tool calls across 11 rounds completes under the default limits", async () => {
-    // 10 rounds of 4 calls (40 tool calls) then a final answer on round 11.
+  test("a turn with 40 tool calls across 12 rounds completes under the default limits", async () => {
+    // 11 rounds of tool calls (4×9 + 3 + 1 = 40 calls) then the final answer on round 12.
     const { cwd, session, stop } = setup({ version: "2.0.0", preset: "control" }, (call) =>
-      call <= 10 ? reads(4, `c${call}`) : final());
+      call <= 9 ? reads(4, `c${call}`) : call === 10 ? reads(3, "c10") : call === 11 ? reads(1, "c11") : final());
     const chat = session();
     try {
       const result = await chat.send("leia tudo");
       expect(result.final).toBe("done");
-      expect(result.steps).toBe(11);
+      expect(result.steps).toBe(12);
       expect(chat.snapshot()).toMatchObject({ turns: 1 });
       expect(join(cwd, "a.txt")).toBeString();
     } finally {
@@ -110,9 +110,11 @@ describe("#594 turn and round limits", () => {
     }
   });
 
-  test("an unlimited round limit does not stop the turn", async () => {
+  test("an unlimited round limit overrides the legacy alias", async () => {
+    // agent.maxSteps is 5, so 12 rounds only complete if "unlimited" wins.
     const { session, stop } = setup(
-      { version: "2.0.0", preset: "control", run: { maxRoundsPerTurn: "unlimited", noProgressSegments: 1000 } },
+      { version: "2.0.0", preset: "control", agent: { model: "p/m1", tools: ["read_file"], maxSteps: 5 },
+        run: { maxRoundsPerTurn: "unlimited", noProgressSegments: 1000 } },
       (call) => call < 12 ? reads(1, `u${call}`) : final(),
     );
     const chat = session();

@@ -5,7 +5,7 @@ import { Auditor } from "../audit";
 import { isAbortError } from "../abort";
 import { SwapDeniedError, swapDelta, type SwapApprover, type SwapRequest } from "../approval";
 import type { AstroConfig, CodexOAuthProviderConfig, OpenAICompatProviderConfig, PriceConfig, ProviderConfig } from "./config";
-import { ConfigError, providerAccountRefFor, providerCredentialRefFor } from "./config";
+import { ConfigError, MAX_RUN_LIMIT, providerAccountRefFor, providerCredentialRefFor } from "./config";
 import { loadEffectiveConfig, providerIdentityFor } from "../providers/profiles";
 import { estimateCost, Ledger } from "../ledger";
 import { CodexOAuthProvider } from "../providers/codex-oauth";
@@ -74,20 +74,25 @@ import type { NoProgressDecider } from "../loop-guard";
  * setting that controls it. A turn is one prompt; rounds are the loop valve.
  */
 export function maxRoundsMessage(
-  config: Pick<AstroConfig, "agent">,
+  config: Pick<AstroConfig, "agent" | "run">,
   error: { limit: number; rounds: number; agentName?: string },
 ): string {
   if (error.agentName !== undefined) {
     const field = `agents.${redactSecrets(error.agentName)}.maxSteps`;
     return `stopped here: this task did not converge — the agent reached ${error.rounds} rounds, limit "${field}" = ${error.limit}; raise "${field}" in the configuration or /config to continue`;
   }
-  // The effective ceiling can be lower than declared when the budget decision
-  // "lower effort" cuts the remaining rounds (L5/B4): cite the declared value.
-  const declared = config.agent.maxSteps;
-  if (error.limit < declared) {
-    return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "agent.maxSteps" = ${declared} lowered to ${error.limit} by the budget decision "lower effort"; raise the budget or the limit in /config to continue`;
+  if (config.run?.maxRoundsPerTurn === "unlimited") {
+    return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, the physical cap of ${error.limit} while "run.maxRoundsPerTurn" is unlimited; raise the budget or the limit in /config to continue`;
   }
-  return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "run.maxRoundsPerTurn" = ${error.limit}; raise it in /config to continue`;
+  // `run.maxRoundsPerTurn` is the enforced key; `agent.maxSteps` is only its legacy
+  // source when the new key is absent. Cite the value that actually controls the stop.
+  const declared = typeof config.run?.maxRoundsPerTurn === "number"
+    ? config.run.maxRoundsPerTurn
+    : config.agent.maxSteps;
+  if (error.limit < declared) {
+    return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "run.maxRoundsPerTurn" = ${declared} lowered to ${error.limit} by the budget decision "lower effort"; raise the budget or the limit in /config to continue`;
+  }
+  return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "run.maxRoundsPerTurn" = ${declared}; raise it in /config to continue`;
 }
 
 export interface RunOptions {
@@ -609,11 +614,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       ...(identity.credentialRef === undefined ? {} : { credentialRef: identity.credentialRef }),
     };
   };
-  /** Round ceiling for a turn (P0): `run.maxRoundsPerTurn`, unlimited when set.
-   * "unlimited" still stops at a physical cap so a pathological loop cannot run forever
-   * (I-17); a human turn never reaches it. */
+  /** Round ceiling for a turn (P0): `run.maxRoundsPerTurn`, capped physically so a
+   * pathological loop cannot run forever (I-17); a human turn never reaches the cap. */
   const sessionMaxRounds = config.run?.maxRoundsPerTurn === "unlimited"
-    ? 100_000
+    ? MAX_RUN_LIMIT
     : (config.run?.maxRoundsPerTurn ?? config.agent.maxSteps);
 
   // Sandbox do run_command (F4-6): modo resolvido antes de qualquer execução

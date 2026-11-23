@@ -156,10 +156,26 @@ test("P0: agente nomeado nomeia agents.<nome>.maxSteps", () => {
     .toContain('limit "agents.coder.maxSteps" = 4');
 });
 
+test("P0: the declared ceiling comes from run.maxRoundsPerTurn, not the legacy alias", () => {
+  const config = {
+    preset: "control" as const,
+    agent: { model: "p/m", maxSteps: 500, tools: [] as string[] },
+    run: { maxTurns: 500 as const, maxRoundsPerTurn: 4 as const },
+  };
+  const message = maxRoundsMessage(config, { limit: 4, rounds: 4 });
+  expect(message).toContain('limit "run.maxRoundsPerTurn" = 4');
+  expect(message).not.toContain("lowered");
+  expect(message).not.toContain("agent.maxSteps");
+});
+
 test("P0: mensagem separa o limite declarado do teto efetivo cortado pelo budget", () => {
-  const config = { preset: "control" as const, agent: { model: "p/m", maxSteps: 4, tools: [] as string[] } };
+  const config = {
+    preset: "control" as const,
+    agent: { model: "p/m", maxSteps: 500, tools: [] as string[] },
+    run: { maxTurns: 500 as const, maxRoundsPerTurn: 4 as const },
+  };
   const message = maxRoundsMessage(config, { limit: 3, rounds: 3 });
-  expect(message).toContain('limit "agent.maxSteps" = 4');
+  expect(message).toContain('limit "run.maxRoundsPerTurn" = 4');
   expect(message).toContain("lowered to 3");
   expect(message).toContain("raise the budget");
 });

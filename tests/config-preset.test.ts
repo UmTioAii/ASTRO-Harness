@@ -69,7 +69,7 @@ describe("preset simple/control (#515)", () => {
     // The /config menu offers 250/500/1000, but a hand-written config may use any
     // positive integer (#594 exercises maxTurns: 1).
     expect(validateConfig({ ...withTurns, run: { maxTurns: 600 } }).run).toMatchObject({ maxTurns: 600 });
-    expect(() => validateConfig({ ...withTurns, run: { maxTurns: 0 } })).toThrow(/run\.maxTurns.*inteiro >= 1/);
+    expect(() => validateConfig({ ...withTurns, run: { maxTurns: 0 } })).toThrow(/run\.maxTurns.*inteiro entre 1 e 100000/);
     expect(validateConfig({ ...base(), run: { maxRoundsPerTurn: 100 } }).run).toMatchObject({ maxRoundsPerTurn: 100 });
   });
 
