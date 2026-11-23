@@ -36,22 +36,14 @@ export interface TimelineView {
   readonly status: { model: string; mode: string; costUsd?: number | null };
   /** ctrl+o expands tool output, ctrl+t expands reasoning; both collapsed by default. */
   readonly expanded?: { tools?: boolean; reasoning?: boolean };
-  /** Tool bodies by `callId`, fetched by `resultKey`; read only when expanded. */
+  /** Tool bodies by `callId` (the id on `tool.start` and `tool.end`); read only when expanded. */
   readonly results?: Readonly<Record<string, string>>;
 }
 
 export const COMPOSER_PROMPT = "❯";
 
-export interface TimelineLayout {
-  readonly contentWidth: number;
-  readonly indent: string;
-  readonly durations: boolean;
-  readonly fullModel: boolean;
-  readonly blockLogo: boolean;
-}
-
 /** Width bands from the TUIX spec: 120+, 80–119, 60–79, below 60. */
-export function timelineLayout(width: number): TimelineLayout {
+export function timelineLayout(width: number) {
   const w = Math.max(1, Math.floor(width));
   if (w >= 120) {
     return { contentWidth: Math.min(100, w - 2), indent: "  ", durations: true, fullModel: true, blockLogo: true };
@@ -61,25 +53,29 @@ export function timelineLayout(width: number): TimelineLayout {
   return { contentWidth: w, indent: "", durations: false, fullModel: false, blockLogo: false };
 }
 
-/** East Asian wide and emoji ranges occupy two columns; combining marks stay at one. */
+/** East Asian wide/emoji, and the East-Asian-Ambiguous glyphs this renderer emits, take two columns. */
 const WIDE = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]|[\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}]/u;
+const AMBIGUOUS = /[·•…→▸▀▄█✓✔✗❯]/;
 
-/** Display columns of a line, so clipping and the property test agree. */
+function cellWidth(char: string): number {
+  return WIDE.test(char) || AMBIGUOUS.test(char) ? 2 : 1;
+}
+
 export function displayWidth(text: string): number {
   let total = 0;
-  for (const char of text) total += WIDE.test(char) ? 2 : 1;
+  for (const char of text) total += cellWidth(char);
   return total;
 }
 
-/** Clips to `max` display columns, keeping the source order and ending in `…`. */
 export function clipLine(text: string, max: number): string {
-  if (max <= 0) return "";
+  if (max < cellWidth("…")) return "";
   if (displayWidth(text) <= max) return text;
+  const budget = max - cellWidth("…");
   let out = "";
   let used = 0;
   for (const char of text) {
-    const step = WIDE.test(char) ? 2 : 1;
-    if (used + step > max - 1) break;
+    const step = cellWidth(char);
+    if (used + step > budget) break;
     out += char;
     used += step;
   }
@@ -93,18 +89,15 @@ function inline(text: string): string {
   return sanitizePromptText(text).replace(/\s+/g, " ").trim();
 }
 
-/** Block field: drops ANSI/CR; each line is sanitized by the caller that renders it. */
-function blockLines(text: string): string[] {
-  return text.replace(ANSI, "").replace(/\r/g, "").split("\n");
+/** One block line: ANSI removed, then controls and secrets redacted (I-03); indentation kept. */
+function blockLine(text: string): string {
+  return sanitizePromptText(text.replace(ANSI, "")).trimEnd();
 }
-/** Human duration: `420ms`, `4s`, `1.3s`; never a progress counter. */
 export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
   const seconds = ms / 1000;
-  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}s`;
+  return ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}s`;
 }
 
-/** Derives the tool label from its arguments; unknown tools keep their name. */
 export function toolLabel(name: string, argumentsJson: string): string {
   let args: Record<string, unknown> = {};
   try {
@@ -144,22 +137,15 @@ function answerLines(markdown: string): string[] {
 
 const GLYPH: Record<TimelineToolStatus, string> = { running: "▸", ok: "✓", failed: "✗" };
 const LOGO = ["█▀▀█ █▀▀ ▀█▀ █▀▀█ █▀▀█", "█▄▄█ ▀▀█  █  █▄▄▀ █  █", "▀  ▀ ▀▀▀  ▀  ▀  ▀ ▀▀▀▀"];
-
-function centered(text: string, width: number): string {
-  const pad = Math.max(0, Math.floor((width - displayWidth(text)) / 2));
-  return `${" ".repeat(pad)}${text}`;
-}
-
 export function renderTimeline(view: TimelineView, width: number): string[] {
   const layout = timelineLayout(width);
   const lines: string[] = [];
   const add = (text: string): void => {
     lines.push(`${layout.indent}${clipLine(inline(text), layout.contentWidth)}`);
   };
-  /** Sanitizes first, then indents, so expanded bodies keep their indentation. */
-  const addIndented = (text: string): void => {
-    const pad = layout.contentWidth > 2 ? "  " : "";
-    lines.push(`${layout.indent}${pad}${clipLine(inline(text), layout.contentWidth - pad.length)}`);
+  /** Sanitizes per line, then indents, so block indentation and relative indent survive. */
+  const addBlock = (text: string, pad = ""): void => {
+    lines.push(`${layout.indent}${pad}${clipLine(blockLine(text), layout.contentWidth - pad.length)}`);
   };
   const time = (ms: number | undefined): string =>
     layout.durations && ms !== undefined ? ` · ${formatDuration(ms)}` : "";
@@ -167,18 +153,18 @@ export function renderTimeline(view: TimelineView, width: number): string[] {
     switch (item.kind) {
       case "reasoning":
         add(`▸ reasoning${time(item.durationMs)}`);
-        if (view.expanded?.reasoning === true) for (const line of blockLines(item.text)) addIndented(line);
+        if (view.expanded?.reasoning === true) for (const line of item.text.replace(/\r/g, "").split("\n")) addBlock(line, "  ");
         return;
       case "tool": {
         add(`${GLYPH[item.status]} ${toolLabel(item.name, item.arguments)}${time(item.durationMs)}`);
         const body = view.results?.[item.callId];
         if (view.expanded?.tools === true && body !== undefined) {
-          for (const line of blockLines(body)) addIndented(line);
+          for (const line of body.replace(/\r/g, "").split("\n")) addBlock(line, "  ");
         }
         return;
       }
       case "answer":
-        for (const line of answerLines(item.markdown)) add(line);
+        for (const line of answerLines(item.markdown)) addBlock(line);
         return;
       case "error":
         add(`✗ ${item.message}`);
@@ -192,8 +178,9 @@ export function renderTimeline(view: TimelineView, width: number): string[] {
 
   if (view.state.kind === "empty") {
     const logo = layout.blockLogo && layout.contentWidth >= displayWidth(LOGO[0]!) ? LOGO : ["ASTRO"];
-    // Static identity: centered padding is kept, so this bypasses `add`'s trim.
-    for (const line of logo) lines.push(`${layout.indent}${clipLine(centered(line, layout.contentWidth), layout.contentWidth)}`);
+    // One pad from the widest line: the block stays centered and aligned in both width models.
+    const pad = Math.max(0, Math.floor((layout.contentWidth - Math.max(...logo.map(displayWidth))) / 2));
+    for (const line of logo) lines.push(`${layout.indent}${" ".repeat(pad)}${clipLine(line, layout.contentWidth - pad)}`);
     lines.push("");
   } else {
     if (view.turn !== undefined) {
@@ -201,7 +188,7 @@ export function renderTimeline(view: TimelineView, width: number): string[] {
       for (const item of view.turn.entries) entry(item);
     }
     if (view.state.kind === "thinking") add(`▸ thinking${time(view.state.elapsedMs)}`);
-    if (view.state.kind === "streaming") for (const line of answerLines(view.state.partial)) add(line);
+    if (view.state.kind === "streaming") for (const line of answerLines(view.state.partial)) addBlock(line);
     if (view.state.kind === "error") {
       add(`✗ ${view.state.message}`);
       if (view.state.hint !== undefined) add(`→ ${view.state.hint}`);

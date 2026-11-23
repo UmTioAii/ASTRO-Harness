@@ -20,8 +20,7 @@ const turn: TimelineTurn = {
 };
 
 const STATES: ReadonlyArray<readonly [string, TimelineState]> = [
-  ["empty", { kind: "empty" }],
-  ["thinking", { kind: "thinking", elapsedMs: 12000 }],
+  ["empty", { kind: "empty" }], ["thinking", { kind: "thinking", elapsedMs: 12000 }],
   ["streaming", { kind: "streaming", partial: "The ledger grew because every tool call appends a record." }],
   ["approval", { kind: "approval", question: "approve run_command: bun test" }],
   ["error", { kind: "error", message: "network timeout", hint: "retry; raise providers.x.timeoutMs if it persists" }],
@@ -38,30 +37,37 @@ function view(state: TimelineState): TimelineView {
 function frame(state: TimelineState, width: number): string {
   return renderTimeline(view(state), width).join("\n");
 }
-describe("timeline snapshots (#595)", () => {
+/** Fenced code and an indented tool body: both must keep their relative indentation. */
+const blocks: TimelineView = {
+  ...view({ kind: "done" }),
+  expanded: { tools: true },
+  results: { "call-1": "line 1\n  indented 2\u0007" },
+  turn: {
+    ...turn,
+    status: "done",
+    entries: [
+      { kind: "answer", markdown: "```ts\nfunction f() {\n  return 1;\n}\n```" },
+      { kind: "tool", callId: "call-1", name: "read_file", arguments: '{"path":"src/a.ts"}', status: "ok" },
+    ],
+  },
+};
+describe("timeline (#595)", () => {
   test("every state at 120, 80 and 60 columns", () => {
     const snapshot = [120, 80, 60]
       .flatMap((width) => STATES.map(([name, state]) => `### ${name} @${width} ${JSON.stringify(renderTimeline(view(state), width))}`))
       .join("\n");
     expect(snapshot).toMatchSnapshot("timeline states");
   });
-});
 
-describe("timeline width contract (#595)", () => {
   test("no rendered line exceeds the supplied width from 40 to 200", () => {
-    const expanded: TimelineView = {
-      ...view({ kind: "done" }),
-      expanded: { tools: true, reasoning: true },
-      results: { "call-1": "first line\nsecond line" },
-    };
     for (let width = 40; width <= 200; width++) {
       for (const [name, state] of STATES) {
         for (const line of frame(state, width).split("\n")) {
           expect(displayWidth(line), `${name} @${width}: ${line}`).toBeLessThanOrEqual(width);
         }
       }
-      for (const line of renderTimeline(expanded, width)) {
-        expect(displayWidth(line), `expanded @${width}: ${line}`).toBeLessThanOrEqual(width);
+      for (const line of renderTimeline(blocks, width)) {
+        expect(displayWidth(line), `blocks @${width}: ${line}`).toBeLessThanOrEqual(width);
       }
     }
   });
@@ -73,9 +79,7 @@ describe("timeline width contract (#595)", () => {
     expect(displayWidth("漢字")).toBe(4);
     expect(displayWidth("▸")).toBe(2); // East-Asian-Ambiguous: 2 columns in a CJK terminal
   });
-});
 
-describe("timeline content contract (#595)", () => {
   test("no state renders a step, round or tool counter", () => {
     for (const width of [120, 80, 60]) {
       for (const [name, state] of STATES) {
@@ -119,19 +123,6 @@ describe("timeline content contract (#595)", () => {
   });
 
   test("block content keeps indentation and strips controls (I-03)", () => {
-    const blocks: TimelineView = {
-      ...view({ kind: "done" }),
-      expanded: { tools: true },
-      results: { "call-1": "line 1\n  indented 2\u0007" },
-      turn: {
-        ...turn,
-        status: "done",
-        entries: [
-          { kind: "answer", markdown: "```ts\nfunction f() {\n  return 1;\n}\n```" },
-          { kind: "tool", callId: "call-1", name: "read_file", arguments: '{"path":"src/a.ts"}', status: "ok" },
-        ],
-      },
-    };
     const lines = renderTimeline(blocks, 120);
     expect(JSON.stringify(lines)).toMatchSnapshot("block indentation");
     expect(lines).toContain("    return 1;");

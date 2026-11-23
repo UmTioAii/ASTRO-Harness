@@ -3,7 +3,6 @@
 - Status: accepted; Date: 2026-11-23; Issue: #595
 - Owner files: `src/tui/timeline.ts` (contract and pure renderer), `src/chat/turn-events.ts` (event source)
 - Related: ADR-0020, I-03, `docs/superpowers/specs/2026-11-21-tuix-design.md` §4–7, `docs/superpowers/specs/2026-11-21-turn-events.md` §3
-
 ## Context
 
 The TUIX spec defines a four-zone continuous-flow screen and S5a (#600) already emits a causal turn-event stream. Both describe the same timeline, so the shape of an entry, its ordering and its redaction cannot live in two places. The screen must also be testable without Ink: a pure function from conversation state to lines.
@@ -13,9 +12,8 @@ The TUIX spec defines a four-zone continuous-flow screen and S5a (#600) already 
 | Topic | Contract |
 |---|---|
 | Ownership | `src/tui/timeline.ts` owns entry types, layout bands and pure rendering. `src/chat/turn-events.ts` owns event delivery; it never renders. |
-| Names | The spec's `Turn`/`Entry` become `TimelineTurn`/`TimelineEntry` because `Entry` already exists in `src/tui/commands.ts`. |
-| Entries | `reasoning`, `tool`, `answer`, `error`, `notice`, with the fields from the TUIX spec §4. |
-| Event mapping | `tool.start` opens a `running` tool entry; `tool.end` closes it as `ok`/`failed` with `durationMs`; `turn.end` sets the turn status and marks every `running` entry `failed`; `round.start` orders only and is never rendered. |
+| Entries | `reasoning {text, durationMs}`, `tool {callId, name, arguments, status, durationMs?}`, `answer {markdown}`, `error {message, hint?}`, `notice {message}`. A tool entry carries no `isError` or `resultKey`; `status` is its only completion field. |
+| Event mapping | `tool.start` opens a `running` tool entry with `callId`; `tool.end` sets `status = isError ? "failed" : "ok"` and `durationMs`, keeping the same `callId`; the body is stored under that `callId` (never under `resultKey`), so `ctrl+o` expands the right entry. `turn.end` sets the turn status and marks every `running` entry `failed`; `round.start` orders only and is never rendered. |
 | Ordering | Causal and append-only. `TurnEventStream` buffers a late event; an entry changing status never reflows the lines above it. |
 | Labels | Derived at render time from name and arguments (`read_file src/a.ts`, `command: bun test`, `edit src/a.ts (+2 −1)`); an unknown tool falls back to its name. Labels are not stored. |
 | Counters | No rendered state contains a step, round or tool counter. Durations (`420ms`, `4s`) and a cost, shown only when the price is known, are allowed; durations are hidden below 80 columns. |
@@ -28,6 +26,6 @@ The TUIX spec defines a four-zone continuous-flow screen and S5a (#600) already 
 
 ## Consequences
 
-- One contract: a tool entry has the same fields and status vocabulary in the event stream and on screen.
+- One contract: `callId` is the identity from `tool.start` through `tool.end` and the body map, and `status` is `running` until `tool.end` maps `isError` to `ok`/`failed`.
 - The renderer is testable at every width without a terminal; snapshots pin the six states at 120/80/60 and a property test covers 40–200.
-- Styling, live wiring, expansion keys, approval focus and `app.tsx` size stay in the Ink slice of #595.
+- Styling, live wiring, expansion keys, approval focus, `banner.tsx` removal and `app.tsx` size stay in the Ink slice (#635).
