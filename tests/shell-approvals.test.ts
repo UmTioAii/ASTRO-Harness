@@ -6,6 +6,7 @@ import { Auditor } from "../src/audit";
 import { toolChoice, toolPrompt } from "../src/chat/approvers";
 import { validateConfig } from "../src/core/config";
 import { ToolExecutor } from "../src/tools/executor";
+import { approvalPattern } from "../src/tools/shell-policy";
 import type { ToolContext } from "../src/tools/types";
 import { installNoDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
 
@@ -15,6 +16,14 @@ afterEach(() => { mock?.restore(); mock = undefined; });
 type Mod = Awaited<ReturnType<typeof isolatedRunCommand>>;
 const dirOf = (): string => mkdtempSync(join(tmpdir(), "astro-always-"));
 const ctxOf = (cwd: string): ToolContext => ({ cwd, run: "r1", agent: "coder", env: { ...process.env } });
+
+function auditEvents(path: string): Record<string, unknown>[] {
+  try {
+    return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
 
 async function run(mod: Mod, cwd: string, command: string, approve: () => unknown, id = "c1") {
   const auditPath = join(cwd, ".astro", "audit.jsonl");
@@ -27,20 +36,28 @@ async function run(mod: Mod, cwd: string, command: string, approve: () => unknow
   return { executor, result, requests, auditPath };
 }
 
+const approvalsOf = (configPath: string): unknown => {
+  const saved = JSON.parse(readFileSync(configPath, "utf8")) as { shell?: { approvals?: unknown } };
+  return saved.shell?.approvals;
+};
+
 describe("approval vocabulary once/always/reject (#599)", () => {
   test("toolChoice maps s/once, a/always and r/reject", () => {
     expect(toolChoice("s")).toBe("once");
     expect(toolChoice("a")).toBe("always");
     expect(toolChoice("r")).toBe("reject");
-    expect(toolChoice("S")).toBe("always"); // legacy grant spelling
+    expect(toolChoice("a", true)).toBe("always"); // per call still saves a prefix rule
+    expect(toolChoice("S", true)).toBe(true); // legacy spelling stays call-scoped
+    expect(toolChoice("S")).toBe("always");
     expect(toolChoice("n")).toBe(false);
   });
 
-  test("the prompt names once/always/reject but not always per call", () => {
+  test("both prompts name once/always/reject", () => {
     const prompt = toolPrompt({ name: "run_command", action: "shell", mode: "ask" });
     for (const choice of ["once", "always", "reject"]) expect(prompt).toContain(choice);
     const perCall = toolPrompt({ name: "run_command", action: "shell", mode: "ask", perCall: true });
-    expect(perCall).not.toContain("[a]");
+    expect(perCall).toContain("[a]");
+    expect(perCall).toContain("reject");
   });
 });
 
@@ -56,11 +73,28 @@ describe("always writes a prefix rule in the project layer (#599)", () => {
     const first = await run(mod, cwd, "echo ok", () => "always", "c1");
     expect(first.result.isError).toBeFalsy();
     expect(first.requests).toHaveLength(1);
-    const saved = JSON.parse(readFileSync(configPath, "utf8")) as { shell?: { approvals?: unknown } };
-    expect(saved.shell?.approvals).toEqual([{ match: "echo *", effect: "allow" }]);
+    expect(approvalsOf(configPath)).toEqual([{ match: "echo *", effect: "allow" }]);
     const second = await run(mod, cwd, "echo ok", () => "always", "c2");
     expect(second.result.isError).toBeFalsy();
     expect(second.requests).toHaveLength(0);
+  });
+
+  test("a wildcard in the head is refused instead of becoming a saved wildcard rule", async () => {
+    for (const command of ["* --version", "g* status"]) {
+      expect(approvalPattern(command)).toBeUndefined();
+      mock?.restore();
+      mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+      const cwd = dirOf();
+      const configPath = join(cwd, "astro.config.json");
+      writeFileSync(configPath, "{}\n");
+      const mod = await isolatedRunCommand(`wild-${command.replace(/\W/g, "")}`);
+      mod.configureRunCommand({ mode: "host", configPath, rules: [{ match: "*", effect: "ask" }] });
+      const first = await run(mod, cwd, command, () => "always");
+      expect(approvalsOf(configPath)).toBeUndefined();
+      expect(first.result.output).toContain("not saved");
+      const second = await run(mod, cwd, command, () => "always", "c2");
+      expect(second.requests).toHaveLength(1); // still asks: no durable grant
+    }
   });
 
   test("a configured deny is never overridden by a saved approval", async () => {
@@ -78,17 +112,53 @@ describe("always writes a prefix rule in the project layer (#599)", () => {
   });
 });
 
-describe("reject cancels the pending approvals of the session (#599)", () => {
-  test("denies, clears session grants and audits the rejection", async () => {
-    mock = installNoDockerSpawnMock();
+describe("the legacy session answer never creates a durable grant (#599)", () => {
+  test("an approver returning session keeps the call scoped", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
     const cwd = dirOf();
-    const mod = await isolatedRunCommand("reject-clear");
-    mod.configureRunCommand({ mode: "host" });
-    const { executor, result, auditPath } = await run(mod, cwd, "echo no", () => "reject");
-    expect(result).toMatchObject({ isError: true, failure: "denied" });
-    expect(executor.permissionGrants.has("read_common:read_file")).toBe(false);
-    const raw = readFileSync(auditPath, "utf8");
-    expect(raw).toContain('"reason":"rejected"');
+    const configPath = join(cwd, "astro.config.json");
+    writeFileSync(configPath, "{}\n");
+    const mod = await isolatedRunCommand("legacy-session");
+    mod.configureRunCommand({ mode: "host", configPath, rules: [{ match: "*", effect: "ask" }] });
+    const first = await run(mod, cwd, "echo ok", () => "session");
+    expect(first.result.isError).toBeFalsy();
+    expect(approvalsOf(configPath)).toBeUndefined();
+    const second = await run(mod, cwd, "echo ok", () => "session", "c2");
+    expect(second.requests).toHaveLength(1); // asked again
+  });
+});
+
+describe("every decision records the grant scope and a saved approval (#599)", () => {
+  test("once and always are distinguishable and the persisted pattern is audited", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const cwd = dirOf();
+    const configPath = join(cwd, "astro.config.json");
+    writeFileSync(configPath, "{}\n");
+    const mod = await isolatedRunCommand("audit-grant");
+    mod.configureRunCommand({ mode: "host", configPath, rules: [{ match: "*", effect: "ask" }] });
+
+    const once = await run(mod, cwd, "echo one", () => "once", "c1");
+    const onceEvents = auditEvents(once.auditPath);
+    expect(onceEvents.find((event) => event.tipo === "permission.decision")?.payload)
+      .toMatchObject({ decision: "allow", grant: "once" });
+    expect(onceEvents.some((event) => event.tipo === "shell.approval.saved")).toBe(false);
+
+    const always = await run(mod, cwd, "echo two", () => "always", "c2");
+    const alwaysEvents = auditEvents(always.auditPath);
+    expect(alwaysEvents.find((event) => event.tipo === "permission.decision")?.payload)
+      .toMatchObject({ decision: "allow", grant: "always" });
+    expect(alwaysEvents.find((event) => event.tipo === "shell.approval.saved")?.payload)
+      .toEqual({ pattern: "echo *", origin: "approval" });
+    expect(JSON.stringify(alwaysEvents)).not.toContain("echo two");
+  });
+
+  test("a failed persist tells the user instead of silently degrading", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const cwd = dirOf();
+    const mod = await isolatedRunCommand("no-config-path");
+    mod.configureRunCommand({ mode: "host", rules: [{ match: "*", effect: "ask" }] });
+    const { result } = await run(mod, cwd, "echo ok", () => "always");
+    expect(result.output).toContain("not saved");
   });
 });
 
