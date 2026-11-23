@@ -280,7 +280,7 @@ test("task filho não recebe spawn_agent: sem neto (ADR-0008 A5)", async () => {
     const audit = new Auditor(join(h.cwd, ".astro", "audit.jsonl")).readAll();
     expect(audit.some((event) => event.tipo === "tool.denied"
       && (event.payload as { name?: string }).name === "spawn_agent")).toBe(true);
-    expect(audit.some((event) => event.tipo === "agent.spawned")).toBe(false);
+    expect(audit.some((event) => event.tipo === "agent.spawn")).toBe(false);
     expect(new Ledger(h.ledgerPath).readAllEntries().some(
       (entry) => entry.kind === "agent" && entry.agent_id.startsWith("sub-"),
     )).toBe(false);

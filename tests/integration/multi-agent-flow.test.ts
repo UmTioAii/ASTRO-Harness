@@ -63,7 +63,7 @@ test("multi-agent-flow: planner spawna em outra conta, faz handoff e o filho esc
     expect(readFileSync(join(dir, "out", "build.txt"), "utf8")).toBe("built by subagent\n");
 
     const audit = readAudit(dir);
-    expect(audit.events.some((event) => event.tipo === "agent.spawned")).toBe(true);
+    expect(audit.events.some((event) => event.tipo === "agent.spawn")).toBe(true);
     expect(audit.events.some((event) => event.tipo === "agent.switch")).toBe(true);
     expect(audit.events.find((event) => event.tipo === "mode.changed")?.payload.mode).toBe("allow-edits");
     expect(audit.text.includes("key-one")).toBe(false);
