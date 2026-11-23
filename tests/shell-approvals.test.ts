@@ -3,11 +3,11 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
-import { toolChoice, toolPrompt } from "../src/chat/approvers";
+import { chatApprovers, toolChoice, toolPrompt } from "../src/chat/approvers";
 import { validateConfig } from "../src/core/config";
 import { ToolExecutor } from "../src/tools/executor";
 import { approvalPattern } from "../src/tools/shell-policy";
-import type { ToolContext } from "../src/tools/types";
+import type { Tool, ToolContext } from "../src/tools/types";
 import { installNoDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
 
 let mock: DockerMock | undefined;
@@ -58,6 +58,14 @@ describe("approval vocabulary once/always/reject (#599)", () => {
     const perCall = toolPrompt({ name: "run_command", action: "shell", mode: "ask", perCall: true });
     expect(perCall).toContain("[a]");
     expect(perCall).toContain("reject");
+  });
+
+  test("the REPL accepts always for a per-call shell prompt", async () => {
+    const io = { read: async () => "a", write: () => {} };
+    const answer = await chatApprovers(io, true).approveTool!({
+      name: "run_command", action: "shell", mode: "ask", perCall: true,
+    });
+    expect(answer).toBe("always");
   });
 });
 
@@ -110,6 +118,73 @@ describe("always writes a prefix rule in the project layer (#599)", () => {
     expect(denied.result.code).toBe("shell_rule_denied");
     expect(denied.requests).toHaveLength(0);
   });
+
+  test("always saves the subcommand that triggered the ask, not the first one", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const cwd = dirOf();
+    const configPath = join(cwd, "astro.config.json");
+    writeFileSync(configPath, "{}\n");
+    const mod = await isolatedRunCommand("always-trigger");
+    mod.configureRunCommand({
+      mode: "host", configPath,
+      rules: [{ match: "*", effect: "ask" }, { match: "git *", effect: "allow" }],
+    });
+    const first = await run(mod, cwd, "git status && rm -rf build", () => "always");
+    expect(first.requests).toHaveLength(1);
+    expect(approvalsOf(configPath)).toEqual([{ match: "rm *", effect: "allow" }]);
+    const second = await run(mod, cwd, "git status && rm -rf build", () => "always", "c2");
+    expect(second.requests).toHaveLength(0);
+  });
+
+  test("always refuses when more than one subcommand needs a decision", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const cwd = dirOf();
+    const configPath = join(cwd, "astro.config.json");
+    writeFileSync(configPath, "{}\n");
+    const mod = await isolatedRunCommand("always-multi");
+    mod.configureRunCommand({ mode: "host", configPath, rules: [{ match: "*", effect: "ask" }] });
+    const first = await run(mod, cwd, "echo a | cat", () => "always");
+    expect(first.requests).toHaveLength(1);
+    expect(approvalsOf(configPath)).toBeUndefined();
+    expect(first.result.output).toContain("not saved");
+    const second = await run(mod, cwd, "echo a | cat", () => "always", "c2");
+    expect(second.requests).toHaveLength(1);
+  });
+});
+
+describe("reject cancels the pending approvals of the session (#599)", () => {
+  test("denies, clears a real session grant and the next non-shell call asks again", async () => {
+    mock = installNoDockerSpawnMock();
+    const cwd = dirOf();
+    const mod = await isolatedRunCommand("reject-clear");
+    mod.configureRunCommand({ mode: "host" });
+    const auditPath = join(cwd, ".astro", "audit.jsonl");
+    const editTool: Tool = {
+      manifest: {
+        name: "write_file", description: "fake edit", parameters: { type: "object", properties: {} },
+        risk: "low", permission: "write", class: "edit", timeoutMs: 1_000,
+        retryable: false, idempotent: false, sideEffects: "filesystem",
+      },
+      async execute() { return { output: "written" }; },
+    };
+    const requests: unknown[] = [];
+    const executor = new ToolExecutor({
+      tools: [mod.runCommandTool, editTool], allow: ["run_command", "write_file"],
+      audit: new Auditor(auditPath), permissionMode: "ask",
+      approveTool: (request) => { requests.push(request); return "reject"; },
+    });
+    const ctx = ctxOf(cwd);
+    executor.permissionGrants.grant("edit:write_file");
+    const result = await executor.run(ctx, {
+      id: "c1", name: "run_command", arguments: JSON.stringify({ command: "echo no" }),
+    });
+    expect(result).toMatchObject({ isError: true, failure: "denied" });
+    expect(executor.permissionGrants.has("edit:write_file")).toBe(false);
+    expect(readFileSync(auditPath, "utf8")).toContain('"reason":"rejected"');
+    // The seeded grant is gone: the next edit asks instead of being allowed silently.
+    await executor.run(ctx, { id: "c2", name: "write_file", arguments: "{}" });
+    expect(requests.some((request) => (request as { name?: string }).name === "write_file")).toBe(true);
+  });
 });
 
 describe("the legacy session answer never creates a durable grant (#599)", () => {
@@ -145,8 +220,8 @@ describe("every decision records the grant scope and a saved approval (#599)", (
 
     const always = await run(mod, cwd, "echo two", () => "always", "c2");
     const alwaysEvents = auditEvents(always.auditPath);
-    expect(alwaysEvents.find((event) => event.tipo === "permission.decision")?.payload)
-      .toMatchObject({ decision: "allow", grant: "always" });
+    const lastDecision = alwaysEvents.filter((event) => event.tipo === "permission.decision").at(-1);
+    expect(lastDecision?.payload).toMatchObject({ decision: "allow", grant: "always" });
     expect(alwaysEvents.find((event) => event.tipo === "shell.approval.saved")?.payload)
       .toEqual({ pattern: "echo *", origin: "approval" });
     expect(JSON.stringify(alwaysEvents)).not.toContain("echo two");
