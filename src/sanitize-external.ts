@@ -47,11 +47,14 @@ const REDACT_VAULT_SECRET = /("secret"\s*:\s*")((?:[^"\\]|\\.)*)(")/gi;
 // usuário e o host ficam. Sem senha (`ssh://git@host`) não casa.
 const REDACT_URL_USERINFO = /(\/\/[^\s/:@]*:)([^\s/@]+)(@)/g;
 
-// JSON `"apiKey":"..."`, env `TOKEN=...`/`x-api-key: ...` (aspas normais ou escapadas)
+// JSON `"apiKey":"..."`, env `TOKEN=...`/`x-api-key: ...` (normal or escaped quotes).
+// The value runs to the closing quote, the end of the line, or the next
+// assignment/delimiter. Stopping at the first space leaked the suffix (#605).
 const SECRET_KEY = "(?:[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?key|secret|password|token(?!s))[A-Za-z0-9_-]*)";
 const QUOTE = `(?:\\\\"|")`;
+const ENV_VALUE = `(?:[^\\s,;}\\]"'\\\\]|[^\\S\\r\\n](?!(?:${SECRET_KEY})[^\\S\\r\\n]*[=:]))*`;
 const REDACT_ENV = new RegExp(
-  `\\b(${SECRET_KEY})((?:${QUOTE})?\\s*[=:]\\s*(?:${QUOTE})?)([^\\s,;"'\\\\}]*)((?:${QUOTE}))?`,
+  `\\b(${SECRET_KEY})((?:${QUOTE})?\\s*[=:]\\s*)(?:(${QUOTE})((?:[^"\\\\]|\\\\.)*)\\3|(${ENV_VALUE}))`,
   "gi",
 );
 
@@ -101,8 +104,8 @@ export function redactSecrets(text: string, opts: RedactSecretsOptions = {}): st
     .replace(REDACT_BEARER, `${BEARER_WORD} ${REDACTED}`)
     .replace(REDACT_NV, REDACTED)
     .replace(REDACT_PREFIX, REDACTED)
-    .replace(REDACT_ENV, (_match, key: string, separator: string, _value: string, closing?: string) =>
-      `${key}${separator}[REDACTED]${closing ?? ""}`)
+    .replace(REDACT_ENV, (_match, key: string, separator: string, open: string | undefined) =>
+      `${key}${separator}${open ?? ""}${REDACTED}${open ?? ""}`)
     .replace(REDACT_HEX_40_KEY, (_match, prefix: string) => `${prefix}${REDACTED}`);
 }
 
