@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Auditor } from "../src/audit";
 import { ConfigError, validateConfig } from "../src/core/config";
 import { ToolExecutor } from "../src/tools/executor";
 import { SHELL_UNPARSABLE, evaluateShellPolicy, scanShellCommand, type ShellRule } from "../src/tools/shell-policy";
 import type { ToolContext } from "../src/tools/types";
+import { HOST_SHELL_BYPASS_CONFIRMATION_ENV } from "../src/tools/run-command";
 import { installNoDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
 
 let mock: DockerMock | undefined;
@@ -53,6 +54,26 @@ describe("compound command scanner (#599, ADR-0001)", () => {
       if (!refused.ok) expect(refused.message).toMatch(/literal/i);
     }
   });
+  test("covers ||, &, newlines and subshells", () => {
+    const compound = scanShellCommand("a || b & c\nd");
+    expect(compound.ok && compound.parts).toEqual(["a", "b", "c", "d"]);
+    const subshell = scanShellCommand("(a && b)");
+    expect(subshell.ok && subshell.parts).toEqual(["a", "b"]);
+  });
+  test("refuses cmd expansion while single quotes keep a literal percent", () => {
+    expect(scanShellCommand("echo '%PATH%'").ok).toBe(true);
+    for (const command of ["echo %NAME:~0%", "echo %%i", "cat %USERPROFILE:~0%\\notes.txt"]) {
+      expect(scanShellCommand(command).ok).toBe(false);
+    }
+  });
+  test("keeps backslashes in Windows paths, quoted paths and ..\\..\\ escapes", () => {
+    const plain = scanShellCommand("cat C:\\Windows\\win.ini");
+    expect(plain.ok && plain.words[0]).toEqual(["cat", "C:\\Windows\\win.ini"]);
+    const quoted = scanShellCommand('cat "C:\\Program Files\\x.txt"');
+    expect(quoted.ok && quoted.words[0]).toEqual(["cat", "C:\\Program Files\\x.txt"]);
+    const relative = scanShellCommand("cat ..\\..\\secret.txt");
+    expect(relative.ok && relative.words[0]).toEqual(["cat", "..\\..\\secret.txt"]);
+  });
 });
 
 describe("ordered rules and external_directory (#599)", () => {
@@ -78,6 +99,48 @@ describe("ordered rules and external_directory (#599)", () => {
       .toMatchObject({ decision: "ask", origin: "external_directory" });
     expect(evaluateShellPolicy("cat ./README.md", "/repo", { rules, externalDirectory: "deny" }).decision).toBe("allow");
   });
+  test("a trailing ' *' also matches the bare prefix", () => {
+    const rules: ShellRule[] = [{ match: "*", effect: "allow" }, { match: "git push *", effect: "deny" }];
+    expect(evaluateShellPolicy("git push", "/repo", { rules })).toMatchObject({ decision: "deny", origin: "rule" });
+    expect(evaluateShellPolicy("git push origin main", "/repo", { rules }).decision).toBe("deny");
+    expect(evaluateShellPolicy("git status", "/repo", { rules }).decision).toBe("allow");
+  });
+  test("--flag= values, cd, .., ~ and absolute targets are external", () => {
+    const rules: ShellRule[] = [{ match: "*", effect: "allow" }];
+    const policy = { rules, externalDirectory: "deny" as const };
+    const repo = resolve(tmpdir(), "astro-policy-repo");
+    const outside = resolve(tmpdir(), "astro-policy-outside", "notes.txt");
+    expect(evaluateShellPolicy(`cat --file=${outside}`, repo, policy)).toMatchObject({ decision: "deny", origin: "external_directory" });
+    expect(evaluateShellPolicy("tar --directory=../x", repo, policy).decision).toBe("deny");
+    expect(evaluateShellPolicy("git --git-dir=../.git log", repo, policy).decision).toBe("deny");
+    expect(evaluateShellPolicy("cd .. && cat x", repo, policy).decision).toBe("deny");
+    expect(evaluateShellPolicy("cat ..", repo, policy).decision).toBe("deny");
+    expect(evaluateShellPolicy("cat ~/notes.txt", repo, policy).decision).toBe("deny");
+    expect(evaluateShellPolicy(`cat ${outside}`, repo, policy).decision).toBe("deny");
+    expect(evaluateShellPolicy("cd sub && cat a.txt", repo, policy).decision).toBe("allow");
+    if (process.platform === "win32") {
+      expect(evaluateShellPolicy("cat C:\\Windows\\win.ini", repo, policy).decision).toBe("deny");
+      expect(evaluateShellPolicy("cat ..\\..\\secret.txt", repo, policy).decision).toBe("deny");
+    }
+  });
+  test("symlink escapes are external and a symlinked project root stays inside", () => {
+    const rules: ShellRule[] = [{ match: "cat *", effect: "allow" }];
+    const policy = { rules, externalDirectory: "deny" as const };
+    const root = mkdtempSync(join(tmpdir(), "astro-rules-link-"));
+    const real = join(root, "project");
+    mkdirSync(join(real, "sub"), { recursive: true });
+    writeFileSync(join(real, "sub", "a.txt"), "x");
+    const linkedProject = join(root, "project-link");
+    symlinkSync(real, linkedProject, process.platform === "win32" ? "junction" : "dir");
+    expect(evaluateShellPolicy("cat sub/a.txt", linkedProject, policy).decision).toBe("allow");
+    const outside = join(root, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "a.txt"), "x");
+    symlinkSync(outside, join(real, "link"), process.platform === "win32" ? "junction" : "dir");
+    expect(evaluateShellPolicy("cat link/a.txt", linkedProject, policy)).toMatchObject({
+      decision: "deny", origin: "external_directory",
+    });
+  });
 });
 
 describe("shell rules at the gate (#599)", () => {
@@ -86,7 +149,7 @@ describe("shell rules at the gate (#599)", () => {
     const cwd = cwdOf();
     const deny = await hostTool("rules-bypass-deny", { rules: [{ match: "echo *", effect: "deny" }] });
     const bypass = await runWith(deny, cwd, "echo secret", {
-      mode: "bypass", env: { ...process.env, ASTRO_HOST_SHELL_BYPASS_CONFIRM: "1" },
+      mode: "bypass", env: { ...process.env, [HOST_SHELL_BYPASS_CONFIRMATION_ENV]: "1" },
     });
     expect(bypass.result.code).toBe("shell_rule_denied");
     expect(mock.calls).toHaveLength(0);
@@ -126,10 +189,48 @@ describe("shell rules at the gate (#599)", () => {
     expect(allowed.result.isError).toBeFalsy();
     expect(allowed.requests).toHaveLength(0);
     const refused = await runWith(await hostTool("rules-unparsable", { rules: [{ match: "*", effect: "allow" }] }), cwdOf(), "echo $(pwd)", {
-      mode: "bypass", env: { ...process.env, ASTRO_HOST_SHELL_BYPASS_CONFIRM: "1" },
+      mode: "bypass", env: { ...process.env, [HOST_SHELL_BYPASS_CONFIRMATION_ENV]: "1" },
     });
     expect(refused.result).toMatchObject({ code: SHELL_UNPARSABLE });
     expect(refused.result.output).toMatch(/literal/i);
+  });
+  test("bypass only runs on the explicit confirmation and still asks nothing", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "bypass-ok\n" });
+    const mod = await hostTool("rules-bypass-allow", { rules: [{ match: "echo *", effect: "allow" }] });
+    const cwd = cwdOf();
+    const blocked = await runWith(mod, cwd, "echo ok", { mode: "bypass" });
+    expect(blocked.result.code).toBe("host_shell_confirmation_required");
+    const allowed = await runWith(mod, cwd, "echo ok", {
+      mode: "bypass", env: { ...process.env, [HOST_SHELL_BYPASS_CONFIRMATION_ENV]: "1" },
+    });
+    expect(allowed.result.isError).toBeFalsy();
+    expect(allowed.requests).toHaveLength(0);
+  });
+  test("the gate refuses --flag= and cd escapes before any spawn", async () => {
+    mock = installNoDockerSpawnMock();
+    const cwd = cwdOf();
+    const outside = resolve(tmpdir(), "astro-gate-outside", "notes.txt");
+    const flag = await runWith(
+      await hostTool("rules-gate-flag", { rules: [{ match: "*", effect: "allow" }], externalDirectory: "deny" }),
+      cwd, `cat --file=${outside}`,
+    );
+    expect(flag.result.code).toBe("external_directory");
+    const cd = await runWith(
+      await hostTool("rules-gate-cd", { rules: [{ match: "*", effect: "allow" }], externalDirectory: "deny" }),
+      cwd, "cd .. && cat notes.txt",
+    );
+    expect(cd.result.code).toBe("external_directory");
+    expect(mock.calls).toHaveLength(0);
+  });
+  test("a rule allow is audited with its origin", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const cwd = cwdOf();
+    const mod = await hostTool("rules-origin", { rules: [{ match: "echo *", effect: "allow" }] });
+    const { result, auditPath } = await runWith(mod, cwd, "echo ok");
+    expect(result.isError).toBeFalsy();
+    const events = readFileSync(auditPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const decision = events.find((event: { tipo: string }) => event.tipo === "permission.decision");
+    expect(decision?.payload).toMatchObject({ decision: "allow", origin: "rule" });
   });
   test("external_directory asks over a rule allow; in-project targets stay allowed", async () => {
     mock = installNoDockerSpawnMock({ stdout: "content\n" });
