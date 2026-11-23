@@ -153,12 +153,29 @@ test("taxonomy: a thrown error is failed and an unclassified failure defaults to
     manifest: { name: "plain", description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs: 1000, retryable: false, idempotent: true, sideEffects: "none", class: "read_common" },
     execute: async () => ({ output: "no", isError: true }),
   };
+  const bogus: Tool = {
+    manifest: { name: "bogus", description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs: 1000, retryable: false, idempotent: true, sideEffects: "none", class: "read_common" },
+    execute: async () => ({ output: "no", isError: true, failure: "bogus" }) as unknown as ToolResult,
+  };
   const ex = new ToolExecutor({
     approveTool: () => true,
-    tools: [boom, plain],
-    allow: ["boom", "plain"],
+    tools: [boom, plain, bogus],
+    allow: ["boom", "plain", "bogus"],
     audit: new Auditor(join(cwd, ".astro", "a5.jsonl")),
   });
   expect((await ex.run(ctx(cwd), { id: "1", name: "boom", arguments: "{}" })).failure).toBe("failed");
   expect((await ex.run(ctx(cwd), { id: "2", name: "plain", arguments: "{}" })).failure).toBe("failed");
+  // A code outside the closed set never reaches the caller.
+  expect((await ex.run(ctx(cwd), { id: "3", name: "bogus", arguments: "{}" })).failure).toBe("failed");
+});
+
+test("taxonomy: write_file confinement refusal is denied, bad input is invalid", async () => {
+  const cwd = dir();
+  // Reserved harness state and an escape are policy denials, not failures.
+  for (const path of [".astro/audit.jsonl", "../escape.txt"]) {
+    const r = await writeFileTool.execute({ path, content: "x" }, ctx(cwd));
+    expect(r.isError).toBe(true);
+    expect(r.failure).toBe("denied");
+  }
+  expect((await writeFileTool.execute({ path: 1, content: "x" }, ctx(cwd))).failure).toBe("invalid");
 });

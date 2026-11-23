@@ -116,11 +116,13 @@ describe("list_dir tool (F4-2)", () => {
     expect(tree.children!.map((c) => c.name)).not.toContain("file0.txt");
   });
 
-  test("caminho fora do cwd → erro (I-11)", async () => {
+  test("caminho fora do cwd → denied, sem ecoar o caminho (I-11)", async () => {
     const cwd = setupNested(1);
     const result = await listDirTool.execute({ path: "../" }, ctx(cwd));
     expect(result.isError).toBe(true);
-    expect(result.output).toContain("fora");
+    expect(result.failure).toBe("denied");
+    expect(result.output).toBe("path outside the working directory");
+    expect(result.output).not.toContain(cwd);
   });
 
   test("path inexistente → erro claro", async () => {
@@ -142,30 +144,47 @@ describe("list_dir output contract (S6, #603)", () => {
     expect(ceiling!.hint.length).toBeGreaterThan(0);
   });
 
-  test("tree above the ceiling is cut with an explicit marker and a structured field", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-cap-"));
-    mkdirSync(join(cwd, "many"));
-    for (let i = 0; i < 500; i++) {
-      writeFileSync(join(cwd, "many", `file-${String(i).padStart(4, "0")}-${"x".repeat(40)}.txt`), "x");
-    }
-    const result = await listDirTool.execute({ path: "many" }, ctx(cwd));
-    expect(result.isError).toBeFalsy();
-    const tree = JSON.parse(result.output) as DirNode & { truncated?: boolean; notice?: string };
-    expect(tree.truncated).toBe(true);
-    expect(tree.notice).toContain("omitted");
-    expect(tree.children!.length).toBeLessThan(500);
-    expect(result.truncation).toBeDefined();
-    expect(result.truncation!.removed).toBeGreaterThan(0);
-    expect(result.output.length).toBeLessThanOrEqual(16_000);
-  });
-
-  test("a secret in a name is redacted before it reaches the result (I-03)", async () => {
+  test("a secret in a file or directory name is redacted at every level (I-03)", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-secret-"));
     writeFileSync(join(cwd, SECRET), "x");
-    const result = await listDirTool.execute({}, ctx(cwd));
-    expect(result.isError).toBeFalsy();
-    expect(result.output).not.toContain(SECRET);
-    expect(result.output).toContain("[REDACTED]");
+    mkdirSync(join(cwd, "outer", SECRET), { recursive: true });
+    writeFileSync(join(cwd, "outer", SECRET, "inner.txt"), "x");
+
+    // Nested node: the directory is emitted as a child with its own name.
+    const tree = await listDirTool.execute({}, ctx(cwd));
+    expect(tree.isError).toBeFalsy();
+    expect(tree.output).not.toContain(SECRET);
+    expect(tree.output).toContain("[REDACTED]");
+
+    // Root node: the caller points at the directory itself.
+    const root = await listDirTool.execute({ path: `outer/${SECRET}` }, ctx(cwd));
+    expect(root.isError).toBeFalsy();
+    expect(root.output).not.toContain(SECRET);
+    expect(root.output).toContain("[REDACTED]");
+  });
+
+  test("cut landing on a directory reports the exact number of hidden entries", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-listdir-count-"));
+    mkdirSync(join(cwd, "alpha"));
+    writeFileSync(join(cwd, "alpha", "a.txt"), "x");
+    mkdirSync(join(cwd, "beta", "sub"), { recursive: true });
+    writeFileSync(join(cwd, "beta", "b1.txt"), "x");
+    writeFileSync(join(cwd, "beta", "b2.txt"), "x");
+    writeFileSync(join(cwd, "beta", "sub", "b3.txt"), "x");
+
+    // 20 tokens -> 64-char budget: only the first entry fits, the cut lands on
+    // a directory (alpha is taken, its file is not, beta and its subtree are not).
+    const result = await listDirTool.execute({}, { ...ctx(cwd), outputLimitTokens: 20 });
+    const body = JSON.parse(result.output) as { truncated?: boolean };
+    expect(body.truncated).toBe(true);
+    // kept: alpha. omitted: a.txt, beta, b1, b2, sub, b3.
+    expect(result.truncation).toEqual({
+      removed: 6,
+      total: 7,
+      unit: "entries",
+      hint: listDirTool.manifest.output!.hint,
+    });
+    expect(result.output).toContain("6 of 7 entries omitted");
   });
 
   test("failure taxonomy: escape is denied, missing path failed", async () => {
