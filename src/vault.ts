@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, win32 } from "node:path";
 import { astroHomePath } from "./astro-home";
 import { withFileLock } from "./file-lock";
 import { isVaultId, looksLikeSecret } from "./secrets";
@@ -80,24 +80,43 @@ const DPAPI_UNPROTECT_SCRIPT =
   "[System.Text.Encoding]::UTF8.GetBytes($env:ASTRO_VAULT_ENTROPY), " +
   "[System.Security.Cryptography.DataProtectionScope]::CurrentUser))";
 
+const WINDOWS_ROOT = "C:\\Windows";
+
 /**
- * Resolves the Windows PowerShell executable from the system root. PATH and
- * the cwd are never consulted: a planted `powershell.exe` must not receive the
- * DPAPI secret (#605, I-03). Missing binary is refused, never downgraded.
+ * Trusted system roots for PowerShell: the drive of the running binary (which
+ * the environment cannot spoof) and the conventional `C:\Windows`. `SystemRoot`
+ * and `windir` are deliberately ignored because a repo `.env` can set them
+ * (#605, I-03); if neither root has the binary, resolution refuses.
  */
-export function resolvePowerShell(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): string {
+function defaultSystemRoots(): string[] {
+  const roots: string[] = [];
+  const drive = /^([A-Za-z]:)[\\/]/.exec(process.execPath)?.[1];
+  if (drive !== undefined) roots.push(win32.join(`${drive}\\`, "Windows"));
+  if (!roots.some((root) => root.toLowerCase() === WINDOWS_ROOT.toLowerCase())) roots.push(WINDOWS_ROOT);
+  return roots;
+}
+
+export interface PowerShellOptions {
+  platform?: NodeJS.Platform;
+  /** Test seam: trusted roots. Production derives them from the running binary. */
+  roots?: readonly string[];
+}
+
+/**
+ * Resolves the Windows PowerShell executable from a trusted system root. PATH,
+ * the cwd, `SystemRoot` and `windir` are never consulted: a planted
+ * `powershell.exe` must not receive the DPAPI secret (#605, I-03).
+ */
+export function resolvePowerShell(opts: PowerShellOptions = {}): string {
+  const platform = opts.platform ?? process.platform;
   if (platform !== "win32") throw new Error("PowerShell is only used for DPAPI on Windows");
-  const root = env.SystemRoot ?? env.windir;
-  if (root === undefined || root.trim() === "") {
-    throw new Error("PowerShell not found: SystemRoot/windir is not set");
+  const roots = opts.roots ?? defaultSystemRoots();
+  for (const root of roots) {
+    if (!isAbsolute(root)) throw new Error(`PowerShell not found: system root "${root}" is not absolute`);
+    const exe = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    if (existsSync(exe)) return exe;
   }
-  if (!isAbsolute(root)) throw new Error("PowerShell not found: SystemRoot/windir is not absolute");
-  const exe = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  if (!existsSync(exe)) throw new Error(`PowerShell not found at "${exe}"`);
-  return exe;
+  throw new Error(`PowerShell not found under ${roots.join(", ")}`);
 }
 
 function runDpapi(script: string, envExtra: Record<string, string>): string {
