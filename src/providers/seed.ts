@@ -6,6 +6,7 @@
 import type { ModelStatus, PriceConfig } from "../core/config";
 import type { ModelFacts, ModelId } from "../models/catalog";
 import { modelFacts } from "../models/catalog";
+import { validateFacts } from "../models/overrides";
 import type { ProfileModel } from "./profiles";
 
 /** How the provider receives the call. */
@@ -54,6 +55,8 @@ const DEFAULT_CALL_METHOD: CallMethod = "chat-completions";
 export function effectiveCard(offer: ProviderModel): ModelCard {
   const overrides = offer.overrides ?? {};
   const merged: ModelFacts = { ...modelFacts(offer.ref), ...overrides };
+  // A malformed override fails closed here, at resolution, before any call (#625).
+  validateFacts(offer.ref, merged, overrides);
   // A narrower gateway context must not leave an output cap bigger than the window.
   const maxOutput = Math.min(merged.maxOutput, merged.context);
   return {

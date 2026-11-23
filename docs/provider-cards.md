@@ -37,6 +37,12 @@ Precedence: provider override > catalog fact > code default. Editing a fact in `
 
 `profileModelsFor(cards)` projects `{id, tags, context}` — the shape `profiles.ts` and the wizard consume. `CatalogEntry.cards` keeps the effective card (facts + overrides) for the `/provider` UI (#555), and `astro models list --seeds --json` exposes it (JSON extension, #553).
 
+## Overrides in `doctor` and `/usage` (#625)
+
+`effectiveCard` validates the merged facts at resolution: `context` and `maxOutput` are positive integers, a declared `maxOutput` cannot exceed the context, and `reasoning: true` requires at least one effort. A violation throws `ModelOverrideError` naming `ref.field`; `PROVIDER_CATALOG` drops that offer's card and records the error instead of crashing startup, and `astro doctor` reports it as a `fail`.
+
+When an override changes a fact, `astro doctor` and `/usage` show the effective value next to the catalog value for the active model, for example `context 64000 (catalog 400000)`. Without an override both outputs are unchanged. `price`, `free` and `status` stay offer-owned, so they are not overridable facts; `price: null` on a paid offer stays `n/d`, never zero.
+
 ## Invariants
 
 - I-03: a card never carries a credential value; only `credentialRef` (variable name) and `fonte` (public URL).

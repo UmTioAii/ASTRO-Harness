@@ -6,6 +6,7 @@
  * (offers). Model facts live in `src/models/catalog.ts`; this file only composes.
  */
 import type { ProfileModel } from "./profiles";
+import { ModelOverrideError } from "../models/overrides";
 import { effectiveCard, profileModelsFor, type ModelCard, type ProviderAdapterSeed } from "./seed";
 import { nvidiaAdapter } from "./nvidia/adapter";
 import { codexAdapter } from "./codex/adapter";
@@ -24,10 +25,26 @@ export interface CatalogEntry {
   models: ProfileModel[];
   /** Cards completos (reasoning/effort/preço/free) para a UI de provider. */
   cards: readonly ModelCard[];
+  /** Malformed overrides found while composing (#625); the offer contributes no card. */
+  overrideErrors?: readonly ModelOverrideError[];
 }
 
-function toEntry(seed: ProviderAdapterSeed): CatalogEntry {
-  const cards = seed.models.map((offer) => effectiveCard(offer));
+/**
+ * Composes one seed into a catalog entry. A malformed override fails closed for
+ * that offer (no card) and is recorded for `astro doctor` instead of crashing
+ * startup; any other error still propagates.
+ */
+export function composeEntry(seed: ProviderAdapterSeed): CatalogEntry {
+  const cards: ModelCard[] = [];
+  const overrideErrors: ModelOverrideError[] = [];
+  for (const offer of seed.models) {
+    try {
+      cards.push(effectiveCard(offer));
+    } catch (error) {
+      if (!(error instanceof ModelOverrideError)) throw error;
+      overrideErrors.push(error);
+    }
+  }
   return {
     key: seed.key,
     name: seed.name,
@@ -38,6 +55,7 @@ function toEntry(seed: ProviderAdapterSeed): CatalogEntry {
     ...(seed.quotaDomain === undefined ? {} : { quotaDomain: seed.quotaDomain }),
     models: profileModelsFor(cards),
     cards,
+    ...(overrideErrors.length === 0 ? {} : { overrideErrors }),
   };
 }
 
@@ -49,7 +67,7 @@ const SEEDS: readonly ProviderAdapterSeed[] = [
   openaiCompatibleAdapter,
 ];
 
-export const PROVIDER_CATALOG: readonly CatalogEntry[] = SEEDS.map(toEntry);
+export const PROVIDER_CATALOG: readonly CatalogEntry[] = SEEDS.map(composeEntry);
 
 export function catalogEntry(key: string): CatalogEntry | undefined {
   return PROVIDER_CATALOG.find((entry) => entry.key === key);

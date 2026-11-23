@@ -3,6 +3,8 @@
  * Puro, sem I/O; preço desconhecido é "n/d", nunca zero (B6).
  */
 import { formatBudgetEstimate, type BudgetStatus } from "../budget";
+import { cardFor, formatOverrideNotes, overrideNotes } from "../models/overrides";
+import { PROVIDER_CATALOG, type CatalogEntry } from "../providers/catalog";
 import type { QuotaStatus } from "../quota";
 import type { SessionSnapshot } from "./agent-session";
 
@@ -63,7 +65,17 @@ export function quotaSegment(status: QuotaStatus): string {
   return `quota ${status.quotaDomain}: ${parts.join(" · ")}`;
 }
 
-/** Linhas do `/usage`: sessão sempre; budget só quando a sessão expõe status. */
-export function usageLines(snapshot: SessionSnapshot, budget: BudgetStatus | undefined): string[] {
-  return [sessionUsageLine(snapshot), ...(budget === undefined ? [] : [budgetLine(budget)])];
+/** Linhas do `/usage`: sessão sempre; override do modelo e budget quando existem. */
+export function usageLines(
+  snapshot: SessionSnapshot,
+  budget: BudgetStatus | undefined,
+  entries: readonly CatalogEntry[] = PROVIDER_CATALOG,
+): string[] {
+  const card = cardFor(snapshot.model, entries);
+  const notes = card === undefined ? [] : overrideNotes(card);
+  return [
+    sessionUsageLine(snapshot),
+    ...(notes.length === 0 ? [] : [`model ${snapshot.model}: ${formatOverrideNotes(notes)}`]),
+    ...(budget === undefined ? [] : [budgetLine(budget)]),
+  ];
 }
