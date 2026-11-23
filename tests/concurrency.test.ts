@@ -59,7 +59,7 @@ describe("bounded spawn (ADR-0037)", () => {
     expect((await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx)).isError).toBe(false);
     const spawned = audit.readAll().find((event) => event.tipo === "agent.spawn");
     expect(spawned?.payload).toMatchObject({
-      requested: 1, granted: 1, cap: 3, source: "config",
+      requested: 1, granted: 1, cap: 1, source: "config",
       reason: "default_rank", grant_reason: "within config cap",
     });
   });
@@ -68,8 +68,56 @@ describe("bounded spawn (ADR-0037)", () => {
     const { tool, ctx } = setup(config({ spawn: { maxConcurrent: 2 } }));
     const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 8 }, ctx);
     const body = JSON.parse(result.output) as { concurrency: Record<string, unknown>; note?: string };
-    expect(body.concurrency).toMatchObject({ requested: 8, granted: 2, cap: 2, truncated: true });
-    expect(body.note).toContain("requested 8, granted 2");
+    expect(body.concurrency).toMatchObject({ requested: 8, granted: 1, cap: 1, truncated: true });
+    expect(body.note).toContain("requested 8, granted 1");
+  });
+
+  test("granted never exceeds the executable ceiling of the slice", async () => {
+    const { tool, ctx } = setup(config({ agents: { maxActive: 3 } }));
+    const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 3 }, ctx);
+    const body = JSON.parse(result.output) as { concurrency: { granted: number; cap: number; truncated: boolean } };
+    expect(body.concurrency).toMatchObject({ granted: 1, cap: 1, truncated: true });
+  });
+
+  test("spawn.maxConcurrent 1 and agents.maxActive precedence reach the tool", async () => {
+    const one = setup(config({ spawn: { maxConcurrent: 1 } }));
+    const first = await one.tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 2 }, one.ctx);
+    expect(JSON.parse(first.output).concurrency).toMatchObject({ granted: 1, cap: 1, source: "config" });
+
+    const explicit = setup(config({
+      providers: {
+        p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "KEY1" },
+        p2: { kind: "openai-compat", baseUrl: "http://p2/v1", credentialRef: "KEY2" },
+      },
+      models: [
+        { provider: "p1", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+        { provider: "p2", id: "m2", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+      ],
+      agents: { maxActive: 2 },
+      spawn: { maxConcurrent: 3 },
+    }));
+    const second = await explicit.tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 3 }, explicit.ctx);
+    expect(JSON.parse(second.output).concurrency).toMatchObject({ granted: 2, cap: 2, source: "request" });
+  });
+
+  test("concurrency 0 is rejected in English", async () => {
+    const { tool, ctx } = setup();
+    const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 0 }, ctx);
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.output).message).toContain("must be an integer >= 1");
+  });
+
+  test("the cut note keeps the maxTurns migration hint", async () => {
+    const { tool, ctx } = setup(config({ spawn: { maxConcurrent: 2 } }));
+    const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 8, maxTurns: 1 }, ctx);
+    const note = JSON.parse(result.output).note as string;
+    expect(note).toContain("requested 8, granted 1");
+    expect(note).toContain("maxTurns now means turns");
+  });
+
+  test("spawn.maxConcurrent rejects zero and fractional values", () => {
+    expect(() => config({ spawn: { maxConcurrent: 0 } })).toThrow(/maxConcurrent/);
+    expect(() => config({ spawn: { maxConcurrent: 2.5 } })).toThrow(/maxConcurrent/);
   });
 
   test("a child cannot spawn a grandchild", async () => {
