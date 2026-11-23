@@ -59,7 +59,7 @@ describe("bounded spawn (ADR-0037)", () => {
     expect((await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx)).isError).toBe(false);
     const spawned = audit.readAll().find((event) => event.tipo === "agent.spawn");
     expect(spawned?.payload).toMatchObject({
-      requested: 1, granted: 1, cap: 1, source: "config",
+      requested: 1, granted: 1, cap: 3, source: "config",
       reason: "default_rank", grant_reason: "within config cap",
     });
   });
@@ -68,8 +68,9 @@ describe("bounded spawn (ADR-0037)", () => {
     const { tool, ctx } = setup(config({ spawn: { maxConcurrent: 2 } }));
     const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 8 }, ctx);
     const body = JSON.parse(result.output) as { concurrency: Record<string, unknown>; note?: string };
-    expect(body.concurrency).toMatchObject({ requested: 8, granted: 1, cap: 1, truncated: true });
+    expect(body.concurrency).toMatchObject({ requested: 8, granted: 1, cap: 2, truncated: true });
     expect(body.note).toContain("requested 8, granted 1");
+    expect(body.note).toContain("account ceiling");
   });
 
   test("granted never exceeds the executable ceiling of the slice", async () => {
@@ -113,6 +114,22 @@ describe("bounded spawn (ADR-0037)", () => {
     const note = JSON.parse(result.output).note as string;
     expect(note).toContain("requested 8, granted 1");
     expect(note).toContain("maxTurns now means turns");
+  });
+
+  test("the documented default cap is recorded even when admission is lower", async () => {
+    const { tool, ctx } = setup();
+    const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 2 }, ctx);
+    const body = JSON.parse(result.output) as { concurrency: Record<string, unknown>; note?: string };
+    expect(body.concurrency).toMatchObject({ requested: 2, granted: 1, cap: 2, source: "default", truncated: true });
+    expect(body.concurrency.reason).toContain("account ceiling");
+  });
+
+  test("the config cap is recorded even when admission is lower", async () => {
+    const { tool, ctx } = setup(config({ spawn: { maxConcurrent: 4 } }));
+    const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 4 }, ctx);
+    const body = JSON.parse(result.output) as { concurrency: Record<string, unknown> };
+    expect(body.concurrency).toMatchObject({ requested: 4, granted: 1, cap: 4, source: "config", truncated: true });
+    expect(body.concurrency.reason).toContain("config cap 4");
   });
 
   test("spawn.maxConcurrent rejects zero and fractional values", () => {
