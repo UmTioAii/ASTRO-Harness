@@ -31,18 +31,18 @@ const baseConfig = {
 };
 
 describe("config tools.run_command.sandbox (F4-6, #474)", () => {
-  test("sem tools: modo auto por padrão (Docker quando disponível)", () => {
+  test("sem tools: modo host por padrão (Docker só com sandbox explícito)", () => {
     const cfg = validateConfig(structuredClone(baseConfig));
     expect(resolveSandboxSetting(cfg.tools?.run_command?.sandbox)).toBe(true);
-    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("auto");
+    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("host");
   });
 
-  test("tools.run_command sem sandbox também é auto", () => {
+  test("tools.run_command sem sandbox também é host", () => {
     const raw = structuredClone(baseConfig) as Record<string, unknown>;
     raw.tools = { run_command: {} };
     const cfg = validateConfig(raw);
     expect(cfg.tools?.run_command?.sandbox).toBeUndefined();
-    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("auto");
+    expect(resolveRunCommandMode(cfg.tools?.run_command?.sandbox)).toBe("host");
   });
 
   test("tools.run_command.sandbox: false é opt-out explícito", () => {

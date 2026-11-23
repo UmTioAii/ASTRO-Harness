@@ -62,7 +62,7 @@ import { deletePathTool } from "../tools/delete-path";
 import { movePathTool } from "../tools/move-path";
 import { lspTool } from "../tools/lsp";
 import { pipelineTool } from "../tools/pipeline";
-import { configureRunCommand, resolveRunCommandMode, sandboxWarning } from "../tools/run-command";
+import { configureRunCommand, resolveRunCommandMode, sandboxWarning, type RunCommandMode } from "../tools/run-command";
 import { allowlistLoadEvents } from "../allowlists";
 import type { Tool } from "../tools/types";
 import { resolvePermissionMode, mostRestrictive, type ActionClass, type PermissionMode } from "../permissions";
@@ -599,6 +599,12 @@ function projectSystemPrompt(config: AstroConfig, cwd: string, memory?: string):
   return parts.length === 0 ? undefined : parts.join("\n\n");
 }
 
+/** One-line notice for a CLI run whose shell executes on the host (ADR-0034, planned). */
+export function hostShellNotice(tools: readonly string[], mode: RunCommandMode, suppressed?: boolean): string | undefined {
+  if (suppressed === true || mode !== "host" || !tools.includes("run_command")) return undefined;
+  return "warning: the shell runs on the host with per-command approval; the Docker sandbox is inactive (ADR-0034)";
+}
+
 export async function runTask(opts: RunOptions): Promise<RunReport> {
   const cwd = opts.cwd ?? process.cwd();
   const env = opts.env ?? process.env;
@@ -623,10 +629,15 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     : (config.run?.maxRoundsPerTurn ?? config.agent.maxSteps);
 
   // Sandbox do run_command (F4-6): modo resolvido antes de qualquer execução
-  // (#474: `true`/ausente = Docker; `"auto"` = Docker → host com aprovação).
+  // Host é o default (#599): sem probe de Docker. `sandbox: true`/`"docker"` mantém
+  // o container explícito; `false` desliga.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
   const sandboxNotice = runCommandMode === "disabled" ? sandboxWarning(false) : undefined;
   if (sandboxNotice !== undefined && opts.suppressRunEvents !== true) console.warn(`aviso: ${sandboxNotice}`);
+  if (runCommandMode === "host") {
+    const notice = hostShellNotice(config.agent.tools, runCommandMode, opts.suppressRunEvents);
+    if (notice !== undefined) console.warn(notice);
+  }
 
   const ledgerPath = resolveFrom(cwd, config.paths.ledger);
   const auditPath = resolveFrom(cwd, config.paths.audit);

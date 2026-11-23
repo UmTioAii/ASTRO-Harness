@@ -154,7 +154,7 @@ When a call asks, the prompt has exactly three answers:
 
 Anything else denies. Fail-closed is the rule: an empty answer, EOF or an unrecognized key is a denial, not an approval.
 
-The fixed floor is enforced in every mode, including `bypass`: `.astro/` and configured `protectedPaths` cannot be written, critical paths (`.env*`, secrets, tokens, keys, the vault) are blocked or gated, file paths stay inside the working directory, secrets are redacted before any log or prompt, and `run_command` defaults to `"auto"`: it uses the Docker sandbox when available and otherwise falls back to the host with per-command approval. `tools.run_command.sandbox: true`/`"docker"` forces Docker (recommended for untrusted repositories); what the host loses is in ADR-0031. In a non-interactive context, `ask` denies with `permission.pending` and the run stops at a safe point instead of proceeding.
+The fixed floor is enforced in every mode, including `bypass`: `.astro/` and configured `protectedPaths` cannot be written, critical paths (`.env*`, secrets, tokens, keys, the vault) are blocked or gated, file paths stay inside the working directory, secrets are redacted before any log or prompt, and `run_command` runs on the **host** with per-command approval by default (#599, ADR-0034 planned). `tools.run_command.sandbox: true`/`"docker"` forces Docker (recommended for untrusted repositories) and refuses without the daemon; what the host loses is in ADR-0031. In a non-interactive context, `ask` denies with `permission.pending` and the run stops at a safe point instead of proceeding.
 
 ## Environment variables
 
@@ -221,7 +221,7 @@ These guarantees are enforced in code and covered by tests:
 | Tools outside the agent allowlist never run, and denials are audited. | I-01 |
 | File paths stay inside the working directory; symlinks and junctions are resolved. | I-11 |
 | `.astro/` and `protectedPaths` cannot be written by tools, in any permission mode. | I-11 |
-| `run_command` defaults to `"auto"` (Docker when available, host with per-command approval otherwise); `sandbox: true`/`"docker"` forces Docker; the child environment is stripped of secret names. | I-03, I-11 |
+| `run_command` runs on the host with per-command approval by default (#599, ADR-0034 planned); `sandbox: true`/`"docker"` forces Docker; the child environment is stripped of secret names. | I-03, I-11 |
 | Prompts are never persisted; `run.started` stores only a task hash. | I-04 |
 | Quotas and budgets block before spending, and the hard ceiling is physical. | I-17 |
 | Provider, model or credential changes require approval, including in `bypass`. | I-08 |

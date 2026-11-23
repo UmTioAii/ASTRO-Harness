@@ -9,7 +9,7 @@ import { isVaultRef } from "./secrets";
 
 /** Ranque de permissão: `ask` é o mais restrito, `bypass` o mais largo. */
 const MODE_RANK: Record<string, number> = { ask: 0, "allow-edits": 1, bypass: 2 };
-/** auto (default; pode cair no host) > Docker > desligado (#474): o projeto não reabre o host. */
+/** host (default) > Docker > desligado (#474/#599): o projeto não reabre o host. */
 const SANDBOX_RANK: Record<string, number> = { false: 0, off: 0, true: 1, docker: 1, auto: 2, host: 2 };
 /** Ranque do perfil do agent: `read-only` é o mais restrito. */
 const PERMISSION_RANK: Record<string, number> = { "read-only": 0, write: 1, execute: 2, full: 3 };
@@ -159,9 +159,9 @@ export function assertNarrowed(
   const globalMode = isPlainObject(global.permissions) ? global.permissions.mode : undefined;
   const mergedMode = isPlainObject(merged.permissions) ? merged.permissions.mode : undefined;
   assertNotWider(globalMode, mergedMode, MODE_RANK, "o modo de permissão global");
-  // Sandbox do shell (#474): auto (default, pode usar host) > Docker > desligado.
+  // Sandbox do shell (#474/#599): host (default) > Docker > desligado.
   // Global Docker pode ser forçado; o projeto endurece para Docker/desligado,
-  // nunca reabre o host com `auto`.
+  // nunca reabre o host.
   const globalTools = isPlainObject(global.tools) ? global.tools : undefined;
   const projectTools = isPlainObject(projectLayer?.tools) ? projectLayer.tools : undefined;
   const globalRunCommand = isPlainObject(globalTools?.run_command) ? globalTools.run_command : undefined;

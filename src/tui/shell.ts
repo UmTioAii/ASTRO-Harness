@@ -62,8 +62,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       run: async () => ({ output: "run_command não está na allowlist de agent.tools", isError: true }),
     };
   }
-  // Fail-closed igual ao caminho do app (I-11): Docker por padrão; `auto` (#474)
-  // cai no host com aprovação por comando quando o Docker não existe.
+  // Fail-closed igual ao caminho do app (I-11): host é o default (#599) com
+  // aprovação por comando; `sandbox: true`/`"docker"` exige o container.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
   configureRunCommand({
     mode: runCommandMode,
