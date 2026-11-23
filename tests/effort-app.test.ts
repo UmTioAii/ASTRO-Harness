@@ -99,7 +99,7 @@ describe("escalada em runTask (#451)", () => {
       preset: "control",
       agent: { model: "mock/m", maxSteps: 5, tools: ["task", "write_file"], entryAgent: "planner" },
       agents: {
-        maxActive: 1,
+        maxActive: 2,
         planner: { model: "mock/m", maxSteps: 5, tools: ["task", "write_file"], systemPrompt: "parent-agent" },
         builder: { model: "mock/m", maxSteps: 5, tools: ["write_file"], systemPrompt: "child-agent" },
       },

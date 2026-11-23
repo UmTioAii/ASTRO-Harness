@@ -7,7 +7,10 @@ import type { Auditor } from "./audit";
 import { processAlive, type Ledger, type LedgerAgentEntry } from "./ledger";
 import { redactSecrets } from "./sanitize-external";
 
-/** Conta presa por um agente ativo, reconstruída do ledger. */
+/** Default concurrent executions per account/provider (ADR-0037, supersedes ADR-0009 A4). */
+export const DEFAULT_MAX_PER_ACCOUNT = 2;
+
+  /** Conta presa por um agente ativo, reconstruída do ledger. */
 export interface AgentLock {
   run: string;
   agent_id: string;
@@ -33,14 +36,24 @@ export class AccountLockedError extends Error {
   readonly code = "account_locked";
   readonly accountRef: string;
   readonly holder: AgentLock;
+  /** Execuções ativas na conta e o limite aplicado, para o operador ver o motivo. */
+  readonly active?: number;
+  readonly max?: number;
 
-  constructor(accountRef: string, holder: AgentLock) {
+  constructor(accountRef: string, holder: AgentLock, capacity?: { active: number; max: number }) {
     super(
-      `conta "${accountRef}" já está em uso pelo agente "${holder.agent_id}" no run "${holder.run}"`,
+      capacity === undefined
+        ? `conta "${accountRef}" já está em uso pelo agente "${holder.agent_id}" no run "${holder.run}"`
+        : `conta "${accountRef}" já tem ${capacity.active} execuções (limite ${capacity.max}); ` +
+          `última pelo agente "${holder.agent_id}" no run "${holder.run}"`,
     );
     this.name = "AccountLockedError";
     this.accountRef = accountRef;
     this.holder = holder;
+    if (capacity !== undefined) {
+      this.active = capacity.active;
+      this.max = capacity.max;
+    }
   }
 }
 
@@ -61,6 +74,8 @@ export interface AcquireAgentLockOptions {
   need?: string;
   /** Conta calculada pelo chamador (ex.: candidato da pool); default `accountRefOf`. */
   accountRef?: string;
+  /** Execuções simultâneas permitidas na conta (ADR-0037); default 2. */
+  maxConcurrent?: number;
   /** PID dono do lock; default o processo atual. */
   pid?: number;
 }
@@ -144,16 +159,32 @@ export function findAgentLock(ledger: Ledger, run: string, agentId: string): Age
   return activeLocks(ledger).find((lock) => sameAgent(lock, run, agentId));
 }
 
-/** Falha se outra execução ativa já detém a conta (usado antes de um `identity`). */
+/** Falha se a conta já atingiu o limite de execuções simultâneas (ADR-0037). */
 export function assertAccountAvailable(
   ledger: Ledger,
   accountRef: string,
   self: { run: string; agent_id: string },
+  maxConcurrent: number = DEFAULT_MAX_PER_ACCOUNT,
 ): void {
-  const holder = activeLocks(ledger).find(
+  const holders = activeLocks(ledger).filter(
     (lock) => lock.accountRef === accountRef && !sameAgent(lock, self.run, self.agent_id),
   );
-  if (holder !== undefined) throw new AccountLockedError(accountRef, holder);
+  if (holders.length >= maxConcurrent) {
+    throw new AccountLockedError(accountRef, holders[0]!, { active: holders.length, max: maxConcurrent });
+  }
+}
+
+/** A conta ainda aceita uma execução? Mesma contagem usada pela aquisição. */
+export function accountHasCapacity(
+  ledger: Ledger,
+  accountRef: string,
+  self: { run: string; agent_id: string },
+  maxConcurrent: number = DEFAULT_MAX_PER_ACCOUNT,
+): boolean {
+  const holders = activeLocks(ledger).filter(
+    (lock) => lock.accountRef === accountRef && !sameAgent(lock, self.run, self.agent_id),
+  );
+  return holders.length < maxConcurrent;
 }
 
 /** Evento de negação (I-04), sem valor de segredo (I-03). */
@@ -199,8 +230,12 @@ export function acquireAgentLock(
       }
       const holder = locks.find((l) => l.accountRef === accountRef);
       if (holder !== undefined) {
-        auditDenied(audit, opts, accountRef, holder);
-        throw new AccountLockedError(accountRef, holder);
+        const max = opts.maxConcurrent ?? DEFAULT_MAX_PER_ACCOUNT;
+        const holders = locks.filter((l) => l.accountRef === accountRef);
+        if (holders.length >= max) {
+          auditDenied(audit, opts, accountRef, holder);
+          throw new AccountLockedError(accountRef, holder, { active: holders.length, max });
+        }
       }
 
       const entry = ledger.recordAgentCreated({
@@ -302,6 +337,7 @@ export function moveAgentLock(
     credentialRef?: string;
     profile?: string;
     reason: string;
+    maxConcurrent?: number;
   },
 ): AgentLock {
   return ledger.withFileLock(() => {
@@ -321,7 +357,13 @@ export function moveAgentLock(
     const holder = activeLocks(ledger).find(
       (lock) => lock.accountRef === accountRef && !sameAgent(lock, opts.run, opts.agent_id),
     );
-    if (holder !== undefined) throw new AccountLockedError(accountRef, holder);
+    const max = opts.maxConcurrent ?? DEFAULT_MAX_PER_ACCOUNT;
+    if (holder !== undefined) {
+      const holders = activeLocks(ledger).filter(
+        (lock) => lock.accountRef === accountRef && !sameAgent(lock, opts.run, opts.agent_id),
+      );
+      if (holders.length >= max) throw new AccountLockedError(accountRef, holder, { active: holders.length, max });
+    }
 
     ledger.recordAgentIdentity({
       run: opts.run,

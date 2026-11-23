@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import type { AstroConfig, BudgetConfig } from "./core/config";
 import { providerAccountRefFor } from "./core/config";
-import { activeLocks } from "./agent-lock";
+import { activeByAccount, DEFAULT_MAX_CONCURRENT_PER_ACCOUNT } from "./concurrency";
 import { budgetStatus } from "./budget";
 import type { Ledger } from "./ledger";
 import { callCost } from "./model-cost";
@@ -49,8 +49,10 @@ export interface CandidateDeps {
   ledger: Ledger;
   quotaLimits?: Record<string, QuotaLimit>;
   budget?: BudgetConfig;
-  /** Contas já presas (A4); default deriva dos locks ativos do ledger. */
-  activeAccounts?: ReadonlySet<string>;
+  /** Execuções ativas por conta (ADR-0037); default deriva dos locks ativos do ledger. */
+  activeAccountCounts?: ReadonlyMap<string, number>;
+  /** Execuções simultâneas permitidas por conta; default 2. */
+  maxPerAccount?: number;
   /** Cooldown/health do profile ou modelo (M2); `true` exclui. */
   cooldown?: (candidate: { model: string; profile?: string; provider: string }) => boolean;
   now?: () => number;
@@ -138,7 +140,8 @@ function passesFilter(
   profile: string | undefined,
   query: CandidateQuery,
   deps: CandidateDeps,
-  activeAccounts: ReadonlySet<string>,
+  activeAccounts: ReadonlyMap<string, number>,
+  maxPerAccount: number,
 ): boolean {
   if (model.status !== "active") return false;
   if (model.context < (query.estimatedInputTokens ?? 0)) return false;
@@ -151,7 +154,7 @@ function passesFilter(
 
   const providerConfig = deps.config.providers[model.provider];
   if (providerConfig === undefined) return false;
-  if (activeAccounts.has(providerAccountRefFor(model.provider, providerConfig))) return false;
+  if ((activeAccounts.get(providerAccountRefFor(model.provider, providerConfig)) ?? 0) >= maxPerAccount) return false;
 
   const nowMs = deps.now?.() ?? Date.now();
   const identity = `${model.provider}/${model.id}`;
@@ -203,12 +206,13 @@ export function listModelCandidates(query: CandidateQuery, deps: CandidateDeps):
     }
   }
 
-  const activeAccounts = deps.activeAccounts ?? new Set(activeLocks(deps.ledger).map((lock) => lock.accountRef));
+  const activeAccounts = deps.activeAccountCounts ?? activeByAccount(deps.ledger);
+  const maxPerAccount = deps.maxPerAccount ?? DEFAULT_MAX_CONCURRENT_PER_ACCOUNT;
   const candidates: ModelCandidate[] = [];
   const seen = new Set<string>();
 
   for (const { model, profile } of sources(deps.config, deps.registry)) {
-    if (!passesFilter(model, profile, query, deps, activeAccounts)) continue;
+    if (!passesFilter(model, profile, query, deps, activeAccounts, maxPerAccount)) continue;
     const identity = `${model.provider}/${model.id}`;
     const key = `${identity}|${profile ?? ""}`;
     if (seen.has(key)) continue;

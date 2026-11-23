@@ -32,10 +32,18 @@ interface Harness {
 }
 
 /** App-level fan-out: parent em P, filhos em Q (com fallback R) e R. */
-function harness(maxActive: number, opts: { abortParentSecond?: boolean; childSpawn?: boolean } = {}): Harness {
+function harness(maxActive: number, opts: {
+  abortParentSecond?: boolean;
+  childSpawn?: boolean;
+  sharedAccount?: boolean;
+  taskCount?: number;
+  spawnMaxConcurrent?: number;
+} = {}): Harness {
   const cwd = mkdtempSync(join(tmpdir(), "astro-task-fanout-app-"));
   const ledgerPath = join(cwd, ".astro", "ledger.jsonl");
   const controller = new AbortController();
+  const shared = opts.sharedAccount === true;
+  const taskCount = opts.taskCount ?? 2;
   const stats: Harness["stats"] = {
     mode: "normal", parentCalls: 0, childCalls: {}, activeChildren: 0, maxChildren: 0, maxLocks: 0,
   };
@@ -87,7 +95,9 @@ function harness(maxActive: number, opts: { abortParentSecond?: boolean; childSp
               function: {
                 name: "task",
                 arguments: JSON.stringify({
-                  tasks: [{ agent: "qa", prompt: "q" }, { agent: "rb", prompt: "r" }],
+                  tasks: shared
+                    ? Array.from({ length: taskCount }, (_, index) => ({ agent: "qa", prompt: `q${index + 1}` }))
+                    : [{ agent: "qa", prompt: "q" }, { agent: "rb", prompt: "r" }],
                 }),
               },
             }],
@@ -99,16 +109,20 @@ function harness(maxActive: number, opts: { abortParentSecond?: boolean; childSp
   });
   writeFileSync(join(cwd, "astro.config.json"), JSON.stringify({
     preset: "control",
-    providers: {
-      p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_P" },
-      q: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_Q", fallback: ["r"] },
-      r: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_R" },
-    },
-    models: [
-      { provider: "p", id: "m", tags: ["writing-code"], context: 8192 },
-      { provider: "q", id: "m", tags: ["writing-code"], context: 8192 },
-      { provider: "r", id: "m", tags: ["writing-code"], context: 8192 },
-    ],
+    providers: shared
+      ? { p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_P" } }
+      : {
+          p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_P" },
+          q: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_Q", fallback: ["r"] },
+          r: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY_R" },
+        },
+    models: shared
+      ? [{ provider: "p", id: "m", tags: ["writing-code"], context: 8192 }]
+      : [
+          { provider: "p", id: "m", tags: ["writing-code"], context: 8192 },
+          { provider: "q", id: "m", tags: ["writing-code"], context: 8192 },
+          { provider: "r", id: "m", tags: ["writing-code"], context: 8192 },
+        ],
     agent: {
       model: "p/m", maxSteps: 6, entryAgent: "parent",
       tools: opts.childSpawn === true ? ["task", "spawn_agent"] : ["task"],
@@ -116,10 +130,13 @@ function harness(maxActive: number, opts: { abortParentSecond?: boolean; childSp
     agents: {
       maxActive,
       parent: { model: "p/m", maxSteps: 6, tools: opts.childSpawn === true ? ["task", "spawn_agent"] : ["task"] },
-      qa: { model: "q/m", maxSteps: 3, tools: opts.childSpawn === true ? ["spawn_agent"] : [], systemPrompt: "child-q" },
-      rb: { model: "r/m", maxSteps: 3, tools: [], systemPrompt: "child-r" },
+      qa: { model: shared ? "p/m" : "q/m", maxSteps: 3, tools: opts.childSpawn === true ? ["spawn_agent"] : [], systemPrompt: "child-q" },
+      ...(shared ? {} : { rb: { model: "r/m", maxSteps: 3, tools: [], systemPrompt: "child-r" } }),
     },
-    spawn: { parallel: true },
+    spawn: {
+      parallel: true,
+      ...(opts.spawnMaxConcurrent === undefined ? {} : { maxConcurrent: opts.spawnMaxConcurrent }),
+    },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
   return {
@@ -171,6 +188,43 @@ test("maxActive=3 libera dois filhos, ainda com lock/atribuição por conta", as
     const childRuns = ledger.readAllEntries().filter((entry) => entry.run.startsWith(`${report.runId}.task.`));
     expect(childRuns.some((entry) => entry.kind === "agent" && entry.credentialRef === "KEY_Q")).toBe(true);
     expect(childRuns.some((entry) => entry.kind === "agent" && entry.credentialRef === "KEY_R")).toBe(true);
+  } finally {
+    h.stop();
+  }
+});
+
+test("mesma conta: dois filhos contam no provider e o terceiro é recusado", async () => {
+  const h = harness(3, { sharedAccount: true, taskCount: 3 });
+  try {
+    const report = await runTask({
+      configPath: h.configPath, cwd: h.cwd, task: "fan-out", env: env(), approveSwap: () => true,
+    });
+    expect(report.final).toBe("parent-final");
+    // Pai + dois filhos = o teto de 3 execuções; o terceiro filho não chega ao provider.
+    expect(h.stats.childCalls["child-q"]).toBe(2);
+    expect(h.stats.maxChildren).toBe(2);
+    expect(h.stats.maxLocks).toBe(3);
+    const ledger = new Ledger(h.ledgerPath);
+    const created = ledger.readAllEntries().filter(
+      (entry): entry is LedgerAgentEntry => entry.kind === "agent" && entry.event === "created",
+    );
+    expect(created).toHaveLength(3);
+    expect(activeLocks(ledger)).toEqual([]);
+  } finally {
+    h.stop();
+  }
+});
+
+test("spawn.maxConcurrent:4 permite três filhos na mesma conta", async () => {
+  const h = harness(4, { sharedAccount: true, taskCount: 3, spawnMaxConcurrent: 4 });
+  try {
+    const report = await runTask({
+      configPath: h.configPath, cwd: h.cwd, task: "fan-out", env: env(), approveSwap: () => true,
+    });
+    expect(report.final).toBe("parent-final");
+    expect(h.stats.childCalls["child-q"]).toBe(3);
+    expect(h.stats.maxChildren).toBe(3);
+    expect(h.stats.maxLocks).toBe(4);
   } finally {
     h.stop();
   }

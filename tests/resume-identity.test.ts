@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { acquireAgentLock } from "../src/agent-lock";
 import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
 import { Ledger } from "../src/ledger";
@@ -95,6 +96,42 @@ describe("identidade efetiva no resume (I-08, #163)", () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  test("ledger antigo sem provider usa o cap resolvido na retomada", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-resume-cap-"));
+    const ledger = new Ledger(join(dir, "ledger.jsonl"));
+    const audit = new Auditor(join(dir, "audit.jsonl"));
+    acquireAgentLock(ledger, audit, {
+      run: "r1", agent_id: "planner", session_id: "r1", provider: "a", credentialRef: "KEY_A",
+    });
+    const node = { agent_id: "planner", session_id: "r1", createdSeq: 0 };
+    for (const [run, agent] of [["o1", "one"], ["o2", "two"]] as const) {
+      acquireAgentLock(ledger, audit, {
+        run, agent_id: agent, session_id: run, provider: "b", credentialRef: "KEY_B",
+      });
+    }
+    // cap 4: two holders on KEY_B still leave room.
+    assertResumeIdentity(node, { provider: "b", credentialRef: "KEY_B" }, ledger, "r1", 4);
+    expect(ledger.readAllEntries().some((entry) => entry.kind === "agent"
+      && entry.event === "identity" && entry.credentialRef === "KEY_B")).toBe(true);
+  });
+
+  test("cap 1 recusa a retomada antes de gravar identity", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-resume-cap1-"));
+    const ledger = new Ledger(join(dir, "ledger.jsonl"));
+    const audit = new Auditor(join(dir, "audit.jsonl"));
+    acquireAgentLock(ledger, audit, {
+      run: "r1", agent_id: "planner", session_id: "r1", provider: "a", credentialRef: "KEY_A",
+    });
+    acquireAgentLock(ledger, audit, {
+      run: "o1", agent_id: "one", session_id: "o1", provider: "b", credentialRef: "KEY_B",
+    });
+    const node = { agent_id: "planner", session_id: "r1", createdSeq: 0 };
+    expect(() => assertResumeIdentity(node, { provider: "b", credentialRef: "KEY_B" }, ledger, "r1", 1))
+      .toThrow(/execuções/);
+    expect(ledger.readAllEntries().some((entry) => entry.kind === "agent"
+      && entry.event === "identity" && entry.credentialRef === "KEY_B")).toBe(false);
   });
 
   test("ledger antigo sem provider é aceito uma vez e grava a identidade", async () => {

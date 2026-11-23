@@ -325,7 +325,7 @@ export interface SpawnConfig {
   parallel?: boolean;
   /** Teto de spawns por run (#552); ausente = DEFAULT_MAX_SPAWNS_PER_RUN; só no preset `control`. */
   maxActive?: number;
-  /** Execuções simultâneas (ADR-0037); ausente = 2. */
+  /** Execuções simultâneas por conta (ADR-0037); ausente = 2. */
   maxConcurrent?: number;
 }
 
@@ -1496,16 +1496,22 @@ function validateHandoff(value: unknown): HandoffConfig {
   };
 }
 
-/** Valida a seção `spawn` (A11): `parallel` booleano e `maxActive` inteiro positivo (#552); ausente = serial e teto default. */
+/** Valida a seção `spawn` (A11): `parallel` booleano, `maxActive` (spawns/run) e `maxConcurrent` (ADR-0037). */
 function validateSpawn(value: unknown): SpawnConfig {
   const raw = expectObject(value, "spawn");
   for (const key of Object.keys(raw)) {
     if (key !== "parallel" && key !== "maxActive" && key !== "maxConcurrent") fail(`config inválida: "spawn.${key}" desconhecido`);
   }
+  const maxConcurrent = raw.maxConcurrent === undefined
+    ? undefined
+    : expectPositiveInteger(raw.maxConcurrent, "spawn.maxConcurrent");
+  if (maxConcurrent !== undefined && maxConcurrent > MAX_ACTIVE_AGENTS) {
+    fail(`invalid config: "spawn.maxConcurrent" exceeds the physical ceiling ${MAX_ACTIVE_AGENTS}`);
+  }
   return {
     ...(raw.parallel === undefined ? {} : { parallel: expectBoolean(raw.parallel, "spawn.parallel") }),
     ...(raw.maxActive === undefined ? {} : { maxActive: expectPositiveInteger(raw.maxActive, "spawn.maxActive") }),
-    ...(raw.maxConcurrent === undefined ? {} : { maxConcurrent: expectPositiveInteger(raw.maxConcurrent, "spawn.maxConcurrent") }),
+    ...(maxConcurrent === undefined ? {} : { maxConcurrent }),
   };
 }
 
@@ -2509,21 +2515,6 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
   if (maxActive !== undefined && maxActive > MAX_ACTIVE_AGENTS) {
     fail(`invalid config: "agents.maxActive" exceeds the physical ceiling ${MAX_ACTIVE_AGENTS}`);
   }
-
-  // A2 (ADR-0008): cada agente ativo consome uma conta exclusiva (A4, ADR-0009).
-  // O teto efetivo da v1 é 2; `maxActive` só é validado quando declarado.
-  if (Object.keys(agents).length > 0) {
-    const accounts = new Set(
-      Object.entries(providers).map(([name, provider]) => providerAccountRefFor(name, provider)),
-    ).size;
-    const ceiling = maxActive ?? 2;
-    if (ceiling > accounts) {
-      fail(
-        `config inválida: max_active_exceeds_accounts (${ceiling} agentes ativos para ${accounts} contas declaradas)`,
-      );
-    }
-  }
-
   const spawn = root.spawn === undefined ? undefined : validateSpawn(root.spawn);
 
   // Validar seção tools (F4-6)

@@ -29,7 +29,7 @@ import type { AuditEvent } from "../audit";
 import { budgetStatus, effectiveBudget, raiseDeniedLabel, restrictBudget, BudgetExceededError, type BudgetDecider, type BudgetStatus } from "../budget";
 import { MaxRoundsError, runSession, runMultiAgentSession, type EffectiveIdentity, type IdentityResolver, type MultiAgentSessionOptions } from "./session";
 import { assertResumeIdentity, planResume, ReplayIncompleteError } from "../resume";
-import { activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks } from "../agent-lock";
+import { accountHasCapacity, activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks } from "../agent-lock";
 import type { CallSelection } from "../call-profile";
 import type { TurnObserver } from "../chat/turn-events";
 import { markProviderFailure, markProviderSuccess } from "../providers/health-state";
@@ -54,6 +54,7 @@ import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-searc
 import { createWebFetchTool } from "../tools/web-fetch";
 import { TodoPlanStore, createTodoWriteTool } from "../tools/todo-write";
 import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, SpawnRegistry } from "../spawn";
+import { spawnConcurrencyCap, activeByAccount } from "../concurrency";
 import { grepTool } from "../tools/grep";
 import { globTool } from "../tools/glob";
 import { listDirTool } from "../tools/list-dir";
@@ -514,8 +515,7 @@ function providerChain(
     if (entry.accountRef === undefined) return true;
     const runKey = redactSecrets(run);
     const agentKey = redactSecrets(agentId());
-    return !activeLocks(ledger).some((lock) => lock.accountRef === entry.accountRef &&
-      !(lock.run === runKey && lock.agent_id === agentKey));
+    return accountHasCapacity(ledger, entry.accountRef, { run: runKey, agent_id: agentKey }, spawnConcurrencyCap(config).cap);
   };
   return new FallbackProvider({
     providers: [
@@ -566,6 +566,7 @@ function providerChain(
       ...(entry.credentialRef === undefined ? {} : { credentialRef: entry.credentialRef }),
       ...(profile === undefined ? {} : { profile }),
       reason,
+      maxConcurrent: spawnConcurrencyCap(config).cap,
     }),
     ...(agentName === undefined ? {} : { agentName }),
   });
@@ -734,7 +735,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       if (resumed.agent.model !== model.id) {
         throw new ReplayIncompleteError(`modelo do agente "${agentId}" mudou (gravado "${resumed.agent.model}", config "${model.id}"); replay incompleto`);
       }
-      assertResumeIdentity(resumed.agent, identityFor(model), ledger, run);
+      assertResumeIdentity(resumed.agent, identityFor(model), ledger, run, spawnConcurrencyCap(config).cap);
       resumedModel = model;
     } else {
       const agent = config.agents?.[agentId];
@@ -745,7 +746,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       if (resumed.agent.model !== resolved.id) {
         throw new ReplayIncompleteError(`modelo do agente "${agentId}" mudou (gravado "${resumed.agent.model}", config "${resolved.id}"); replay incompleto`);
       }
-      assertResumeIdentity(resumed.agent, identityFor(resolved), ledger, run);
+      assertResumeIdentity(resumed.agent, identityFor(resolved), ledger, run, spawnConcurrencyCap(config).cap);
       resumedModel = resolved;
       resumedProfile = agent.profile;
     }
@@ -819,8 +820,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     if (entry.accountRef === undefined) return true;
     const runKey = redactSecrets(run);
     const agentKey = redactSecrets(activeAgent.name);
-    return !activeLocks(ledger).some((lock) => lock.accountRef === entry.accountRef &&
-      !(lock.run === runKey && lock.agent_id === agentKey));
+    return accountHasCapacity(ledger, entry.accountRef, { run: runKey, agent_id: agentKey }, spawnConcurrencyCap(config).cap);
   };
   let effectiveProvider = (baseConfig?.fallback ?? []).length > 0
     ? providerChain(config, model, env, loaded.providerFactories, audit, run, ledger, quotaLimits, undefined, approveSwap, () => activeAgent.name, priceOf)
@@ -866,6 +866,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ...(entry.credentialRef === undefined ? {} : { credentialRef: entry.credentialRef }),
         profile: entry.name,
         reason,
+        maxConcurrent: concurrencyCap,
       }),
     });
   }
@@ -1037,6 +1038,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   toolsByName.set("memory_write", createMemoryWriteTool({ audit, env }));
   // #552: teto de spawns por run vem de spawn.maxActive (clamp em DEFAULT_MAX_SPAWNS_PER_RUN).
   const spawns = new SpawnRegistry({ limit: spawnLimitFromConfig(config) });
+  const concurrencyCap = spawnConcurrencyCap(config).cap;
   // Preenchidos depois de resolver a allowlist/modo; a closure da task lê no call.
   let childTools: readonly Tool[] = [];
   let taskPermissionMode: PermissionMode = "ask";
@@ -1065,6 +1067,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     knownAgents: () => registry.listAgentNames(),
     parallel: config.spawn?.parallel === true,
     maxActive: config.maxActive ?? 2,
+    maxPerAccount: concurrencyCap,
+    activeAccounts: () => activeByAccount(ledger),
     activeCount: () => activeLocks(ledger).filter((lock) => lock.run === redactSecrets(run)).length,
     accountOf: (agent) => {
       const target = registry.requireAgent(agent);
@@ -1078,7 +1082,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       const target = registry.requireAgent(agent);
       const targetModel = registry.resolveModel(target);
       // A11: sem spawn.parallel o filho compartilha a conta já travada pelo
-      // chamador; com a flag, o filho de outra conta adquire a sua (A4).
+      // chamador; com a flag, o filho de outra conta adquire a sua (ADR-0037).
       const parentAccount = currentAccount() ?? providerAccountRefFor(model.provider, config.providers[model.provider]!);
       const targetProvider = config.providers[targetModel.provider];
       const parallel = config.spawn?.parallel === true;
@@ -1131,7 +1135,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         env,
         protectedPaths: [ledgerPath, auditPath],
         secretEnvNames,
-        inheritAgentLock: sameAccount,
+        // ADR-0037: every child records its own execution, so `astro locks` and
+        // fan-out see the real count even when the account is shared.
+        inheritAgentLock: false,
+        maxConcurrent: concurrencyCap,
         taskHash: shortTaskHash(prompt),
         // L5/L6 (#135): o filho da task segue config.run e o decider do pai; o run do filho é codificado no path.
         ...(config.run?.checkpointAt === undefined
@@ -1241,6 +1248,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ledger,
         audit,
         baseMaxSteps: sessionMaxRounds,
+        maxConcurrent: concurrencyCap,
         baseSystemPrompt: systemPromptBase,
         ...(memorySection === undefined ? {} : { memorySection }),
         entryAgent,
@@ -1308,6 +1316,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           ledger,
           audit,
           maxSteps: sessionMaxRounds,
+          maxConcurrent: concurrencyCap,
           taskHash: shortTaskHash(opts.task),
           ...(config.run?.checkpointAt === undefined
             ? {}

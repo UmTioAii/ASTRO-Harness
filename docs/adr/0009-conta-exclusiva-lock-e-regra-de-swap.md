@@ -1,6 +1,6 @@
 # ADR-0009: conta exclusiva por agente ativo, lock em ledger, crash recovery e regra de swap
 
-- Status: aceita
+- Status: aceita; A4 substituída por ADR-0037
 - Data: 2026-10-27
 - Issue: #118
 - Decisões relacionadas: D-10, D-14, D-20

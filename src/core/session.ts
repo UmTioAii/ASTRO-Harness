@@ -21,7 +21,7 @@ import { redactSecrets } from "../sanitize-external";
 import type { SpanHandle, TracerLike } from "../tracing";
 import { assertWithinQuota, type QuotaLimit } from "../quota";
 import { assertAgentQuota, assertBudgetWindows } from "../team";
-import { acquireAgentLock, findAgentLock, releaseAgentLock } from "../agent-lock";
+import { DEFAULT_MAX_PER_ACCOUNT, acquireAgentLock, findAgentLock, releaseAgentLock } from "../agent-lock";
 import { initialEffortJumpState, MAX_EFFORT_LEVEL, planAutoJump, type AppliedCallProfile, type CallSelection, type EffortEscalationConfig, type EffortJumpState } from "../call-profile";
 import type { ModelRouting } from "../providers/model-routing";
 import { CompactionPausedError } from "../compaction/breaker";
@@ -195,6 +195,8 @@ export interface SessionOptions {
    * não adquire/libera lock próprio. Ausente = comportamento normal.
    */
   inheritAgentLock?: boolean;
+  /** Execuções simultâneas por conta (ADR-0037); default 2. */
+  maxConcurrent?: number;
 }
 
 export const DEFAULT_SYSTEM_PROMPT =
@@ -535,6 +537,8 @@ export async function runSession(
       opts.model.id,
       { provider: opts.model.provider, ...(opts.credentialRef === undefined ? {} : { credentialRef: opts.credentialRef }) },
       opts.agentProfile,
+      undefined,
+      opts.maxConcurrent,
     );
   }
 
@@ -942,6 +946,7 @@ function ensureAgentCreated(
   identity: AgentIdentity,
   profile?: string,
   parentAgentId?: string,
+  maxConcurrent: number = DEFAULT_MAX_PER_ACCOUNT,
 ): void {
   if (agentActive(ledger, run, agentId)) return;
   acquireAgentLock(ledger, audit, {
@@ -953,6 +958,7 @@ function ensureAgentCreated(
     ...(identity.credentialRef === undefined ? {} : { credentialRef: identity.credentialRef }),
     ...(profile === undefined ? {} : { profile }),
     ...(parentAgentId === undefined ? {} : { parent_agent_id: parentAgentId }),
+    maxConcurrent,
   });
 }
 
@@ -986,6 +992,8 @@ export interface MultiAgentSessionOptions {
   ledger: Ledger;
   audit: Auditor;
   baseMaxSteps: number;
+  /** Execuções simultâneas por conta (ADR-0037); default 2. */
+  maxConcurrent?: number;
   baseSystemPrompt?: string;
   /** Seção `## Memory` já montada; acompanha o override de cada agent (review #579). */
   memorySection?: string;
@@ -1353,9 +1361,9 @@ export async function runMultiAgentSession(
       const resumo = resumeDetail(opts.ledger, pending.artifact);
       messages.push({ role: "system", content: `[Sistema: handoff ${pending.handoff_id} para "${pending.artifact.to}": ${JSON.stringify(pending.artifact)}]${resumo}` });
       ensureAgentDestroyed(opts.ledger, opts.audit, opts.run, pending.artifact.from, "handoff");
-      ensureAgentCreated(opts.ledger, opts.audit, opts.run, currentAgentName, currentModel.id, identityOf(currentModel), currentAgent.profile, pending.artifact.from);
+      ensureAgentCreated(opts.ledger, opts.audit, opts.run, currentAgentName, currentModel.id, identityOf(currentModel), currentAgent.profile, pending.artifact.from, opts.maxConcurrent);
     }
-    ensureAgentCreated(opts.ledger, opts.audit, opts.run, currentAgentName, currentModel.id, identityOf(currentModel), currentAgent.profile);
+    ensureAgentCreated(opts.ledger, opts.audit, opts.run, currentAgentName, currentModel.id, identityOf(currentModel), currentAgent.profile, undefined, opts.maxConcurrent);
     agentsUsed.push(currentAgentName);
 
     let effectiveBaseMaxSteps = opts.baseMaxSteps;
@@ -1618,7 +1626,7 @@ export async function runMultiAgentSession(
           // Self-handoff mantém o mesmo agente ativo: sem destroyed/created (F-22)
           if (handoff.to !== emitterName) {
             ensureAgentDestroyed(opts.ledger, opts.audit, opts.run, emitterName, "handoff");
-            ensureAgentCreated(opts.ledger, opts.audit, opts.run, currentAgentName, currentModel.id, identityOf(currentModel), currentAgent.profile, emitterName);
+            ensureAgentCreated(opts.ledger, opts.audit, opts.run, currentAgentName, currentModel.id, identityOf(currentModel), currentAgent.profile, emitterName, opts.maxConcurrent);
           }
           agentsUsed.push(currentAgentName);
           opts.audit.append({ run: opts.run, agent: entry.artifact.from, tipo: "agent.switch",

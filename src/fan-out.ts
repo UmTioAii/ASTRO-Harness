@@ -1,9 +1,10 @@
 /**
- * Fan-out de subagentes (A11, ADR-0008): executa jobs independentes com um
- * teto de concorrência e serializa jobs da mesma conta (A4). Cada job recebe
- * um sinal próprio: abortar ou falhar um filho não toca nos irmãos.
+ * Fan-out de subagentes (A11, ADR-0008, ADR-0037): executa jobs independentes
+ * com um teto de concorrência e uma conta compartilhada até `maxPerAccount`.
+ * Cada job recebe um sinal próprio: abortar ou falhar um filho não toca nos irmãos.
  */
 import { redactSecrets } from "./sanitize-external";
+import { DEFAULT_MAX_CONCURRENT_PER_ACCOUNT } from "./concurrency";
 
 export interface FanOutJob<T> {
   id: string;
@@ -21,6 +22,10 @@ export interface FanOutOptions {
   parallel: boolean;
   /** Teto de jobs simultâneos; inteiro positivo. */
   maxActive: number;
+  /** Execuções simultâneas por conta (ADR-0037); default 2. */
+  maxPerAccount?: number;
+  /** Execuções já ativas por conta antes deste fan-out (locks do pai etc.). */
+  activeAccounts?: ReadonlyMap<string, number>;
   signal?: AbortSignal;
   /** Só no caminho serial: interrompe a fila (ex.: pausa de permissão). */
   stopOnError?: (error: unknown) => boolean;
@@ -71,32 +76,48 @@ export async function runFanOut<T>(
       return results;
     }
 
-    // Uma fila por conta: jobs da mesma conta são sequenciais; contas distintas
-    // disputam os `maxActive` slots. A ordem de entrada é preservada.
-    const groups = new Map<string, number[]>();
+    // ADR-0037: a conta é compartilhada até `maxPerAccount`; contas distintas
+    // disputam os `maxActive` slots globais. A ordem de entrada é preservada.
+    const perAccount = opts.maxPerAccount ?? DEFAULT_MAX_CONCURRENT_PER_ACCOUNT;
+    assertFanOutBound(perAccount);
+    const baseline = opts.activeAccounts ?? new Map<string, number>();
+    const byAccount = new Map<string, number>();
+    // Refuse up front instead of waiting forever: an account already at the cap
+    // cannot make progress no matter how many slots are free.
+    const skipped = new Set<number>();
     for (const [index, job] of jobs.entries()) {
-      const group = groups.get(job.account);
-      if (group === undefined) groups.set(job.account, [index]);
-      else group.push(index);
+      if ((baseline.get(job.account) ?? 0) >= perAccount) {
+        results[index] = { id: job.id, ok: false, error: "spawn_limit_exceeded: account at concurrency cap" };
+        skipped.add(index);
+      }
     }
-
     let active = 0;
+    // Acorda todos: um waiter pode estar bloqueado pela conta enquanto outro tem slot.
     const waiters: Array<() => void> = [];
-    const acquire = async (): Promise<void> => {
-      while (active >= opts.maxActive) await new Promise<void>((resolve) => waiters.push(resolve));
-      active++;
+    const wakeAll = (): void => {
+      for (const resolve of waiters.splice(0)) resolve();
     };
-    const release = (): void => {
+    const acquire = async (account: string): Promise<void> => {
+      while (active >= opts.maxActive ||
+        (baseline.get(account) ?? 0) + (byAccount.get(account) ?? 0) >= perAccount) {
+        await new Promise<void>((resolve) => waiters.push(resolve));
+      }
+      active++;
+      byAccount.set(account, (byAccount.get(account) ?? 0) + 1);
+    };
+    const release = (account: string): void => {
       active--;
-      waiters.shift()?.();
+      byAccount.set(account, (byAccount.get(account) ?? 1) - 1);
+      wakeAll();
     };
 
-    await Promise.all([...groups.values()].map(async (indexes) => {
-      await acquire();
+    await Promise.all(jobs.map(async (job, index) => {
+      if (skipped.has(index)) return;
+      await acquire(job.account);
       try {
-        for (const index of indexes) await runOne(jobs[index]!, index);
+        await runOne(job, index);
       } finally {
-        release();
+        release(job.account);
       }
     }));
   } finally {

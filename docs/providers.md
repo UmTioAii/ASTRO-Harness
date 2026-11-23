@@ -19,7 +19,7 @@ Model cards e o layout `src/providers/<provider>/` ficam em `docs/provider-cards
 
 ## Contas por subagente e fan-out (A4/A11)
 
-Cada agente ativo prende uma conta exclusiva (A4, ADR-0009); o ledger reconstrói o lock e nunca permite dois locks na mesma conta ao mesmo tempo. Um move de fallback/profile (A7) troca a conta do agente de forma atômica e gated, então a exclusividade vale para o lock vigente. `spawn.parallel: true` (ADR-0008, #452) habilita o fan-out de `task` via lista `tasks`; `agents.maxActive` conta os agentes vivos do run (pai incluso), `spawn.parallel` ausente mantém a execução serial e uma falha/aborto de um filho não cancela os irmãos.
+Desde a ADR-0037 a conta deixa de ser exclusiva: cada execução registra `agent.created`/`agent.destroyed`, a conta é compartilhada até o limite (default 2, `spawn.maxConcurrent`; `agents.maxActive` é o teto do run e a requisição explícita) e o `astro locks` reporta execuções por conta. Um move de fallback/profile (A7) troca a conta do agente de forma atômica e gated, sob o mesmo limite. `spawn.parallel: true` (ADR-0008, #452) habilita o fan-out de `task` via lista `tasks`; o fan-out admite `limite - execuções já ativas` por conta e recusa o excedente. `spawn.parallel` ausente mantém a execução serial e uma falha/aborto de um filho não cancela os irmãos.
 
 ## Redirects (fail-closed, #442)
 

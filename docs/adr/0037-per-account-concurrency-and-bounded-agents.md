@@ -1,32 +1,37 @@
-# ADR-0037: bounded agent concurrency
+# ADR-0037: per-account concurrency and bounded agents
 
-- Status: accepted
+- Status: accepted; supersedes ADR-0009 A4
 - Date: 2026-11-23
 - Issue: #602
-- Related decisions: ADR-0008, ADR-0009, ADR-0013
+- Related decisions: ADR-0008, ADR-0009, ADR-0013, ADR-0036
 
 ## Context
 
-The model can ask for several subagents, but the harness needs one auditable bound and must not let a request silently exceed it. This slice defines the bound and the `agent.spawn` contract; shared-account capacity (ADR-0009 A4 replacement) ships in the follow-up slice.
+ADR-0009 A4 made a credential exclusive to one active agent, so fan-out serialized every agent that shared an account. The bounded-agents phase needs parallel children without losing cost or quota accounting: two agents must share an account while consumption stays aggregated by `quotaDomain` and a reservation cannot be erased by a sibling.
 
 ## Decision
 
 | Topic | Contract |
 |---|---|
-| Bound | Resolved once per run from `agents.maxActive` (explicit request) > `spawn.maxConcurrent` (`/config`) > 2. Invalid declarations never widen it. The physical ceiling is 8 (`MAX_ACTIVE_AGENTS`). The explicit tier wins even when `/config` declares a lower value. |
-| Grant | `spawn_agent.concurrency` is the model's request; the harness grants `min(requested, cap)` and records `requested`, `granted`, `cap`, `source` and `reason` in `agent.spawn`. A cut is stated in the tool result. |
-| Source | `request` for `agents.maxActive`, `config` for `spawn.maxConcurrent`, `default` for 2. |
-| Admission | Unchanged in this slice: ADR-0009 A4 still gives one execution per account, so `granted` is clamped to that executable ceiling. |
+| Unit | Concurrency is counted per account (`credentialRef`), the unit the lock enforces. Distinct credentials are distinct accounts; providers that share a credential share one account and one count. |
+| Default | Two executions per account, in both profiles. |
+| Precedence | explicit request (`agents.maxActive`) > `/config` (`spawn.maxConcurrent`) > 2. Invalid declarations never widen the bound. The physical ceiling is 8 (`MAX_ACTIVE_AGENTS`) and the explicit tier wins even when `/config` declares a lower value. |
+| Grant | `spawn_agent.concurrency` is the model's request; the harness grants `min(requested, cap)` and records `requested`, `granted`, `cap`, `source` (`request`/`config`/`default`), the model-choice `reason`, the grant `grant_reason` and `cut` when truncated in `agent.spawn`. A cut is stated in the tool result. |
+| Accounts | Up to the cap, agents share one account. Capacity is the cap minus executions already active on that account; the surplus is refused. `task` children record their own execution, so fan-out and `astro locks` see the real count. Capacity pre-admission refuses with `spawn_limit_exceeded`; a lock race still returns `account_locked` (D-18). |
 | Depth | One, no grandchildren; a spawned child never receives `spawn_agent`. |
+| Budget | Reservation accounting is unchanged in this slice. B2 moves the status read plus `recordBudgetReserved` under the ledger file lock (fail closed) and keys reservations by `run` + `agent`. |
+| Recovery | Orphan recovery counts live executions instead of assuming exclusive credential ownership. `astro locks` reports executions and accounts, including how many share an account. |
 | Limits | No proactive RPM/TPM limiter; retry remains reactive through `retry-after`. |
 
 ## Consequences
 
-- Gain: the bound and the truncation are auditable before any capacity model changes.
-- Cost: until shared accounts land, `granted` can be lower than the resolved request bound; the tool result states the cut.
-- Invariants affected: I-01/I-02 (child scope never exceeds the parent), I-03/I-04 (sanitized events).
+- Gain: parallel children become auditable and bounded; the model sees a truncated request instead of repeating it.
+- Cost: `spawn.maxActive` (spawns per run) and `spawn.maxConcurrent` (executions per account) are distinct knobs; the event name changes from `agent.spawned` to `agent.spawn`.
+- Consequence: `agents.maxActive` is both the run's active-agent ceiling and the explicit concurrency request. A declared `agents.maxActive: 8` on one shared credential therefore admits up to eight concurrent executions (still bounded by the `spawn.maxActive` spawn ceiling). The key is intentionally shared; a dedicated key is future work.
+- Invariants affected: I-01/I-02 (child scope never exceeds the parent), I-03/I-04 (sanitized events), I-07 (consumption aggregated by `quotaDomain`).
 
 ## Alternatives discarded
 
-- Emitting the request without a harness bound: the model would repeat an impossible ask.
+- Exclusivity per credential: serializes healthy parallelism and duplicates cost accounting.
+- Per-run concurrency only: two runs would still exceed the account's usable rate and reservation ceiling.
 - Proactive RPM/TPM limiter: adds a second counter before the provider contract is stable.

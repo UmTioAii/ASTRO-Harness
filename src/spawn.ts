@@ -6,8 +6,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Auditor } from "./audit";
-import { AccountLockedError, acquireAgentLock, activeLocks, releaseAgentLock } from "./agent-lock";
-import { grantConcurrency, spawnConcurrencyCap } from "./concurrency";
+import { AccountLockedError, acquireAgentLock, releaseAgentLock } from "./agent-lock";
+import { activeByAccount, grantConcurrency, spawnConcurrencyCap } from "./concurrency";
 import { redactSecrets } from "./sanitize-external";
 import type { AstroConfig, BudgetConfig } from "./core/config";
 import { providerAccountRefFor } from "./core/config";
@@ -47,28 +47,17 @@ export class SpawnLimitError extends Error {
   }
 }
 
-/** Teto de agentes ativos do run (A2 v1: orchestrator + 1). */
+/** Teto de agentes ativos do run (ADR-0037: concorrência por provider). */
 export class SpawnConcurrencyError extends Error {
   readonly code = "spawn_limit_exceeded";
-  constructor(limit: number, accounts?: number) {
+  constructor(limit: number, provider?: string) {
     super(
-      accounts === undefined
-        ? `teto de ${limit} agentes ativos por run atingido`
-        : `teto de ${limit} agente(s) ativo(s) por run atingido; contas declaradas: ${accounts}`,
+      provider === undefined
+        ? `limite de concorrência de ${limit} execuções por provider atingido`
+        : `limite de concorrência de ${limit} execuções no provider "${provider}" atingido`,
     );
     this.name = "SpawnConcurrencyError";
   }
-}
-
-/**
- * Contas distintas declaradas nos providers (A2/A4, ADR-0009): cada agente
- * ativo consome uma conta exclusiva, então o teto nunca passa do número de
- * contas (#551).
- */
-export function declaredAccounts(config: AstroConfig): number {
-  return new Set(
-    Object.entries(config.providers).map(([name, provider]) => providerAccountRefFor(name, provider)),
-  ).size;
 }
 
 /** Subagente nascido em runtime, fixado no spawn (ADR-0007/0008). */
@@ -168,6 +157,8 @@ function candidateDeps(deps: SpawnToolDeps): CandidateDeps {
     config: deps.config,
     registry: deps.registry,
     ledger: deps.ledger,
+    activeAccountCounts: activeByAccount(deps.ledger),
+    maxPerAccount: spawnConcurrencyCap(deps.config).cap,
     ...(deps.quotaLimits === undefined ? {} : { quotaLimits: deps.quotaLimits }),
     ...(budget === undefined ? {} : { budget }),
   };
@@ -223,7 +214,7 @@ const SPAWN_PARAMETERS = {
     tools: { type: "array", items: { type: "string" }, description: "Subconjunto das tools do pai" },
     maxRounds: { type: "integer", minimum: 1, description: "Teto de rodadas do subagente (≤ pai)" },
     maxTurns: { type: "integer", minimum: 1, description: "Turnos do subagente; um spawn executa uma tarefa, então aceita 1" },
-    concurrency: { type: "integer", minimum: 1, description: "Execuções simultâneas pedidas; acima do teto é truncado e o resultado informa o corte" },
+    concurrency: { type: "integer", minimum: 1, description: "Execuções simultâneas pedidas para a conta; acima do limite é truncado e o resultado informa o corte" },
     maxSteps: { type: "integer", minimum: 1, description: "Removido: use maxRounds (rodadas) ou maxTurns (turnos)" },
     snapshot_id: { type: "string", description: "Snapshot de list_model_candidates" },
   },
@@ -236,7 +227,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
   return {
     manifest: {
       name: "spawn_agent",
-      description: "Cria um subagente com modelo da pool, escopo ⊆ pai e conta exclusiva; use handoff para executá-lo.",
+      description: "Cria um subagente com modelo da pool, escopo ⊆ pai e conta compartilhada até o limite; use handoff para executá-lo.",
       parameters: SPAWN_PARAMETERS,
       risk: "medium",
       permission: "spawn_agent",
@@ -319,15 +310,17 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
 
         if (deps.spawns.size >= deps.spawns.limit) throw new SpawnLimitError(deps.spawns.limit);
 
-        // #551: teto aware de contas — com 1–2 providers (contas) os spawns
-        // extras são recusados aqui, antes da escolha de modelo (sem drenar
-        // quota/RPM no stall do lock de conta), com erro claro que cita contas.
-        const accounts = declaredAccounts(deps.config);
-        const maxActive = deps.config.maxActive ?? 2;
-        const ceiling = Math.min(maxActive, accounts);
-        const runKey = redactSecrets(ctx.run);
-        const active = activeLocks(deps.ledger).filter((lock) => lock.run === runKey).length;
-        if (active >= ceiling) throw new SpawnConcurrencyError(ceiling, accounts);
+        // ADR-0037: the harness grants at most the per-account cap. A provider
+        // whose account is at the cap is not a candidate; all full is a clear cut.
+        const cap = spawnConcurrencyCap(deps.config);
+        const activeAccounts = activeByAccount(deps.ledger);
+        const open = Object.keys(deps.config.providers)
+          .filter((provider) => {
+            const config = deps.config.providers[provider];
+            return config === undefined ||
+              (activeAccounts.get(providerAccountRefFor(provider, config)) ?? 0) < cap.cap;
+          });
+        if (open.length === 0) throw new SpawnConcurrencyError(cap.cap);
 
         const parentAllow = ctx.allow ?? [];
         const tools = raw.tools === undefined ? [...parentAllow] : raw.tools;
@@ -394,7 +387,8 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         const rawCredential = (providerConfig as { credentialRef?: unknown }).credentialRef;
         const keyless = providerConfig.kind === "openai-compat" &&
           (typeof rawCredential !== "string" || rawCredential.length === 0);
-        const grant = grantConcurrency(requestedConcurrency, spawnConcurrencyCap(deps.config), ceiling);
+        if ((activeAccounts.get(accountRef) ?? 0) >= cap.cap) throw new SpawnConcurrencyError(cap.cap, provider);
+        const grant = grantConcurrency(requestedConcurrency, cap);
         const agentId = deps.spawns.nextId(new Set(Object.keys(deps.config.agents ?? {})));
         const reason = [choice.reason, typeof raw.reason === "string" ? raw.reason : ""]
           .filter((part) => part.length > 0)
@@ -417,6 +411,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
           reason,
           need: raw.need,
           ...(snapshotId === undefined ? {} : { snapshot_id: snapshotId }),
+          maxConcurrent: cap.cap,
         });
 
         try {
@@ -450,6 +445,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
               // Both rationales are explicit: model choice and the harness grant.
               reason,
               grant_reason: grant.reason,
+              truncated: grant.truncated,
               ...(grant.truncated ? { cut: grant.reason } : {}),
               limits: { rounds: childMax, turns: 1 },
             },

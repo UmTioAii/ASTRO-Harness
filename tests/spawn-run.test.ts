@@ -79,7 +79,7 @@ describe("spawn_agent ponta a ponta (S-11, C4a)", () => {
     }
   });
 
-  test("dois subagentes em contas distintas com handoff de ida e volta (golden §11.1/§11.2)", async () => {
+  test("dois subagentes com conta compartilhada e handoff de ida e volta (golden §11.1/§11.2)", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-spawn-two-"));
     const bodies: Body[] = [];
     let calls = 0;
@@ -136,8 +136,9 @@ describe("spawn_agent ponta a ponta (S-11, C4a)", () => {
       expect(tree.nodes.find((node) => node.agent_id === "sub-1")?.reason).toBe("handoff");
       expect(tree.nodes.find((node) => node.agent_id === "sub-2")?.reason).toBe("completed");
       expect(activeLocks(ledger)).toEqual([]);
-      // Os dois filhos usaram contas/providers distintos: sub-1 em p2 e sub-2 em p3.
-      expect(bodies.filter((body) => body.model === "m2").length).toBe(1);
+      // ADR-0037: sub-1 compartilha p1 com o planner; o revisor usa o próprio provider.
+      expect(bodies.filter((body) => body.model === "m1").length).toBe(5);
+      expect(bodies[2]?.model).toBe("m1");
       expect(bodies.filter((body) => body.model === "m3").length).toBe(1);
 
       const system = (index: number): string =>

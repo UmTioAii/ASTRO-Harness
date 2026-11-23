@@ -5,7 +5,7 @@
  * A11 (ADR-0008): `tasks` faz fan-out; paralelo só com `spawn.parallel`.
  */
 import { createHash } from "node:crypto";
-import { runFanOut, type FanOutJob } from "../fan-out";
+import { runFanOut, type FanOutJob, type FanOutOutcome } from "../fan-out";
 import { NoProgressError } from "../loop-guard";
 import { PermissionPendingError, type AgentPermission } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
@@ -35,8 +35,12 @@ export interface TaskToolDeps {
   maxActive?: number;
   /** Locks vivos do run (pai incluso); o teto desconta esses slots (A2/A4). */
   activeCount?(): number;
-  /** Conta do agente alvo; jobs da mesma conta são serializados (A4). */
+  /** Conta do agente alvo; jobs da mesma conta compartilham até o limite (ADR-0037). */
   accountOf?(agent: string): string;
+  /** Execuções simultâneas por conta (ADR-0037); default 2. */
+  maxPerAccount?: number;
+  /** Execuções já ativas por conta (pai incluso). */
+  activeAccounts?(): ReadonlyMap<string, number>;
 }
 
 /** Teto de jobs por fan-out; espelha o teto de spawns por run (A2). */
@@ -170,7 +174,35 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         // A2/A4: o slot só é lido quando a flag liga a concorrência.
         const slots = gated ? availableSlots() : undefined;
         if (slots !== undefined && slots.available < 1) return noSlot(slots.maxActive);
+
+        // ADR-0037: the account admits `maxPerAccount - executions already active`;
+        // surplus tasks are refused up front instead of oversubscribing a shared credential.
+        const perAccount = deps.maxPerAccount ?? 2;
+        const baseline = gated ? deps.activeAccounts?.() ?? new Map<string, number>() : new Map<string, number>();
+        const admitted = new Map<string, number>();
+        const outcomes: Array<FanOutOutcome<string> | undefined> = new Array(tasks.length);
+        const runnable: Array<{ task: FanOutTask; index: number; account: string }> = [];
         tasks.forEach((task, index) => {
+          const account = deps.accountOf?.(task.agent) ?? task.agent;
+          const used = admitted.get(account) ?? 0;
+          const accountCap = gated
+            ? Math.min(perAccount - (baseline.get(account) ?? 0), slots?.available ?? perAccount)
+            : perAccount;
+          // Serial fan-out never runs siblings concurrently, so account admission
+          // only applies when the flag turns concurrency on (ADR-0008 default).
+          if (gated && used >= accountCap) {
+            outcomes[index] = {
+              id: `t${index + 1}`,
+              ok: false,
+              error: `spawn_limit_exceeded: conta "${account}" no limite de ${accountCap} execuções concorrentes`,
+            };
+            return;
+          }
+          admitted.set(account, (admitted.get(account) ?? 0) + 1);
+          runnable.push({ task, index, account });
+        });
+
+        for (const { task, index } of runnable) {
           deps.audit.append({
             run: ctx.run,
             agent: ctx.agent,
@@ -182,15 +214,16 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
               taskId: `t${index + 1}`,
             },
           });
-        });
+        }
 
         const isFatal = (error: unknown): boolean =>
           error instanceof PermissionPendingError || error instanceof NoProgressError;
 
         let fatal: unknown;
-        const jobs: FanOutJob<string>[] = tasks.map((task, index) => ({
+        const jobs: FanOutJob<string>[] = runnable.map(({ task, index, account }) => ({
           id: `t${index + 1}`,
-          account: deps.accountOf?.(task.agent) ?? task.agent,          run: async (signal) => {
+          account,
+          run: async (signal) => {
             try {
               return await delegation(task, signal);
             } catch (error) {
@@ -202,6 +235,8 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         const results = await runFanOut(jobs, {
           parallel: gated,
           maxActive: gated ? slots!.available : 1,
+          maxPerAccount: perAccount,
+          activeAccounts: baseline,
           ...(gated ? {} : { stopOnError: isFatal }),
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
         });
@@ -210,16 +245,21 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           throw reason instanceof Error ? reason : new DOMException("aborted", "AbortError");
         }
         if (fatal !== undefined) throw fatal;
-        const output = JSON.stringify({
-          tasks: results.map((result, index) => ({
+        runnable.forEach(({ index }, resultIndex) => {
+          outcomes[index] = results[resultIndex];
+        });
+        const all = outcomes.map((result, index) => {
+          if (result === undefined) throw new Error(`task ${index + 1} sem resultado`);
+          return {
             taskId: result.id,
             agent: tasks[index]!.agent,
             ...(result.ok
               ? { status: "ok", output: result.value }
               : { status: "error", error: result.error }),
-          })),
+          };
         });
-        return { output, isError: results.every((result) => !result.ok) };
+        const output = JSON.stringify({ tasks: all });
+        return { output, isError: outcomes.every((result) => result?.ok !== true) };
       }
 
       const agent = typeof raw.agent === "string" ? raw.agent.trim() : "";
@@ -238,6 +278,18 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
       if (gated) {
         const slots = availableSlots();
         if (slots.available < 1) return noSlot(slots.maxActive);
+        const account = deps.accountOf?.(agent) ?? agent;
+        const used = deps.activeAccounts?.().get(account) ?? 0;
+        const perAccount = deps.maxPerAccount ?? 2;
+        if (used >= perAccount) {
+          return {
+            output: JSON.stringify({
+              error: "spawn_limit_exceeded",
+              message: `conta "${account}" no limite de ${perAccount} execuções concorrentes`,
+            }),
+            isError: true,
+          };
+        }
       }
       deps.audit.append({
         run: ctx.run,
