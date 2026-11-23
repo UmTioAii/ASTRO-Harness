@@ -482,6 +482,13 @@ export function quotasForPreset(
   return config.preset === "control" ? config.quota : undefined;
 }
 
+/** Per-agent token quotas follow the same Control-only rule (#617). */
+export function teamQuotasForPreset(
+  config: Pick<AstroConfig, "preset" | "team">,
+): NonNullable<AstroConfig["team"]>["agentQuotas"] {
+  return config.preset === "control" ? config.team?.agentQuotas : undefined;
+}
+
 /** Códigos estáveis das falhas de save da config (#470); sem código = erro legado. */
 export type ConfigErrorCode =
   | "config_not_found"
