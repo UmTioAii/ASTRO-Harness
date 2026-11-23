@@ -10,7 +10,7 @@ import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
 import { realpathPreservingDots, isWithin } from "./paths";
 import { evaluateShellPolicy, approvalPattern, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
 import { persistShellApproval } from "./shell-approvals";
-import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolPermissionHint, type ToolResult } from "./types";
+import { ToolError, type ApprovalSave, type AuditLike, type Tool, type ToolContext, type ToolPermissionHint, type ToolResult } from "./types";
 
 /** Teto da saída devolvida ao modelo (run_command e run_tests). */
 export const MAX_OUTPUT = 10_000;
@@ -767,15 +767,37 @@ export const runCommandTool: Tool = {
   permissionHint: runCommandPolicyHint,
 
   /** `always` (#599): a prefix rule in the project layer; deny rules still win. */
-  rememberApproval(input: unknown, ctx: ToolContext): string | undefined {
+  rememberApproval(input: unknown, ctx: ToolContext): ApprovalSave {
     const command = commandOf(input);
-    if (command === undefined || projectConfigPath === undefined) return undefined;
-    const pattern = approvalPattern(command);
-    if (pattern === undefined || !persistShellApproval(resolve(ctx.cwd, projectConfigPath), pattern)) {
-      return undefined;
+    if (command === undefined) return { ok: false, reason: "invalid_input (no command to derive a prefix from)" };
+    const policy = shellPolicyFor(command, ctx.cwd);
+    // Save the subcommand that actually triggered the ask, and only when it is
+    // the single uncovered part: a prefix for a part the user never saw would
+    // grant the wrong command.
+    if (policy.origin === "unparsable" || policy.origin === "external_directory") {
+      return { ok: false, reason: `${policy.origin} (always cannot save this decision)` };
     }
+    const parts = policy.uncovered ?? [];
+    if (parts.length !== 1) {
+      return {
+        ok: false,
+        reason: parts.length === 0
+          ? "nothing_to_save (no subcommand needs a prefix)"
+          : "multiple_parts (always saves one subcommand; approve once and run it again)",
+      };
+    }
+    const pattern = approvalPattern(parts[0] as string);
+    if (pattern === undefined) {
+      return {
+        ok: false,
+        reason: "unsafe_pattern (the command starts with a wildcard or cannot be parsed, so it cannot be saved as a prefix)",
+      };
+    }
+    if (projectConfigPath === undefined) return { ok: false, reason: "no_config (no project config file to write)" };
+    const saved = persistShellApproval(resolve(ctx.cwd, projectConfigPath), pattern);
+    if (!saved.ok) return saved;
     shellApprovals = [...shellApprovals, { match: pattern, effect: "allow" }];
-    return pattern;
+    return saved;
   },
 
   async execute(input, ctx): Promise<ToolResult> {

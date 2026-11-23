@@ -19,6 +19,8 @@ export type ShellPolicyResult = {
   decision: ShellRuleEffect;
   origin: "rule" | "external_directory" | "unparsable" | "approval" | "default";
   trigger?: string;
+  /** Subcommands that still need a decision (no allow rule, no saved approval). */
+  uncovered?: readonly string[];
   code?: string;
   message?: string;
 };
@@ -122,6 +124,10 @@ export function approvalPattern(command: string): string | undefined {
   const words = scan.words[0];
   if (words === undefined || words.length === 0) return undefined;
   const head = words[0] === "git" && words[1] !== undefined ? `${words[0]} ${words[1]}` : words[0];
+  // A literal `*` in the command would become wildcard syntax in the saved
+  // rule (`* --version` → `* *` allows everything). Refuse it: the approval
+  // then covers this call only.
+  if (head.includes("*")) return undefined;
   return `${head} *`;
 }
 
@@ -243,7 +249,16 @@ export function evaluateShellPolicy(
           'set shell.externalDirectory to "ask" or "allow" to permit it',
       };
     }
-    if (mode === "ask") return { decision: "ask", origin: "external_directory", trigger: external };
+    if (mode === "ask") {
+      return {
+        decision: "ask", origin: "external_directory", trigger: external,
+        uncovered: uncovered.map(({ part }) => part),
+      };
+    }
   }
-  return { decision, origin, ...(trigger === undefined ? {} : { trigger }) };
+  return {
+    decision, origin,
+    ...(trigger === undefined ? {} : { trigger }),
+    uncovered: uncovered.map(({ part }) => part),
+  };
 }

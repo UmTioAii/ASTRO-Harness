@@ -45,22 +45,24 @@ export function toolPrompt(request: ToolPermissionRequest): string {
     ? ""
     : `, ${request.detail.kind === "command" ? "comando" : "caminho"} \`${request.detail.value}\``;
   const choices = request.perCall === true
-    ? "[s] once, [n] deny, [r] reject (per-command approval: the host asks on every execution)"
+    ? "[s] once, [a] always (saves a prefix rule), [r] reject, [n] deny"
     : "[s] once, [a] always, [r] reject, [n] deny";
   return `tool "${request.name}" (ação ${request.action}, modo ${request.mode}${detail}). ${choices}: `;
 }
 
 /**
  * Mapeia a resposta do prompt de tool (PERM-04, #265, #599). `s`/`once` aprova
- * uma vez; `a`/`always`/`S` aprova sempre (regra salva no shell, grant na
- * sessão); `r`/`reject` nega e cancela as aprovações pendentes da sessão. Em
- * `perCall`, `always` vale só para a chamada (não vira grant). Qualquer outra
- * resposta nega (fail-closed, #546).
+ * uma vez; `a`/`always` aprova sempre (regra salva no shell, grant na sessão);
+ * `S` é o sinônimo legado, mas em `perCall` fica limitado à chamada — só
+ * `always` pode gravar a camada de projeto; `r`/`reject` nega e cancela as
+ * aprovações pendentes da sessão. Qualquer outra resposta nega (fail-closed,
+ * #546).
  */
 export function toolChoice(answer: string | null, perCall = false): PermissionApproval {
   const raw = (answer ?? "").trim();
   const word = raw.toLowerCase();
-  if (raw === "S" || word === "a" || word === "always") return perCall ? true : "always";
+  if (word === "a" || word === "always") return "always";
+  if (raw === "S") return perCall ? true : "always";
   if (raw === "s" || word === "once") return "once";
   if (word === "r" || word === "reject") return "reject";
   return false;

@@ -158,6 +158,11 @@ export interface ToolPermissionHint {
   origin?: "rule" | "external_directory" | "unparsable" | "approval";
 }
 
+/** Result of persisting an `always` approval (#599); failure carries a stable reason. */
+export type ApprovalSave =
+  | { ok: true; pattern: string }
+  | { ok: false; reason: string };
+
 /** Contrato de uma tool executável pelo agente. */
 export interface Tool {
   manifest: ToolManifest;
@@ -173,11 +178,10 @@ export interface Tool {
   approvalDetail?(input: unknown, ctx?: ToolContext): ApprovalDetail | undefined;
   /**
    * Persists an `always` approval for this call (#599) and returns the stored
-   * prefix pattern. Only tools whose policy owns a saved list implement it; a
-   * tool without it keeps the session grant. An unparsable command returns
-   * `undefined` and the approval covers the call only.
+   * prefix pattern. Only tools whose policy owns a saved list implement it.
+   * `session` never reaches this hook: only an explicit `always` may persist.
    */
-  rememberApproval?(input: unknown, ctx: ToolContext): string | undefined;
+  rememberApproval?(input: unknown, ctx: ToolContext): ApprovalSave | undefined;
 }
 
 /** Erro de validação ou de política de uma tool. */
