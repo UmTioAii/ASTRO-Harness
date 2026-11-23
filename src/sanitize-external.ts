@@ -51,12 +51,15 @@ const REDACT_URL_USERINFO = /(\/\/[^\s/:@]*:)([^\s/@]+)(@)/g;
 // The value runs to the closing quote, the end of the line, or the next
 // assignment/delimiter. Stopping at the first space leaked the suffix (#605).
 const SECRET_KEY = "(?:[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?key|secret|password|token(?!s))[A-Za-z0-9_-]*)";
-const QUOTE = `(?:\\\\"|")`;
+const DQ = `(?:\\\\"|")`;
+const SQ = `(?:\\\\'|')`;
+const QUOTE = `(?:${DQ}|${SQ})`;
 // The marker is a unit so a second pass consumes it whole (idempotent) instead
 // of stopping at its `]` and leaving a stray bracket.
-const ENV_VALUE = `(?:\\[REDACTED\\]|[^\\s,;}\\]"'\\\\]|[^\\S\\r\\n](?!(?:${SECRET_KEY})[^\\S\\r\\n]*[=:]))*`;
+const ENV_VALUE = `(?:\\[REDACTED\\]|[^\\s,;}\\]\\\\]|[^\\S\\r\\n](?!(?:${SECRET_KEY})[^\\S\\r\\n]*[=:]))*`;
 const REDACT_ENV = new RegExp(
-  `\\b(${SECRET_KEY})((?:${QUOTE})?\\s*[=:]\\s*)(?:(${QUOTE})((?:[^"\\\\]|\\\\.)*)\\3|(${ENV_VALUE}))`,
+  `\\b(${SECRET_KEY})((?:${QUOTE})?\\s*[=:]\\s*)` +
+    `(?:(${DQ})((?:[^"\\\\]|\\\\.)*)\\3|(${SQ})((?:[^'\\\\]|\\\\.)*)\\5|((?:${QUOTE})[^\\r\\n]*)|(${ENV_VALUE}))`,
   "gi",
 );
 
@@ -106,8 +109,14 @@ export function redactSecrets(text: string, opts: RedactSecretsOptions = {}): st
     .replace(REDACT_BEARER, `${BEARER_WORD} ${REDACTED}`)
     .replace(REDACT_NV, REDACTED)
     .replace(REDACT_PREFIX, REDACTED)
-    .replace(REDACT_ENV, (_match, key: string, separator: string, open: string | undefined) =>
-      `${key}${separator}${open ?? ""}${REDACTED}${open ?? ""}`)
+    .replace(REDACT_ENV, (
+      _match,
+      key: string,
+      separator: string,
+      dq: string | undefined,
+      _dqValue: string | undefined,
+      sq: string | undefined,
+    ) => `${key}${separator}${dq ?? sq ?? ""}${REDACTED}${dq ?? sq ?? ""}`)
     .replace(REDACT_HEX_40_KEY, (_match, prefix: string) => `${prefix}${REDACTED}`);
 }
 
