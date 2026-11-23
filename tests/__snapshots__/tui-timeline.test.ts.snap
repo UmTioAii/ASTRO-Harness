@@ -1,0 +1,22 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`timeline snapshots (#595) every state at 120, 80 and 60 columns: timeline states 1`] = `
+"### empty @120 ["                                         █▀▀█ █▀▀ ▀█▀ █▀▀█ █▀▀█","                                         █▄▄█ ▀▀█  █  █▄▄▀ █  █","                                         ▀  ▀ ▀▀▀  ▀  ▀  ▀ ▀▀▀▀","","  ❯","  anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### thinking @120 ["  > why did the ledger grow?","  ▸ reasoning · 4s","  ✓ read_file src/ledger.ts · 420ms","  ▸ thinking · 12s","","  ❯","  anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### streaming @120 ["  > why did the ledger grow?","  ▸ reasoning · 4s","  ✓ read_file src/ledger.ts · 420ms","  The ledger grew because every tool call appends a record.","","  ❯","  anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### approval @120 ["  > why did the ledger grow?","  ▸ reasoning · 4s","  ✓ read_file src/ledger.ts · 420ms","","  approve run_command: bun test","  [y] approve · [n] deny · [esc] cancel","  anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### error @120 ["  > why did the ledger grow?","  ▸ reasoning · 4s","  ✓ read_file src/ledger.ts · 420ms","  ✗ network timeout","  → retry; raise providers.x.timeoutMs if it persists","","  ❯","  anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### done @120 ["  > why did the ledger grow?","  ▸ reasoning · 4s","  ✓ read_file src/ledger.ts · 420ms","  Done. The ledger is append-only.","","  ❯","  anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### empty @80 ["                             █▀▀█ █▀▀ ▀█▀ █▀▀█ █▀▀█","                             █▄▄█ ▀▀█  █  █▄▄▀ █  █","                             ▀  ▀ ▀▀▀  ▀  ▀  ▀ ▀▀▀▀","","❯","anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### thinking @80 ["> why did the ledger grow?","▸ reasoning · 4s","✓ read_file src/ledger.ts · 420ms","▸ thinking · 12s","","❯","anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### streaming @80 ["> why did the ledger grow?","▸ reasoning · 4s","✓ read_file src/ledger.ts · 420ms","The ledger grew because every tool call appends a record.","","❯","anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### approval @80 ["> why did the ledger grow?","▸ reasoning · 4s","✓ read_file src/ledger.ts · 420ms","","approve run_command: bun test","[y] approve · [n] deny · [esc] cancel","anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### error @80 ["> why did the ledger grow?","▸ reasoning · 4s","✓ read_file src/ledger.ts · 420ms","✗ network timeout","→ retry; raise providers.x.timeoutMs if it persists","","❯","anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### done @80 ["> why did the ledger grow?","▸ reasoning · 4s","✓ read_file src/ledger.ts · 420ms","Done. The ledger is append-only.","","❯","anthropic/claude-sonnet-4 · ask · US$ 0.002100"]
+### empty @60 ["                    █▀▀█ █▀▀ ▀█▀ █▀▀█ █▀▀█","                    █▄▄█ ▀▀█  █  █▄▄▀ █  █","                    ▀  ▀ ▀▀▀  ▀  ▀  ▀ ▀▀▀▀","","  ❯","  claude-sonnet-4 · ask · US$ 0.002100"]
+### thinking @60 ["  > why did the ledger grow?","  ▸ reasoning","  ✓ read_file src/ledger.ts","  ▸ thinking","","  ❯","  claude-sonnet-4 · ask · US$ 0.002100"]
+### streaming @60 ["  > why did the ledger grow?","  ▸ reasoning","  ✓ read_file src/ledger.ts","  The ledger grew because every tool call appends a record.","","  ❯","  claude-sonnet-4 · ask · US$ 0.002100"]
+### approval @60 ["  > why did the ledger grow?","  ▸ reasoning","  ✓ read_file src/ledger.ts","","  approve run_command: bun test","  [y] approve · [n] deny · [esc] cancel","  claude-sonnet-4 · ask · US$ 0.002100"]
+### error @60 ["  > why did the ledger grow?","  ▸ reasoning","  ✓ read_file src/ledger.ts","  ✗ network timeout","  → retry; raise providers.x.timeoutMs if it persists","","  ❯","  claude-sonnet-4 · ask · US$ 0.002100"]
+### done @60 ["  > why did the ledger grow?","  ▸ reasoning","  ✓ read_file src/ledger.ts","  Done. The ledger is append-only.","","  ❯","  claude-sonnet-4 · ask · US$ 0.002100"]"
+`;
