@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   TOOL_FAILURES,
+  contentBudgetChars,
   failureResult,
   isToolFailure,
   outputCeilingChars,
@@ -39,5 +40,12 @@ describe("tool output contract primitives (S6, #603)", () => {
     expect(outputCeilingChars(ceiling, { outputLimitTokens: 1000 })).toBe(4000);
     expect(outputCeilingChars(ceiling, { outputLimitTokens: 9000 })).toBe(16_000);
     expect(outputCeilingChars(undefined, { outputLimitTokens: 9000 })).toBeUndefined();
+  });
+
+  test("a tiny session cap never drops the budget below the marker floor", () => {
+    const ceiling = { maxTokens: 4000, hint: "narrow the path" };
+    // 5 tokens would be 20 chars, less than a marker: the 64-char floor wins.
+    expect(outputCeilingChars(ceiling, { outputLimitTokens: 5 })).toBe(64);
+    expect(contentBudgetChars(ceiling, { outputLimitTokens: 5 })).toBe(64);
   });
 });
