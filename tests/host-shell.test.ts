@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -401,19 +401,88 @@ describe("limites do host (#474)", () => {
     expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
   });
 
-  test("run_tests requires Docker until the host slice lands", async () => {
-    mock = installNoDockerSpawnMock();
+  test("run_tests runs on the host with the same approval path when the mode is host", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "tests ok\n" });
     const mod = await isolatedRunCommand("host-run-tests");
     mod.configureRunCommand({ mode: "host" });
+    const dir = cwd();
+    const auditPath = join(dir, ".astro", "audit.jsonl");
     const tool = mod.createRunTestsTool({
       config: { command: ["echo", "test"] },
-      audit: { append: () => ({}) },
+      audit: new Auditor(auditPath),
     });
-    const result = await tool.execute({}, ctxOf(cwd()));
-    expect(result.code).toBe("sandbox_required_for_shell");
-    expect(result.output).toContain("run_tests");
-    expect(result.output).toContain("Docker");
+    let approvals = 0;
+    const executor = new ToolExecutor({
+      tools: [tool], allow: ["run_tests"], audit: new Auditor(auditPath), permissionMode: "ask",
+      approveTool: () => { approvals++; return "session"; },
+    });
+    const result = await executor.run(ctxOf(dir), { id: "c1", name: "run_tests", arguments: "{}" });
+    expect(result.isError).toBeFalsy();
+    expect(result.output).toContain("tests ok");
+    await executor.run(ctxOf(dir), { id: "c2", name: "run_tests", arguments: "{}" });
+    // A session answer never suppresses the shell gate: every call asks again.
+    expect(approvals).toBe(2);
+    expect(mock.calls.some((cmd) => cmd[0] === "docker")).toBe(false);
+  });
+
+  test("run_tests refuses a filter that escapes the project on the host", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("host-run-tests-escape");
+    mod.configureRunCommand({ mode: "host" });
+    const dir = cwd();
+    const auditPath = join(dir, ".astro", "audit.jsonl");
+    const tool = mod.createRunTestsTool({ config: { command: ["echo", "test"] }, audit: new Auditor(auditPath) });
+    const executor = new ToolExecutor({
+      tools: [tool], allow: ["run_tests"], audit: new Auditor(auditPath), permissionMode: "ask", approveTool: () => true,
+    });
+    const escaped = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_tests", arguments: JSON.stringify({ filter: "../outside.test.ts" }),
+    });
+    expect(escaped.code).toBe("external_directory");
     expect(mock.calls).toHaveLength(0);
+    const home = await executor.run(ctxOf(dir), {
+      id: "c2", name: "run_tests", arguments: JSON.stringify({ filter: "~/vault.json" }),
+    });
+    expect(home.code).toBe("external_directory");
+    expect(mock.calls).toHaveLength(0);
+  });
+
+  test("run_tests refuses a symlinked filter that leaves the project", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("host-run-tests-symlink");
+    mod.configureRunCommand({ mode: "host" });
+    const dir = cwd();
+    const outside = mkdtempSync(join(tmpdir(), "astro-outside-"));
+    try {
+      symlinkSync(outside, join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return; // the OS refused the link; nothing to exercise
+    }
+    const auditPath = join(dir, ".astro", "audit.jsonl");
+    const tool = mod.createRunTestsTool({ config: { command: ["echo", "test"] }, audit: new Auditor(auditPath) });
+    const executor = new ToolExecutor({
+      tools: [tool], allow: ["run_tests"], audit: new Auditor(auditPath), permissionMode: "ask", approveTool: () => true,
+    });
+    const result = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_tests", arguments: JSON.stringify({ filter: "link/probe.test.ts" }),
+    });
+    expect(result.code).toBe("external_directory");
+    expect(mock.calls).toHaveLength(0);
+  });
+
+  test("run_tests with sandbox:true refuses without Docker instead of using the host", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("docker-run-tests-refuse");
+    mod.configureRunCommand({ sandbox: true });
+    const dir = cwd();
+    const auditPath = join(dir, ".astro", "audit.jsonl");
+    const tool = mod.createRunTestsTool({ config: { command: ["echo", "test"] }, audit: new Auditor(auditPath) });
+    const executor = new ToolExecutor({
+      tools: [tool], allow: ["run_tests"], audit: new Auditor(auditPath), permissionMode: "ask", approveTool: () => true,
+    });
+    const result = await executor.run(ctxOf(dir), { id: "c1", name: "run_tests", arguments: "{}" });
+    expect(result.code).toBe("sandbox_required_for_shell");
+    expect(mock.runCalls).toHaveLength(0);
   });
 
   test("run_tests refuses when the shell is off", async () => {
