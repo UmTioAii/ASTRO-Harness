@@ -75,22 +75,22 @@ import type { NoProgressDecider } from "../loop-guard";
  */
 export function maxRoundsMessage(
   config: Pick<AstroConfig, "agent" | "run">,
-  error: { limit: number; rounds: number; agentName?: string },
+  error: { limit: number; rounds: number; agentName?: string; budgetCut?: boolean },
 ): string {
   if (error.agentName !== undefined) {
     const field = `agents.${redactSecrets(error.agentName)}.maxSteps`;
     return `stopped here: this task did not converge — the agent reached ${error.rounds} rounds, limit "${field}" = ${error.limit}; raise "${field}" in the configuration or /config to continue`;
-  }
-  if (config.run?.maxRoundsPerTurn === "unlimited") {
-    return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, the physical cap of ${error.limit} while "run.maxRoundsPerTurn" is unlimited; raise the budget or the limit in /config to continue`;
   }
   // `run.maxRoundsPerTurn` is the enforced key; `agent.maxSteps` is only its legacy
   // source when the new key is absent. Cite the value that actually controls the stop.
   const declared = typeof config.run?.maxRoundsPerTurn === "number"
     ? config.run.maxRoundsPerTurn
     : config.agent.maxSteps;
-  if (error.limit < declared) {
+  if (error.budgetCut === true) {
     return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "run.maxRoundsPerTurn" = ${declared} lowered to ${error.limit} by the budget decision "lower effort"; raise the budget or the limit in /config to continue`;
+  }
+  if (config.run?.maxRoundsPerTurn === "unlimited") {
+    return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, the physical cap of ${error.limit} while "run.maxRoundsPerTurn" is unlimited; raise the budget or the limit in /config to continue`;
   }
   return `stopped here: this task did not converge — the turn reached ${error.rounds} rounds, limit "run.maxRoundsPerTurn" = ${declared}; raise it in /config to continue`;
 }
@@ -1344,7 +1344,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       });
       // #473: the message names the limit that fired, the value and the setting.
       // Multi-agent: the named agent ceiling (`agents.<name>.maxSteps`) comes in the error.
-      throw new MaxRoundsError(error.limit, error.rounds, error.agentName, maxRoundsMessage(config, error));
+      throw new MaxRoundsError(error.limit, error.rounds, error.agentName, error.budgetCut, maxRoundsMessage(config, error));
     }
 
     // Cancelamento explícito (F-06): o estado interrupted já foi gravado pela sessão

@@ -202,13 +202,16 @@ export class MaxRoundsError extends Error {
   readonly rounds: number;
   /** Named agent whose ceiling fired (multi-agent); absent for the main agent. */
   readonly agentName?: string;
+  /** True when the budget decision "lower effort" cut the ceiling below the declared one. */
+  readonly budgetCut: boolean;
   readonly action: string;
-  constructor(limit: number, rounds: number, agentName?: string, message?: string) {
+  constructor(limit: number, rounds: number, agentName?: string, budgetCut = false, message?: string) {
     const where = agentName === undefined ? "run.maxRoundsPerTurn" : `agents.${redactSecrets(agentName)}.maxSteps`;
     super(message ?? `stopped here: this task did not converge — the turn reached its round limit "${where}" = ${limit} after ${rounds} rounds; raise the limit in /config to continue`);
     this.name = "MaxRoundsError";
     this.limit = limit;
     this.rounds = rounds;
+    this.budgetCut = budgetCut;
     this.action = `raise "${where}" in /config to continue`;
     if (agentName !== undefined) this.agentName = agentName;
   }
@@ -518,6 +521,7 @@ export async function runSession(
   let failed = false;
   try {
     let effectiveMaxRounds = opts.maxSteps;
+    let budgetCut = false;
     for (let step = 1; step <= effectiveMaxRounds; step++) {
       throwIfAborted(opts.signal); // ponto seguro: não inicia step após cancelamento (F-06)
       // Quota (F6-3): bloqueia a chamada antes de gastar
@@ -543,6 +547,7 @@ export async function runSession(
         // "baixar esforço" (B4): metade dos passos **restantes**, ao menos um
         if (choice === "lower_effort") {
           effectiveMaxRounds = Math.min(effectiveMaxRounds, step + Math.max(1, Math.floor((effectiveMaxRounds - step) / 2)));
+          budgetCut = true;
         }
       }
       const releaseReserve = (): void => {
@@ -779,7 +784,7 @@ export async function runSession(
       tracer?.end(stepSpan);
     }
     tracer?.end(rootSpan, { status: "max_rounds" });
-    throw new MaxRoundsError(effectiveMaxRounds, effectiveMaxRounds);
+    throw new MaxRoundsError(effectiveMaxRounds, effectiveMaxRounds, undefined, budgetCut);
   } catch (error) {
     failed = true;
     // HandoffSignal transfere o controle ao caller e não grava run_state:

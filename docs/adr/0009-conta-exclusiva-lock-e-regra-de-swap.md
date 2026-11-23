@@ -17,7 +17,7 @@ A unidade de placement é `(provider, modelo, credencial)` e a quota agrega por 
 
 **Aquisição (A4).** A checagem de exclusividade e o append de `created` rodam sob o lock de arquivo do ledger com falha fechada: sem o lock, a aquisição falha (`ledger_lock_timeout`) em vez de correr sem exclusividade. Lock órfão de PID morto é removido; o de processo vivo é respeitado.
 
-**Fim de run (A4).** Qualquer saída que não seja sucesso (erro de provider, `MaxSteps`, cancelamento, budget, swap negado) libera a conta no mesmo run com `reason` estável (`max_rounds`, `cancelled`, `budget_exceeded`, `swap_denied`, classe do erro). O run continua retomável: `planResume` usa o último agente da árvore quando não há agente ativo.
+**Fim de run (A4).** Qualquer saída que não seja sucesso (erro de provider, `MaxRoundsError`, cancelamento, budget, swap negado) libera a conta no mesmo run com `reason` estável (`max_rounds`, `cancelled`, `budget_exceeded`, `swap_denied`, classe do erro). O run continua retomável: `planResume` usa o último agente da árvore quando não há agente ativo.
 
 **Crash recovery (A4).** Todo run começa liberando locks cujo `pid` dono está comprovadamente morto. No `--resume` (F-22; S-07, #124), os órfãos daquele run viram `destroyed` com `reason: "crash_recovered"`; se o dono ainda está vivo, a retomada falha `account_locked` em vez de derrubar um run em execução. Crash duro sem `run_state` também é recuperável (estado implícito `interrupted`).
 
