@@ -95,6 +95,16 @@ describe("round.start no loop single-agent (#508, #600)", () => {
       process.off("unhandledRejection", onUnhandled);
     }
   });
+
+  test("turno cancelado termina com turn.end cancelled", async () => {
+    const s = singleSetup([resp({ content: "ok" })]);
+    const events: TurnEvent[] = [];
+    s.opts.onTurnEvent = (event) => { events.push(event); };
+    s.opts.signal = AbortSignal.abort();
+    await expect(runSession(s.opts, "tarefa")).rejects.toThrow();
+    expect(events.map((event) => event.kind)).toEqual(["turn.end"]);
+    expect(events[0]).toMatchObject({ status: "cancelled", usage: { inputTokens: 0, outputTokens: 0 } });
+  });
 });
 
 describe("round.start no loop multi-agent (#508, #600)", () => {
