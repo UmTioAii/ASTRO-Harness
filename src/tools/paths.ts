@@ -1,6 +1,6 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
-import { ToolError } from "./types";
+import { ToolDeniedError, ToolError } from "./types";
 
 const RESERVED_DIR = ".astro";
 
@@ -76,13 +76,14 @@ export function isWithin(root: string, target: string): boolean {
 /**
  * Resolve `p` relativo a `cwd` e garante que o resultado fica dentro de `cwd`.
  * A checagem usa o caminho real, então symlinks/junctions não escapam do cwd.
- * Lança `ToolError` (mensagem com "fora") para `../` e caminhos absolutos externos.
+ * Lança `ToolDeniedError` (mensagem sem o path, S6/I-03) para `../` e caminhos
+ * absolutos externos.
  */
 export function resolveWithin(cwd: string, p: string): string {
   const root = resolve(cwd);
   const target = resolve(root, p);
   if (!isWithin(canonicalize(root), canonicalize(target))) {
-    throw new ToolError(`caminho fora do diretório de trabalho: ${p}`);
+    throw new ToolDeniedError("caminho fora do diretório de trabalho");
   }
   return target;
 }
@@ -103,11 +104,11 @@ export function assertConfinedPath(
   const canonicalRoot = canonicalize(root);
   const canonicalTarget = canonicalize(target);
   if (!isWithin(canonicalRoot, canonicalTarget)) {
-    throw new ToolError("caminho reservado do harness: alvo fora da raiz permitida");
+    throw new ToolDeniedError("caminho reservado do harness: alvo fora da raiz permitida");
   }
   const protectedTargets = protectedPaths.map((path) => canonicalize(resolve(root, path)));
   if (protectedTargets.some((path) => isWithin(path, canonicalTarget))) {
-    throw new ToolError("caminho reservado do harness: Auditoria/ledger não são memória");
+    throw new ToolDeniedError("caminho reservado do harness: Auditoria/ledger não são memória");
   }
   return target;
 }
@@ -128,7 +129,8 @@ export function resolveWritableWithin(
     ...protectedPaths.map((path) => resolve(cwd, path)),
   ];
   if (reserved.some((path) => isWithin(canonicalize(path), canonicalTarget))) {
-    throw new ToolError(`caminho reservado do harness: ${p}`);
+    // Sem o path do modelo: a recusa não ecoa o input (I-03, S6).
+    throw new ToolDeniedError("caminho reservado do harness");
   }
   return target;
 }

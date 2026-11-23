@@ -61,6 +61,16 @@ describe("tool SDK (F7-3)", () => {
     expect(tool.calls[0]!.input).toEqual({ a: 1 });
   });
 
+  test("validateManifest preserves a declared output ceiling (I-12, S6)", () => {
+    const withOutput = { ...validManifest, output: { maxTokens: 500, hint: "narrow the path" } };
+    expect(validateManifest(withOutput).output).toEqual({ maxTokens: 500, hint: "narrow the path" });
+    expect(validateManifest(validManifest).output).toBeUndefined();
+    expect(() => validateManifest({ ...validManifest, output: { maxTokens: 0, hint: "x" } })).toThrow(/output/);
+    expect(() => validateManifest({ ...validManifest, output: { maxTokens: 10, hint: "" } })).toThrow(/output/);
+    // A plugin using defineTool keeps the ceiling declared in its manifest.
+    expect(defineTool(withOutput, async () => ({ output: "ok" })).manifest.output).toEqual({ maxTokens: 500, hint: "narrow the path" });
+  });
+
   test("toolFailure/toolSuccess helpers seguem o contrato ToolResult", () => {
     expect(toolFailure("x")).toEqual({ output: "x", isError: true });
     expect(toolSuccess("y")).toEqual({ output: "y" });
