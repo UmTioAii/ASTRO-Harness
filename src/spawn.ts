@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Auditor } from "./audit";
 import { AccountLockedError, acquireAgentLock, activeLocks, releaseAgentLock } from "./agent-lock";
+import { grantConcurrency, spawnConcurrencyCap } from "./concurrency";
 import { redactSecrets } from "./sanitize-external";
 import type { AstroConfig, BudgetConfig } from "./core/config";
 import { providerAccountRefFor } from "./core/config";
@@ -222,6 +223,7 @@ const SPAWN_PARAMETERS = {
     tools: { type: "array", items: { type: "string" }, description: "Subconjunto das tools do pai" },
     maxRounds: { type: "integer", minimum: 1, description: "Teto de rodadas do subagente (≤ pai)" },
     maxTurns: { type: "integer", minimum: 1, description: "Turnos do subagente; um spawn executa uma tarefa, então aceita 1" },
+    concurrency: { type: "integer", minimum: 1, description: "Execuções simultâneas pedidas; acima do teto é truncado e o resultado informa o corte" },
     maxSteps: { type: "integer", minimum: 1, description: "Removido: use maxRounds (rodadas) ou maxTurns (turnos)" },
     snapshot_id: { type: "string", description: "Snapshot de list_model_candidates" },
   },
@@ -301,6 +303,10 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
             }),
             isError: true,
           };
+        }
+        const requestedConcurrency = raw.concurrency;
+        if (requestedConcurrency !== undefined && (typeof requestedConcurrency !== "number" || !Number.isInteger(requestedConcurrency) || requestedConcurrency < 1)) {
+          return { output: JSON.stringify({ error: "invalid_request", message: "campo 'concurrency' deve ser inteiro >= 1" }), isError: true };
         }
 
         // v1 é serial: filho não spawna neto (sem canal p2p e sem histórico do pai).
@@ -388,6 +394,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         const rawCredential = (providerConfig as { credentialRef?: unknown }).credentialRef;
         const keyless = providerConfig.kind === "openai-compat" &&
           (typeof rawCredential !== "string" || rawCredential.length === 0);
+        const grant = grantConcurrency(requestedConcurrency, spawnConcurrencyCap(deps.config));
         const agentId = deps.spawns.nextId(new Set(Object.keys(deps.config.agents ?? {})));
         const reason = [choice.reason, typeof raw.reason === "string" ? raw.reason : ""]
           .filter((part) => part.length > 0)
@@ -427,15 +434,23 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
           deps.audit.append({
             run: ctx.run,
             agent: ctx.agent,
-            tipo: "agent.spawned",
+            tipo: "agent.spawn",
             payload: {
               agent_id: agentId,
               parent_agent_id: ctx.agent,
+              provider,
               model: choice.candidate.model,
               ...(choice.candidate.profile === undefined ? {} : { profile: choice.candidate.profile }),
               ...(snapshotId === undefined ? {} : { snapshot_id: snapshotId }),
               need: raw.need,
+              requested: grant.requested,
+              granted: grant.granted,
+              cap: grant.cap,
+              source: grant.source,
+              // Both rationales are explicit: model choice and the harness grant.
               reason,
+              grant_reason: grant.reason,
+              ...(grant.truncated ? { cut: grant.reason } : {}),
               limits: { rounds: childMax, turns: 1 },
             },
           });
@@ -456,9 +471,12 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
             ...(choice.candidate.profile === undefined ? {} : { profile: choice.candidate.profile }),
             status: "active",
             limits: { rounds: childMax, turns: 1 },
-            ...(raw.maxTurns !== undefined && requestedMaxRounds === undefined
-              ? { note: "maxTurns now means turns; set maxRounds to cap rounds" }
-              : {}),
+            concurrency: grant,
+            ...(grant.truncated
+              ? { note: grant.reason }
+              : raw.maxTurns !== undefined && requestedMaxRounds === undefined
+                ? { note: "maxTurns now means turns; set maxRounds to cap rounds" }
+                : {}),
           }),
           isError: false,
         };
