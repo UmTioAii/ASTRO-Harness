@@ -1,18 +1,11 @@
-/** Model cards do Codex (#553). */
-import type { ModelCard } from "../seed";
+/** Codex offers (#601); model facts live in `src/models/catalog.ts`. */
+import type { ProviderModel } from "../seed";
 
-export const CODEX_MODELS: readonly ModelCard[] = [
+export const CODEX_MODELS: readonly ProviderModel[] = [
   {
-    id: "gpt-5.5",
-    tags: ["writing-code", "tools", "reasoning"],
-    context: 400000,
-    status: "active",
-    reasoning: true,
-    // Codex usa o endpoint Responses.
+    ref: "gpt-5.5",
+    // Codex uses the Responses endpoint; the catalog fact stays transport-free.
     callMethod: "responses",
-    // Escala do CLI: low/medium/high mapeiam para 1/2/3.
-    efforts: ["1", "2", "3"],
-    // Assinatura OAuth: sem preço por token.
     price: null,
     free: false,
   },

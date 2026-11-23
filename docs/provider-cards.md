@@ -1,33 +1,44 @@
-# Model cards por provider (#553)
+# Provider model cards (#553, #601)
 
-Layout por provider: cada pasta tem o adapter (endpoint/credencial) e um arquivo de model cards; o catálogo apenas compõe. Detalhe de retry/cota fica em `docs/providers.md`.
+Each provider folder holds the adapter (endpoint/credential) and an offer file; model facts live once in `src/models/catalog.ts` and the catalog only composes. The wire adapter stays shared by `kind`; the provider `adapter.ts` is the descriptor read by the wizard and the catalog. Retry/quota detail stays in `docs/providers.md`.
 
-| Arquivo | Contém | Não contém |
+| File | Owns | Does not own |
 |---|---|---|
-| `src/providers/<provider>/adapter.ts` | `key`, `name`, `kind`, `baseUrl`/`credentialsPath`, `credentialRef`, `quotaDomain` | dado de modelo, segredo |
-| `src/providers/<provider>/<provider>_models.ts` | model cards do provider | endpoint, credencial |
-| `src/providers/seed.ts` | tipos `ModelCard`/`ProviderAdapterSeed` e `profileModelsFor` | dado de provider específico |
-| `src/providers/catalog.ts` | composição dos seeds em `PROVIDER_CATALOG` | dado de modelo inline |
+| `src/providers/<provider>/adapter.ts` | `key`, `name`, `kind`, `baseUrl`/`credentialsPath`, `credentialRef`, `quotaDomain` | model facts, price, secret |
+| `src/providers/<provider>/<provider>_models.ts` | offers: `ref`, `price`, `free`, `status`, `callMethod`, `overrides` | context, reasoning, efforts, tags |
+| `src/models/catalog.ts` | facts: `context`, `maxOutput`, `reasoning`, `efforts`, `tools`, modalities, `tags`; `ModelId` | price, status, endpoint |
+| `src/providers/seed.ts` | `ProviderModel`/`ModelCard`/`ProviderAdapterSeed`, `effectiveCard`, `profileModelsFor` | provider-specific data |
+| `src/providers/catalog.ts` | composes offers into `PROVIDER_CATALOG` | inline model data |
 
-O adapter de fio continua compartilhado por `kind` (`openai-compat.ts`, `codex-oauth.ts`); o `adapter.ts` do provider é o descritor que o wizard e o catálogo leem.
+Precedence: provider override > catalog fact > code default. Editing a fact in `src/models/catalog.ts` changes every offer that points at that `ref`; a gateway divergence becomes an explicit `overrides` entry instead of a copy of the other facts. `effectiveCard` clamps `maxOutput` to the effective `context`.
 
-## Contrato do model card
+## Offer (`ProviderModel`)
 
-| Campo | Tipo | Regra |
+| Field | Type | Rule |
 |---|---|---|
-| `id` | string | Slug exato do provider |
-| `tags` | string[] | Vocabulário de `src/tags.ts` |
-| `context` | number | Janela em tokens, > 0 |
-| `status` | `active`/`deprecated`/`disabled` | Estado na oferta do provider |
-| `reasoning` | boolean | Expõe raciocínio configurável |
-| `callMethod` | `chat-completions`/`responses` | Endpoint usado pelo adapter |
-| `efforts` | `EffortLevel[]` | Vazio se `reasoning: false`; com reasoning, ≥ 1 nível |
-| `price` | `PriceConfig \| null` | `null` = sem curadoria (`n/d`, D-10); `verificado: false` até conferir na fonte |
-| `free` | boolean | Gratuito declarado; se `true`, preço 0/0 ou `null` |
+| `ref` | `ModelId` | Curated id in `src/models/catalog.ts`; unknown or misspelled ids do not compile |
+| `price` | `PriceConfig \| null` | `null` = uncurated (`n/d`, D-10); `verificado: false` until checked at the source |
+| `free` | boolean | Declared free; when `true`, price 0/0 or `null` |
+| `status` | `active`/`deprecated`/`disabled` | State in this offer; default `active` |
+| `callMethod` | `chat-completions`/`responses` | Adapter endpoint; default `chat-completions` |
+| `overrides` | `Partial<ModelFacts>` | Only what the gateway changes; wins over the catalog |
 
-`profileModelsFor(cards)` projeta `{id, tags, context}` — o formato que `profiles.ts`/wizard consomem. `CatalogEntry.cards` mantém a ficha completa para a UI de `/provider` (#555) e `astro models list --seeds --json` a expõe (extensão do JSON, #553).
+## Facts (`ModelFacts`)
 
-## Invariantes
+| Field | Type | Rule |
+|---|---|---|
+| `context` | number | Context window in tokens, > 0 |
+| `maxOutput` | number | Output cap in tokens, > 0 and ≤ `context` |
+| `reasoning` | boolean | Exposes configurable reasoning |
+| `efforts` | `EffortLevel[]` | Empty when `reasoning: false`; otherwise ≥ 1 level |
+| `tools` | boolean | Tool calling support |
+| `modalities` | `{ input, output }` | `text`/`image`/`audio` |
+| `tags` | `Tag[]` | Closed vocabulary from `src/tags.ts`; a typo in a fact or override does not compile (I-21) |
 
-- I-03: card nunca carrega valor de credencial; só `credentialRef` (nome da variável) e `fonte` (URL pública).
-- Paridade (#553): mover um modelo para o layout novo não muda a saída de `PROVIDER_CATALOG` — `tests/provider-layout.test.ts` compara com o snapshot anterior.
+`profileModelsFor(cards)` projects `{id, tags, context}` — the shape `profiles.ts` and the wizard consume. `CatalogEntry.cards` keeps the effective card (facts + overrides) for the `/provider` UI (#555), and `astro models list --seeds --json` exposes it (JSON extension, #553).
+
+## Invariants
+
+- I-03: a card never carries a credential value; only `credentialRef` (variable name) and `fonte` (public URL).
+- I-21: a tag outside the vocabulary fails the catalog test; tags are curated once, not per provider.
+- Parity (#553): moving a model into the new layout does not change `PROVIDER_CATALOG` output; `tests/provider-layout.test.ts` compares against the previous snapshot.

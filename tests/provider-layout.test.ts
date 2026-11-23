@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { modelFacts } from "../src/models/catalog";
 import { PROVIDER_CATALOG, catalogEntry } from "../src/providers/catalog";
 import { nvidiaAdapter } from "../src/providers/nvidia/adapter";
 import { NVIDIA_MODELS } from "../src/providers/nvidia/nvidia_models";
@@ -9,6 +10,7 @@ import { OPENROUTER_MODELS } from "../src/providers/openrouter/openrouter_models
 import { openaiCompatibleAdapter } from "../src/providers/openai-compatible/adapter";
 import { OPENAI_COMPATIBLE_MODELS } from "../src/providers/openai-compatible/openai_compatible_models";
 import type { ModelCard } from "../src/providers/seed";
+import { effectiveCard } from "../src/providers/seed";
 
 const SEEDS = [
   { adapter: nvidiaAdapter, models: NVIDIA_MODELS },
@@ -44,18 +46,19 @@ describe("per-provider layout (#553)", () => {
     for (const { adapter, models } of SEEDS) {
       const entry = catalogEntry(adapter.key);
       expect(entry).toBeDefined();
-      expect(entry!.models.map((model) => model.id)).toEqual(models.map((card) => card.id));
+      expect(entry!.models.map((model) => model.id)).toEqual(models.map((offer) => offer.ref));
     }
   });
 
   test("every model card declares the full contract", () => {
-    const cards: ModelCard[] = SEEDS.flatMap((seed) => [...seed.models]);
+    const cards: ModelCard[] = SEEDS.flatMap((seed) => seed.models.map((offer) => effectiveCard(offer)));
     expect(cards.length).toBeGreaterThan(0);
     for (const card of cards) {
       expect(typeof card.id).toBe("string");
       expect(card.id.length).toBeGreaterThan(0);
       expect(Array.isArray(card.tags)).toBe(true);
       expect(card.context).toBeGreaterThan(0);
+      expect(card.maxOutput).toBeLessThanOrEqual(card.context);
       expect(["active", "deprecated", "disabled"]).toContain(card.status);
       expect(typeof card.reasoning).toBe("boolean");
       expect(["chat-completions", "responses"]).toContain(card.callMethod);
@@ -81,14 +84,14 @@ describe("per-provider layout (#553)", () => {
     }
   });
 
-  test("cards exposed by the catalog do not share state with the seed modules", () => {
+  test("cards exposed by the catalog do not share state with the catalog facts", () => {
     const entry = catalogEntry("nvidia")!;
     (entry.cards[0]!.tags as string[]).push("leak");
-    expect(NVIDIA_MODELS[0]!.tags).not.toContain("leak");
+    expect(modelFacts("meta/llama-3.3-70b-instruct").tags).not.toContain("leak");
   });
 
   test("cards reach the catalog entry for the provider UI", () => {
     const entry = catalogEntry("nvidia");
-    expect(entry!.cards.map((card) => card.id)).toEqual(NVIDIA_MODELS.map((card) => card.id));
+    expect(entry!.cards.map((card) => card.id)).toEqual(NVIDIA_MODELS.map((offer) => offer.ref));
   });
 });

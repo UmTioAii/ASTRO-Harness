@@ -1,13 +1,12 @@
 /**
- * Catálogo seed de providers: preenche o wizard, não é whitelist.
+ * Provider seed catalog: fills the wizard, it is not a whitelist.
  *
- * Layout por provider (#553): cada pasta em `src/providers/<provider>/` tem o
- * `adapter.ts` (endpoint/credencial/kind) e o `<provider>_models.ts` (model
- * cards). Este arquivo só compõe os seeds — nenhum dado de modelo mora aqui.
+ * Per-provider layout (#553, #601): each folder in `src/providers/<provider>/`
+ * has the `adapter.ts` (endpoint/credential/kind) and the `<provider>_models.ts`
+ * (offers). Model facts live in `src/models/catalog.ts`; this file only composes.
  */
 import type { ProfileModel } from "./profiles";
-import type { ModelCard, ProviderAdapterSeed } from "./seed";
-import { profileModelsFor } from "./seed";
+import { effectiveCard, profileModelsFor, type ModelCard, type ProviderAdapterSeed } from "./seed";
 import { nvidiaAdapter } from "./nvidia/adapter";
 import { codexAdapter } from "./codex/adapter";
 import { openrouterAdapter } from "./openrouter/adapter";
@@ -28,6 +27,7 @@ export interface CatalogEntry {
 }
 
 function toEntry(seed: ProviderAdapterSeed): CatalogEntry {
+  const cards = seed.models.map((offer) => effectiveCard(offer));
   return {
     key: seed.key,
     name: seed.name,
@@ -36,9 +36,8 @@ function toEntry(seed: ProviderAdapterSeed): CatalogEntry {
     ...(seed.credentialRef === undefined ? {} : { credentialRef: seed.credentialRef }),
     ...(seed.credentialsPath === undefined ? {} : { credentialsPath: seed.credentialsPath }),
     ...(seed.quotaDomain === undefined ? {} : { quotaDomain: seed.quotaDomain }),
-    models: profileModelsFor(seed.models),
-    // Cópia: a UI pode ordenar/editar sem alterar o módulo de seed.
-    cards: seed.models.map((card) => ({ ...card, tags: [...card.tags] })),
+    models: profileModelsFor(cards),
+    cards,
   };
 }
 
