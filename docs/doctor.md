@@ -22,12 +22,15 @@ Diagnóstico local do ASTRO: versões, dependências, config, credenciais por no
 | `bun`, `node` | `bun`, `node` |
 | `dependências`, `dist` | `dependencies`, `dist` |
 | `config`, `config global` | `config`, `configGlobal` |
+| `model` (só com override) | `model` |
 | `credencial <id>` | `credential:<id>` |
 | `mcp`, `skills` | `mcp`, `skills` |
 | `mcp <nome>` (só `--online`) | `mcp:<nome>` |
 | `astro home`, `anexos`, `disco` | `astroHome`, `attachments`, `disk` |
 
 Segredo nunca entra na saída: `name`, label e detalhe passam por `redactSecrets` (I-03). `name` é slug estável; `label` é só exibição.
+
+O check `model` só aparece quando o modelo ativo tem override do provider (#625): mostra o valor efetivo ao lado do valor do catálogo (`context 64000 (catalog 400000)`). Um override malformado vira `fail` nomeando o campo e a oferta não entra no catálogo; sem override a saída é a mesma de antes.
 
 ## Config efetiva e isolamento
 

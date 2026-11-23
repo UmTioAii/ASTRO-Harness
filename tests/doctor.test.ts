@@ -8,6 +8,7 @@ import {
   collectOnlineChecks,
   doctorJson,
   exitCode,
+  modelFactFor,
   renderReport,
   runChecks,
   runDoctor,
@@ -15,6 +16,7 @@ import {
   type DoctorFacts,
 } from "../src/doctor";
 import { projectSkillsRoot } from "../src/home-layout";
+import { composeEntry } from "../src/providers/catalog";
 
 const VALID_SKILL = `---\nname: ok\ndescription: ok\nversion: 1.0.0\n---\nPrompt\n`;
 
@@ -626,4 +628,50 @@ test("credencial vault:<id> é cofre local, não env ausente", () => {
   expect(check?.level).toBe("ok");
   expect(check?.detail).toContain("cofre");
   expect(check?.detail).not.toContain("ausente");
+});
+
+test("model check shows a provider override next to the catalog value (#625)", () => {
+  const report = runChecks(facts({
+    model: {
+      ref: "codex/gpt-5.5",
+      overrides: [{ field: "context", effective: "64000", catalog: "400000" }],
+    },
+  }));
+  const check = report.checks.find((item) => item.name === "model");
+  expect(check?.level).toBe("ok");
+  expect(check?.detail).toContain("context 64000 (catalog 400000)");
+  expect(exitCode(report)).toBe(0);
+});
+
+test("a malformed override fails the model check naming the field (#625)", () => {
+  const report = runChecks(facts({
+    model: {
+      ref: "codex/gpt-5.5",
+      overrides: [],
+      overrideError: { field: "efforts", reason: "reasoning requires at least one effort level" },
+    },
+  }));
+  const check = report.checks.find((item) => item.name === "model");
+  expect(check?.level).toBe("fail");
+  expect(check?.detail).toContain("efforts");
+  expect(exitCode(report)).toBe(1);
+});
+
+test("no model check without an override, so doctor output is unchanged (#625)", () => {
+  const report = runChecks(facts());
+  expect(report.checks.some((item) => item.name === "model")).toBe(false);
+});
+
+test("modelFactFor reads the active model card from the composed catalog (#625)", () => {
+  const entry = composeEntry({
+    key: "demo", name: "Demo", kind: "openai-compat",
+    models: [
+      { ref: "gpt-5.5", price: null, free: false, overrides: { context: 64000 } },
+      { ref: "meta/llama-3.3-70b-instruct", price: null, free: false },
+    ],
+  });
+  const fact = modelFactFor("demo/gpt-5.5", [entry]);
+  expect(fact?.overrides[0]).toEqual({ field: "context", effective: "64000", catalog: "400000" });
+  expect(modelFactFor("demo/meta/llama-3.3-70b-instruct", [entry])).toBeUndefined();
+  expect(modelFactFor("unknown/gpt-5.5", [entry])).toBeUndefined();
 });

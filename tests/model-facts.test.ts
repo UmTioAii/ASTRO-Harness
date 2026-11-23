@@ -68,7 +68,7 @@ describe("model catalog facts (#601)", () => {
 
   test("maxOutput stays within the effective context", () => {
     const narrower = effectiveCard({
-      ref: "gpt-5.5", price: null, free: false, overrides: { context: 64000, efforts: [] },
+      ref: "gpt-5.5", price: null, free: false, overrides: { context: 64000, reasoning: false, efforts: [] },
     });
     expect(narrower.context).toBe(64000);
     expect(narrower.maxOutput).toBe(64000);

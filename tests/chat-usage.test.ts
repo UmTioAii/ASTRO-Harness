@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { BudgetStatus } from "../src/budget";
 import { budgetLine, budgetSegment, quotaSegment, usageLines } from "../src/chat/usage";
 import type { SessionSnapshot } from "../src/chat/agent-session";
+import { composeEntry } from "../src/providers/catalog";
 import type { QuotaStatus } from "../src/quota";
 
 const snapshot: SessionSnapshot = {
@@ -93,5 +94,29 @@ describe("quotaSegment (#64)", () => {
       dailyTokens: { used: 90, limit: 100, ratio: 0.9, known: true },
       monthlyCostUsd: { used: 4.5, limit: 5, ratio: 0.9, known: true },
     }))).toBe("quota d: 90% dos tokens do dia (90/100) · 90% do custo do mês (US$ 4.50/US$ 5.00)");
+  });
+});
+
+describe("model override in /usage (#625)", () => {
+  const demo = composeEntry({
+    key: "demo", name: "Demo", kind: "openai-compat",
+    models: [
+      { ref: "gpt-5.5", price: null, free: false, overrides: { context: 64000 } },
+      { ref: "meta/llama-3.3-70b-instruct", price: null, free: false },
+    ],
+  });
+
+  test("shows the effective and catalog value for the active model", () => {
+    expect(usageLines({ ...snapshot, model: "demo/gpt-5.5" }, undefined, [demo])).toEqual([
+      "uso da sessão: in 100 / out 50 tokens · custo US$ 0.001000",
+      "model demo/gpt-5.5: context 64000 (catalog 400000) · maxOutput 64000 (catalog 128000)",
+    ]);
+  });
+
+  test("stays unchanged when the active model has no override", () => {
+    expect(usageLines({ ...snapshot, model: "demo/meta/llama-3.3-70b-instruct" }, undefined, [demo]))
+      .toEqual(["uso da sessão: in 100 / out 50 tokens · custo US$ 0.001000"]);
+    expect(usageLines({ ...snapshot, model: "unknown/model" }, undefined, [demo]))
+      .toEqual(["uso da sessão: in 100 / out 50 tokens · custo US$ 0.001000"]);
   });
 });

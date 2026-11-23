@@ -10,6 +10,8 @@ import { isAbsolute, join, resolve } from "node:path";
 import { loadConfig, loadConfigRaw, CONFIG_SCHEMA_VERSION, type AstroConfig, type MCPServerConfig } from "./core/config";
 import { credentialMissingMessage } from "./credential-ref";
 import { loadEffectiveConfig, loadGlobalConfig, NoProviderError } from "./providers/profiles";
+import { PROVIDER_CATALOG, type CatalogEntry } from "./providers/catalog";
+import { formatOverrideNotes, overrideNotes, type OverrideNote } from "./models/overrides";
 import { readGcMarker, resolveArtifactRoot, validateArtifactRoot } from "./attachments/store";
 import type { HealthCheck } from "./health";
 import { ARTIFACT_KEY_PATTERN, SHA256_HEX } from "./internal-ids";
@@ -69,6 +71,16 @@ export interface ProviderFact {
   kind?: string;
   /** `codex-oauth`: o arquivo de credenciais está legível no disco. */
   credentialsReadable?: boolean;
+}
+
+/** Active model override facts (#625); absent when nothing changed and no offer is malformed. */
+export interface ModelFact {
+  /** `provider/id` of the active model. */
+  ref: string;
+  /** Overridden facts, effective value next to the catalog value. */
+  overrides: OverrideNote[];
+  /** Malformed override recorded at composition; the offer contributes no card. */
+  overrideError?: { field: string; reason: string };
 }
 
 /** Seção `mcpServers` já validada pela config; só nomes de env, nunca valores (I-03). */
@@ -137,6 +149,8 @@ export interface DoctorFacts {
     note?: string;
   };
   attachments: AttachmentFacts;
+  /** Overrides over the active model; absent without one or when config is unusable. */
+  model?: ModelFact;
   skills?: SkillsFact;
   disk?: DiskFact;
   env: Record<string, string | undefined>;
@@ -276,6 +290,46 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+function modelCheck(fact: ModelFact): Check {
+  if (fact.overrideError !== undefined) {
+    return {
+      name: "model",
+      level: "fail",
+      label: "model",
+      detail: `${fact.ref}: malformed provider override at "${fact.overrideError.field}": ${fact.overrideError.reason}`,
+    };
+  }
+  return {
+    name: "model",
+    level: "ok",
+    label: "model",
+    detail: `${fact.ref}: ${formatOverrideNotes(fact.overrides)}`,
+  };
+}
+
+/**
+ * Active-model override facts (#625). Reads the composed catalog, never the
+ * network: an offer the provider does not seed stays invisible.
+ */
+export function modelFactFor(
+  ref: string,
+  entries: readonly CatalogEntry[] = PROVIDER_CATALOG,
+): ModelFact | undefined {
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash === ref.length - 1) return undefined;
+  const provider = ref.slice(0, slash);
+  const id = ref.slice(slash + 1);
+  const entry = entries.find((item) => item.key === provider);
+  if (entry === undefined) return undefined;
+  const error = entry.overrideErrors?.find((item) => item.ref === id);
+  if (error !== undefined) {
+    return { ref, overrides: [], overrideError: { field: error.field, reason: error.reason } };
+  }
+  const card = entry.cards.find((item) => item.id === id);
+  const overrides = card === undefined ? [] : overrideNotes(card);
+  return overrides.length === 0 ? undefined : { ref, overrides };
+}
+
 /** Avalia fatos coletados. Puro: não lê fs, env nem rede. */
 export function runChecks(facts: DoctorFacts): DoctorReport {
   const checks: Check[] = [];
@@ -318,6 +372,9 @@ export function runChecks(facts: DoctorFacts): DoctorReport {
       });
     }
   }
+
+  const model = facts.model;
+  if (model !== undefined) checks.push(modelCheck(model));
 
   const globalConfig = facts.config.global;
   if (globalConfig !== undefined && globalConfig.present) {
@@ -602,8 +659,8 @@ function readGlobalConfig(env: NodeJS.ProcessEnv): DoctorFacts["config"]["global
 
 /** Config efetiva dos limites de anexos: ausente usa defaults; inválida não tem valor. */
 type EffectiveConfigFacts =
-  | { status: "ok"; ttlDays: number; maxBytes: number; error?: undefined }
-  | { status: "invalid"; ttlDays?: undefined; maxBytes?: undefined; error: string };
+  | { status: "ok"; ttlDays: number; maxBytes: number; agentModel: string; error?: undefined }
+  | { status: "invalid"; ttlDays?: undefined; maxBytes?: undefined; agentModel?: undefined; error: string };
 
 /**
  * Config efetiva e limites de anexos. A ausência de config é determinada
@@ -623,6 +680,7 @@ function readEffectiveConfig(configPath: string, env: NodeJS.ProcessEnv): Effect
       status: "ok",
       ttlDays: effective.config.attachments.artifactTtlDays,
       maxBytes: effective.config.attachments.artifactMaxBytes,
+      agentModel: effective.config.agent.model,
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -847,6 +905,7 @@ export function collectFacts(
   // (mesma base do loader de skills), nunca contra o projeto.
   const userSkillsRoot = resolve(options.userSkillsRoot ?? skillsUserRoot(env));
   const effective = readEffectiveConfig(configPath, env);
+  const model = effective.status === "ok" ? modelFactFor(effective.agentModel) : undefined;
   return {
     bunVersion: Bun.version,
     nodeVersion: readNodeVersion(),
@@ -856,6 +915,7 @@ export function collectFacts(
     config: readConfig(env, configPath, effective),
     astroHome: readAstroHome(env),
     attachments: collectAttachmentFacts(env, effective, projectCwd, options.checkPrivate, options.probeWritable, options.artifactRoot),
+    ...(model === undefined ? {} : { model }),
     skills: collectSkillFacts(projectSkillsRoot, userSkillsRoot),
     disk: collectDiskFacts(env, projectCwd),
     env,
