@@ -144,27 +144,15 @@ test("redaction stops at the next assignment so the following secret is still re
 });
 
 test("redactSecrets redacts single-quoted values with spaces and newlines (#605)", () => {
-  const spaced = ["alpha", "beta"].join(" ");
-  expect(redactSecrets(`TOKEN='${spaced}'`)).toBe("TOKEN='[REDACTED]'");
+  expect(redactSecrets("TOKEN='alpha beta'")).toBe("TOKEN='[REDACTED]'");
   expect(redactSecrets("export API_TOKEN='sk live xyz'")).toBe("export API_TOKEN='[REDACTED]'");
-
-  const multiline = ["first-fragment", "second-fragment"].join("\n");
-  const out = redactSecrets(`apiKey='${multiline}'`);
-  expect(out).not.toContain("first-fragment");
-  expect(out).not.toContain("second-fragment");
-  expect(out).toBe(`apiKey='[REDACTED]'`);
+  expect(redactSecrets("apiKey='first-fragment\nsecond-fragment'")).toBe("apiKey='[REDACTED]'");
 });
 
 test("redactSecrets redacts unbalanced quoted values to the end of the line (#605)", () => {
   expect(redactSecrets('TOKEN="alpha beta\nnext line')).toBe("TOKEN=[REDACTED]\nnext line");
   expect(redactSecrets("TOKEN='alpha beta\nnext line")).toBe("TOKEN=[REDACTED]\nnext line");
-});
-
-test("redactSecrets keeps an apostrophe inside an unquoted value inside the redaction (#605)", () => {
-  const out = redactSecrets("TOKEN=abc'def ghi");
-  expect(out).not.toContain("def");
-  expect(out).not.toContain("ghi");
-  expect(out).toBe("TOKEN=[REDACTED]");
+  expect(redactSecrets("TOKEN=abc'def ghi")).toBe("TOKEN=[REDACTED]");
 });
 
 test("redaction is idempotent for the [REDACTED] marker (#605)", () => {

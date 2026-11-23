@@ -39,11 +39,6 @@ export interface VaultStore {
 /** DPAPI shells out to PowerShell; a cold start can exceed the 1s file-lock default. */
 export const VAULT_LOCK_TIMEOUT_MS = 60_000;
 
-export interface VaultOptions {
-  /** Test seam: shorten the lock wait; production uses `VAULT_LOCK_TIMEOUT_MS`. */
-  lockTimeoutMs?: number;
-}
-
 export function vaultPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(astroHomePath(env), "vault.json");
 }
@@ -89,17 +84,10 @@ const WINDOWS_ROOT = "C:\\Windows";
  * (#605, I-03); if neither root has the binary, resolution refuses.
  */
 function defaultSystemRoots(): string[] {
-  const roots: string[] = [];
   const drive = /^([A-Za-z]:)[\\/]/.exec(process.execPath)?.[1];
-  if (drive !== undefined) roots.push(win32.join(`${drive}\\`, "Windows"));
-  if (!roots.some((root) => root.toLowerCase() === WINDOWS_ROOT.toLowerCase())) roots.push(WINDOWS_ROOT);
-  return roots;
-}
-
-export interface PowerShellOptions {
-  platform?: NodeJS.Platform;
-  /** Test seam: trusted roots. Production derives them from the running binary. */
-  roots?: readonly string[];
+  return drive === undefined || drive.toUpperCase() === "C:"
+    ? [WINDOWS_ROOT]
+    : [win32.join(`${drive}\\`, "Windows"), WINDOWS_ROOT];
 }
 
 /**
@@ -107,7 +95,9 @@ export interface PowerShellOptions {
  * the cwd, `SystemRoot` and `windir` are never consulted: a planted
  * `powershell.exe` must not receive the DPAPI secret (#605, I-03).
  */
-export function resolvePowerShell(opts: PowerShellOptions = {}): string {
+export function resolvePowerShell(
+  opts: { platform?: NodeJS.Platform; roots?: readonly string[] } = {},
+): string {
   const platform = opts.platform ?? process.platform;
   if (platform !== "win32") throw new Error("PowerShell is only used for DPAPI on Windows");
   const roots = opts.roots ?? defaultSystemRoots();
@@ -276,7 +266,7 @@ export class Vault {
   constructor(
     readonly path: string = vaultPath(),
     readonly backend: VaultBackend = defaultBackend(),
-    private readonly options: VaultOptions = {},
+    private readonly options: { lockTimeoutMs?: number } = {},
   ) {}
 
   #load(): VaultStore {

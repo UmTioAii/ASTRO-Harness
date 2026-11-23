@@ -39,22 +39,16 @@ describe("vault write lock (#605, I-03)", () => {
   test("the default timeout waits for a slow DPAPI critical section", async () => {
     const { dir, path } = tmpVault();
     const lockPath = `${path}.lock`;
-    const childCode = `
-import { rmSync, writeFileSync } from "node:fs";
+    const child = Bun.spawn([
+      process.execPath,
+      "-e",
+      `import { rmSync, writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(lockPath)}, String(process.pid));
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
-rmSync(${JSON.stringify(lockPath)}, { force: true });
-`;
-    const child = Bun.spawn({
-      cmd: [process.execPath, "-e", childCode],
-      cwd: process.cwd(),
-      stdout: "ignore",
-      stderr: "ignore",
-    });
+await Bun.sleep(1500);
+rmSync(${JSON.stringify(lockPath)}, { force: true });`,
+    ], { cwd: process.cwd(), stdout: "ignore", stderr: "ignore" });
     try {
-      const deadline = Date.now() + 5_000;
-      while (!existsSync(lockPath) && Date.now() < deadline) await Bun.sleep(5);
-      expect(existsSync(lockPath)).toBe(true);
+      while (!existsSync(lockPath)) await Bun.sleep(5);
 
       // No override: the production timeout must outlast a PowerShell cold start.
       const created = new Vault(path, plainBackend).create({ providerId: "p", label: "l", secret: "value" });

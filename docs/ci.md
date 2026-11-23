@@ -23,11 +23,9 @@ A matriz `test` roda nos dois SOs de propósito: há regressões específicas de
 
 | Workflow | Dispara em | Custo |
 |---|---|---|
-| `ci.yml` | todo PR, push em `main` e tag de release `v*` (os mesmos jobs, sem workflow paralelo) | `test` em 2 SOs + `coverage`, `eval`, `audit`, `bench-mock` e `secrets` em 1 SO |
-| `packed-smoke.yml` | manual (`workflow_dispatch`) e noturno | 1 ubuntu, ~2 min e registry; nunca em PR |
-| `bench.yml` | manual e noturno com opt-in `BENCH_NIGHTLY=true` | 1 ubuntu, quota real de provider; nunca em PR |
-
-Tag não remove cobertura: roda exatamente a suíte do `main`, e `audit` falha em qualquer advisory conhecida (#605).
+| `ci.yml` | todo PR, push em `main` e tag de release `v*` (os mesmos jobs, sem workflow paralelo nem cobertura removida) | `test` em 2 SOs + `coverage`, `eval`, `audit`, `bench-mock` e `secrets` em 1 SO |
+| `packed-smoke.yml` | manual (`workflow_dispatch`) e noturno | 1 ubuntu, ~2 min e registry; nunca em PR; Windows só local (`docs/release.md` §5) |
+| `bench.yml` | manual e noturno com opt-in `BENCH_NIGHTLY=true` | 1 ubuntu, quota real de provider; nunca em PR; filtro em `docs/eval.md` |
 
 ### Gate de cobertura: contrato do cabeçalho
 
@@ -38,10 +36,6 @@ Tag não remove cobertura: roda exatamente a suíte do `main`, e `audit` falha e
 - Slice com `files > 0` reprova se linhas ou funções ficarem abaixo do limiar; slice sem registros — e métrica sem registros — é `n/a` e não reprova.
 - `unmapped` nunca é gate: arquivo fora do mapa não derruba o job.
 - Exit code: `0` só com total e slices aprovados; `1` abaixo do limiar, lcov ausente/sem métricas ou flag inválida.
-
-O bench fica em `.github/workflows/bench.yml`; métricas, filtro e opt-in em `docs/eval.md`.
-
-O `smoke:packed` (TUI instalada) fica em `.github/workflows/packed-smoke.yml`; detalhes da etapa em `docs/release.md` §5. Regressão de empacotamento no Windows continua coberta só localmente (`bun run smoke:packed`).
 
 ## Pré-requisitos e comportamento condicional
 
