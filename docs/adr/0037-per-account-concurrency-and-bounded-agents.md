@@ -19,7 +19,7 @@ ADR-0009 A4 made a credential exclusive to one active agent, so fan-out serializ
 | Grant | `spawn_agent.concurrency` is the model's request; the harness grants `min(requested, cap)` and records `requested`, `granted`, `cap`, `source` (`request`/`config`/`default`), the model-choice `reason`, the grant `grant_reason` and `cut` when truncated in `agent.spawn`. A cut is stated in the tool result. |
 | Accounts | Up to the cap, agents share one account. Capacity is the cap minus executions already active on that account; the surplus is refused. `task` children record their own execution, so fan-out and `astro locks` see the real count. Capacity pre-admission refuses with `spawn_limit_exceeded`; a lock race still returns `account_locked` (D-18). |
 | Depth | One, no grandchildren; a spawned child never receives `spawn_agent`. |
-| Budget | Reservation accounting is unchanged in this slice. B2 moves the status read plus `recordBudgetReserved` under the ledger file lock (fail closed) and keys reservations by `run` + `agent`. |
+| Budget | The reservation read and `recordBudgetReserved` run under the ledger file lock (fail closed), and reservations are matched by `run` + `agent` so one release cannot erase a sibling's commitment. The decision prompt is never inside the lock. |
 | Recovery | Orphan recovery counts live executions instead of assuming exclusive credential ownership. `astro locks` reports executions and accounts, including how many share an account. |
 | Limits | No proactive RPM/TPM limiter; retry remains reactive through `retry-after`. |
 
