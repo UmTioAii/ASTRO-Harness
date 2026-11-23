@@ -32,7 +32,8 @@ import { AllowlistInvalidError, classifyPath, type PathClass } from "../path-cla
 import { validateManifest } from "../sdk/tool";
 import { join, relative } from "node:path";
 import type { ToolCall, ToolDef } from "../providers/types";
-import type { Tool, ToolContext, ToolLifecycleEvent, ToolResult } from "./types";
+import { isToolFailure } from "./contract";
+import { ToolError, type Tool, type ToolContext, type ToolFailure, type ToolLifecycleEvent, type ToolResult } from "./types";
 
 const TIMEOUT = Symbol("timeout");
 const ABORTED = Symbol("aborted");
@@ -66,8 +67,8 @@ function safeRunDir(run: string): string {
   return clean.length === 0 ? "run" : clean;
 }
 
-function failure(message: string): ToolResult {
-  return { output: message, isError: true };
+function failure(message: string, code: ToolFailure): ToolResult {
+  return { output: message, isError: true, failure: code };
 }
 
 /**
@@ -225,7 +226,7 @@ export class ToolExecutor {
         payload: { name: call.name, callId: id, ...pathPayload },
       });
       this.emitTool(ctx, { phase: "start", callId: call.id, name: call.name, arguments: call.arguments });
-      const result = await this.execute(ctx, call);
+      const result = this.classify(await this.execute(ctx, call));
       journal.record(id, result);
       this.emitTool(ctx, { phase: "end", callId: call.id, isError: result.isError === true, durationMs: auditDurationMs(startedAt) });
       this.auditRef.append({
@@ -245,8 +246,9 @@ export class ToolExecutor {
     });
 
     this.emitTool(ctx, { phase: "start", callId: call.id, name: call.name, arguments: call.arguments });
-    const result = await this.execute(ctx, call);
+    const result = this.classify(await this.execute(ctx, call));
     this.emitTool(ctx, { phase: "end", callId: call.id, isError: result.isError === true, durationMs: auditDurationMs(startedAt) });
+
 
     this.auditRef.append({
       run: ctx.run,
@@ -270,6 +272,12 @@ export class ToolExecutor {
     }
   }
 
+  /** A result without a valid taxonomy code is `failed` (S6, #603), so a plugin cannot leak one. */
+  private classify(result: ToolResult): ToolResult {
+    if (result.isError !== true) return result;
+    return isToolFailure(result.failure) ? result : { ...result, failure: "failed" };
+  }
+
   private async execute(ctx: ToolContext, call: ToolCall): Promise<ToolResult> {
     const tool = this.byName.get(call.name);
     if (tool === undefined) {
@@ -279,7 +287,7 @@ export class ToolExecutor {
         tipo: "tool.denied",
         payload: { name: call.name, reason: "tool desconhecida" },
       });
-      return failure(`tool desconhecida: "${call.name}"`);
+      return failure(`tool desconhecida: "${call.name}"`, "denied");
     }
     if (!this.allowSet.has(call.name)) {
       const reason = `tool "${call.name}" não permitida para o agent "${ctx.agent}"`;
@@ -289,7 +297,7 @@ export class ToolExecutor {
         tipo: "tool.denied",
         payload: { name: call.name, reason },
       });
-      return failure(reason);
+      return failure(reason, "denied");
     }
     // Ceiling enforcement (I-02): tool no allow mas fora do teto do parent → negado
     if (!this.ceilingSet.has(call.name)) {
@@ -300,7 +308,7 @@ export class ToolExecutor {
         tipo: "tool.denied",
         payload: { name: call.name, reason },
       });
-      return failure(reason);
+      return failure(reason, "denied");
     }
     // Manifesto inválido falha fechado antes de qualquer decisão (#264): sem
     // `class` válida o gate não pode escolher entre allow/ask/deny e o
@@ -313,7 +321,7 @@ export class ToolExecutor {
         tipo: "tool.denied",
         payload: { name: call.name, reason: "invalid_manifest" },
       });
-      return { ...failure(`tool "${call.name}" recusada: ${problem}`), code: "invalid_manifest" };
+      return { ...failure(`tool "${call.name}" recusada: ${problem}`, "denied"), code: "invalid_manifest" };
     }
     // Perfil do agent (#58): a permissão mais restritiva entre I-01 e o perfil vence
     const required = requiredPermission(tool.manifest);
@@ -325,14 +333,14 @@ export class ToolExecutor {
         tipo: "tool.denied",
         payload: { name: call.name, reason, required, permission: this.agentPermission },
       });
-      return failure(reason);
+      return failure(reason, "denied");
     }
 
     let input: unknown;
     try {
       input = JSON.parse(call.arguments);
     } catch {
-      return failure(`argumentos ilegíveis para a tool "${call.name}": JSON inválido`);
+      return failure(`argumentos ilegíveis para a tool "${call.name}": JSON inválido`, "invalid");
     }
 
     const blocked = await this.permissionGate(ctx, tool, call, input);
@@ -365,17 +373,18 @@ export class ToolExecutor {
         controller.abort(new DOMException(`timeout de ${tool.manifest.timeoutMs}ms`, "AbortError"));
         return failure(
           `timeout: a tool "${call.name}" excedeu ${tool.manifest.timeoutMs}ms`,
+          "timeout",
         );
       }
       if (outcome === ABORTED) {
-        return failure(`cancelado: a tool "${call.name}" foi interrompida`);
+        return failure(`cancelado: a tool "${call.name}" foi interrompida`, "failed");
       }
       return this.limitOutput(ctx, call, outcome);
     } catch (error) {
       // Pending do gate ou pausa por não-progresso sobe e para o run em ponto seguro (I-19), não vira tool error.
       if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      return failure(`erro na tool "${call.name}": ${message}`);
+      return failure(`erro na tool "${call.name}": ${message}`, error instanceof ToolError ? "invalid" : "failed");
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       ctx.signal?.removeEventListener("abort", onAbort);
@@ -500,10 +509,11 @@ export class ToolExecutor {
           });
           return failure(
             `aprovação expirada: a tool "${call.name}" não foi aprovada em ${this.approvalWaitTimeoutMs}ms (permissions.approvalTimeoutMs)`,
+            "timeout",
           );
         }
         if (outcome === ABORTED) {
-          return failure(`cancelado: a tool "${call.name}" foi interrompida`);
+          return failure(`cancelado: a tool "${call.name}" foi interrompida`, "failed");
         }
         // Fail-closed: sem aprovador, `ask` vira deny (#262).
         if (outcome === "session") {
@@ -543,7 +553,7 @@ export class ToolExecutor {
       tipo: "tool.denied",
       payload: { name: call.name, reason },
     });
-    return failure(reason);
+    return failure(reason, "denied");
   }
 
   /**
@@ -606,7 +616,7 @@ export class ToolExecutor {
             tipo: "tool.denied",
             payload: { name: call.name, reason: error.code, entry: error.entry },
           });
-          return { ...failure(`entrada de allowlist inválida (${error.code}): ${error.entry}`), code: error.code };
+          return { ...failure(`entrada de allowlist inválida (${error.code}): ${error.entry}`, "denied"), code: error.code };
         }
         // fail-closed: caminho que não classifica não é liberado (ADR-0027)
         this.auditRef.append({
@@ -617,7 +627,7 @@ export class ToolExecutor {
         });
         const display = denyDisplayPath(ctx.cwd, candidate);
         const blocked = new PathHardBlockedError(display, `caminho não classificável; negado por fail-closed (${PATH_HARD_BLOCKED}): ${display}`);
-        return { ...failure(blocked.message), code: blocked.code };
+        return { ...failure(blocked.message, "denied"), code: blocked.code };
       }
       if (pathClass === "hard-block") {
         this.auditRef.append({
@@ -627,7 +637,7 @@ export class ToolExecutor {
           payload: { name: call.name, reason: PATH_HARD_BLOCKED },
         });
         const blocked = new PathHardBlockedError(denyDisplayPath(ctx.cwd, candidate));
-        return { ...failure(blocked.message), code: blocked.code };
+        return { ...failure(blocked.message, "denied"), code: blocked.code };
       }
     }
     return undefined;
