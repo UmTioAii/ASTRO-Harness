@@ -974,6 +974,11 @@ function expectCheckpointName(name: string, field: string): string {
   return name;
 }
 
+function validateStepsCeiling(value: number, field: string): number {
+  if (value > MAX_RUN_LIMIT) fail(`config invalid: "${field}" must be <= ${MAX_RUN_LIMIT} (physical round cap)`);
+  return value;
+}
+
 function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>): AgentConfig {
   const raw = expectObject(value, "agent");
   const systemPrompt =
@@ -990,7 +995,7 @@ function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>
     return {
       model,
       profile,
-      maxSteps: raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"),
+      maxSteps: validateStepsCeiling(raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"), "agent.maxSteps"),
       tools: raw.tools === undefined ? [...DEFAULT_AGENT_TOOLS] : expectStringArray(raw.tools, "agent.tools"),
       entryAgent,
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
@@ -999,7 +1004,7 @@ function validateAgent(value: unknown, modelPool?: Record<string, ProfileConfig>
 
   return {
     model: expectString(raw.model, "agent.model"),
-    maxSteps: raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"),
+    maxSteps: validateStepsCeiling(raw.maxSteps === undefined ? BASELINE_MAX_STEPS : expectPositiveInteger(raw.maxSteps, "agent.maxSteps"), "agent.maxSteps"),
     tools: raw.tools === undefined ? [...DEFAULT_AGENT_TOOLS] : expectStringArray(raw.tools, "agent.tools"),
     entryAgent,
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
@@ -1079,7 +1084,7 @@ function validateNamedAgent(
   const raw = expectObject(value, field);
 
   const systemPrompt = raw.systemPrompt === undefined ? undefined : expectString(raw.systemPrompt, `${field}.systemPrompt`);
-  const maxSteps = raw.maxSteps === undefined ? baseAgent.maxSteps : expectPositiveInteger(raw.maxSteps, `${field}.maxSteps`);
+  const maxSteps = validateStepsCeiling(raw.maxSteps === undefined ? baseAgent.maxSteps : expectPositiveInteger(raw.maxSteps, `${field}.maxSteps`), `${field}.maxSteps`);
   const permission = raw.permission === undefined ? undefined : expectAgentPermission(raw.permission, `${field}.permission`);
   let tools = baseAgent.tools;
   if (raw.tools !== undefined) {
