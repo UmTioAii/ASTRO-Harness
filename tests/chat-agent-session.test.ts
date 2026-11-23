@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { AgentSession } from "../src/chat/agent-session";
+import type { TurnEvent } from "../src/chat/turn-events";
 import type { LoadedAttachment } from "../src/attachments/model";
 import { loadConfig, loadConfigRaw } from "../src/core/config";
 import type { PermissionMode } from "../src/permissions";
@@ -69,9 +70,14 @@ describe("AgentSession (T1, #62)", () => {
   test("multi-turn envia histórico e acumula tokens/custo no mesmo run", async () => {
     const { cwd, bodies, session, stop } = setup();
     const chat = session();
+    const events: TurnEvent[] = [];
     try {
-      const first = await chat.send("primeiro");
+      const first = await chat.send("primeiro", undefined, undefined, undefined, {
+        observer: (event) => { events.push(event); },
+      });
       expect(first.final).toBe("ok");
+      expect(events.map((event) => event.kind)).toEqual(["round.start", "turn.end"]);
+      expect(events[1]).toMatchObject({ status: "done" });
       expect(bodies[0]!.messages?.map((m) => m.content)).toEqual(["sys", "primeiro"]);
       const second = await chat.send("segundo");
       expect(second.totalTokensIn).toBe(20);
@@ -83,20 +89,6 @@ describe("AgentSession (T1, #62)", () => {
       chat.clear();
       expect(chat.snapshot().turns).toBe(2); // acumulados da sessão continuam
       expect(chat.messages.map((m) => m.content)).toEqual(["sys"]);
-    } finally {
-      chat.close();
-      stop();
-    }
-  });
-  test("SendTurnOptions.onStep chega ao loop com o teto da config (#508)", async () => {
-    const { session, stop } = setup();
-    const chat = session();
-    try {
-      const events: Array<[number, number]> = [];
-      await chat.send("x", undefined, undefined, undefined, {
-        onStep: (step, maxSteps) => events.push([step, maxSteps]),
-      });
-      expect(events).toEqual([[1, 3]]);
     } finally {
       chat.close();
       stop();

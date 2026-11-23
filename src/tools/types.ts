@@ -39,6 +39,11 @@ export interface ToolManifest {
   sideEffects: SideEffects;
 }
 
+/** Live tool signal for the turn observer (#600); absent = no observer. */
+export type ToolLifecycleEvent =
+  | { phase: "start"; callId: string; name: string; arguments: string }
+  | { phase: "end"; callId: string; isError: boolean; durationMs: number };
+
 /**
  * Contexto de execução de uma tool.
  *
@@ -79,6 +84,8 @@ export interface ToolContext {
   allowCritical?: readonly string[];
   /** Allowlist `allow-sensitive` da CLI (ADR-0027): promove normal para sensitive no gate/read_file. */
   allowSensitive?: readonly string[];
+  /** Live tool signal for the turn observer (#600); absent = no observer. */
+  onToolEvent?: (event: ToolLifecycleEvent) => void;
 }
 
 /**

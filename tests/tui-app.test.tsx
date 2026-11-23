@@ -349,7 +349,7 @@ test("the conversation carries no turn, round or tool counter in any profile (#5
       _attachments?: Parameters<ChatSession["send"]>[3],
       turn?: SendTurnOptions,
     ): Promise<TurnResult> {
-      turn?.onStep?.(2, 7); this.stepped = true;
+      this.stepped = true;
       await new Promise((resolve) => setTimeout(resolve, 80));
       return super.send(prompt, signal);
     }
@@ -406,7 +406,6 @@ test("progresso não fica visível depois de um turno com erro (#508)", async ()
       _attachments?: Parameters<ChatSession["send"]>[3],
       turn?: SendTurnOptions,
     ): Promise<TurnResult> {
-      turn?.onStep?.(1, 4);
       await new Promise((resolve) => setTimeout(resolve, 40));
       throw new Error("falhou");
     }

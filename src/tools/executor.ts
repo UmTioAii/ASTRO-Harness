@@ -32,7 +32,7 @@ import { AllowlistInvalidError, classifyPath, type PathClass } from "../path-cla
 import { validateManifest } from "../sdk/tool";
 import { join, relative } from "node:path";
 import type { ToolCall, ToolDef } from "../providers/types";
-import type { Tool, ToolContext, ToolResult } from "./types";
+import type { Tool, ToolContext, ToolLifecycleEvent, ToolResult } from "./types";
 
 const TIMEOUT = Symbol("timeout");
 const ABORTED = Symbol("aborted");
@@ -209,8 +209,7 @@ export class ToolExecutor {
       const tool = this.byName.get(call.name);
       const cached = tool?.manifest?.idempotent === true ? journal.lookup(id) : undefined;
       if (cached !== undefined) {
-        // Chamada suprimida NÃO emite tool.call/tool.result: as métricas de
-        // duração continuam medindo só execuções reais.
+        // A deduped call emits no lifecycle pair; nothing executed.
         this.auditRef.append({
           run: ctx.run,
           agent: ctx.agent,
@@ -225,8 +224,10 @@ export class ToolExecutor {
         tipo: "tool.call",
         payload: { name: call.name, callId: id, ...pathPayload },
       });
+      this.emitTool(ctx, { phase: "start", callId: call.id, name: call.name, arguments: call.arguments });
       const result = await this.execute(ctx, call);
       journal.record(id, result);
+      this.emitTool(ctx, { phase: "end", callId: call.id, isError: result.isError === true, durationMs: auditDurationMs(startedAt) });
       this.auditRef.append({
         run: ctx.run,
         agent: ctx.agent,
@@ -243,7 +244,9 @@ export class ToolExecutor {
       payload: { name: call.name, ...pathPayload },
     });
 
+    this.emitTool(ctx, { phase: "start", callId: call.id, name: call.name, arguments: call.arguments });
     const result = await this.execute(ctx, call);
+    this.emitTool(ctx, { phase: "end", callId: call.id, isError: result.isError === true, durationMs: auditDurationMs(startedAt) });
 
     this.auditRef.append({
       run: ctx.run,
@@ -253,6 +256,18 @@ export class ToolExecutor {
     });
 
     return result;
+  }
+
+  /** Live signal for the turn observer; sync or async observer errors never abort the tool (#600). */
+  private emitTool(ctx: ToolContext, event: ToolLifecycleEvent): void {
+    try {
+      const out: unknown = ctx.onToolEvent?.(event);
+      if (out !== null && typeof out === "object" && typeof (out as { then?: unknown }).then === "function") {
+        void Promise.resolve(out).catch(() => {});
+      }
+    } catch {
+      // The observer is a consumer, not an execution dependency.
+    }
   }
 
   private async execute(ctx: ToolContext, call: ToolCall): Promise<ToolResult> {

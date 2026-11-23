@@ -31,6 +31,7 @@ import { MaxRoundsError, runSession, runMultiAgentSession, type EffectiveIdentit
 import { assertResumeIdentity, planResume, ReplayIncompleteError } from "../resume";
 import { activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks } from "../agent-lock";
 import type { CallSelection } from "../call-profile";
+import type { TurnObserver } from "../chat/turn-events";
 import { markProviderFailure, markProviderSuccess } from "../providers/health-state";
 import { reserveForCall } from "../model-cost";
 import type { AgentIdentity } from "./session";
@@ -150,8 +151,10 @@ export interface RunOptions {
   suppressRunEvents?: boolean;
   /** Recebe deltas de texto do provider (T3); ausente = resposta única. */
   onToken?: (text: string) => void;
-  /** Progresso do loop (#508): passo e teto efetivo, antes de cada chamada ao provider. */
-  onStep?: (step: number, maxSteps: number) => void;
+  /** Live turn observer (#600); absent = no event stream. */
+  onTurnEvent?: TurnObserver;
+  /** Unique turn id for the event stream; defaults to the run id. */
+  turnId?: string;
   /** Escolha do call profile (E1–E5); ausente = defaults do modelo. */
   call?: CallSelection;
   /** `allow-critical` da CLI (ADR-0027, #391 slice 5a): realpaths que liberam o tier configurável. */
@@ -1247,7 +1250,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ...(config.effort === undefined ? {} : { effort: config.effort }),
         ...(tracer === undefined ? {} : { tracer }),
         ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
-        ...(opts.onStep === undefined ? {} : { onStep: opts.onStep }),
+        ...(opts.onTurnEvent === undefined ? {} : { onTurnEvent: opts.onTurnEvent }),
+        ...(opts.turnId === undefined ? {} : { turnId: opts.turnId }),
         resolveIdentity,
         ...(budget === undefined ? {} : { budget }),
         ...(budget === undefined ? {} : { budgetReserve: (m: ModelEntry, profile?: string) => reserveForCall(config, registry, m, profile) }),
@@ -1316,7 +1320,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           ...(opts.attachments === undefined ? {} : { attachments: opts.attachments }),
           ...(opts.images === undefined ? {} : { images: opts.images }),
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
-          ...(opts.onStep === undefined ? {} : { onStep: opts.onStep }),
+          ...(opts.onTurnEvent === undefined ? {} : { onTurnEvent: opts.onTurnEvent }),
+          ...(opts.turnId === undefined ? {} : { turnId: opts.turnId }),
           ...(baseProfile === undefined ? {} : { agentProfile: baseProfile }),
           ...(systemPromptBase === undefined ? {} : { systemPrompt: systemPromptBase }),
           ...(tracer === undefined ? {} : { tracer }),

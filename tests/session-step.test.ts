@@ -10,6 +10,7 @@ import { runMultiAgentSession, runSession, type MultiAgentSessionOptions, type S
 import { handoffTool } from "../src/tools/handoff";
 import { writeFileTool } from "../src/tools/write-file";
 import { ToolExecutor } from "../src/tools/executor";
+import type { TurnEvent } from "../src/chat/turn-events";
 
 const model: ModelEntry = {
   provider: "openai", id: "gpt-4o-mini", tags: ["writing-code"], context: 128000, status: "active",
@@ -24,6 +25,8 @@ const handoffCall = (id: string) => ({
   id, name: "handoff",
   arguments: JSON.stringify({ to: "coder", task: "t", objective: "o", decisions: [], constraints: [], next_steps: [] }),
 });
+const roundsOf = (events: readonly TurnEvent[]): number[] =>
+  events.flatMap((event) => event.kind === "round.start" ? [event.roundIndex] : []);
 
 /** Sessão single-agent cujo script de respostas é consumido em ordem. */
 function singleSetup(script: CompletionResponse[]) {
@@ -40,56 +43,72 @@ function singleSetup(script: CompletionResponse[]) {
   };
   const opts: SessionOptions = {
     run: "r1", agent: "default", credentialRef: "K", quotaDomain: "default", cwd,
-    provider, model,
+    provider, model, turnId: "turn-7",
     executor: new ToolExecutor({ approveTool: () => true, tools: [writeFileTool], allow: ["write_file"], audit }),
     ledger, audit, maxSteps: 5,
   };
   return { opts, requests };
 }
 
-describe("onStep no loop single-agent (#508)", () => {
-  test("emite antes de cada chamada ao provider, em ordem, com o teto efetivo", async () => {
+describe("round.start no loop single-agent (#508, #600)", () => {
+  test("emite antes de cada chamada ao provider, em ordem", async () => {
     const s = singleSetup([resp({ toolCalls: [writeCall("c1")] }), resp({ content: "pronto" })]);
-    const events: Array<[number, number]> = [];
+    const events: TurnEvent[] = [];
     const callsSeen: number[] = [];
-    s.opts.onStep = (step, maxSteps) => {
-      events.push([step, maxSteps]);
-      callsSeen.push(s.requests.length);
+    s.opts.onTurnEvent = (event) => {
+      events.push(event);
+      if (event.kind === "round.start") callsSeen.push(s.requests.length);
     };
     const result = await runSession(s.opts, "tarefa");
     expect(result.steps).toBe(2);
-    expect(events).toEqual([[1, 5], [2, 5]]);
-    // cada evento antecede a chamada do seu step: 0 chamadas no passo 1, 1 no passo 2
+    expect(roundsOf(events)).toEqual([1, 2]);
+    // cada evento antecede a chamada do seu round: 0 chamadas no round 1, 1 no round 2
     expect(callsSeen).toEqual([0, 1]);
-    expect(s.requests).toHaveLength(2);
   });
 
-  test("teto do passo cai quando o budget escolhe lower_effort (#508)", async () => {
+  test("tool.end.resultKey é o toolCallId da mensagem de histórico", async () => {
     const s = singleSetup([resp({ toolCalls: [writeCall("c1")] }), resp({ content: "pronto" })]);
-    s.opts.maxSteps = 10;
-    s.opts.budget = { scope: "use-as-you-go", limitUsd: 0.000001, warnAt: 0.8, onExceed: "ask" };
-    s.opts.budgetDecide = () => "lower_effort";
-    const events: Array<[number, number]> = [];
-    s.opts.onStep = (step, maxSteps) => { events.push([step, maxSteps]); };
+    const events: TurnEvent[] = [];
+    s.opts.onTurnEvent = (event) => { events.push(event); };
     const result = await runSession(s.opts, "tarefa");
-    expect(result.steps).toBe(2);
-    // passo 1 sem gasto (10/10); o gasto do 1º passo esgota o budget e o
-    // lower_effort no passo 2 reduz o teto para 2 + floor(8/2) = 6.
-    expect(events).toEqual([[1, 10], [2, 6]]);
+    const toolMessage = result.messages.find((message) => message.role === "tool");
+    const toolCallId = toolMessage?.toolCallId;
+    if (toolCallId === undefined) throw new Error("expected tool message");
+    const end = events.find((event) => event.kind === "tool.end");
+    if (end?.kind !== "tool.end") throw new Error("expected tool.end");
+    expect(end.callId).toBe("c1");
+    expect(end.resultKey).toBe(toolCallId);
+    expect(toolCallId).toBe("c1");
   });
 
-  test("usa o maxSteps resolvido da sessão no denominador", async () => {
-    const s = singleSetup([resp({ toolCalls: [writeCall("c1")] }), resp({ toolCalls: [writeCall("c2")] })]);
-    s.opts.maxSteps = 2;
-    const events: Array<[number, number]> = [];
-    s.opts.onStep = (step, maxSteps) => { events.push([step, maxSteps]); };
-    await runSession(s.opts, "loop").catch(() => undefined);
-    expect(events).toEqual([[1, 2], [2, 2]]);
+  test("observador async que lança não muda o desfecho do turno", async () => {
+    const s = singleSetup([resp({ content: "ok" })]);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      s.opts.onTurnEvent = async () => { throw new Error("consumer bug"); };
+      expect((await runSession(s.opts, "tarefa")).final).toBe("ok");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  test("turno cancelado termina com turn.end cancelled", async () => {
+    const s = singleSetup([resp({ content: "ok" })]);
+    const events: TurnEvent[] = [];
+    s.opts.onTurnEvent = (event) => { events.push(event); };
+    s.opts.signal = AbortSignal.abort();
+    await expect(runSession(s.opts, "tarefa")).rejects.toThrow();
+    expect(events.map((event) => event.kind)).toEqual(["turn.end"]);
+    expect(events[0]).toMatchObject({ status: "cancelled", usage: { inputTokens: 0, outputTokens: 0 } });
   });
 });
 
-describe("onStep no loop multi-agent (#508)", () => {
-  test("conta por agente ativo e limita pelo teto global restante", async () => {
+describe("round.start no loop multi-agent (#508, #600)", () => {
+  test("emite o round do agente ativo antes de cada chamada", async () => {
     const cwd = dir("step-multi");
     const audit = new Auditor(join(cwd, "audit.jsonl"));
     const ledger = new Ledger(join(cwd, "ledger.jsonl"));
@@ -111,10 +130,10 @@ describe("onStep no loop multi-agent (#508)", () => {
       }),
       ledger, audit, baseMaxSteps: 3, entryAgent: "planner",
     };
-    const events: Array<[number, number]> = [];
-    opts.onStep = (step, maxSteps) => { events.push([step, maxSteps]); };
+    const events: TurnEvent[] = [];
+    opts.onTurnEvent = (event) => { events.push(event); };
     await runMultiAgentSession(opts, "delegue");
-    // planner: 1/3; coder: 1/2 e 2/2 (teto global 4 já consumiu 1 passo)
-    expect(events).toEqual([[1, 3], [1, 2], [2, 2]]);
+    // planner: round 1; coder: rounds 1 and 2 (per-agent numbering, as #508)
+    expect(roundsOf(events)).toEqual([1, 1, 2]);
   });
 });
