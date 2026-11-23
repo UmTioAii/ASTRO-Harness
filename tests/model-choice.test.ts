@@ -94,17 +94,17 @@ describe("pipeline de candidatos (S-09, ADR-0011)", () => {
       .toThrow(ModelChoiceError);
   });
 
-  test("conta no limite (ADR-0037) e cooldown excluem candidatos", () => {
+  test("provider no limite (ADR-0037) e cooldown excluem candidatos", () => {
     const deps = setup();
     const held = listModelCandidates({ need: "writing-code", requires: ["tools"] }, {
       ...deps,
-      activeAccountCounts: new Map([["KEY1", 2]]),
+      activeProviderCounts: new Map([["p1", 2]]),
     });
     expect(held.candidates.every((c) => !c.model.startsWith("p1/"))).toBe(true);
 
     const shared = listModelCandidates({ need: "writing-code", requires: ["tools"] }, {
       ...deps,
-      activeAccountCounts: new Map([["KEY1", 1]]),
+      activeProviderCounts: new Map([["p1", 1]]),
     });
     expect(shared.candidates.some((c) => c.model.startsWith("p1/"))).toBe(true);
 

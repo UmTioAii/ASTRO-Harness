@@ -171,7 +171,7 @@ describe("fan-out concorrente (A11)", () => {
 
     expect(results[0]).toMatchObject({ id: "a", ok: true });
     expect(results[1]).toMatchObject({ id: "b", ok: false });
-    expect((results[1] as { error: string }).error).toContain("já está em uso");
+    expect((results[1] as { error: string }).error).toContain("já tem 2 execuções");
     expect(ledger.readAll().filter((entry) => entry.agent === "b")).toHaveLength(0);
   });
 });

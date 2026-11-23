@@ -119,7 +119,7 @@
   "expect": {
     "final": "build ok",
     "audit": [
-      "agent.spawned",
+      "agent.spawn",
       "agent.switch",
       "tool.call"
     ],

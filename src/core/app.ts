@@ -29,7 +29,7 @@ import type { AuditEvent } from "../audit";
 import { budgetStatus, effectiveBudget, raiseDeniedLabel, restrictBudget, BudgetExceededError, type BudgetDecider, type BudgetStatus } from "../budget";
 import { MaxRoundsError, runSession, runMultiAgentSession, type EffectiveIdentity, type IdentityResolver, type MultiAgentSessionOptions } from "./session";
 import { assertResumeIdentity, planResume, ReplayIncompleteError } from "../resume";
-import { activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks } from "../agent-lock";
+import { accountHasCapacity, activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks } from "../agent-lock";
 import type { CallSelection } from "../call-profile";
 import type { TurnObserver } from "../chat/turn-events";
 import { markProviderFailure, markProviderSuccess } from "../providers/health-state";
@@ -54,6 +54,7 @@ import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-searc
 import { createWebFetchTool } from "../tools/web-fetch";
 import { TodoPlanStore, createTodoWriteTool } from "../tools/todo-write";
 import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, SpawnRegistry } from "../spawn";
+import { spawnConcurrencyCap } from "../concurrency";
 import { grepTool } from "../tools/grep";
 import { globTool } from "../tools/glob";
 import { listDirTool } from "../tools/list-dir";
@@ -514,8 +515,7 @@ function providerChain(
     if (entry.accountRef === undefined) return true;
     const runKey = redactSecrets(run);
     const agentKey = redactSecrets(agentId());
-    return !activeLocks(ledger).some((lock) => lock.accountRef === entry.accountRef &&
-      !(lock.run === runKey && lock.agent_id === agentKey));
+    return accountHasCapacity(ledger, entry.accountRef, { run: runKey, agent_id: agentKey }, spawnConcurrencyCap(config).cap);
   };
   return new FallbackProvider({
     providers: [
@@ -819,8 +819,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     if (entry.accountRef === undefined) return true;
     const runKey = redactSecrets(run);
     const agentKey = redactSecrets(activeAgent.name);
-    return !activeLocks(ledger).some((lock) => lock.accountRef === entry.accountRef &&
-      !(lock.run === runKey && lock.agent_id === agentKey));
+    return accountHasCapacity(ledger, entry.accountRef, { run: runKey, agent_id: agentKey }, spawnConcurrencyCap(config).cap);
   };
   let effectiveProvider = (baseConfig?.fallback ?? []).length > 0
     ? providerChain(config, model, env, loaded.providerFactories, audit, run, ledger, quotaLimits, undefined, approveSwap, () => activeAgent.name, priceOf)

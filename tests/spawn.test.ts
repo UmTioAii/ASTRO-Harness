@@ -100,7 +100,7 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     expect(properties.maxSteps?.description).toContain("Removido");
   });
 
-  test("snapshot velho falha no lock e o limite de concorrência fecha o provider", async () => {
+  test("snapshot velho falha fechado quando o provider enche durante a escolha", async () => {
     const { cfg, ledger, audit, registry, tool, ctx } = setup();
     // Snapshot emitido antes de o provider encher.
     const snap = listModelCandidates({ need: "writing-code" }, { config: cfg, registry, ledger });
@@ -112,7 +112,8 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     });
     const stale = await tool.execute({ need: "writing-code", task: "d", model: "p1/m1", snapshot_id: snap.snapshot_id }, ctx);
     expect(stale.isError).toBe(true);
-    expect(JSON.parse(stale.output)).toMatchObject({ error: "account_locked" });
+    expect(JSON.parse(stale.output)).toMatchObject({ error: "spawn_limit_exceeded" });
+    expect(JSON.parse(stale.output).message).toContain("p1");
 
     expect((await tool.execute({ need: "writing-code", task: "b", tools: [] }, ctx)).isError).toBe(false);
     acquireAgentLock(ledger, audit, {
@@ -271,9 +272,11 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     expect(second.isError).toBe(false); // p1 is at 2, so it uses p2
     expect(JSON.parse(second.output).model).toBe("p2/m2");
     const third = await tool.execute({ need: "writing-code", task: "c", tools: [] }, ctx);
-    expect(third.isError).toBe(true);
-    expect(JSON.parse(third.output)).toMatchObject({ error: "spawn_limit_exceeded" });
-    expect(JSON.parse(third.output).message).toContain("concorrência");
-    expect(spawns.size).toBe(2);
+    expect(third.isError).toBe(false); // p2 has one free slot
+    const fourth = await tool.execute({ need: "writing-code", task: "d", tools: [] }, ctx);
+    expect(fourth.isError).toBe(true);
+    expect(JSON.parse(fourth.output)).toMatchObject({ error: "spawn_limit_exceeded" });
+    expect(JSON.parse(fourth.output).message).toContain("concorrência");
+    expect(spawns.size).toBe(3);
   });
 });

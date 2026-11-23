@@ -317,6 +317,8 @@ export interface SpawnConfig {
   parallel?: boolean;
   /** Teto de spawns por run (#552); ausente = DEFAULT_MAX_SPAWNS_PER_RUN; só no preset `control`. */
   maxActive?: number;
+  /** Execuções simultâneas por provider (ADR-0037); ausente = 2. */
+  maxConcurrent?: number;
 }
 
 /** Permissões por chamada de tool (PERM-01): modo global do harness. */
@@ -1486,15 +1488,16 @@ function validateHandoff(value: unknown): HandoffConfig {
   };
 }
 
-/** Valida a seção `spawn` (A11): `parallel` booleano e `maxActive` inteiro positivo (#552); ausente = serial e teto default. */
+/** Valida a seção `spawn` (A11): `parallel` booleano, `maxActive` (spawns/run) e `maxConcurrent` (ADR-0037). */
 function validateSpawn(value: unknown): SpawnConfig {
   const raw = expectObject(value, "spawn");
   for (const key of Object.keys(raw)) {
-    if (key !== "parallel" && key !== "maxActive") fail(`config inválida: "spawn.${key}" desconhecido`);
+    if (key !== "parallel" && key !== "maxActive" && key !== "maxConcurrent") fail(`config inválida: "spawn.${key}" desconhecido`);
   }
   return {
     ...(raw.parallel === undefined ? {} : { parallel: expectBoolean(raw.parallel, "spawn.parallel") }),
     ...(raw.maxActive === undefined ? {} : { maxActive: expectPositiveInteger(raw.maxActive, "spawn.maxActive") }),
+    ...(raw.maxConcurrent === undefined ? {} : { maxConcurrent: expectPositiveInteger(raw.maxConcurrent, "spawn.maxConcurrent") }),
   };
 }
 
@@ -1911,7 +1914,7 @@ const CONFIG_SHAPE: ConfigShape = {
     cache: { keys: ["enabled", "ttlHours", "maxEntries"] },
     team: { keys: TEAM_KEYS, children: { agentQuotas: { values: { keys: QUOTA_KEYS } } } },
     handoff: { keys: ["ackTimeoutMs"] },
-    spawn: { keys: ["parallel", "maxActive"] },
+    spawn: { keys: ["parallel", "maxActive", "maxConcurrent"] },
     permissions: { keys: ["mode", "approvalTimeoutMs"] },
     security: { keys: ["entropyThreshold"] },
     effort: { keys: ["auto", "autoJumpMax", "maxCumulativeJump"] },
@@ -2421,20 +2424,6 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
       }
       expectCheckpointName(name, `agents.${name}`);
       agents[name] = validateNamedAgent(name, agentRaw, agent, knownTools, seenModels, models, modelPool);
-    }
-  }
-
-  // A2 (ADR-0008): cada agente ativo consome uma conta exclusiva (A4, ADR-0009).
-  // O teto efetivo da v1 é 2; `maxActive` só é validado quando declarado.
-  if (Object.keys(agents).length > 0) {
-    const accounts = new Set(
-      Object.entries(providers).map(([name, provider]) => providerAccountRefFor(name, provider)),
-    ).size;
-    const ceiling = maxActive ?? 2;
-    if (ceiling > accounts) {
-      fail(
-        `config inválida: max_active_exceeds_accounts (${ceiling} agentes ativos para ${accounts} contas declaradas)`,
-      );
     }
   }
 

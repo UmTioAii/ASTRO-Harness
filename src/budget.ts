@@ -53,13 +53,16 @@ function inScope(ts: string, scope: BudgetConfig["scope"], now: Date): boolean {
 
 /** Reservas ainda sem `released` (B9), casadas por run em FIFO; filtro opcional pela janela do escopo. */
 export function outstandingReservations(ledger: Ledger, inWindow: (ts: string) => boolean = () => true): number {
-  const pending: Array<{ run: string; amount: number }> = [];
+  const pending: Array<{ key: string; amount: number }> = [];
   for (const entry of ledger.readAllEntries()) {
     if (entry.kind !== "budget" || !inWindow(entry.ts)) continue;
+    // ADR-0037: agents share an account, so a reservation is matched by run+agent;
+    // matching by run alone lets one agent's release erase another's reservation.
+    const key = `${entry.run}\u0000${entry.agent}`;
     if (entry.event === "reserved" && typeof entry.reserved === "number") {
-      pending.push({ run: entry.run, amount: entry.reserved });
+      pending.push({ key, amount: entry.reserved });
     } else if (entry.event === "released") {
-      const index = pending.findIndex((item) => item.run === entry.run);
+      const index = pending.findIndex((item) => item.key === key);
       if (index >= 0) pending.splice(index, 1);
     }
   }

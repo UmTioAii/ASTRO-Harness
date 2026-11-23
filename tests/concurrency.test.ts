@@ -104,7 +104,12 @@ describe("bounded spawn (ADR-0037)", () => {
   });
 
   test("two agents share one account; the third execution is refused", async () => {
-    const { ledger, audit, tool, ctx } = setup();
+    const single = config({
+      providers: { p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "KEY1" } },
+      models: [{ provider: "p1", id: "m1", tags: ["writing-code", "tools"], context: 8192,
+        capabilities: { tools: true } }],
+    });
+    const { ledger, audit, tool, ctx } = setup(single);
     acquireAgentLock(ledger, audit, {
       run: "r1", agent_id: "planner", session_id: "r1", provider: "p1", credentialRef: "KEY1", accountRef: "KEY1",
     });
