@@ -25,20 +25,24 @@ export type ShellScan =
   | { ok: false; code: typeof SHELL_UNPARSABLE; message: string };
 
 const UNPARSABLE =
-  "shell_unparsable: the command cannot be analyzed before execution (dynamic expansion, " +
-  "backticks or unbalanced syntax); rewrite it as literal subcommands without $ or ` " +
-  "(and without unmatched quotes) and retry";
+  "shell_unparsable: the command cannot be analyzed before execution (dynamic expansion " +
+  "such as $, backticks or %VAR%, a trailing operator, or unbalanced quotes); rewrite it " +
+  "as literal subcommands without $, ` or % and retry";
 const refuse = (): ShellScan => ({ ok: false, code: SHELL_UNPARSABLE, message: UNPARSABLE });
+const WIN = process.platform === "win32";
+
+/** On Windows a backslash is a path separator, not an escape for letters/dots. */
+const escapes = (next: string | undefined): boolean =>
+  next !== undefined && (!WIN || next === '"' || next === "'" || next === " " || next === "\t");
 
 /** Split a command line into subcommands; quoted operators stay literal. */
 export function scanShellCommand(command: string): ShellScan {
-  if (/%[A-Za-z_][A-Za-z0-9_]*%/.test(command)) return refuse(); // cmd.exe expansion
   const parts: string[][] = [];
   const words: string[] = [];
   let word = "";
   let wordStarted = false;
   let quote: "'" | '"' | null = null;
-  let expectCommand = true; // makes `ls &&`, `; ls` and `a || | b` unparsable
+  let expectCommand = true; // makes `ls &&`, `; ls`, `a || | b` and `ls;` unparsable
   const flushWord = (): void => {
     if (wordStarted || word.length > 0) words.push(word);
     word = "";
@@ -63,12 +67,11 @@ export function scanShellCommand(command: string): ShellScan {
     }
     if (quote === '"') {
       if (ch === '"') { quote = null; continue; }
-      if (ch === "$" || ch === "`") return refuse();
+      if (ch === "$" || ch === "`" || ch === "%") return refuse();
       if (ch === "\\") {
         const next = command[i + 1];
-        if (next === undefined) return refuse();
-        word += next;
-        i += 1;
+        if (next === undefined && !WIN) return refuse();
+        if (escapes(next)) { word += next as string; i += 1; } else word += "\\";
         continue;
       }
       word += ch;
@@ -79,13 +82,12 @@ export function scanShellCommand(command: string): ShellScan {
     if (ch === "\n" || ch === ";") { if (!separator()) return refuse(); continue; }
     if (ch === "\\") {
       const next = command[i + 1];
-      if (next === undefined) return refuse();
-      word += next;
+      if (next === undefined && !WIN) return refuse();
+      if (escapes(next)) { word += next as string; i += 1; } else word += "\\";
       wordStarted = true;
-      i += 1;
       continue;
     }
-    if (ch === "$" || ch === "`") return refuse();
+    if (ch === "$" || ch === "`" || ch === "%") return refuse();
     if (ch === "&") {
       if (word.endsWith(">") || word.endsWith("<")) { word += ch; continue; } // 2>&1
       if (command[i + 1] === "&") i += 1;
@@ -111,34 +113,63 @@ export function scanShellCommand(command: string): ShellScan {
 
 const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Prefix pattern, anchored: `git status *` covers `git status -s`, `git *` too. */
+/** Prefix pattern, anchored; a trailing ` *` also matches the bare prefix. */
 function matches(pattern: string, part: string): boolean {
   const normalized = pattern.trim().replace(/\s+/g, " ");
-  if (normalized.length === 0) return false;
-  return new RegExp(`^${normalized.split("*").map(escapeRegex).join(".*")}$`).test(part);
+  if (normalized === "*") return true;
+  const optional = normalized.endsWith(" *");
+  const body = optional ? normalized.slice(0, -2) : normalized;
+  const expression = body.split("*").map(escapeRegex).join(".*") + (optional ? "( .*)?" : "");
+  return new RegExp(`^${expression}$`).test(part);
+}
+
+/** The value a path-like decision must classify: redirect or `--flag=` unwrapped. */
+function tokenValue(token: string): string | undefined {
+  const bare = token.replace(/^[<>]+/, "");
+  if (bare.length === 0) return undefined;
+  if (!bare.startsWith("-")) return bare;
+  if (bare.includes("=")) return bare.slice(bare.indexOf("=") + 1) || undefined;
+  const attached = bare.search(/[./\\]/);
+  return attached === -1 ? bare : bare.slice(attached);
 }
 
 function isPathLike(token: string): boolean {
-  const bare = token.replace(/^[<>]+/, "");
-  const value = bare.startsWith("-") && bare.includes("=") ? bare.slice(bare.indexOf("=") + 1) : bare;
-  if (value.length === 0 || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return false; // URL
+  const value = tokenValue(token);
+  if (value === undefined || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return false; // URL
+  if (value === "." || value === "..") return true;
   if (value.includes("/") || value.includes("\\") || value.startsWith("~")) return true;
   return /^[a-zA-Z]:/.test(value) || /\.[A-Za-z0-9]+$/.test(value);
 }
 
-/** Resolve existing paths so a symlink or `..` cannot hide the escape. */
-function outsideProject(token: string, cwd: string): boolean {
-  const bare = token.replace(/^[<>]+/, "");
-  if (bare.startsWith("~")) return true;
-  let real = resolve(cwd, bare);
+/** Physical root, so a symlinked/junction project does not make itself external. */
+function physical(path: string): string {
+  const absolute = resolve(path);
+  try { return realpathSync(absolute); } catch { return absolute; }
+}
+
+function outsideProject(token: string, base: string): boolean {
+  const value = tokenValue(token);
+  if (value === undefined) return false;
+  if (value.startsWith("~")) return true; // another home is never the project
+  const root = physical(base);
+  let real = resolve(root, value);
   try { real = realpathSync(real); } catch { /* missing paths stay lexical */ }
-  const rel = relative(resolve(cwd), real);
+  const rel = relative(root, real);
   return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
 
+/** First subcommand outside the project; `cd <path>` moves the base for the rest. */
 function externalPart(parts: readonly (readonly string[])[], cwd: string): string | undefined {
+  let base = physical(cwd);
   for (const words of parts) {
-    if (words.some((word) => isPathLike(word) && outsideProject(word, cwd))) return words.join(" ");
+    const first = words[0];
+    if (first === "cd" || first === "pushd") {
+      const target = words.slice(1).find((word) => !word.startsWith("-"));
+      if (target === undefined || outsideProject(target, base)) return words.join(" ");
+      base = physical(resolve(base, tokenValue(target) ?? target));
+      continue;
+    }
+    if (words.some((word) => isPathLike(word) && outsideProject(word, base))) return words.join(" ");
   }
   return undefined;
 }

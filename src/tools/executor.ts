@@ -546,13 +546,15 @@ export class ToolExecutor {
       }
     }
     // `allow` automático só é auditado em bypass (#268): nele toda decisão fica rastreável.
-    if (decision !== "allow" || this.mode === "bypass") {
+    // A rule allow also carries its origin (#599 review): the source is auditable.
+    if (decision !== "allow" || this.mode === "bypass" || hint?.origin !== undefined) {
       this.auditRef.append({
         run: ctx.run,
         agent: ctx.agent,
         tipo: "permission.decision",
         payload: {
           name: call.name, action, mode: this.mode, decision: effective,
+          ...(hint?.origin === undefined ? {} : { origin: hint.origin }),
           ...(hint?.code === undefined ? {} : { reason: hint.code }),
         },
       });

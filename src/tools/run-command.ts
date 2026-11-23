@@ -704,10 +704,11 @@ function runCommandPolicyHint(input: unknown, ctx: ToolContext): ToolPermissionH
   return policy.decision === "deny"
     ? {
         decision: "deny",
+        origin: policy.origin,
         ...(policy.code === undefined ? {} : { code: policy.code }),
         ...(policy.message === undefined ? {} : { message: policy.message }),
       }
-    : { decision: policy.decision };
+    : { decision: policy.decision, origin: policy.origin };
 }
 
 /** Prompt detail: the whole command, plus the part that triggered a compound ask (#599). */

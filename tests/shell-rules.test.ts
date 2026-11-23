@@ -68,10 +68,11 @@ describe("compound command scanner (#599, ADR-0001)", () => {
   });
   test("keeps backslashes in Windows paths, quoted paths and ..\\..\\ escapes", () => {
     const plain = scanShellCommand("cat C:\\Windows\\win.ini");
-    expect(plain.ok && plain.words[0]).toEqual(["cat", "C:\\Windows\\win.ini"]);
     const quoted = scanShellCommand('cat "C:\\Program Files\\x.txt"');
-    expect(quoted.ok && quoted.words[0]).toEqual(["cat", "C:\\Program Files\\x.txt"]);
     const relative = scanShellCommand("cat ..\\..\\secret.txt");
+    if (process.platform !== "win32") return; // POSIX keeps its escape semantics
+    expect(plain.ok && plain.words[0]).toEqual(["cat", "C:\\Windows\\win.ini"]);
+    expect(quoted.ok && quoted.words[0]).toEqual(["cat", "C:\\Program Files\\x.txt"]);
     expect(relative.ok && relative.words[0]).toEqual(["cat", "..\\..\\secret.txt"]);
   });
 });

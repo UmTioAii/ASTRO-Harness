@@ -154,6 +154,8 @@ export interface ToolPermissionHint {
   code?: string;
   /** Sanitized message for a deny; never the raw command. */
   message?: string;
+  /** Policy origin for the audit record (#599 review). */
+  origin?: "rule" | "external_directory" | "unparsable";
 }
 
 /** Contrato de uma tool executável pelo agente. */
