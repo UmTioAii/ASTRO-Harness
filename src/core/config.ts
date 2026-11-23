@@ -1502,10 +1502,16 @@ function validateSpawn(value: unknown): SpawnConfig {
   for (const key of Object.keys(raw)) {
     if (key !== "parallel" && key !== "maxActive" && key !== "maxConcurrent") fail(`config inválida: "spawn.${key}" desconhecido`);
   }
+  const maxConcurrent = raw.maxConcurrent === undefined
+    ? undefined
+    : expectPositiveInteger(raw.maxConcurrent, "spawn.maxConcurrent");
+  if (maxConcurrent !== undefined && maxConcurrent > MAX_ACTIVE_AGENTS) {
+    fail(`invalid config: "spawn.maxConcurrent" exceeds the physical ceiling ${MAX_ACTIVE_AGENTS}`);
+  }
   return {
     ...(raw.parallel === undefined ? {} : { parallel: expectBoolean(raw.parallel, "spawn.parallel") }),
     ...(raw.maxActive === undefined ? {} : { maxActive: expectPositiveInteger(raw.maxActive, "spawn.maxActive") }),
-    ...(raw.maxConcurrent === undefined ? {} : { maxConcurrent: expectPositiveInteger(raw.maxConcurrent, "spawn.maxConcurrent") }),
+    ...(maxConcurrent === undefined ? {} : { maxConcurrent }),
   };
 }
 

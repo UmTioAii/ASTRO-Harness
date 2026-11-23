@@ -82,6 +82,15 @@ export async function runFanOut<T>(
     assertFanOutBound(perAccount);
     const baseline = opts.activeAccounts ?? new Map<string, number>();
     const byAccount = new Map<string, number>();
+    // Refuse up front instead of waiting forever: an account already at the cap
+    // cannot make progress no matter how many slots are free.
+    const skipped = new Set<number>();
+    for (const [index, job] of jobs.entries()) {
+      if ((baseline.get(job.account) ?? 0) >= perAccount) {
+        results[index] = { id: job.id, ok: false, error: "spawn_limit_exceeded: account at concurrency cap" };
+        skipped.add(index);
+      }
+    }
     let active = 0;
     // Acorda todos: um waiter pode estar bloqueado pela conta enquanto outro tem slot.
     const waiters: Array<() => void> = [];
@@ -103,6 +112,7 @@ export async function runFanOut<T>(
     };
 
     await Promise.all(jobs.map(async (job, index) => {
+      if (skipped.has(index)) return;
       await acquire(job.account);
       try {
         await runOne(job, index);

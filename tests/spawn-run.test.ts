@@ -137,7 +137,8 @@ describe("spawn_agent ponta a ponta (S-11, C4a)", () => {
       expect(tree.nodes.find((node) => node.agent_id === "sub-2")?.reason).toBe("completed");
       expect(activeLocks(ledger)).toEqual([]);
       // ADR-0037: sub-1 compartilha p1 com o planner; o revisor usa o próprio provider.
-      expect(bodies.filter((body) => body.model === "m1").length).toBeGreaterThanOrEqual(3);
+      expect(bodies.filter((body) => body.model === "m1").length).toBe(5);
+      expect(bodies[2]?.model).toBe("m1");
       expect(bodies.filter((body) => body.model === "m3").length).toBe(1);
 
       const system = (index: number): string =>

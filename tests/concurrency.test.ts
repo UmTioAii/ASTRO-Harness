@@ -139,9 +139,11 @@ describe("bounded spawn (ADR-0037)", () => {
     expect(note).toContain("maxTurns now means turns");
   });
 
-  test("spawn.maxConcurrent rejects zero and fractional values", () => {
+  test("spawn.maxConcurrent rejects zero, fractional and above-ceiling values", () => {
     expect(() => config({ spawn: { maxConcurrent: 0 } })).toThrow(/maxConcurrent/);
     expect(() => config({ spawn: { maxConcurrent: 2.5 } })).toThrow(/maxConcurrent/);
+    expect(() => config({ spawn: { maxConcurrent: 9 } })).toThrow(/maxConcurrent/);
+    expect(() => config({ spawn: { maxConcurrent: 64 } })).toThrow(/physical ceiling/);
   });
 
   test("two agents share one account; the third execution is refused", async () => {
@@ -203,9 +205,8 @@ describe("bounded spawn (ADR-0037)", () => {
   });
 
   test("spawn.maxConcurrent is also clamped to the physical cap", () => {
-    const cfg = config({ spawn: { maxConcurrent: 1000 } });
-    expect(spawnConcurrencyCap(cfg).cap).toBe(8);
-    expect(spawnConcurrencyCap(cfg).source).toBe("config");
+    expect(spawnConcurrencyCap({ spawn: { maxConcurrent: 1000 } } as unknown as AstroConfig).cap).toBe(8);
+    expect(spawnConcurrencyCap({ spawn: { maxConcurrent: 1000 } } as unknown as AstroConfig).source).toBe("config");
   });
 
   test("a child cannot spawn a grandchild", async () => {

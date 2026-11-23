@@ -184,14 +184,17 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         const runnable: Array<{ task: FanOutTask; index: number; account: string }> = [];
         tasks.forEach((task, index) => {
           const account = deps.accountOf?.(task.agent) ?? task.agent;
-          const used = (baseline.get(account) ?? 0) + (admitted.get(account) ?? 0);
+          const used = admitted.get(account) ?? 0;
+          const accountCap = gated
+            ? Math.min(perAccount - (baseline.get(account) ?? 0), slots?.available ?? perAccount)
+            : perAccount;
           // Serial fan-out never runs siblings concurrently, so account admission
           // only applies when the flag turns concurrency on (ADR-0008 default).
-          if (gated && used >= perAccount) {
+          if (gated && used >= accountCap) {
             outcomes[index] = {
               id: `t${index + 1}`,
               ok: false,
-              error: `spawn_limit_exceeded: conta "${account}" no limite de ${perAccount} execuções concorrentes`,
+              error: `spawn_limit_exceeded: conta "${account}" no limite de ${accountCap} execuções concorrentes`,
             };
             return;
           }
