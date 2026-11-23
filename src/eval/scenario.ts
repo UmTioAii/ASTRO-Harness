@@ -546,9 +546,15 @@ function assertEffectiveLoopback(config: AstroConfig): void {
       assertLoopbackUrl(base, field);
     };
     check("webSearch.baseUrl", config.webSearch.baseUrl ?? DEFAULT_BASE[config.webSearch.provider]);
-    // The whole chain is a fixture surface, not only the primary (#604).
+    // The whole chain is a fixture surface, not only the primary (#604). A chain
+    // entry has no baseUrl, so name the default endpoint that failed and why it
+    // cannot be overridden here.
     for (const [index, entry] of (config.webSearch.fallback ?? []).entries()) {
-      check(`webSearch.fallback[${index}].baseUrl`, DEFAULT_BASE[entry.provider]);
+      const base = DEFAULT_BASE[entry.provider];
+      if (base === undefined || base === "") {
+        throw new Error(`cenário com webSearch.fallback[${index}] (${entry.provider}) sem endpoint padrão; o golden não pode declarar esse fallback`);
+      }
+      assertLoopbackUrl(base, `webSearch.fallback[${index}] (endpoint padrão de ${entry.provider}; o golden não pode sobrescrevê-lo)`);
     }
   }
   if (config.team?.auditWebhook !== undefined) {
