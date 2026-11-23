@@ -306,7 +306,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         }
         const requestedConcurrency = raw.concurrency;
         if (requestedConcurrency !== undefined && (typeof requestedConcurrency !== "number" || !Number.isInteger(requestedConcurrency) || requestedConcurrency < 1)) {
-          return { output: JSON.stringify({ error: "invalid_request", message: "campo 'concurrency' deve ser inteiro >= 1" }), isError: true };
+          return { output: JSON.stringify({ error: "invalid_request", message: "field 'concurrency' must be an integer >= 1" }), isError: true };
         }
 
         // v1 é serial: filho não spawna neto (sem canal p2p e sem histórico do pai).
@@ -394,7 +394,11 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         const rawCredential = (providerConfig as { credentialRef?: unknown }).credentialRef;
         const keyless = providerConfig.kind === "openai-compat" &&
           (typeof rawCredential !== "string" || rawCredential.length === 0);
-        const grant = grantConcurrency(requestedConcurrency, spawnConcurrencyCap(deps.config));
+        const grant = grantConcurrency(requestedConcurrency, {
+          ...spawnConcurrencyCap(deps.config),
+          // Until shared accounts (#632) admission still stops at the A4 ceiling.
+          cap: Math.min(spawnConcurrencyCap(deps.config).cap, ceiling),
+        });
         const agentId = deps.spawns.nextId(new Set(Object.keys(deps.config.agents ?? {})));
         const reason = [choice.reason, typeof raw.reason === "string" ? raw.reason : ""]
           .filter((part) => part.length > 0)
@@ -464,6 +468,11 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
           throw error;
         }
 
+        const notes: string[] = [];
+        if (grant.truncated) notes.push(grant.reason);
+        if (raw.maxTurns !== undefined && requestedMaxRounds === undefined) {
+          notes.push("maxTurns now means turns; set maxRounds to cap rounds");
+        }
         return {
           output: JSON.stringify({
             agent_id: agentId,
@@ -472,11 +481,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
             status: "active",
             limits: { rounds: childMax, turns: 1 },
             concurrency: grant,
-            ...(grant.truncated
-              ? { note: grant.reason }
-              : raw.maxTurns !== undefined && requestedMaxRounds === undefined
-                ? { note: "maxTurns now means turns; set maxRounds to cap rounds" }
-                : {}),
+            ...(notes.length === 0 ? {} : { note: notes.join("; ") }),
           }),
           isError: false,
         };

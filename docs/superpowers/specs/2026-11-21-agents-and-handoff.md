@@ -31,7 +31,7 @@ harness heuristic: the model asks, the harness decides.
 | depth | **1, no grandchild**, not configurable (`src/spawn.ts:297`) |
 
 Every spawn is recorded as an `agent.spawn` audit event with `requested`, `granted`, `cap`,
-`source` (`prompt` | `config` | `default`) and `reason`. Above the cap the harness grants the
+`source` (`request` | `config` | `default`) and `reason`. Above the cap the harness grants the
 cap and says so in the tool result — "requested 8, granted 2: profile cap" — so the model
 does not repeat the request blindly and the user sees the request in `/usage`.
 
