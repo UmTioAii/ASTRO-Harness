@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { MCPError } from "../src/mcp/types";
 import type { MCPServerConfig } from "../src/core/config";
 import { MCPRegistry } from "../src/mcp/registry";
+import { waitFor } from "./helpers/wait";
 
 const STUB = `
 import { appendFileSync, existsSync } from "node:fs";
@@ -23,6 +24,9 @@ process.stdin.on("data", (chunk) => {
     const reply = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n");
     if (msg.method === "initialize") {
       if (process.env.PID_FILE !== undefined) appendFileSync(process.env.PID_FILE, process.pid + "\\n");
+      // Parks the handshake until the gate file appears or the process dies, so a test that closes
+      // mid-connect never races a fixed delay (#628).
+      while (process.env.INIT_GATE !== undefined && !existsSync(process.env.INIT_GATE)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       if (process.env.INIT_DELAY !== undefined) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.INIT_DELAY));
       reply({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stdio-registry", version: "1" } } });
     } else if (msg.method === "tools/list") reply({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "echo" }, { name: "boom" }, { name: "suicide" }] } });
@@ -65,19 +69,15 @@ const waitObservedDeath = async (pid: number, closed: () => boolean): Promise<bo
   await waitFor(closed, "transporte observou a morte do filho");
   return true;
 };
-/** Espera o sinal real (arquivo de pid, morte do processo) em vez de dormir um tempo fixo. */
-const waitFor = async (condition: () => boolean, label: string, timeoutMs = 15_000): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() >= deadline) throw new Error(`condição não atingida em ${timeoutMs}ms: ${label}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-};
 // `process.execPath` é o próprio binário bun: não passa pelo shim `.cmd` do PATH (um processo menos
 // por spawn). 15000ms cobre spawn real + handshake; 3000ms estourava sob a carga da suíte (#540).
-const stdioCfg = (pidFile: string, delay?: number): MCPServerConfig => ({
+const stdioCfg = (pidFile: string, opts: { delay?: number; gate?: string } = {}): MCPServerConfig => ({
   transport: "stdio", command: process.execPath, args: [writeStub(join(pidFile, ".."))], timeoutMs: 15_000, enabled: true,
-  env: delay === undefined ? { PID_FILE: pidFile } : { PID_FILE: pidFile, INIT_DELAY: String(delay) },
+  env: {
+    PID_FILE: pidFile,
+    ...(opts.delay === undefined ? {} : { INIT_DELAY: String(opts.delay) }),
+    ...(opts.gate === undefined ? {} : { INIT_GATE: opts.gate }),
+  },
 });
 
 test("registry conecta com isolamento, namespace e cache", async () => {
@@ -162,7 +162,7 @@ test("chamadas concorrentes em cliente morto: MCPError e uma reconexão", async 
 test("close durante reconexão não deixa órfão e classifica o erro", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
   const pidFile = pidFileOf(dir);
-  const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile, 400) }, warn: () => {} });
+  const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile, { delay: 400 }) }, warn: () => {} });
   await registry.connectAll();
   const dead = pids(pidFile)[0];
   expect(dead).toBeDefined();
@@ -180,12 +180,17 @@ test("close durante connectAll não deixa órfãos", async () => {
   const dir = mkdtempSync(join(tmpdir(), "astro-mcpreg-"));
   const pidFile = pidFileOf(dir);
   const slowPidFile = join(dir, "pids-lento");
-  const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile), lento: stdioCfg(slowPidFile, 400) }, warn: () => {} });
+  const gate = join(dir, "init-gate");
+  const registry = new MCPRegistry({ servers: { fs: stdioCfg(pidFile), lento: stdioCfg(slowPidFile, { gate }) }, warn: () => {} });
   const inFlight = registry.connectAll();
   await waitFor(() => pids(slowPidFile).length === 1, "fs conectou e o lento está no initialize");
+  // close lands while the handshake is still parked (never inside a fixed window) and the handshake
+  // only finishes after it, so the assertion below cannot depend on runner speed (#628).
   registry.close();
+  writeFileSync(gate, "go");
   await expect(inFlight).rejects.toThrow(/fechado/);
   await expect(waitDead(pids(slowPidFile)[0]!)).resolves.toBe(true);
+  await expect(waitDead(pids(pidFile)[0]!)).resolves.toBe(true); // o servidor que já tinha conectado também morre
 }, 20_000);
 
 test("reconexão com backoff exponencial: falha rápido no cooldown, dobra e reseta no sucesso", async () => {
