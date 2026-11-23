@@ -34,9 +34,9 @@ Resumo: `run_tests` executa o comando de teste declarado em `run.tests.command` 
 | Sandbox | Segue o mesmo `shell.mode`/`sandbox` do `run_command` (#599): host com aprovação por comando é o default; `true`/`"docker"` usa `docker run` efêmero, `--network none`, rootfs read-only, máscaras `:ro` de `.git`/hard-block, cwd bindado |
 | Shell | Nenhum: no host o argv configurado é spawnado item a item; no Docker ele vira o `cmd` do container (`dockerArgvNoShell`) |
 | `sandbox: false` | Recusa `sandbox_required_for_shell` sem tocar o host (I-19), igual ao `run_command` |
-| `sandbox` ausente/`"auto"` | Roda no host atrás do mesmo gate/approval do `run_command`; o `filter` é confinado ao cwd (recusa `external_directory` fora dele, inclusive por symlink/glob) |
+| `sandbox` ausente/`"auto"` | Roda no host atrás do mesmo gate/approval do `run_command`; o `filter` é confinado ao cwd (recusa `external_directory` fora dele, inclusive por symlink/glob) e um caminho crítico (`.env*`, `.git/*`) é negado com `path_hard_blocked` |
 | `sandbox: true`/`"docker"` | Habilita o caminho Docker; sem daemon a recusa é explícita com `sandbox_required_for_shell`, sem downgrade para o host |
-| Env | Host não entra no container (env mínima do docker CLI), como no `run_command` (I-03) |
+| Env | No host usa `sanitizedEnv` (nomes de segredo removidos); no container, env mínima do docker CLI (I-03) |
 
 ## Saída
 

@@ -795,7 +795,7 @@ function filterOutsideProject(filter: string, ctx: ToolContext): ToolResult | un
   }
   const resolved = resolve(ctx.cwd, filter);
   const rel = relative(ctx.cwd, resolved);
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     return failureCode(
       "external_directory: run_tests filter cannot leave the project directory",
       "external_directory",
@@ -957,10 +957,11 @@ function serializeTestsResult(
 }
 
 /**
- * Tool `run_tests` (F-15, #538): executa o comando de teste DO PROJETO pelo
- * mesmo sandbox do `run_command`, com a mesma recusa sem sandbox (I-19). O argv
- * vem de `run.tests.command` e vai item a item para o container — sem shell,
- * sem interpolação e sem flag escolhida pelo modelo. `filter`, quando presente,
+ * Tool `run_tests` (F-15, #538): executa o comando de teste DO PROJETO no
+ * mesmo caminho do `run_command` — host com aprovação por comando (default) ou
+ * Docker explícito —, com a mesma recusa sem shell (I-19). O argv vem de
+ * `run.tests.command` e vai item a item, sem shell, sem interpolação e sem flag
+ * escolhida pelo modelo. `filter`, quando presente, é um único argumento extra
  * é um único argumento extra.
  */
 export function createRunTestsTool(deps: RunTestsDeps): Tool {
@@ -986,7 +987,8 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
     manifest: {
       name: "run_tests",
       description:
-        "Executa o comando de teste do projeto (run.tests.command, argv) no mesmo sandbox Docker do run_command, " +
+        "Executa o comando de teste do projeto (run.tests.command, argv) no mesmo caminho do run_command " +
+        "(host com aprovação por comando por padrão, Docker só com sandbox:true/\"docker\"), " +
         "sem shell: `filter` vira um único argumento extra. Sem run.tests.command devolve tests_not_configured.",
       parameters: {
         type: "object",
@@ -1097,7 +1099,7 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
   };
 }
 
-/** Shared tail for `run_tests`: cap, result, audit. Raw output is already sanitized. */
+/** Shared tail for `run_tests`: cap, result, audit. The cap redacts before truncating. */
 function finishTestsResult(
   argv: string[],
   rawOutput: string,
@@ -1109,8 +1111,8 @@ function finishTestsResult(
   const durationMs = Date.now() - startedAt;
   const failed = exit.cancelled || exit.timedOut || exit.code !== 0;
   const keep = failed ? "tail" : "head";
-  // Redact first, then apply the failure-aware cap so the tail survives.
-  const capped = capTestsOutput(redactSecrets(rawOutput), keep);
+  // The cap redacts, then truncates from the failure-aware side.
+  const capped = capTestsOutput(rawOutput, keep);
   const result: RunTestsResult = {
     // Same redaction as the audit: the argv comes from config and can carry a secret (I-03).
     command: argv.map((item) => redactSecrets(item)),

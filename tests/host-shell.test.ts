@@ -474,6 +474,27 @@ describe("limites do host (#474)", () => {
     expect(mock.calls).toHaveLength(0);
   });
 
+  test("run_tests runs in-project filters through the host argv and still requires the gate", async () => {
+    mock = installNoDockerSpawnMock({ stdout: "ok\n" });
+    const mod = await isolatedRunCommand("host-run-tests-positive");
+    mod.configureRunCommand({ mode: "host" });
+    const dir = cwd();
+    const auditPath = join(dir, ".astro", "audit.jsonl");
+    const tool = mod.createRunTestsTool({ config: { command: ["echo", "test"] }, audit: new Auditor(auditPath) });
+    const executor = new ToolExecutor({
+      tools: [tool], allow: ["run_tests"], audit: new Auditor(auditPath), permissionMode: "ask", approveTool: () => true,
+    });
+    const result = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_tests", arguments: JSON.stringify({ filter: "..fixtures.test.ts" }),
+    });
+    // A name starting with ".." but staying inside the cwd is a valid filter.
+    expect(result.isError).toBeFalsy();
+    expect(mock.calls.some((cmd) => cmd.join(" ").includes("test ..fixtures.test.ts"))).toBe(true);
+    // Direct execution without an executor never reaches the host.
+    const direct = await tool.execute({}, ctxOf(dir));
+    expect(direct.code).toBe("host_shell_requires_gate");
+  });
+
   test("run_tests hard-blocks a critical glob filter on the host", async () => {
     mock = installNoDockerSpawnMock();
     const mod = await isolatedRunCommand("host-run-tests-critical-glob");
