@@ -321,7 +321,8 @@ export const DEFAULT_ACK_TIMEOUT_MS = 30_000;
 export const MAX_ACTIVE_AGENTS = 8;
 
 /** Seção `spawn` (A11, ADR-0008): paralelismo é opt-in; serial é o default. */
-export interface SpawnConfig {  parallel?: boolean;
+export interface SpawnConfig {
+  parallel?: boolean;
   /** Teto de spawns por run (#552); ausente = DEFAULT_MAX_SPAWNS_PER_RUN; só no preset `control`. */
   maxActive?: number;
   /** Execuções simultâneas (ADR-0037); ausente = 2. */
@@ -2459,7 +2460,7 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
   }
 
   if (maxActive !== undefined && maxActive > MAX_ACTIVE_AGENTS) {
-    fail(`config inválida: "agents.maxActive" exceeds the physical ceiling ${MAX_ACTIVE_AGENTS}`);
+    fail(`invalid config: "agents.maxActive" exceeds the physical ceiling ${MAX_ACTIVE_AGENTS}`);
   }
 
   // A2 (ADR-0008): cada agente ativo consome uma conta exclusiva (A4, ADR-0009).

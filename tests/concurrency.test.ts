@@ -77,7 +77,7 @@ describe("bounded spawn (ADR-0037)", () => {
     const { tool, ctx } = setup(config({ agents: { maxActive: 3 } }));
     const result = await tool.execute({ need: "writing-code", task: "a", tools: [], concurrency: 3 }, ctx);
     const body = JSON.parse(result.output) as { concurrency: { granted: number; cap: number; truncated: boolean } };
-    expect(body.concurrency).toMatchObject({ granted: 1, cap: 1, truncated: true });
+    expect(body.concurrency).toMatchObject({ granted: 1, cap: 3, truncated: true });
   });
 
   test("spawn.maxConcurrent 1 and agents.maxActive precedence reach the tool", async () => {

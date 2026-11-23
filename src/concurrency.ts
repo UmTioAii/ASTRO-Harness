@@ -50,17 +50,25 @@ export function spawnConcurrencyCap(config: AstroConfig): ConcurrencyCap {
 }
 
 /** Truncate the request at the cap and state the cut, so the model does not ask again blindly. */
-export function grantConcurrency(requested: number | undefined, cap: ConcurrencyCap): ConcurrencyGrant {
+export function grantConcurrency(
+  requested: number | undefined,
+  cap: ConcurrencyCap,
+  ceiling?: number,
+): ConcurrencyGrant {
   const asked = positiveInteger(requested) ?? 1;
-  const granted = Math.min(asked, cap.cap);
+  const executable = ceiling === undefined ? cap.cap : Math.min(cap.cap, Math.max(1, Math.floor(ceiling)));
+  const granted = Math.min(asked, executable);
+  const ceilingLimited = ceiling !== undefined && ceiling < cap.cap && granted < asked;
   return {
     requested: asked,
     granted,
     cap: cap.cap,
     source: cap.source,
     truncated: granted < asked,
-    reason: granted < asked
-      ? `requested ${asked}, granted ${granted}: ${cap.source} cap`
-      : `within ${cap.source} cap`,
+    reason: ceilingLimited
+      ? `requested ${asked}, granted ${granted}: account ceiling (${cap.source} cap ${cap.cap})`
+      : granted < asked
+        ? `requested ${asked}, granted ${granted}: ${cap.source} cap`
+        : `within ${cap.source} cap`,
   };
 }
