@@ -166,7 +166,8 @@ describe("run_command on the host by default, approved per command (#474, #599)"
     expect(mock.calls.some((cmd) => cmd[0] === "docker")).toBe(false);
     expect(mock.runCalls).toHaveLength(0);
     const hostEvent = auditEvents(auditPath).find((event) => event.tipo === "host_shell.decision");
-    expect(hostEvent?.payload).toMatchObject({ decision: "allow", permissionMode: "ask" });
+    expect(hostEvent?.payload).toMatchObject({ effect: "allow", origin: "mode", stage: "gate", permissionMode: "ask" });
+    expect((hostEvent?.payload as { commandHash?: string }).commandHash).toMatch(/^[a-f0-9]{16}$/);
     expect(JSON.stringify(hostEvent)).not.toContain("astro-host-default");
   });
 
@@ -273,8 +274,11 @@ describe("run_command on the host by default, approved per command (#474, #599)"
     expect(denied.code).toBe("host_shell_confirmation_required");
     expect(mock.runCalls).toHaveLength(0);
     expect(mock.calls.filter((cmd) => cmd[0] !== "docker")).toHaveLength(0);
-    const denyEvent = auditEvents(auditPath).find((event) => event.tipo === "host_shell.decision");
-    expect(denyEvent?.payload).toMatchObject({ decision: "deny", reason: "bypass_confirmation_required" });
+    const denyEvent = auditEvents(auditPath).find((event) =>
+      event.tipo === "host_shell.decision" && (event.payload as { reason?: string }).reason === "bypass_confirmation_required");
+    expect(denyEvent?.payload).toMatchObject({
+      effect: "deny", origin: "mode", stage: "execution", reason: "bypass_confirmation_required",
+    });
 
     const allowed = await executor.run(
       ctxOf(dir, { env: { ...process.env, [HOST_SHELL_BYPASS_CONFIRMATION_ENV]: "1" } }),
