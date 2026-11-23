@@ -185,7 +185,7 @@ Descartados após verificação: IPv4 alternativo no guard de URL (o `URL` canon
 |---|---|
 | `docs/adr/0014` e `docs/adr/0030` | perdem "turno é unidade de interação, não de limite" (P0, ADR-0033) |
 | `docs/adr/0031` | superado: shell no host por padrão; Docker fica inativo e só o alias legado mantém o sentido antigo (P0.5, ADR-0034) |
-| `docs/adr/0033` | linha do shell: `shell.mode` é `host`/`off`, e `sandbox` legado mantém o sentido de schema 1 (P0.5, ADR-0034) |
+| `docs/adr/0033` | linha do shell: `shell.mode` é `host`/`off`; `sandbox` legado mantém o sentido de schema 1, exceto `"auto"`/ausente, que passam a host por decisão do alpha.5 (P0.5, ADR-0034) |
 | `docs/adr/0028` "Guardas de segurança" | nenhum alias ou migração rebaixa o valor efetivo de uma chave de segurança; o alias do shell obedece (P0.5) |
 | `docs/invariants.md` I-11 | reescrito: shell no host com aprovação por comando é o padrão; `sandbox: true`/`"docker"` ainda exige Docker (P0.5, ADR-0034) |
 | `docs/adr/0009` A4 | revogado: concorrência por conta com reserva somada (P4, ADR-0037) |

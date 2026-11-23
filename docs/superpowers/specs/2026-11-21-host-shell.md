@@ -34,8 +34,10 @@ Docker keeps that requirement (§2).
 select Docker, and the Docker path stays in `src/tools/run-command.ts`, with its own tests
 still running, so it does not rot and coverage does not drop.
 
-A legacy `tools.run_command.sandbox` keeps its schema-1 meaning; the alias never lowers a
-security setting below what the file asked (ADR-0033, ADR-0028 "Guardas de segurança"):
+A legacy `tools.run_command.sandbox` keeps its schema-1 meaning for `false` and
+`true`/`"docker"`; `"auto"` and absent follow the alpha.5 change below. The alias never
+lowers a security setting below what the file asked (ADR-0033, ADR-0028 "Guardas de
+segurança"):
 
 | Legacy value | Effective behavior |
 |---|---|
