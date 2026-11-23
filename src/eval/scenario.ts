@@ -11,6 +11,7 @@ import { validateConfig, type AstroConfig } from "../core/config";
 import { runHealthCheck, type HealthReport } from "../health";
 import { looksLikeSecret } from "../secrets";
 import { parseSkill } from "../skills/loader";
+import { DEFAULT_BASE } from "../tools/web-search";
 import { resolveWithin } from "../tools/paths";
 
 export interface ScenarioToolCall {
@@ -522,15 +523,7 @@ function checkExpectations(expect: ScenarioExpectations, obs: Observation): stri
   return diff;
 }
 
-/** Defaults de backend de web_search quando `baseUrl` não é declarado (espelha src/tools/web-search.ts). */
-const WEB_SEARCH_DEFAULT_BASE: Record<string, string> = {
-  exa: "https://api.exa.ai",
-  brave: "https://api.search.brave.com",
-  google: "https://www.googleapis.com/customsearch/v1",
-  custom: "",
-};
-
-/** Valida a config efetiva (defaults inclusos), não só os overrides do scenario. */
+/** Validates the effective config (defaults included), not only the scenario overrides. */
 function assertEffectiveLoopback(config: AstroConfig): void {
   for (const [name, provider] of Object.entries(config.providers)) {
     if (provider.kind === "codex-oauth") {
@@ -552,10 +545,10 @@ function assertEffectiveLoopback(config: AstroConfig): void {
       }
       assertLoopbackUrl(base, field);
     };
-    check("webSearch.baseUrl", config.webSearch.baseUrl ?? WEB_SEARCH_DEFAULT_BASE[config.webSearch.provider]);
+    check("webSearch.baseUrl", config.webSearch.baseUrl ?? DEFAULT_BASE[config.webSearch.provider]);
     // The whole chain is a fixture surface, not only the primary (#604).
     for (const [index, entry] of (config.webSearch.fallback ?? []).entries()) {
-      check(`webSearch.fallback[${index}].baseUrl`, WEB_SEARCH_DEFAULT_BASE[entry.provider]);
+      check(`webSearch.fallback[${index}].baseUrl`, DEFAULT_BASE[entry.provider]);
     }
   }
   if (config.team?.auditWebhook !== undefined) {

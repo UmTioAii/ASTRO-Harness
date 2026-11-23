@@ -1782,12 +1782,6 @@ function validateMemory(value: unknown): MemoryConfig {
   }
   return { maxChars };
 }
-/**
- * Valida `webSearch` (#57, #604): a chave é sempre um NOME de variável de
- * ambiente (I-03); `custom` exige baseUrl; a cadeia `fallback` é ordenada, sem
- * backend repetido (nem o principal) e com chave de ambiente opcional por
- * entrada. Default de resultados 5, teto 10.
- */
 const WEB_SEARCH_PROVIDERS: readonly WebSearchProvider[] = ["exa", "brave", "google", "custom"];
 
 function expectWebSearchProvider(value: unknown, field: string): WebSearchProvider {
@@ -1821,6 +1815,12 @@ function validateWebSearchBackend(value: unknown, field: string): WebSearchBacke
   return { provider, ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }) };
 }
 
+/**
+ * Valida `webSearch` (#57, #604): a chave é sempre um NOME de variável de
+ * ambiente (I-03); `custom` exige baseUrl; a cadeia `fallback` é ordenada, sem
+ * backend repetido (nem o principal) e com chave de ambiente opcional por
+ * entrada. Default de resultados 5, teto 10.
+ */
 function validateWebSearch(value: unknown): WebSearchConfig {
   const raw = expectObject(value, "webSearch");
   const known = new Set(["provider", "apiKeyEnv", "baseUrl", "defaultMaxResults", "fallback"]);

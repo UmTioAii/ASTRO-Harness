@@ -43,7 +43,7 @@ type CitedResult = SearchResult & { id: number };
 type CachedSearch = { status: number; results: CitedResult[] };
 
 /** Bounded audit code for a backend that did not answer (#604); never a message or URL. */
-type BackendReason = "credential_missing" | "network" | "invalid_body" | `http_${number}`;
+type BackendReason = "credential_missing" | "network" | "invalid_body" | "aborted" | `http_${number}`;
 type BackendAudit = { provider: WebSearchProvider; status: number; durationMs: number; reason?: BackendReason };
 
 const DEFAULT_MAX_RESULTS = 5;
@@ -54,7 +54,8 @@ const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 8_000;
 const MAX_CACHE_ENTRIES = 32;
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);
-const DEFAULT_BASE: Record<WebSearchProvider, string> = {
+/** Provider defaults; also the endpoint the golden runner validates (#604). */
+export const DEFAULT_BASE: Record<WebSearchProvider, string> = {
   exa: "https://api.exa.ai",
   brave: "https://api.search.brave.com",
   google: "https://www.googleapis.com/customsearch/v1",
@@ -468,14 +469,17 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
         }
         const backendStarted = Date.now();
         const outcome = await requestBackend(backend, parsed, key, ctx, io);
+        const durationMs = Date.now() - backendStarted;
         if (outcome.kind === "aborted") {
+          // The in-flight backend is considered too: the audit says the chain stopped here.
+          backends.push({ provider: backend.provider, status: 0, durationMs, reason: "aborted" });
           record({ provider: backend.provider, status: 0, resultsCount: 0, cacheHit: false });
           return failure("web_search cancelada");
         }
         backends.push({
           provider: backend.provider,
           status: outcome.status,
-          durationMs: Date.now() - backendStarted,
+          durationMs,
           ...(outcome.kind === "ok" ? {} : { reason: outcome.reason }),
         });
         if (outcome.kind === "ok") {
