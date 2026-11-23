@@ -182,7 +182,8 @@ export function statusLine(result: TurnResult): string {
   const note = [result.warning ? "⚠ contexto ≥80%" : "", result.trimmed ? "turno antigo descartado" : ""]
     .filter((item) => item !== "").join(" · ");
   const totals = `total ${result.totalTokensIn}/${result.totalTokensOut} · ${fmtCost(result.totalCostUsd)}`;
-  return `[${result.model}] ${result.steps} step(s) · ${result.tokensIn}/${result.tokensOut} tokens · ${totals}${note === "" ? "" : ` · ${note}`}`;
+  // #594: tokens and cost in the conversation; no round counter.
+  return `[${result.model}] ${result.tokensIn}/${result.tokensOut} tokens · ${totals}${note === "" ? "" : ` · ${note}`}`;
 }
 
 /** Executa o REPL até `/exit`, EOF ou erro fatal; sempre fecha a sessão. */

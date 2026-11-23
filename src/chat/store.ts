@@ -16,6 +16,8 @@ export interface SessionRecord {
   model: string;
   messages: ChatMessage[];
   turns: number;
+  /** Rounds executed in the session (#594); optional for records written before this field existed. */
+  rounds?: number;
   tokensIn: number;
   tokensOut: number;
   costUsd: number | null;
@@ -139,6 +141,7 @@ function parseRecord(raw: unknown): SessionRecord {
     ? null
     : number(record.costUsd, "custo");
   const name = normalizeName(record.name);
+  const rounds = record.rounds === undefined ? undefined : number(record.rounds, "rodadas");
   return {
     schemaVersion: 1,
     id: record.id,
@@ -146,6 +149,7 @@ function parseRecord(raw: unknown): SessionRecord {
     model: record.model,
     messages,
     turns: number(record.turns, "turnos"),
+    ...(rounds === undefined ? {} : { rounds }),
     tokensIn: number(record.tokensIn, "tokens"),
     tokensOut: number(record.tokensOut, "tokens"),
     costUsd,

@@ -65,7 +65,6 @@ export interface TuiAppProps {
 
 interface Status {
   model: string;
-  turns: number;
   tokensIn: number;
   tokensOut: number;
   costUsd: number | null;
@@ -76,7 +75,6 @@ const WELCOME = "astro · /help para comandos · /exit para sair";
 function statusOf(snapshot: SessionSnapshot): Status {
   return {
     model: snapshot.model,
-    turns: snapshot.turns,
     tokensIn: snapshot.tokensIn,
     tokensOut: snapshot.tokensOut,
     costUsd: snapshot.costUsd,
@@ -151,8 +149,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     setInputState(inputRef.current);
   };
   const [busy, setBusy] = useState(false);
-  /** Progresso do passo (#508): undefined = desconhecido (turno não iniciado ou sem evento). */
-  const [stepProgress, setStepProgress] = useState<{ step: number; maxSteps: number } | undefined>(undefined);
   const [partial, setPartial] = useState<string | undefined>(undefined);
   /** Fila de mensagens digitadas durante o turno (#560): enviadas ao fim do turno. */
   const queueRef = useRef<string[]>([]);
@@ -419,7 +415,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       busyRef.current = true;
       const shellTurn = new AbortController();
       turn.current = shellTurn;
-      setStepProgress(undefined); // começo de turno: sem passo de um turno anterior
       setBusy(true);
       try {
         const result = await shell.run(command, shellTurn.signal);
@@ -518,7 +513,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     busyRef.current = true;
     const controller = new AbortController();
     turn.current = controller;
-    setStepProgress(undefined); // começo de turno: sem passo de um turno anterior
     setBusy(true);
     // deltas do provider passam pelo throttle: leading edge + trailing (#64)
     const sink = createThrottledSink({
@@ -532,7 +526,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       const attachments = pendingAttachments.current;
       const turnOptions: SendTurnOptions = {
         ...(attachments.length === 0 ? {} : { attachments, approveAttachment }),
-        onStep: (step, maxSteps) => setStepProgress(session.configSummary?.().knobs.some((knob) => knob.key === "preset" && knob.value === "control") ? { step, maxSteps } : undefined),
       };
       const result = await session.send(
         prompt,
@@ -545,7 +538,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       sink.flush();
       setPartial(undefined);
       // Resumo do turno sai da conversa e vai para o /log (#514, docs/tui-layout.md), lane [turno] (#560)
-      logLine(laneLine("turno", `turno concluído · ${result.steps} step(s)`));
+      logLine(laneLine("turno", "turno concluído"));
       logLine(laneLine("turno", statusLine(result)));
       const contextNote = result.warning ? `⚠ contexto ${Math.round(result.contextRatio * 100)}% (≥80%)` : undefined;
       if (contextNote !== undefined) {
@@ -999,9 +992,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           <Text color={colors.warning}>
             {thinkingCollapsed
               ? "pensando… recolhido (ctrl+t mostra)"
-              : stepProgress === undefined
-                ? "pensando…"
-                : `pensando… passo ${stepProgress.step}/${stepProgress.maxSteps}`}
+              : "pensando…"}
           </Text>
           {thinkingCollapsed || partial === undefined ? null : <Text>{partial}</Text>}
         </Box>
@@ -1048,7 +1039,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       <Text dimColor>
         {footerBase({
           place,
-          turns: status.turns,
           tokensIn: status.tokensIn,
           tokensOut: status.tokensOut,
           costUsd: status.costUsd,

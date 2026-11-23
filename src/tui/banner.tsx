@@ -71,20 +71,17 @@ export function headerLine(data: HeaderData): string {
 
 export interface FooterData {
   place: string;
-  turns: number;
   tokensIn: number;
   tokensOut: number;
   costUsd: number | null;
 }
 
 /**
- * Footer (#480): só campos com valor. Sem turnos, sem tokens ou sem custo
- * conhecido, o campo não aparece. Budget e modo são anexados pelo componente
- * para receber cor.
+ * Footer (#480): only fields with a value. Tokens and known cost stay; the
+ * conversation carries no turn, round or tool counter (#594).
  */
 export function footerBase(data: FooterData): string {
   const parts = [data.place];
-  if (data.turns > 0) parts.push(`${data.turns} turno(s)`);
   if (data.tokensIn + data.tokensOut > 0) parts.push(`${data.tokensIn}/${data.tokensOut} tokens`);
   if (data.costUsd !== null) parts.push(`US$ ${data.costUsd.toFixed(6)}`);
   return parts.join(" · ");
