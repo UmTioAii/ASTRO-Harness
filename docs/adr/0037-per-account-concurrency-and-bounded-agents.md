@@ -13,7 +13,7 @@ The model can ask for several subagents, but the harness needs one auditable bou
 
 | Topic | Contract |
 |---|---|
-| Bound | Resolved once per run from `agents.maxActive` (explicit request) > `spawn.maxConcurrent` (`/config`) > 2. Invalid declarations never widen it. |
+| Bound | Resolved once per run from `agents.maxActive` (explicit request) > `spawn.maxConcurrent` (`/config`) > 2. Invalid declarations never widen it. The physical ceiling is 8 (`MAX_ACTIVE_AGENTS`). The explicit tier wins even when `/config` declares a lower value. |
 | Grant | `spawn_agent.concurrency` is the model's request; the harness grants `min(requested, cap)` and records `requested`, `granted`, `cap`, `source` and `reason` in `agent.spawn`. A cut is stated in the tool result. |
 | Source | `request` for `agents.maxActive`, `config` for `spawn.maxConcurrent`, `default` for 2. |
 | Admission | Unchanged in this slice: ADR-0009 A4 still gives one execution per account, so `granted` is clamped to that executable ceiling. |
