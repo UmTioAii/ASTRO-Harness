@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { validateConfig } from "../src/core/config";
-import { canonicalUrl, createWebSearchTool, webSearchSecretEnvNames, type WebSearchConfig, type WebSearchDeps } from "../src/tools/web-search";
+import { canonicalUrl, createWebSearchTool, searchCacheKey, webSearchSecretEnvNames, type WebSearchConfig, type WebSearchDeps } from "../src/tools/web-search";
 
 const HOST_SECRET = ["s", "k", "-"].join("") + "host-secret-123456";
 const WEB_SECRET = "web-secret-value";
@@ -205,6 +205,24 @@ describe("web_search canonical dedupe, citations and cache (#604)", () => {
     expect(canonicalUrl("not a url")).toBe("not a url");
   });
 
+  test("canonicalUrl treats http and https of the same page as one URL", () => {
+    expect(canonicalUrl("http://example.test/p")).toBe(canonicalUrl("https://example.test/p"));
+    expect(canonicalUrl("http://example.test:80/p")).toBe("https://example.test/p");
+  });
+
+  test("the retained cache key is a digest, never the query text (#604, I-03)", () => {
+    // Segredo sintético em runtime (gate G6: sem literal de segredo no diff).
+    const CACHE_SECRET = ["s", "k", "-"].join("") + "cache-key-synthetic-1234";
+    const key = searchCacheKey({ provider: "exa", query: `busca ${CACHE_SECRET}`, maxResults: 5 });
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
+    expect(key).not.toContain(CACHE_SECRET);
+    // Canonical-equivalent queries share the key; distinct secrets never collapse.
+    expect(searchCacheKey({ provider: "exa", query: "  ASTRO  harness ", maxResults: 5 }))
+      .toBe(searchCacheKey({ provider: "exa", query: "astro harness", maxResults: 5 }));
+    expect(searchCacheKey({ provider: "exa", query: `busca ${CACHE_SECRET}`, maxResults: 5 }))
+      .not.toBe(searchCacheKey({ provider: "exa", query: "busca outro-valor-sintetico", maxResults: 5 }));
+  });
+
   test("collapses duplicates by canonical URL keeping the best snippet and the first position", async () => {
     const fetchImpl = mockFetch(() => Response.json({
       results: [
@@ -216,14 +234,28 @@ describe("web_search canonical dedupe, citations and cache (#604)", () => {
     const { tool, audit, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY" }, { fetchImpl });
     const result = await tool.execute({ query: "astro" }, ctx(cwd));
     const body = parse(result.output);
+    // Position comes from the first occurrence; url, title and snippet come from
+    // the same (best) entry — never a mix of two results.
     expect(body.results.map((item) => item.url)).toEqual([
-      "https://Example.test/post/?utm_source=x#top",
+      "https://example.test/post?utm_source=y",
       "https://other.test/",
     ]);
+    expect(body.results.map((item) => item.title)).toEqual(["A2", "C"]);
     expect(body.results.map((item) => item.snippet)).toEqual(["um trecho bem mais completo", "outro"]);
     expect(body.results.map((item) => item.id)).toEqual([1, 2]);
     expect(audit.readAll().find((item) => item.tipo === "web.search")?.payload)
       .toMatchObject({ resultsCount: 2, cacheHit: false });
+  });
+
+  test("a provider ignoring maxResults cannot inflate the result list or the cache", async () => {
+    const fetchImpl = mockFetch(() => Response.json({
+      results: Array.from({ length: 50 }, (_, index) => ({
+        title: `T${index}`, url: `https://a.test/${index}`, text: "trecho",
+      })),
+    }));
+    const { tool, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY" }, { fetchImpl });
+    const body = parse((await tool.execute({ query: "astro", maxResults: 2 }, ctx(cwd))).output);
+    expect(body.results.map((item) => item.url)).toEqual(["https://a.test/0", "https://a.test/1"]);
   });
 
   test("manifest tells the model to cite results by [n]", () => {
@@ -262,6 +294,46 @@ describe("web_search canonical dedupe, citations and cache (#604)", () => {
     const restarted = parse((await tool.execute({ query: "astro" }, { ...ctx(cwd), run: "r2" })).output);
     expect(restarted.results[0]?.id).toBe(1);
     expect(calls).toBe(3);
+  });
+
+  test("only successful calls are cached", async () => {
+    let calls = 0;
+    let fail = true;
+    const fetchImpl = mockFetch(() => {
+      calls += 1;
+      return fail
+        ? new Response("boom", { status: 500 })
+        : Response.json({ results: [{ title: "A", url: "https://a.test/p", text: "trecho" }] });
+    });
+    const { tool, cwd } = setup(
+      { provider: "exa", apiKeyEnv: "WEB_KEY" },
+      { fetchImpl, sleep: async () => undefined, random: () => 0.5 },
+    );
+    expect((await tool.execute({ query: "astro" }, ctx(cwd))).isError).toBe(true);
+    expect((await tool.execute({ query: "astro" }, ctx(cwd))).isError).toBe(true);
+    expect(calls).toBe(6); // 3 attempts per call: a failure never enters the cache
+    fail = false;
+    expect((await tool.execute({ query: "astro" }, ctx(cwd))).isError).not.toBe(true);
+    expect(calls).toBe(7);
+  });
+
+  test("a cached call still requires the credential, and the missing one is audited", async () => {
+    let calls = 0;
+    const fetchImpl = mockFetch(() => {
+      calls += 1;
+      return Response.json({ results: [{ title: "A", url: "https://a.test/p", text: "trecho" }] });
+    });
+    const env: Record<string, string | undefined> = { WEB_KEY: "web-secret-value" };
+    const { tool, audit, cwd } = setup({ provider: "exa", apiKeyEnv: "WEB_KEY" }, { fetchImpl, env });
+    expect((await tool.execute({ query: "astro" }, ctx(cwd))).isError).not.toBe(true);
+    env.WEB_KEY = undefined;
+    const result = await tool.execute({ query: "astro" }, ctx(cwd));
+    expect(result).toMatchObject({ isError: true });
+    expect(result.output).toContain("WEB_KEY");
+    expect(calls).toBe(1);
+    const events = audit.readAll().filter((item) => item.tipo === "web.search");
+    expect(events.map((item) => item.payload?.status)).toEqual([200, 0]);
+    expect(events[1]?.payload).toMatchObject({ resultsCount: 0, cacheHit: false });
   });
 
   test("cache eviction keeps the cache bounded", async () => {

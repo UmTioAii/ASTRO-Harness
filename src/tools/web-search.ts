@@ -403,3 +403,14 @@ export function createWebSearchTool(deps: WebSearchDeps): Tool {
     },
   };
 }
+
+/** RED stub (#604): the real digest lands in the next commit so the test commit replays with behavioural failures. */
+export function searchCacheKey(input: {
+  provider: WebSearchProvider;
+  baseUrl?: string;
+  query: string;
+  maxResults: number;
+  recencyDays?: number;
+}): string {
+  return JSON.stringify(input);
+}
