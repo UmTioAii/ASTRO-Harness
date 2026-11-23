@@ -40,7 +40,8 @@ describe("enforcement de budget (F-05, #132 parte 3)", () => {
     expect(ledger.readAllEntries().filter((e) => e.kind === "budget" && e.event === "reserved")).toHaveLength(1);
   });
 
-  test("leitura e reserva acontecem sob o file lock do ledger", async () => {    const ledger = ledgerWith(0);
+  test("leitura e reserva acontecem sob o file lock do ledger", async () => {
+    const ledger = ledgerWith(0);
     let depth = 0;
     const guarded = new Proxy(ledger, {
       get(target, prop) {
@@ -54,6 +55,12 @@ describe("enforcement de budget (F-05, #132 parte 3)", () => {
           return (...args: unknown[]) => {
             if (depth === 0) throw new Error(`${String(prop)} fora do file lock`);
             return (target[prop] as (...a: unknown[]) => unknown)(...args);
+          };
+        }
+        if (prop === "recordBudgetReserved") {
+          return (...args: unknown[]) => {
+            if (depth === 0) throw new Error("recordBudgetReserved fora do file lock");
+            return (target.recordBudgetReserved as (...a: unknown[]) => unknown)(...args);
           };
         }
         const value = Reflect.get(target, prop) as unknown;
