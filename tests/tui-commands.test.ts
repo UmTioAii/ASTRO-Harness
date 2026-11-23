@@ -401,14 +401,14 @@ describe("/usage na TUI (#63)", () => {
     const out = await runCommand({ kind: "usage" }, session, {});
     expect(out.entries).toHaveLength(1);
     expect(out.entries[0]).toMatchObject({ kind: "info" });
-    expect(out.entries[0]!.text).toContain("uso da sessão: 2 turno(s) · in 20 / out 10 tokens · custo US$ 0.500000");
+    expect(out.entries[0]!.text).toContain("uso da sessão: in 20 / out 10 tokens · custo US$ 0.500000");
     expect(out.entries[0]!.text).toContain("budget day: gasto US$ 1.000000 / limite US$ 5.000000 (20%) · restante US$ 4.000000 · aviso em 80%");
   });
 
   test("sem budgetStatus imprime só a linha da sessão", async () => {
     const session = new FakeSession();
     const out = await runCommand({ kind: "usage" }, session, {});
-    expect(out.entries[0]!.text).toBe("uso da sessão: 2 turno(s) · in 20 / out 10 tokens · custo US$ 0.500000");
+    expect(out.entries[0]!.text).toBe("uso da sessão: in 20 / out 10 tokens · custo US$ 0.500000");
   });
 });
 

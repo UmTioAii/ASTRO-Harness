@@ -10,6 +10,8 @@ const snapshot: SessionSnapshot = {
   model: "p/m1",
   messages: [],
   turns: 3,
+  rounds: 7,
+  preset: "default",
   tokensIn: 100,
   tokensOut: 50,
   costUsd: 0.001,
@@ -33,18 +35,24 @@ function status(over: Partial<BudgetStatus> = {}): BudgetStatus {
 }
 
 describe("usageLines / budgetLine / budgetSegment (#63)", () => {
-  test("sem budget mostra só a linha da sessão; custo null vira n/d (B6)", () => {
+  test("Default shows tokens and cost without turn or round counters", () => {
     expect(usageLines({ ...snapshot, costUsd: null }, undefined)).toEqual([
-      "uso da sessão: 3 turno(s) · in 100 / out 50 tokens · custo n/d",
+      "uso da sessão: in 100 / out 50 tokens · custo n/d",
     ]);
     expect(usageLines(snapshot, undefined)).toEqual([
-      "uso da sessão: 3 turno(s) · in 100 / out 50 tokens · custo US$ 0.001000",
+      "uso da sessão: in 100 / out 50 tokens · custo US$ 0.001000",
+    ]);
+  });
+
+  test("Control adds turn and round counters", () => {
+    expect(usageLines({ ...snapshot, preset: "control" }, undefined)).toEqual([
+      "uso da sessão: 3 turno(s) · 7 rodada(s) · in 100 / out 50 tokens · custo US$ 0.001000",
     ]);
   });
 
   test("com budget day mostra gasto/limite/pct/restante/aviso", () => {
     expect(usageLines(snapshot, status())).toEqual([
-      "uso da sessão: 3 turno(s) · in 100 / out 50 tokens · custo US$ 0.001000",
+      "uso da sessão: in 100 / out 50 tokens · custo US$ 0.001000",
       "budget day: gasto US$ 1.000000 / limite US$ 5.000000 (20%) · restante US$ 4.000000 · aviso em 80%",
     ]);
   });

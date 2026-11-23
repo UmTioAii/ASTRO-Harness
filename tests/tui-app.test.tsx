@@ -175,7 +175,8 @@ test("mostra boas-vindas, status e responde um turno", async () => {
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("eco:olá") === true);
     expect(session.sent).toEqual(["olá"]);
-    expect(instance.lastFrame()).toContain("1 turno(s)");
+    expect(instance.lastFrame()).not.toMatch(/turno\(s\)/);
+    expect(instance.lastFrame()).toContain("tokens");
   } finally {
     instance.unmount();
   }
@@ -325,8 +326,12 @@ test("enfileira Enter durante o turno (#560) e atualiza o status após /model", 
     instance.stdin.write("/model p/m2");
     instance.stdin.write("\r");
     await waitFor(() => instance.lastFrame()?.includes("modelo: p/m2") === true);
-    expect(instance.lastFrame()).toMatch(/2 turno\(s\)/);
+    // #594: no turn counter in the conversation; the footer still refreshes with usage.
+    expect(instance.lastFrame()).not.toMatch(/turno\(s\)/);
+    expect(instance.lastFrame()).toContain("tokens");
+    // The old model disappears from the header/footer: the status really refreshed.
     expect(instance.lastFrame()).toContain("p/m2");
+    expect(instance.lastFrame()).not.toContain("p/m1");
   } finally {
     instance.unmount();
   }
@@ -334,7 +339,7 @@ test("enfileira Enter durante o turno (#560) e atualiza o status após /model", 
 
 const progressSummary = (preset: "default" | "control"): ConfigSummary => ({ configPath: "/tmp/astro.config.json", maxSteps: 7, permissionMode: "ask", approvalTimeoutMs: "300000 (default)", costs: [], budget: "sem budget", knobs: [{ key: "preset", value: preset }] });
 
-test("live counters follow the effective profile and disappear at turn end (#508, #594)", async () => {
+test("the conversation carries no turn, round or tool counter in any profile (#508, #594)", async () => {
   class StepSession extends FakeSession {
     preset: "default" | "control" = "control"; stepped = false; configSummary(): ConfigSummary { return progressSummary(this.preset); }
     override async send(
@@ -353,9 +358,11 @@ test("live counters follow the effective profile and disappear at turn end (#508
   try {
     instance.stdin.write("conte");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "pensando… passo 2/7"));
+    await waitFor(() => frameHas(instance, "pensando…"));
+    expect(frameHas(instance, "passo")).toBe(false);
     await waitFor(() => frameHas(instance, "eco:conte"));
     expect(frameHas(instance, "passo")).toBe(false);
+    expect(frameHas(instance, "step(s)")).toBe(false);
     expect(frameHas(instance, "pensando…")).toBe(false);
   } finally {
     instance.unmount();
@@ -366,6 +373,7 @@ test("live counters follow the effective profile and disappear at turn end (#508
     await waitFor(() => defaultSession.stepped && frameHas(defaultInstance, "pensando…"));
     expect(frameHas(defaultInstance, "passo")).toBe(false);
     await waitFor(() => frameHas(defaultInstance, "eco:conte"));
+    expect(frameHas(defaultInstance, "passo")).toBe(false);
   } finally { defaultInstance.unmount(); }
 });
 
@@ -407,7 +415,7 @@ test("progresso não fica visível depois de um turno com erro (#508)", async ()
   try {
     instance.stdin.write("conte");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "pensando… passo 1/4"));
+    await waitFor(() => frameHas(instance, "pensando…"));
     await waitFor(() => frameHas(instance, "erro: falhou"));
     expect(frameHas(instance, "passo")).toBe(false);
     expect(frameHas(instance, "pensando…")).toBe(false);
@@ -959,7 +967,7 @@ test("/usage na TUI imprime uso da sessão e budget no painel (#63)", async () =
     instance.stdin.write("\r");
     await waitFor(() => frameHas(instance, "uso da sessão:"));
     const frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
-    expect(frame).toContain("uso da sessão: 0 turno(s) · in 0 / out 0 tokens · custo US$ 0.001000");
+    expect(frame).toContain("uso da sessão: in 0 / out 0 tokens · custo US$ 0.001000");
     expect(frame).toContain("budget day: gasto US$ 1.000000 / limite US$ 5.000000 (20%) · restante US$ 4.000000 · aviso em 80%");
   } finally {
     instance.unmount();
@@ -1049,7 +1057,7 @@ test("erro aparece uma vez no histórico, com próximo passo e sem toast (#480)"
   }
 });
 
-test("turno concluído não gera toast: o footer já tem os números (#480)", async () => {
+test("turno concluído não gera toast e o footer não repete contadores (#480, #594)", async () => {
   const session = new FakeSession();
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-toast-ok-"));
   const instance = render(<TuiApp session={session} cwd={cwd} />);
@@ -1059,7 +1067,8 @@ test("turno concluído não gera toast: o footer já tem os números (#480)", as
     instance.stdin.write("\r");
     await waitFor(() => frameHas(instance, "eco:oi"));
     expect(frameHas(instance, "turno concluído")).toBe(false);
-    expect(frameHas(instance, "1 turno(s)")).toBe(true);
+    expect(frameHas(instance, "turno(s)")).toBe(false);
+    expect(frameHas(instance, "tokens")).toBe(true);
   } finally {
     instance.unmount();
   }
@@ -1579,14 +1588,15 @@ test("turno concluído e a linha por turno vão para o buffer; /log <n> mostra s
     await waitFor(() => frameHas(instance, "log da sess"));
     let frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
     expect(frame).toContain("turno conclu");
-    expect(frame).toContain("[p/m1] 1 step(s)");
+    expect(frame).toContain("[p/m1] 10/5 tokens");
+    expect(frame).not.toContain("step(s)");
     instance.stdin.write("\u001b");
     await waitFor(() => frameHas(instance, "enter envia"));
     instance.stdin.write("/log 1");
     instance.stdin.write("\r");
     await waitFor(() => frameHas(instance, "log da sess"));
     frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
-    expect(frame).toContain("[p/m1] 1 step(s)");
+    expect(frame).toContain("[p/m1] 10/5 tokens");
     expect(frame).not.toContain("turno conclu");
   } finally {
     instance.unmount();

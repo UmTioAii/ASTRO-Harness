@@ -13,14 +13,14 @@ Onde cada informação da TUI vive: header de identidade, footer de números, er
 | Elemento | Hoje | Depois |
 |---|---|---|
 | Header | Caixa com versão, provider, modelo, endpoint, estado e modo; pode passar de 80 colunas | Uma linha sem caixa: versão, provider/modelo e saúde |
-| Footer | Repete provider, modelo, saúde e modo; mostra `0 turno(s)`, `0/0 tokens`, `n/d` e nenhum orçamento quando não há | Só campos com valor; modo sempre; bypass em vermelho |
+| Footer | Repete provider, modelo, saúde e modo; mostra contadores e custo quando há | Só campos com valor; modo sempre; bypass em vermelho |
 | Erro | Linha vermelha sem saída + toast com o mesmo texto | Linha vermelha com próximo passo, uma vez, sem toast |
 | Estado | Aviso reimpresso a cada turno e às vezes em toast | Uma linha cinza, uma vez por sessão |
-| Progresso | `pensando…`, sem passo | `pensando… passo n/max` em bloco, recolhível com ctrl+t (#560) |
+| Progresso | `pensando…`, sem contador | `pensando…` em bloco, recolhível com ctrl+t (#560); contadores só em `/usage`, `/config` e relatório (#594) |
 | Shell `!cmd` | saída como linha de info/erro | bloco com borda: `$ cmd · cwd: … · exit: 0\|erro` + saída (#560) |
 | Entrada durante o turno | descartada | fila (`fila: N`), enviada ao fim do turno (#560) |
 | Enter com menu aberto | submete o prefixo digitado | 1º Enter aplica a completion, 2º Enter roda (#471, #560) |
-| Status do turno | Entrada `[modelo] N step(s) · tokens · total` na conversa + toast | Só em `/log`; o footer já tem os números |
+| Status do turno | Entrada `[modelo] N step(s) · tokens · total` na conversa + toast | Só em `/log`, sem contador de rodada (#594) |
 | Endpoint | No header, competindo com modelo | `/log`, no cabeçalho da sessão |
 | Modo | No header e no footer | Só no footer; bypass também pinta a borda do input |
 
@@ -44,12 +44,11 @@ Formato: `ASTRO v<versão> · <provider>/<modelo> · <saúde>`
 
 ## Footer
 
-Formato: `pasta · N turno(s) · in/out tokens · custo · orçamento · modo`
+Formato: `pasta · in/out tokens · custo · orçamento · modo`
 
 | Campo | Quando aparece |
 |---|---|
 | pasta | Sempre; `~` para o home |
-| turnos | Só com `N > 0` |
 | tokens | Só quando `in + out > 0` |
 | custo | Só quando o preço é conhecido; sem `n/d` |
 | orçamento | Só quando há orçamento configurado; vermelho no teto, amarelo no aviso |
@@ -85,9 +84,9 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 
 ## Progresso
 
-- `pensando… passo n/max` aparece só no preset efetivo `control`, com `max` = teto efetivo do loop em rodadas (`run.maxRoundsPerTurn`; `agent.maxSteps` legado alimenta o mesmo teto pelo alias). No Default fica só `pensando…`. Em multi-agent o denominador é **por visita** ao agente: `agentSteps` zera a cada handoff, inclusive ao voltar a um agente já usado, e o teto global restante limita o total.
-- O evento `onStep(step, maxSteps)` vem antes de cada chamada ao provider e carrega só números. A linha some quando o turno termina (sucesso, erro ou abort), porque o progresso só renderiza com turno em andamento.
-- Sem evento de passo — o intervalo entre o início do turno e o 1º evento, ou uma execução single-shot sem o callback — fica só `pensando…`: nunca um número inventado. Cada `send` começa um loop novo no passo 1.
+- A conversa nunca mostra contador de turno, rodada ou ferramenta (#594). Enquanto o turno roda, o bloco mostra `pensando…`; números de progresso vivem em `/usage`, `/config` e no relatório.
+- O bloco some quando o turno termina (sucesso, erro ou abort), porque o progresso só renderiza com turno em andamento.
+- Nenhum número é inventado: sem sinal de progresso, fica só `pensando…`.
 
 ## Blocos e fila (#560)
 
@@ -95,7 +94,7 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 |---|---|---|
 | usuário | `> texto` | inalterado |
 | shell `!cmd` | caixa com `$ cmd · cwd: … · exit: 0\|erro`, saída no corpo | `exit` é `0`/`erro` porque o contrato `ToolResult` não traz código numérico |
-| thinking | caixa com `pensando…` (ou `passo n/max`) + stream parcial | ctrl+t recolhe/mostra; some no fim do turno |
+| thinking | caixa com `pensando…` + stream parcial | ctrl+t recolhe/mostra; some no fim do turno |
 | resposta | Markdown | inalterado |
 
 - Durante o turno o editor continua editável; Enter coloca a mensagem na fila (`fila: N` acima do input) e o dreno acontece no fim do turno, na ordem digitada.
@@ -107,9 +106,9 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 | Move para `/log` | Fica inline |
 |---|---|
 | Cabeçalho da sessão: versão, provider, modelo e endpoint | mensagens do usuário e do assistente |
-| `turno concluído · N step(s)` | erro com próximo passo |
-| Linha `[modelo] N step(s) · tokens · total` por turno | pergunta de aprovação e diff |
-| Transições de saúde do provider | progresso `passo n/max` |
+| `turno concluído` | erro com próximo passo |
+| Linha `[modelo] tokens · total` por turno | pergunta de aprovação e diff |
+| Transições de saúde do provider | `pensando…` (sem contador) |
 | Avisos de orçamento repetidos | aviso de contexto, uma vez |
 | Repetições do aviso de contexto | |
 | Detalhe de tool: nome, duração, custo | |
@@ -128,6 +127,7 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 - Toast de erro duplicando a linha de erro.
 - Linha de status por turno na área de conversa.
 - `pensando…` coexistindo com toast de conclusão.
+- Contador de passo/rodada na conversa (`passo n/max`); contadores vivem em `/usage`, `/config` e no relatório (#594).
 
 ## Como verificar
 

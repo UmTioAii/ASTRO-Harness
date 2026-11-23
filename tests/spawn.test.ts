@@ -47,7 +47,7 @@ beforeEach(() => resetCandidateSnapshots());
 describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
   test("cria subagente com modelo/profile da pool, escopo ⊆ pai e reason no ledger", async () => {
     const { ledger, spawns, tool, ctx } = setup();
-    const result = await tool.execute({ need: "writing-code", task: "sub tarefa", tools: ["read_file"], maxTurns: 2 }, ctx);
+    const result = await tool.execute({ need: "writing-code", task: "sub tarefa", tools: ["read_file"], maxRounds: 2 }, ctx);
     const body = JSON.parse(result.output) as { agent_id: string; model: string; profile?: string; status: string };
 
     expect(result.isError).toBe(false);
@@ -64,32 +64,40 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     expect(snapshotId).toMatch(/^[0-9a-f]{64}$/); // I-06: snapshot correlacionável
   });
 
-  test("maxSteps limita o filho e maxTurns segue como alias obsoleto", async () => {
+  test("maxRounds limits the child and maxTurns means one turn", async () => {
     const { spawns, tool, ctx } = setup();
-    const modern = await tool.execute({ need: "writing-code", task: "a", maxSteps: 2 }, ctx);
-    expect(modern.isError).toBe(false);
-    expect(spawns.get("sub-1")?.maxSteps).toBe(2);
+    const rounds = await tool.execute({ need: "writing-code", task: "a", maxRounds: 2 }, ctx);
+    expect(rounds.isError).toBe(false);
+    expect(spawns.get("sub-1")?.maxRounds).toBe(2);
+    expect(spawns.get("sub-1")?.maxTurns).toBe(1);
 
-    const legacy = await tool.execute({ need: "writing-code", task: "b", maxTurns: 1 }, ctx);
-    expect(legacy.isError).toBe(false);
-    expect(spawns.get("sub-2")?.maxSteps).toBe(1);
+    const oneTurn = await tool.execute({ need: "writing-code", task: "b", maxTurns: 1 }, ctx);
+    expect(oneTurn.isError).toBe(false);
+    expect(spawns.get("sub-2")?.maxTurns).toBe(1);
+    expect(spawns.get("sub-2")?.maxRounds).toBe(3); // parent ceiling
+    expect(JSON.parse(oneTurn.output).limits).toEqual({ rounds: 3, turns: 1 });
+    expect(JSON.parse(oneTurn.output).note).toContain("maxTurns now means turns");
 
-    const both = await tool.execute({ need: "writing-code", task: "c", maxTurns: 1, maxSteps: 1 }, ctx);
-    expect(both.isError).toBe(true);
-    expect(JSON.parse(both.output)).toMatchObject({ error: "invalid_request" });
-    expect(JSON.parse(both.output).message).toContain("use só 'maxSteps'");
+    const twoTurns = await tool.execute({ need: "writing-code", task: "c", maxTurns: 2 }, ctx);
+    expect(twoTurns.isError).toBe(true);
+    expect(JSON.parse(twoTurns.output).message).toContain("one turn");
 
-    const invalid = await tool.execute({ need: "writing-code", task: "d", maxTurns: "2" }, ctx);
+    const legacy = await tool.execute({ need: "writing-code", task: "d", maxSteps: 1 }, ctx);
+    expect(legacy.isError).toBe(true);
+    expect(JSON.parse(legacy.output).message).toContain("maxRounds");
+
+    const invalid = await tool.execute({ need: "writing-code", task: "e", maxRounds: "2" }, ctx);
     expect(invalid.isError).toBe(true);
-    expect(JSON.parse(invalid.output).message).toContain("'maxTurns'");
+    expect(JSON.parse(invalid.output).message).toContain("'maxRounds'");
   });
 
-  test("o schema anuncia maxSteps como campo atual (#545)", () => {
+  test("o schema anuncia maxRounds e maxTurns e marca maxSteps como removido (#594)", () => {
     const { tool } = setup();
     const properties = (tool.manifest.parameters as { properties: Record<string, { description: string }> }).properties;
-    expect(properties.maxSteps?.description).toContain("passos");
-    expect(properties.maxSteps?.description).not.toContain("Obsoleto");
-    expect(properties.maxTurns?.description).toContain("Obsoleto");
+    expect(properties.maxRounds?.description).toContain("rodadas");
+    expect(properties.maxTurns?.description).toContain("Turnos");
+    expect(properties.maxTurns?.description).not.toContain("Obsoleto");
+    expect(properties.maxSteps?.description).toContain("Removido");
   });
 
   test("sem conta livre o snapshot fica vazio; snapshot velho falha no lock", async () => {
@@ -116,16 +124,16 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     expect(JSON.parse(second.output)).toMatchObject({ error: "spawn_limit_exceeded" });
   });
 
-  test("tools fora do pai e maxSteps maior que o pai são recusados", async () => {
+  test("tools fora do pai e maxRounds maior que o pai são recusados", async () => {
     const { tool, ctx } = setup();
     const outside = await tool.execute({ need: "writing-code", task: "a", tools: ["run_command"] }, ctx);
     expect(outside.isError).toBe(true);
     expect(JSON.parse(outside.output)).toMatchObject({ error: "invalid_request" });
 
-    const tooLong = await tool.execute({ need: "writing-code", task: "a", tools: [], maxSteps: 99 }, ctx);
+    const tooLong = await tool.execute({ need: "writing-code", task: "a", tools: [], maxRounds: 99 }, ctx);
     expect(tooLong.isError).toBe(true);
     expect(JSON.parse(tooLong.output)).toMatchObject({ error: "invalid_request" });
-    expect(JSON.parse(tooLong.output).message).toContain("maxSteps 99");
+    expect(JSON.parse(tooLong.output).message).toContain("maxRounds 99");
   });
 
   test("modelo fora do snapshot devolve invalid_model_choice com a lista", async () => {

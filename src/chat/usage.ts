@@ -14,9 +14,12 @@ function pct(ratio: number | null): string {
   return ratio === null ? "n/d" : `${Math.round(ratio * 100)}%`;
 }
 
-/** Linha da sessão: turnos, tokens in/out e custo acumulado. */
+/** Session line: tokens and cost for both profiles; turn/round counters only in Control. */
 export function sessionUsageLine(snapshot: SessionSnapshot): string {
-  return `uso da sessão: ${snapshot.turns} turno(s) · in ${snapshot.tokensIn} / out ${snapshot.tokensOut} tokens · custo ${money(snapshot.costUsd)}`;
+  const counters = snapshot.preset === "control"
+    ? `${snapshot.turns} turno(s) · ${snapshot.rounds ?? 0} rodada(s) · `
+    : "";
+  return `uso da sessão: ${counters}in ${snapshot.tokensIn} / out ${snapshot.tokensOut} tokens · custo ${money(snapshot.costUsd)}`;
 }
 
 /** Linha do budget a partir do status derivado do ledger (flags no fim). */

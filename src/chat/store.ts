@@ -16,6 +16,8 @@ export interface SessionRecord {
   model: string;
   messages: ChatMessage[];
   turns: number;
+  /** Rounds executed in the session (#594); optional for records written before this field existed. */
+  rounds?: number;
   tokensIn: number;
   tokensOut: number;
   costUsd: number | null;
@@ -139,6 +141,7 @@ function parseRecord(raw: unknown): SessionRecord {
     ? null
     : number(record.costUsd, "custo");
   const name = normalizeName(record.name);
+  const rounds = record.rounds === undefined ? undefined : number(record.rounds, "rodadas");
   return {
     schemaVersion: 1,
     id: record.id,
@@ -146,6 +149,7 @@ function parseRecord(raw: unknown): SessionRecord {
     model: record.model,
     messages,
     turns: number(record.turns, "turnos"),
+    ...(rounds === undefined ? {} : { rounds }),
     tokensIn: number(record.tokensIn, "tokens"),
     tokensOut: number(record.tokensOut, "tokens"),
     costUsd,
@@ -223,7 +227,9 @@ function sanitizeValue(value: unknown, key?: string, attachmentMeta = false, har
 
 /** Converte o snapshot do runtime no registro persistido (o snapshot não carrega `name`). */
 export function toSessionRecord(snapshot: SessionSnapshot): SessionRecord {
-  return { schemaVersion: 1, ...snapshot };
+  // `preset` is live config, not session data: never persist a stale profile.
+  const { preset: _preset, ...record } = snapshot;
+  return { schemaVersion: 1, ...record };
 }
 
 /** Motivo da recusa ao excluir uma sessão ainda viva; `undefined` libera a exclusão (#366). */
@@ -362,6 +368,7 @@ export class SessionStore {
     // `name` vindo de chamador JS é descartado: só `rename` muda o nome (runtime)
     const base = { ...snapshot } as Record<string, unknown>;
     delete base.name;
+    delete base.preset;
     const record = sanitizeValue(parseRecord({ schemaVersion: 1, ...base, ...(name === undefined ? {} : { name }) })) as SessionRecord;
     // nunca grava um arquivo que o #read recusaria (sessão salva mas invisível)
     if (record.model === "" || INVISIBLE.test(record.model)) throw new Error("modelo da sessão inválido");

@@ -305,9 +305,9 @@ describe("AgentSession resume (T2, #63)", () => {
           { role: "user", content: "velho" },
           { role: "assistant", content: "resp" },
         ],
-        turns: 2, tokensIn: 20, tokensOut: 10, costUsd: 0.5,
+        turns: 2, rounds: 9, tokensIn: 20, tokensOut: 10, costUsd: 0.5,
       });
-      expect(chat.snapshot()).toMatchObject({ turns: 2, tokensIn: 20, tokensOut: 10, costUsd: 0.5, model: "p/m1" });
+      expect(chat.snapshot()).toMatchObject({ turns: 2, rounds: 9, tokensIn: 20, tokensOut: 10, costUsd: 0.5, model: "p/m1" });
       const result = await chat.send("novo");
       expect(bodies[0]!.messages?.map((message) => message.content)).toEqual(["sys", "velho", "resp", "novo"]);
       expect(result.totalTokensIn).toBe(30);

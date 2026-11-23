@@ -76,7 +76,10 @@ export interface SpawnedAgent {
   parent_agent_id: string;
   candidate: ModelCandidate;
   tools: string[];
-  maxSteps: number;
+  /** Round ceiling for the child's single turn (≤ the parent). */
+  maxRounds: number;
+  /** Turns accepted by the child; a spawn runs one task, so it is always 1. */
+  maxTurns: number;
   /** Task entregue ao filho; `AGENTS.md` vem do system prompt base (A9/CMP-8). */
   instructions: string;
   reason: string;
@@ -136,7 +139,7 @@ export class SpawnRegistry {
     return {
       model: agent.candidate.model,
       ...(agent.candidate.profile === undefined ? {} : { profile: agent.candidate.profile }),
-      maxSteps: agent.maxSteps,
+      maxSteps: agent.maxRounds,
       tools: agent.tools,
       ...(permission === undefined ? {} : { permission }),
       ...(systemPrompt.length === 0 ? {} : { systemPrompt }),
@@ -217,8 +220,9 @@ const SPAWN_PARAMETERS = {
     model: { type: "string", description: "Modelo do snapshot (provider/id); omitido = rank 1" },
     reason: { type: "string", maxLength: 200, description: "Justificativa da escolha" },
     tools: { type: "array", items: { type: "string" }, description: "Subconjunto das tools do pai" },
-    maxSteps: { type: "integer", minimum: 1, description: "Teto de passos do subagente (≤ pai)" },
-    maxTurns: { type: "integer", minimum: 1, description: "Obsoleto: alias de maxSteps" },
+    maxRounds: { type: "integer", minimum: 1, description: "Teto de rodadas do subagente (≤ pai)" },
+    maxTurns: { type: "integer", minimum: 1, description: "Turnos do subagente; um spawn executa uma tarefa, então aceita 1" },
+    maxSteps: { type: "integer", minimum: 1, description: "Removido: use maxRounds (rodadas) ou maxTurns (turnos)" },
     snapshot_id: { type: "string", description: "Snapshot de list_model_candidates" },
   },
   required: ["need", "task"],
@@ -275,20 +279,28 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         if (raw.tools !== undefined && !isStringArray(raw.tools)) {
           return { output: JSON.stringify({ error: "invalid_request", message: "campo 'tools' deve ser lista de strings" }), isError: true };
         }
-        const requestedMaxSteps = raw.maxSteps;
-        const legacyMaxTurns = raw.maxTurns;
-        if (requestedMaxSteps !== undefined && legacyMaxTurns !== undefined) {
+        if (raw.maxSteps !== undefined) {
           return {
             output: JSON.stringify({
               error: "invalid_request",
-              message: "use só 'maxSteps'; 'maxTurns' é um alias obsoleto",
+              message: "maxSteps was removed: use maxRounds for rounds per turn and maxTurns for turns",
             }),
             isError: true,
           };
         }
-        const stepCap = requestedMaxSteps ?? legacyMaxTurns;
-        if (stepCap !== undefined && (typeof stepCap !== "number" || !Number.isInteger(stepCap) || stepCap < 1)) {
-          return { output: JSON.stringify({ error: "invalid_request", message: `campo '${requestedMaxSteps !== undefined ? "maxSteps" : "maxTurns"}' deve ser inteiro >= 1` }), isError: true };
+        const requestedMaxRounds = raw.maxRounds;
+        if (requestedMaxRounds !== undefined && (typeof requestedMaxRounds !== "number" || !Number.isInteger(requestedMaxRounds) || requestedMaxRounds < 1)) {
+          return { output: JSON.stringify({ error: "invalid_request", message: "campo 'maxRounds' deve ser inteiro >= 1" }), isError: true };
+        }
+        const requestedMaxTurns = raw.maxTurns;
+        if (requestedMaxTurns !== undefined && requestedMaxTurns !== 1) {
+          return {
+            output: JSON.stringify({
+              error: "invalid_request",
+              message: "um spawn executa uma tarefa (one turn); 'maxTurns' aceita apenas 1",
+            }),
+            isError: true,
+          };
         }
 
         // v1 é serial: filho não spawna neto (sem canal p2p e sem histórico do pai).
@@ -325,12 +337,12 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         }
 
         const parentMax = ctx.maxSteps ?? deps.config.agent.maxSteps;
-        const childMax = stepCap ?? parentMax;
+        const childMax = requestedMaxRounds ?? parentMax;
         if (childMax > parentMax) {
           return {
             output: JSON.stringify({
               error: "invalid_request",
-              message: `maxSteps ${childMax} excede o teto do pai (${parentMax})`,
+              message: `maxRounds ${childMax} excede o teto do pai (${parentMax})`,
             }),
             isError: true,
           };
@@ -406,7 +418,8 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
             parent_agent_id: ctx.agent,
             candidate: choice.candidate,
             tools: [...tools],
-            maxSteps: childMax,
+            maxRounds: childMax,
+            maxTurns: 1,
             instructions,
             reason,
             createdAt: Date.now(),
@@ -423,6 +436,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
               ...(snapshotId === undefined ? {} : { snapshot_id: snapshotId }),
               need: raw.need,
               reason,
+              limits: { rounds: childMax, turns: 1 },
             },
           });
         } catch (error) {
@@ -441,6 +455,10 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
             model: choice.candidate.model,
             ...(choice.candidate.profile === undefined ? {} : { profile: choice.candidate.profile }),
             status: "active",
+            limits: { rounds: childMax, turns: 1 },
+            ...(raw.maxTurns !== undefined && requestedMaxRounds === undefined
+              ? { note: "maxTurns now means turns; set maxRounds to cap rounds" }
+              : {}),
           }),
           isError: false,
         };

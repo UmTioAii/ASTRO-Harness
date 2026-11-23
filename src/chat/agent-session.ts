@@ -127,6 +127,10 @@ export interface SessionSnapshot {
   model: string;
   messages: ChatMessage[];
   turns: number;
+  /** Rounds executed in the session (#594); absent in sessions stored before this field existed. */
+  rounds?: number;
+  /** Effective profile (#594); Default shows no counters. */
+  preset?: "default" | "control";
   tokensIn: number;
   tokensOut: number;
   costUsd: number | null;
@@ -765,9 +769,9 @@ export class AgentSession {
     ];
     if (this.#registry.get(snapshot.model)?.status === "active") this.#modelRef = snapshot.model;
     this.#turns = snapshot.turns;
+    this.#steps = snapshot.rounds ?? 0;
     this.#tokensIn = snapshot.tokensIn;
     this.#tokensOut = snapshot.tokensOut;
-    this.#steps = 0;
     this.#costKnown = snapshot.costUsd !== null;
     this.#costUsd = snapshot.costUsd ?? 0;
     this.#resumedFrom = { id: snapshot.id, startedAt: snapshot.startedAt };
@@ -904,6 +908,8 @@ export class AgentSession {
       model: this.modelName(),
       messages: this.#messages.map(withoutImages),
       turns: this.#turns,
+      rounds: this.#steps,
+      preset: this.#config.preset === "control" ? "control" : "default",
       tokensIn: this.#tokensIn,
       tokensOut: this.#tokensOut,
       costUsd: this.#costKnown ? this.#costUsd : null,
