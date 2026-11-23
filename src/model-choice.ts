@@ -125,11 +125,11 @@ export function resetCandidateSnapshots(): void {
 }
 
 function isRoleTag(tag: string): boolean {
-  return ROLE_TAGS.includes(tag);
+  return ROLE_TAGS.some((role) => role === tag);
 }
 
 function isCapacityTag(tag: string): boolean {
-  return CAPACITY_TAGS.includes(tag);
+  return CAPACITY_TAGS.some((capacity) => capacity === tag);
 }
 
 /** O candidato passa pelo filtro duro (M2)? */

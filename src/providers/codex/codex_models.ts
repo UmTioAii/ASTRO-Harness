@@ -6,7 +6,6 @@ export const CODEX_MODELS: readonly ProviderModel[] = [
     ref: "gpt-5.5",
     // Codex uses the Responses endpoint; the catalog fact stays transport-free.
     callMethod: "responses",
-    // OAuth subscription: no per-token price.
     price: null,
     free: false,
   },

@@ -4,7 +4,6 @@ import type { ProviderModel } from "../seed";
 export const OPENROUTER_MODELS: readonly ProviderModel[] = [
   {
     ref: "openai/gpt-4o-mini",
-    // OpenRouter table price (USD/1M); curation still pending verification.
     price: {
       inputPerM: 0.15,
       outputPerM: 0.6,

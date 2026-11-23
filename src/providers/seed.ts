@@ -1,8 +1,7 @@
 /**
- * Per-provider seed contract (S3, #601): `<provider>_models.ts` lists offers
- * (ref, price, status, call method, explicit overrides), `adapter.ts` describes
- * transport, credentials and quota, and `catalog.ts` only composes. Model facts
- * live in `src/models/catalog.ts`.
+ * Per-provider seed contract (S3, #601): `<provider>_models.ts` lists offers,
+ * `adapter.ts` describes transport, credentials and quota, and `catalog.ts` only
+ * composes. Model facts live in `src/models/catalog.ts`.
  */
 import type { ModelStatus, PriceConfig } from "../core/config";
 import type { ModelFacts, ModelId } from "../models/catalog";
@@ -12,10 +11,7 @@ import type { ProfileModel } from "./profiles";
 /** How the provider receives the call. */
 export type CallMethod = "chat-completions" | "responses";
 
-/**
- * What a provider offers: a catalog ref plus the facts that belong to the
- * offer itself. Never carries a secret (I-03).
- */
+/** What a provider offers: a ref plus offer-owned facts; never a secret (I-03). */
 export interface ProviderModel {
   /** Curated catalog id; an unknown or misspelled id does not compile. */
   ref: ModelId;
@@ -58,10 +54,12 @@ const DEFAULT_CALL_METHOD: CallMethod = "chat-completions";
 export function effectiveCard(offer: ProviderModel): ModelCard {
   const overrides = offer.overrides ?? {};
   const merged: ModelFacts = { ...modelFacts(offer.ref), ...overrides };
+  // A narrower gateway context must not leave an output cap bigger than the window.
+  const maxOutput = Math.min(merged.maxOutput, merged.context);
   return {
     id: offer.ref,
     context: merged.context,
-    maxOutput: merged.maxOutput,
+    maxOutput,
     reasoning: merged.reasoning,
     efforts: [...merged.efforts],
     tools: merged.tools,

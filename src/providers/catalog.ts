@@ -37,7 +37,6 @@ function toEntry(seed: ProviderAdapterSeed): CatalogEntry {
     ...(seed.credentialsPath === undefined ? {} : { credentialsPath: seed.credentialsPath }),
     ...(seed.quotaDomain === undefined ? {} : { quotaDomain: seed.quotaDomain }),
     models: profileModelsFor(cards),
-    // Each card is already a fresh copy: `effectiveCard` never reuses catalog arrays.
     cards,
   };
 }

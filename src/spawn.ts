@@ -261,7 +261,7 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         if (typeof raw.need !== "string" || raw.need.trim().length === 0) {
           return { output: JSON.stringify({ error: "invalid_need", message: "campo 'need' é obrigatório" }), isError: true };
         }
-        if (!ROLE_TAGS.includes(raw.need)) {
+        if (!ROLE_TAGS.some((role) => role === raw.need)) {
           return { output: JSON.stringify({ error: "invalid_need", message: `need "${raw.need}" não é um papel válido` }), isError: true };
         }
         if (typeof raw.task !== "string" || raw.task.trim().length === 0) {
