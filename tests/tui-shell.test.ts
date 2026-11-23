@@ -34,7 +34,8 @@ function config(tools: string[], credentialRef = "KEY", sandbox = true, withTool
 
 const slowCommand = process.platform === "win32" ? "ping -n 10 127.0.0.1" : "sleep 5";
 
-describe("!cmd da TUI (T2, #63)", () => {  afterEach(() => {
+describe("!cmd da TUI (T2, #63)", () => {
+  afterEach(() => {
     configureRunCommand({ sandbox: false });
   });
 
@@ -242,5 +243,45 @@ describe("!cmd always approval reloads the project layer (#599)", () => {
     const second = await shell.run("echo ok");
     expect(second.isError).toBe(false);
     expect(prompts).toBe(1); // the runner sees the saved approval; no second prompt
+  });
+});
+
+describe("!cmd reload falls back to the last good config (#599)", () => {
+  test("a narrowed config survives a corrupt read: the denied command never runs", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const write = (shell: unknown): void => writeFileSync(configPath, JSON.stringify({
+      ...JSON.parse(readFileSync(configPath, "utf8")),
+      shell,
+    }));
+    write({ rules: [{ match: "*", effect: "allow" }] });
+    const shell = createShellRunner({ configPath, cwd, env: process.env });
+    write({ rules: [{ match: "*", effect: "ask" }, { match: "echo *", effect: "deny" }] });
+    const narrowed = await shell.run("echo ok");
+    expect(narrowed.isError).toBe(true);
+    expect(narrowed.output).toContain("shell_rule_denied");
+    writeFileSync(configPath, "{ broken");
+    const corrupted = await shell.run("echo ok");
+    expect(corrupted.isError).toBe(true);
+    expect(corrupted.output).toContain("shell_rule_denied");
+  });
+
+  test("switching shell.mode to off mid-session refuses the next command", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const write = (shell: unknown): void => writeFileSync(configPath, JSON.stringify({
+      ...JSON.parse(readFileSync(configPath, "utf8")),
+      shell,
+    }));
+    write({ rules: [{ match: "*", effect: "allow" }] });
+    const shell = createShellRunner({ configPath, cwd, env: process.env });
+    const before = await shell.run("echo ok");
+    expect(before.isError).toBe(false);
+    write({ mode: "off", rules: [{ match: "*", effect: "allow" }] });
+    const after = await shell.run("echo ok");
+    expect(after.isError).toBe(true);
+    expect(after.output).toContain("sandbox_required_for_shell");
   });
 });
