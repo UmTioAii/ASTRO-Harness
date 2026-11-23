@@ -227,7 +227,9 @@ function sanitizeValue(value: unknown, key?: string, attachmentMeta = false, har
 
 /** Converte o snapshot do runtime no registro persistido (o snapshot não carrega `name`). */
 export function toSessionRecord(snapshot: SessionSnapshot): SessionRecord {
-  return { schemaVersion: 1, ...snapshot };
+  // `preset` is live config, not session data: never persist a stale profile.
+  const { preset: _preset, ...record } = snapshot;
+  return { schemaVersion: 1, ...record };
 }
 
 /** Motivo da recusa ao excluir uma sessão ainda viva; `undefined` libera a exclusão (#366). */
@@ -366,6 +368,7 @@ export class SessionStore {
     // `name` vindo de chamador JS é descartado: só `rename` muda o nome (runtime)
     const base = { ...snapshot } as Record<string, unknown>;
     delete base.name;
+    delete base.preset;
     const record = sanitizeValue(parseRecord({ schemaVersion: 1, ...base, ...(name === undefined ? {} : { name }) })) as SessionRecord;
     // nunca grava um arquivo que o #read recusaria (sessão salva mas invisível)
     if (record.model === "" || INVISIBLE.test(record.model)) throw new Error("modelo da sessão inválido");

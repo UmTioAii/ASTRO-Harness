@@ -329,7 +329,9 @@ test("enfileira Enter durante o turno (#560) e atualiza o status após /model", 
     // #594: no turn counter in the conversation; the footer still refreshes with usage.
     expect(instance.lastFrame()).not.toMatch(/turno\(s\)/);
     expect(instance.lastFrame()).toContain("tokens");
+    // The old model disappears from the header/footer: the status really refreshed.
     expect(instance.lastFrame()).toContain("p/m2");
+    expect(instance.lastFrame()).not.toContain("p/m1");
   } finally {
     instance.unmount();
   }
