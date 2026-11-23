@@ -456,7 +456,8 @@ describe("corte de budget no run (F-05, #132 parte 3)", () => {
     const codes = (await Promise.all([first.exited, second.exited])).sort();
     expect(codes).toEqual([0, 2]);
     const reserved = new Ledger(ledgerPath).readAllEntries()
-      .filter((entry) => entry.kind === "budget" && entry.event === "reserved");
-    expect(reserved.reduce((sum, entry) => sum + (entry.reserved ?? 0), 0)).toBe(6);
+      .filter((entry) => entry.kind === "budget" && entry.event === "reserved")
+      .reduce((sum, entry) => sum + (entry.kind === "budget" ? entry.reserved ?? 0 : 0), 0);
+    expect(reserved).toBe(6);
   }, 20_000);
 });
