@@ -8,7 +8,8 @@ import { redactSecrets } from "../sanitize-external";
 import { isSecretEnvName } from "../secrets";
 import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
 import { realpathPreservingDots, isWithin } from "./paths";
-import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolResult } from "./types";
+import { evaluateShellPolicy, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
+import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolPermissionHint, type ToolResult } from "./types";
 
 /** Teto da saída devolvida ao modelo (run_command e run_tests). */
 export const MAX_OUTPUT = 10_000;
@@ -104,6 +105,9 @@ let sandboxEnabled = false;
 /** Estado do #474 (`sandbox: "auto"`): modo e `shell.default`. */
 let commandMode: RunCommandMode = "disabled";
 let preferredShell: string | undefined;
+/** Ordered shell rules and the external-directory decision (#599). */
+let shellRules: readonly ShellRule[] = [];
+let shellExternalDirectory: ShellExternalDirectory | undefined;
 let dockerProbe: Promise<boolean> | undefined;
 
 /**
@@ -160,9 +164,15 @@ export function configureRunCommand(opts: {
   mode?: RunCommandMode;
   /** `shell.default` da config (#474); ausente = ordem da plataforma. */
   shellDefault?: string;
+  /** Regras de prefixo ordenadas (#599); ausente = só a matriz de permissão. */
+  rules?: readonly ShellRule[];
+  /** Decisão quando o comando sai do projeto (#599); ausente = `ask`. */
+  externalDirectory?: ShellExternalDirectory;
 }): void {
   commandMode = opts.mode ?? (opts.sandbox === false ? "disabled" : opts.sandbox === true ? "docker" : "host");
   preferredShell = opts.shellDefault;
+  shellRules = opts.rules ?? [];
+  shellExternalDirectory = opts.externalDirectory;
   // `sandbox: true` mantém o caminho Docker byte a byte; `isRunCommandSandboxEnabled`
   // segue significando "Docker", como antes.
   sandboxEnabled = commandMode === "docker";
@@ -677,6 +687,38 @@ async function runOnHost(
   return { output: redactThenTruncate(outcome.output) };
 }
 
+/** Non-throwing command extraction for the policy hooks (#599). */
+function commandOf(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null) return undefined;
+  const command = (input as { command?: unknown }).command;
+  return typeof command === "string" && command.trim().length > 0 ? command : undefined;
+}
+const shellPolicyFor = (command: string, cwd: string): ShellPolicyResult =>
+  evaluateShellPolicy(command, cwd, { rules: shellRules, externalDirectory: shellExternalDirectory });
+
+/** Policy before the permission matrix (#599); `default` keeps the matrix in charge. */
+function runCommandPolicyHint(input: unknown, ctx: ToolContext): ToolPermissionHint | undefined {
+  const command = commandOf(input);
+  const policy = command === undefined ? undefined : shellPolicyFor(command, ctx.cwd);
+  if (policy === undefined || policy.origin === "default") return undefined;
+  return policy.decision === "deny"
+    ? {
+        decision: "deny",
+        ...(policy.code === undefined ? {} : { code: policy.code }),
+        ...(policy.message === undefined ? {} : { message: policy.message }),
+      }
+    : { decision: policy.decision };
+}
+
+/** Prompt detail: the whole command, plus the part that triggered a compound ask (#599). */
+function runCommandDetail(input: unknown, ctx?: ToolContext): ApprovalDetail | undefined {
+  const command = commandOf(input);
+  if (command === undefined) return undefined;
+  const part = ctx === undefined ? undefined : shellPolicyFor(command, ctx.cwd).trigger;
+  const value = part !== undefined && part !== command.trim() ? `${command} (part: ${part})` : command;
+  return { kind: "command", value: redactSecrets(value) };
+}
+
 /** Executa um comando de shell no diretório de trabalho, com timeout do manifesto. */
 export const runCommandTool: Tool = {
   manifest: {
@@ -705,6 +747,9 @@ export const runCommandTool: Tool = {
     sideEffects: "process",
   },
 
+  approvalDetail: runCommandDetail,
+  permissionHint: runCommandPolicyHint,
+
   async execute(input, ctx): Promise<ToolResult> {
     let command: string;
     try {
@@ -718,6 +763,16 @@ export const runCommandTool: Tool = {
     if (commandMode === "disabled") {
       const error = new SandboxRequiredForShellError("sandbox:false");
       return { ...failure(error.message), code: error.code };
+    }
+
+    // A deny rule or an unparsable command never reaches a transport, even on a
+    // direct call or in bypass (#599, I-01/I-11); the gate already refused it.
+    const policy = shellPolicyFor(command, ctx.cwd);
+    if (policy.decision === "deny") {
+      return failureCode(
+        policy.message ?? "shell_denied: the command was refused before execution",
+        policy.code ?? "shell_rule_denied",
+      );
     }
 
     // Host is the default (#599): no Docker probe, no container. The gate already

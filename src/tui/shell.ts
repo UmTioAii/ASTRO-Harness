@@ -68,6 +68,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
   configureRunCommand({
     mode: runCommandMode,
     ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
+    ...(config.shell?.rules === undefined ? {} : { rules: config.shell.rules }),
+    ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
   });
   const auditPath = resolve(opts.cwd, config.paths.audit);
   const secretEnvNames: string[] = [];
@@ -109,6 +111,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       configureRunCommand({
         mode: runCommandMode,
         ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
+        ...(config.shell?.rules === undefined ? {} : { rules: config.shell.rules }),
+        ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
       });
       const executor = new ToolExecutor({
         tools: [runCommandTool],

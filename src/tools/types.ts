@@ -143,17 +143,32 @@ export interface TruncationInfo {
   hint: string;
 }
 
+/**
+ * Decision the tool owns before the permission matrix (#599): ordered shell
+ * rules and the compound scanner run here, so an explicit `deny` survives every
+ * mode and saved approval. The executor still applies the path hard-block first.
+ */
+export interface ToolPermissionHint {
+  decision: "allow" | "ask" | "deny";
+  /** Stable policy code for a deny (never the raw command). */
+  code?: string;
+  /** Sanitized message for a deny; never the raw command. */
+  message?: string;
+}
+
 /** Contrato de uma tool executável pelo agente. */
 export interface Tool {
   manifest: ToolManifest;
   execute(input: unknown, ctx: ToolContext): Promise<ToolResult>;
+  /** Tool-owned policy before the mode matrix (#599); absent = matrix only. */
+  permissionHint?(input: unknown, ctx: ToolContext): ToolPermissionHint | undefined;
   /**
    * Detalhe material da chamada para o prompt de aprovação (#536, #578) quando
    * ele não está no input — `run_tests` executa o comando da config, não do
    * modelo. O executor normaliza (uma linha, redigido, truncado) antes do
    * prompt; devolver `undefined` volta ao mapeamento por nome.
    */
-  approvalDetail?(input: unknown): ApprovalDetail | undefined;
+  approvalDetail?(input: unknown, ctx?: ToolContext): ApprovalDetail | undefined;
 }
 
 /** Erro de validação ou de política de uma tool. */

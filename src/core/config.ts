@@ -11,6 +11,7 @@ import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "../compaction/
 import type { ModelRouting } from "../providers/model-routing";
 import { DEFAULT_RUN_TESTS_TIMEOUT_MS, MAX_RUN_TESTS_TIMEOUT_MS, type RunTestsConfig } from "../tools/run-command";
 import { HOST_SHELLS, isHostShell } from "../tools/host-shell";
+import type { ShellExternalDirectory, ShellRule, ShellRuleEffect } from "../tools/shell-policy";
 import type { WebSearchConfig, WebSearchProvider } from "../tools/web-search";
 import { isPermissionMode, DEFAULT_PERMISSION_MODE, isAgentPermission, type AgentPermission, type PermissionMode } from "../permissions";
 import { isAuthHeader, isEnvName, isVaultCredentialRef, looksLikeSecret, mcpSecretProblem } from "../secrets";
@@ -235,6 +236,10 @@ export interface RunCommandToolConfig {
 export interface ShellConfig {
   default?: string;
   mode?: "host" | "off";
+  /** Ordered prefix rules; the last match wins (#599). */
+  rules?: ShellRule[];
+  /** Decision when the command or an inferred target leaves the project (#599). */
+  externalDirectory?: ShellExternalDirectory;
 }
 
 /** Telemetria opt-in (F5-5): métricas anônimas por run; off por default. */
@@ -1673,8 +1678,11 @@ function validateTools(value: unknown): ToolsConfig {
 function validateShell(value: unknown, legacySandbox?: boolean | "auto" | "docker"): ShellConfig {
   const raw = value === undefined ? {} : expectObject(value, "shell");
   const result: ShellConfig = Object.create(null);
+  const effects: readonly unknown[] = ["allow", "ask", "deny"];
   for (const key of Object.keys(raw)) {
-    if (key !== "default" && key !== "mode") fail(`config inválida: "shell.${key}" desconhecido`);
+    if (key !== "default" && key !== "mode" && key !== "rules" && key !== "externalDirectory") {
+      fail(`config inválida: "shell.${key}" desconhecido`);
+    }
   }
   if (raw.default !== undefined) {
     const shell = expectString(raw.default, "shell.default");
@@ -1687,6 +1695,27 @@ function validateShell(value: unknown, legacySandbox?: boolean | "auto" | "docke
   const mode = raw.mode ?? (legacySandbox === false ? "off" : undefined);
   if (mode !== undefined && mode !== "host" && mode !== "off") fail('config inválida: "shell.mode" deve ser "host" ou "off"');
   if (mode !== undefined) result.mode = mode;
+  if (raw.rules !== undefined) {
+    if (!Array.isArray(raw.rules)) fail('config inválida: "shell.rules" deve ser uma lista');
+    result.rules = raw.rules.map((item: unknown, index: number): ShellRule => {
+      const label = `shell.rules[${index}]`;
+      if (!isPlainObject(item)) fail(`config inválida: "${label}" deve ser um objeto`);
+      if (Object.keys(item).some((key) => key !== "match" && key !== "effect")) {
+        fail(`config inválida: "${label}" tem chave desconhecida`);
+      }
+      if (typeof item.match !== "string" || item.match.trim().length === 0) {
+        fail(`config inválida: "${label}.match" deve ser uma string não vazia`);
+      }
+      if (!effects.includes(item.effect)) fail(`config inválida: "${label}.effect" deve ser "allow", "ask" ou "deny"`);
+      return { match: item.match, effect: item.effect as ShellRuleEffect };
+    });
+  }
+  if (raw.externalDirectory !== undefined) {
+    if (!effects.includes(raw.externalDirectory)) {
+      fail('config inválida: "shell.externalDirectory" deve ser "allow", "ask" ou "deny"');
+    }
+    result.externalDirectory = raw.externalDirectory as ShellExternalDirectory;
+  }
   return result;
 }
 
@@ -1894,7 +1923,7 @@ const CONFIG_SHAPE: ConfigShape = {
       values: { keys: NAMED_AGENT_KEYS, children: { modelRouting: { keys: ["cheapModel", "strongModel"] } } },
     },
     tools: { keys: ["run_command"], children: { run_command: { keys: ["sandbox"] } } },
-    shell: { keys: ["default", "mode"] },
+    shell: { keys: ["default", "mode", "rules", "externalDirectory"], children: { rules: { items: { keys: ["match", "effect"] } } } },
     telemetry: { keys: ["enabled", "endpoint", "sampleRate"] },
     quota: { values: { keys: QUOTA_KEYS } },
     budget: { keys: ["scope", "limitUsd", "warnAt", "onExceed", "hardCeilingUsd"] },
