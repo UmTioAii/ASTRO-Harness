@@ -1035,6 +1035,7 @@ export function resolveEffectiveConfig(input: {
   const declaredSandbox = isPlainObject(declared.tools) && isPlainObject(declared.tools.run_command) ? declared.tools.run_command.sandbox : undefined;
   if (declaredSandbox !== undefined && !hasDerivedShellSandbox(declared)) warnings.push('tools.run_command.sandbox is a legacy alias of shell.mode; use shell.mode in schema 2.0.0 (the file was not rewritten)');
   if (config.preset === "control") warnings.push('preset "control" is active: advanced limits and budgets are visible; use /config preset default to return');
+  if (config.preset !== "control" && config.quota !== undefined) warnings.push("quota limits are ignored in the default profile; switch to \"control\" to enforce them (#617)");
   if (config.run?.maxTurns === "unlimited") warnings.push("run.maxTurns is unlimited: spend is not capped by a turn limit");
   if (config.run?.maxRoundsPerTurn === "unlimited") warnings.push("run.maxRoundsPerTurn is unlimited: spend and loop protection have no round ceiling");
   const projectProviders = project === undefined ? [] : Object.keys(isPlainObject(project.providers) ? project.providers : {});

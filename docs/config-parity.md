@@ -40,7 +40,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 | Ajuste | Persistido em | CLI | TUI | REPL | Classe / por quê |
 |---|---|---|---|---|---|
 | providers e models | camadas 2–3 | lê | lê + CRUD guiado (provider/perfil) | lê + CRUD guiado (provider/perfil) | compartilhado: contrato do run |
-| pricing, quota, paths, MCP, plugins | camadas 2–3 | lê | lê | lê | compartilhado; edição só no arquivo |
+| pricing, quota, paths, MCP, plugins | camadas 2-3 | lê | lê | lê | compartilhado; edição só no arquivo. `quota` só é aplicada no preset `control` (#617); no `default` fica declarada e ignorada, com aviso no load |
 | provider ativo | `activeProfileId` (store legado hoje; `config.json` após #459/#492) | `--provider` efêmero | tela; só perfil global | `/provider use`; só global | compartilhado; flag CLI-only |
 | modelo do turno | `agent.model`/`modelPool` (camadas 2–3) | sem flag | `/model` em runtime; `lastModel` só vale sem `agent.model` declarado (#497) | só config; `/model` em runtime | compartilhado; memória TUI-only |
 | `permissions.mode` | camada 3 | `--permission-mode`/env efêmeros | `/config` grava; `/mode` runtime | `/config <chave> <valor>` grava; `/mode` runtime | compartilhado; persistência TUI+REPL (#558) |

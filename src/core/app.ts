@@ -5,7 +5,7 @@ import { Auditor } from "../audit";
 import { isAbortError } from "../abort";
 import { SwapDeniedError, swapDelta, type SwapApprover, type SwapRequest } from "../approval";
 import type { AstroConfig, CodexOAuthProviderConfig, OpenAICompatProviderConfig, PriceConfig, ProviderConfig } from "./config";
-import { ConfigError, MAX_RUN_LIMIT, providerAccountRefFor, providerCredentialRefFor } from "./config";
+import { ConfigError, MAX_RUN_LIMIT, providerAccountRefFor, providerCredentialRefFor, quotasForPreset } from "./config";
 import { loadEffectiveConfig, providerIdentityFor } from "../providers/profiles";
 import { estimateCost, Ledger } from "../ledger";
 import { CodexOAuthProvider } from "../providers/codex-oauth";
@@ -792,7 +792,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   /** Preço curado por identidade efetiva, a mesma fonte do ledger (D-10). */
   const priceOf = (provider: string, modelId: string): PriceConfig | undefined =>
     registry.get(`${provider}/${modelId}`)?.price;
-  const quotaLimits = config.quota;
+  const quotaLimits = quotasForPreset(config);
   /** Budget efetivo (B1): o limite mais restritivo entre budget, quota e team. */
   const budget = config.budget === undefined ? undefined : restrictBudget(config.budget, [
     config.budget.scope === "project" ? config.team?.projectBudgetUsd : undefined,
@@ -1266,7 +1266,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
                   : { weekBudgetUsd: config.team.weekBudgetUsd }),
                 ...(config.team.agentQuotas === undefined
                   ? {}
-                  : { agentQuotas: config.team.agentQuotas }),
+                  : config.preset === "control" ? { agentQuotas: config.team.agentQuotas } : {}),
               },
             }),
         env,
@@ -1332,7 +1332,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
                     : { projectBudgetUsd: config.team.projectBudgetUsd }),
                   ...(config.team.agentQuotas === undefined
                     ? {}
-                    : { agentQuotas: config.team.agentQuotas }),
+                    : config.preset === "control" ? { agentQuotas: config.team.agentQuotas } : {}),
                 },
               }),
           env,

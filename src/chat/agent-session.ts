@@ -11,7 +11,7 @@ import type { ToolApprover } from "../tools/executor";
 import { TodoPlanStore } from "../tools/todo-write";
 import type { TrustAsk } from "../trust";
 import { canonicalFolder, TrustedFolders, trustStatePath } from "../trust";
-import { isPlainObject, updateConfigPermissionsMode } from "../core/config";
+import { isPlainObject, quotasForPreset, updateConfigPermissionsMode } from "../core/config";
 import { updateConfigKnobs, type EditableConfigKey } from "../core/config-edit";
 import { assertModeWithinGlobal } from "../config-overlay";
 import type { AstroConfig } from "../core/config";
@@ -465,7 +465,7 @@ export class AgentSession {
   quotaStatus(): QuotaStatus | undefined {
     const provider = this.#registry.require(this.#modelRef).provider;
     const quotaDomain = this.#config.providers[provider]?.quotaDomain ?? "default";
-    return quotaStatus(this.#ledger, this.#config.quota ?? {}, quotaDomain);
+    return quotaStatus(this.#ledger, quotasForPreset(this.#config) ?? {}, quotaDomain);
   }
 
   get providerSource(): ProviderSource {
@@ -623,7 +623,7 @@ export class AgentSession {
     const setup = createProvider(this.#config, modelEntry, this.#env ?? process.env);
     const provider = setup.provider;
     // Mesma quota do caminho normal: o resumo é uma chamada paga.
-    assertWithinQuota(this.#ledger, this.#config.quota ?? {}, setup.quotaDomain);
+    assertWithinQuota(this.#ledger, quotasForPreset(this.#config) ?? {}, setup.quotaDomain);
     // CMP-6: `/compact force` ignora a pausa do breaker e zera o contador,
     // depois da checagem de quota (o reset é auditado mesmo se o resumo falhar).
     if (force) {
