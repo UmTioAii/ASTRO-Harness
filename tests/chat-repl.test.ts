@@ -485,11 +485,9 @@ describe("REPL do chat (T1, #62)", () => {
 
   test("/config redacts invalid keys and warns immediately on Control entry", async () => {
     const sentinel = "review-sentinel-not-secret", edits: Record<string, string>[] = [], session = new FakeSession();
-    session.applyConfigEdits = (edit) => { edits.push(edit); return edit; };
-    const io = new ScriptedIO([`/config ${sentinel} x`, "/config preset control", "/exit"]);
-    await runRepl(session, io);
-    const output = io.outputs.join("\n");
-    expect(output).not.toContain(sentinel); expect(output).toContain('preset "control" is active');
+    Object.assign(session, { applyConfigEdits: (edit: Record<string, string>) => { edits.push(edit); return edit; } });
+    const io = new ScriptedIO([`/config ${sentinel} x`, "/config preset control", "/exit"]); await runRepl(session, io);
+    const output = io.outputs.join("\n"); expect(output).not.toContain(sentinel); expect(output).toContain('preset "control" is active');
     expect(edits).toEqual([{ preset: "control" }]);
   });
 

@@ -25,7 +25,7 @@ export const EDITABLE_CONFIG_KEYS = [
   "shell.default",
 ] as const;
 
-export type EditableConfigKey = (typeof EDITABLE_CONFIG_KEYS)[number];
+export type EditableConfigKey = (typeof EDITABLE_CONFIG_KEYS)[number]; export const CONTROL_ENTRY_WARNING = 'preset "control" is active: advanced limits and budgets are visible; use /config preset default to return';
 
 /** Guard de runtime para input externo (whitelist fechada). */
 export function isEditableConfigKey(value: unknown): value is EditableConfigKey {
@@ -118,7 +118,8 @@ function setNested(raw: Record<string, unknown>, key: string, value: unknown): v
   let node = raw;
   for (const part of parts.slice(0, -1)) {
     const next = node[part];
-    if (!isPlainObject(next)) node[part] = {};
+    if (next === undefined) node[part] = {};
+    else if (!isPlainObject(next)) throw new ConfigError(`invalid config: section "${part}" must be an object for /config edits`);
     node = node[part] as Record<string, unknown>;
   }
   node[parts[parts.length - 1]!] = value;

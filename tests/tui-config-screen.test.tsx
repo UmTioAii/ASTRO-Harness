@@ -83,10 +83,8 @@ test("enter abre o seletor; up+enter salva allow-edits e o modo exibido muda (#2
 });
 
 test("editor warns immediately after entering Control", async () => {
-  const saved: [string, string][] = [];
-  const instance = render(<ConfigScreen colors={colors} summary={{ ...summary, knobs: [{ key: "preset", value: "default" }] }} trustedFolders={[]} onClose={() => undefined} onSaveMode={() => undefined} onSaveKnob={(key, value) => { saved.push([key, value]); }} />);
-  try {
-    instance.stdin.write("e"); await waitFor(() => instance.lastFrame()?.includes("knob editável") === true);
+  const saved: [string, string][] = [], instance = render(<ConfigScreen colors={colors} summary={{ ...summary, knobs: [{ key: "preset", value: "default" }] }} trustedFolders={[]} onClose={() => undefined} onSaveMode={() => undefined} onSaveKnob={(key, value) => { saved.push([key, value]); }} />);
+  try { instance.stdin.write("e"); await waitFor(() => instance.lastFrame()?.includes("knob editável") === true);
     instance.stdin.write("\r"); await waitFor(() => instance.lastFrame()?.includes("atual: default") === true);
     for (let index = 0; index < 7; index++) { instance.stdin.write("\u007f"); await new Promise((resolve) => setTimeout(resolve, 10)); }
     instance.stdin.write("control"); await waitFor(() => instance.lastFrame()?.includes("control") === true);

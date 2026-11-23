@@ -3,7 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { useState, type ReactElement } from "react";
 import { PERMISSION_MODES, type PermissionMode } from "../permissions";
 import { configLines, type ConfigSummary } from "../chat/config-summary";
-import type { EditableConfigKey } from "../core/config-edit";
+import { CONTROL_ENTRY_WARNING, type EditableConfigKey } from "../core/config-edit";
 import { redactSecrets } from "../sanitize-external";
 import type { ThemeColors } from "./theme";
 
@@ -47,7 +47,7 @@ export function ConfigScreen({ colors, summary, trustedFolders, onClose, onSaveM
     try {
       if (onSaveKnob === undefined) throw new Error("esta tela não aceita editar knobs");
       onSaveKnob(key, rawValue);
-      setMessage({ text: `salvo: ${key} = ${rawValue} (gravado na config)`, ok: true });
+      setMessage({ text: `salvo: ${key} = ${rawValue} (gravado na config)${key === "preset" && rawValue === "control" ? `\n${CONTROL_ENTRY_WARNING}` : ""}`, ok: true });
     } catch (error) {
       setMessage({ text: `erro: ${redactSecrets(error instanceof Error ? error.message : String(error))}`, ok: false });
     }

@@ -13,6 +13,7 @@ import { termsReport } from "../terms";
 import { THEMES, isTheme, type Theme } from "./theme";
 import { detectHostShells } from "../tools/host-shell";
 import {
+  CONTROL_ENTRY_WARNING,
   EDITABLE_CONFIG_KEYS,
   isEditableConfigKey,
   parseConfigEditValue,
@@ -163,7 +164,7 @@ export async function runCommand(
           return { entries: [{ kind: "error", text: "esta sessão não aceita editar a config" }] };
         }
         if (!isEditableConfigKey(command.key)) {
-          return { entries: [{ kind: "error", text: `chave não editável via /config: "${command.key}" — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}` }] };
+          return { entries: [{ kind: "error", text: `chave não editável via /config — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}` }] };
         }
         if ((command.rawValue ?? "").trim() === "") {
           return { entries: [{ kind: "error", text: `uso: /config ${command.key} <valor> — editáveis: ${EDITABLE_CONFIG_KEYS.join(", ")}` }] };
@@ -172,7 +173,7 @@ export async function runCommand(
           const key = command.key;
           const value = parseConfigEditValue(key, command.rawValue ?? "");
           session.applyConfigEdits({ [key]: command.rawValue ?? "" });
-          return { entries: [{ kind: "info", text: `salvo: ${key} = ${value === null ? "null" : String(value)} (gravado na config)` }] };
+          return { entries: [{ kind: "info", text: `salvo: ${key} = ${value === null ? "null" : String(value)} (gravado na config)` }, ...(key === "preset" && value === "control" ? [{ kind: "info" as const, text: CONTROL_ENTRY_WARNING }] : [])] };
         } catch (error) {
           return { entries: [{ kind: "error", text: `erro: ${messageOf(error)}` }] };
         }

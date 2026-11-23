@@ -532,7 +532,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       const attachments = pendingAttachments.current;
       const turnOptions: SendTurnOptions = {
         ...(attachments.length === 0 ? {} : { attachments, approveAttachment }),
-        onStep: (step, maxSteps) => setStepProgress({ step, maxSteps }),
+        onStep: (step, maxSteps) => setStepProgress(session.configSummary?.().knobs.some((knob) => knob.key === "preset" && knob.value === "control") ? { step, maxSteps } : undefined),
       };
       const result = await session.send(
         prompt,

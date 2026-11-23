@@ -336,8 +336,7 @@ const progressSummary = (preset: "default" | "control"): ConfigSummary => ({ con
 
 test("live counters follow the effective profile and disappear at turn end (#508, #594)", async () => {
   class StepSession extends FakeSession {
-    preset: "default" | "control" = "control"; stepped = false;
-    configSummary(): ConfigSummary { return progressSummary(this.preset); }
+    preset: "default" | "control" = "control"; stepped = false; configSummary(): ConfigSummary { return progressSummary(this.preset); }
     override async send(
       prompt: string,
       signal?: AbortSignal,
@@ -361,8 +360,7 @@ test("live counters follow the effective profile and disappear at turn end (#508
   } finally {
     instance.unmount();
   }
-  const defaultSession = new StepSession(); defaultSession.preset = "default";
-  const defaultInstance = render(<TuiApp session={defaultSession} cwd="/tmp/astro" />);
+  const defaultSession = new StepSession(); defaultSession.preset = "default"; const defaultInstance = render(<TuiApp session={defaultSession} cwd="/tmp/astro" />);
   try {
     defaultInstance.stdin.write("conte"); defaultInstance.stdin.write("\r");
     await waitFor(() => defaultSession.stepped && frameHas(defaultInstance, "pensando…"));

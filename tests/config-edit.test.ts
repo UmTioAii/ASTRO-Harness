@@ -170,24 +170,19 @@ describe("updateConfigKnobs (#558)", () => {
     }
   });
 
-  test("rejects non-object sections without replacing user-authored values", () => {
-    for (const run of ["INVALID-USER-VALUE", null, []]) {
-      const path = writeProject({ ...BASE, run }), before = readFileSync(path, "utf8");
-      let message = "";
+  test("rejects non-object sections without replacing user-authored values", () => { for (const run of ["INVALID-USER-VALUE", null, []]) {
+      const path = writeProject({ ...BASE, run }), before = readFileSync(path, "utf8"); let message = "";
       try { updateConfigKnobs(path, { "run.maxTurns": "250" }); } catch (error) { message = (error as Error).message; }
       expect(message).not.toBe(""); expect(message).not.toContain("INVALID-USER-VALUE");
       expect(readFileSync(path, "utf8")).toBe(before);
     }
   });
 
-  test("Control returns to Default without deleting advanced declarations", () => {
-    const path = writeProject({ ...BASE, version: "2.0.0", preset: "control" }), env = { ASTRO_NO_GLOBAL_CONFIG: "1" };
-    updateConfigKnobs(path, { "run.maxRoundsPerTurn": "100", "team.sessionBudgetUsd": "10" }, { env });
-    updateConfigKnobs(path, { preset: "default" }, { env });
+  test("Control returns to Default without deleting advanced declarations", () => { const path = writeProject({ ...BASE, version: "2.0.0", preset: "control" }), env = { ASTRO_NO_GLOBAL_CONFIG: "1" };
+    updateConfigKnobs(path, { "run.maxRoundsPerTurn": "100", "team.sessionBudgetUsd": "10" }, { env }); updateConfigKnobs(path, { preset: "default" }, { env });
     expect(loadConfigRaw(path)).toMatchObject({ preset: "default", run: { maxRoundsPerTurn: 100 }, team: { sessionBudgetUsd: 10 } }); expect(loadConfig(path).run).toMatchObject({ maxRoundsPerTurn: 100 });
     expect(() => updateConfigKnobs(path, { "run.maxRoundsPerTurn": "200" }, { env })).toThrow(/"control"/);
-    updateConfigKnobs(path, { preset: "control" }, { env });
-    updateConfigKnobs(path, { "run.maxRoundsPerTurn": "200" }, { env }); expect(loadConfigRaw(path).run).toMatchObject({ maxRoundsPerTurn: 200 });
+    updateConfigKnobs(path, { preset: "control", "run.maxRoundsPerTurn": "200" }, { env }); expect(loadConfigRaw(path).run).toMatchObject({ maxRoundsPerTurn: 200 });
   });
 
   test("ASTRO_NO_GLOBAL_CONFIG=1 disables global ceiling validation", () => {
