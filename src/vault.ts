@@ -9,6 +9,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync,
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { astroHomePath } from "./astro-home";
+import { withFileLock } from "./file-lock";
 import { isVaultId, looksLikeSecret } from "./secrets";
 
 export type VaultScheme = "dpapi" | "plain";
@@ -234,6 +235,16 @@ export class Vault {
     return loadVault(this.path);
   }
 
+  /**
+   * Serializes read-modify-write across processes (#605, I-03). The lock lives
+   * next to the vault, like audit/ledger, and is created with the owning PID;
+   * a live holder makes the write fail closed instead of losing an update.
+   */
+  #write<T>(critical: () => T): T {
+    mkdirSync(dirname(this.path), { recursive: true });
+    return withFileLock(`${this.path}.lock`, critical);
+  }
+
   /** Listagem sem o campo secreto (seguro para TUI/log). */
   list(): VaultPublic[] {
     return this.#load().credentials.map(({ secret: _secret, ...rest }) => rest);
@@ -243,57 +254,65 @@ export class Vault {
   create(input: { providerId: string; label: string; secret: string }, now: Date = new Date()): VaultPublic {
     if (input.secret.trim() === "") throw new Error("segredo vazio não entra no cofre");
     if (looksLikeSecret(input.label)) throw new Error(`"label" parece conter segredo; não é gravado (I-03)`);
-    const store = this.#load();
-    const ts = now.toISOString();
-    const cred: VaultCredential = {
-      id: `cred-${randomUUID()}`,
-      providerId: input.providerId,
-      label: input.label,
-      scheme: this.backend.scheme,
-      secret: this.backend.protect(input.secret),
-      createdAt: ts,
-      lastUsedAt: ts,
-      active: true,
-    };
-    for (const c of store.credentials) {
-      if (c.providerId === input.providerId) c.active = false;
-    }
-    store.credentials.push(cred);
-    saveVault(store, this.path);
-    const { secret: _secret, ...pub } = cred;
-    return pub;
+    return this.#write(() => {
+      const store = this.#load();
+      const ts = now.toISOString();
+      const cred: VaultCredential = {
+        id: `cred-${randomUUID()}`,
+        providerId: input.providerId,
+        label: input.label,
+        scheme: this.backend.scheme,
+        secret: this.backend.protect(input.secret),
+        createdAt: ts,
+        lastUsedAt: ts,
+        active: true,
+      };
+      for (const c of store.credentials) {
+        if (c.providerId === input.providerId) c.active = false;
+      }
+      store.credentials.push(cred);
+      saveVault(store, this.path);
+      const { secret: _secret, ...pub } = cred;
+      return pub;
+    });
   }
 
   /** Re-cifra o segredo de uma credencial existente. */
   rotate(id: string, secret: string, now: Date = new Date()): void {
     if (secret.trim() === "") throw new Error("segredo vazio não entra no cofre");
-    const store = this.#load();
-    const cred = store.credentials.find((c) => c.id === id);
-    if (cred === undefined) throw new Error("credencial não encontrada no cofre");
-    cred.scheme = this.backend.scheme;
-    cred.secret = this.backend.protect(secret);
-    cred.lastUsedAt = now.toISOString();
-    saveVault(store, this.path);
+    this.#write(() => {
+      const store = this.#load();
+      const cred = store.credentials.find((c) => c.id === id);
+      if (cred === undefined) throw new Error("credencial não encontrada no cofre");
+      cred.scheme = this.backend.scheme;
+      cred.secret = this.backend.protect(secret);
+      cred.lastUsedAt = now.toISOString();
+      saveVault(store, this.path);
+    });
   }
 
   /** Deixa `id` ativa e desativa as demais do mesmo provider (uma ativa por provider). */
   activate(id: string): void {
-    const store = this.#load();
-    const cred = store.credentials.find((c) => c.id === id);
-    if (cred === undefined) throw new Error("credencial não encontrada no cofre");
-    for (const c of store.credentials) {
-      if (c.providerId === cred.providerId) c.active = c.id === id;
-    }
-    saveVault(store, this.path);
+    this.#write(() => {
+      const store = this.#load();
+      const cred = store.credentials.find((c) => c.id === id);
+      if (cred === undefined) throw new Error("credencial não encontrada no cofre");
+      for (const c of store.credentials) {
+        if (c.providerId === cred.providerId) c.active = c.id === id;
+      }
+      saveVault(store, this.path);
+    });
   }
 
   /** Remove a credencial; retorna false se não existia. */
   remove(id: string): boolean {
-    const store = this.#load();
-    const next = store.credentials.filter((c) => c.id !== id);
-    if (next.length === store.credentials.length) return false;
-    saveVault({ version: 1, credentials: next }, this.path);
-    return true;
+    return this.#write(() => {
+      const store = this.#load();
+      const next = store.credentials.filter((c) => c.id !== id);
+      if (next.length === store.credentials.length) return false;
+      saveVault({ version: 1, credentials: next }, this.path);
+      return true;
+    });
   }
 
   /** Resolve a credencial ATIVA do provider; valor só em memória (I-03). */
