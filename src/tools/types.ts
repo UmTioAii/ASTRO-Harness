@@ -37,6 +37,16 @@ export interface ToolManifest {
   idempotent: boolean;
   /** O que a tool pode mutar fora da conversa (F-10). */
   sideEffects: SideEffects;
+  /** Teto de saída declarado pela tool (S6, #603); ausente = sem teto próprio. */
+  output?: ToolOutputCeiling;
+}
+
+/** Teto de saída de uma tool (S6, #603). */
+export interface ToolOutputCeiling {
+  /** Teto em tokens estimados (~4 chars/token), o mesmo estimador do CMP-10. */
+  maxTokens: number;
+  /** Como o modelo pede o restante omitido. */
+  hint: string;
 }
 
 /** Live tool signal for the turn observer (#600); absent = no observer. */
@@ -115,6 +125,22 @@ export interface ToolResult {
   isError?: boolean;
   /** Código estável de erro de política (ADR-0027): path_hard_blocked, allow_invalid, sandbox_required_for_shell, invalid_manifest. */
   code?: string;
+  /** Código estável da taxonomia (S6, #603); `code` continua sendo o motivo de política. */
+  failure?: ToolFailure;
+  /** O que foi omitido e como pedir o restante (S6, #603). */
+  truncation?: TruncationInfo;
+}
+
+/** Taxonomia fechada de falha (S6, #603): código estável, nunca prosa. */
+export type ToolFailure = "denied" | "failed" | "timeout" | "invalid";
+
+/** O que um truncamento removeu e como recuperar (S6, #603). */
+export interface TruncationInfo {
+  removed: number;
+  total: number;
+  /** Unidade dos números: `entries`, `results`, `lines`. */
+  unit: string;
+  hint: string;
 }
 
 /** Contrato de uma tool executável pelo agente. */
@@ -135,5 +161,16 @@ export class ToolError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ToolError";
+  }
+}
+
+/**
+ * Recusa de política (S6, #603): o caminho foi negado por confinamento, não por
+ * entrada malformada. O executor mapeia por causa, não por classe.
+ */
+export class ToolDeniedError extends ToolError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolDeniedError";
   }
 }

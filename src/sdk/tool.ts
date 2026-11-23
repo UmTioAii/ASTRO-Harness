@@ -61,6 +61,16 @@ export function validateManifest(value: unknown): ToolManifest {
   if (typeof m.sideEffects !== "string" || !SIDE_EFFECTS.has(m.sideEffects)) {
     throw new ToolError('manifesto.sideEffects deve ser "none", "filesystem", "network" ou "process"');
   }
+  if (m.output !== undefined) {
+    const output = m.output as { maxTokens?: unknown; hint?: unknown };
+    if (
+      typeof output !== "object" || output === null ||
+      typeof output.maxTokens !== "number" || !Number.isFinite(output.maxTokens) || output.maxTokens <= 0 ||
+      typeof output.hint !== "string" || output.hint.length === 0
+    ) {
+      throw new ToolError('manifest.output must be { maxTokens: positive number, hint: non-empty string }');
+    }
+  }
 
   return {
     name: m.name,
@@ -73,6 +83,8 @@ export function validateManifest(value: unknown): ToolManifest {
     retryable: m.retryable,
     idempotent: m.idempotent,
     sideEffects: m.sideEffects as ToolManifest["sideEffects"],
+    // I-12: a declared ceiling must survive validation, or the plugin loses it.
+    ...(m.output === undefined ? {} : { output: m.output as ToolManifest["output"] }),
   };
 }
 

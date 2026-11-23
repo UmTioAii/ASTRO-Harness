@@ -6,8 +6,9 @@ import { Auditor } from "../src/audit";
 import { CallJournal } from "../src/call-id";
 import { ToolExecutor } from "../src/tools/executor";
 import { resolveWithin } from "../src/tools/paths";
+import { globTool } from "../src/tools/glob";
 import { readFileTool } from "../src/tools/read-file";
-import type { Tool, ToolResult } from "../src/tools/types";
+import type { Tool, ToolManifest, ToolResult } from "../src/tools/types";
 import { writeFileTool } from "../src/tools/write-file";
 import { dockerSandboxModule, type DockerMock, type RunCommandModule } from "./helpers/docker-mock";
 
@@ -148,4 +149,92 @@ test("tool.result do journal (dedup) também carrega durationMs", async () => {
   expect(results).toHaveLength(1);
   expect(Number.isInteger(results[0].payload.durationMs)).toBe(true);
   expect(lines.some((line) => line.tipo === "tool.dedup")).toBe(true);
+});
+
+// S6 (#603): the executor classifies every failure with the closed taxonomy.
+/** Minimal tool with the required manifest fields. */
+const toolOf = (name: string, execute: Tool["execute"], overrides: Partial<ToolManifest> = {}): Tool => ({
+  manifest: { name, description: "x", parameters: {}, risk: "low", permission: "read", timeoutMs: 1000, retryable: false, idempotent: true, sideEffects: "none", class: "read_common", ...overrides },
+  execute,
+});
+
+test("taxonomy: unknown tool and allowlist denial are denied, bad arguments are invalid", async () => {
+  const cwd = dir();
+  const ex = mkExec(cwd);
+  expect((await ex.run(ctx(cwd), { id: "1", name: "ghost", arguments: "{}" })).failure).toBe("denied");
+  expect((await ex.run(ctx(cwd), { id: "2", name: "read_file", arguments: "{quebrado" })).failure).toBe("invalid");
+  const denied = new ToolExecutor({ approveTool: () => true, tools: [readFileTool], allow: [], audit: new Auditor(join(cwd, ".astro", "a3.jsonl")) });
+  expect((await denied.run(ctx(cwd), { id: "3", name: "read_file", arguments: '{"path":"a.txt"}' })).failure).toBe("denied");
+});
+
+test("taxonomy: a confinement refusal is denied by cause, not by error class", async () => {
+  const cwd = dir();
+  const glob = await globTool.execute({ pattern: "../outside/**" }, ctx(cwd));
+  expect(glob.isError).toBe(true);
+  expect(glob.failure).toBe("denied");
+  const read = await readFileTool.execute({ path: "../x" }, ctx(cwd));
+  expect(read.isError).toBe(true);
+  expect(read.failure).toBe("denied");
+});
+
+test("taxonomy: permission, ceiling and invalid manifest denials keep the policy code", async () => {
+  const cwd = dir();
+  const writer = toolOf("writer", async () => ({ output: "ok" }), { class: "edit", permission: "write", sideEffects: "filesystem" });
+  const weak = new ToolExecutor({ permission: "read-only", approveTool: () => true, tools: [writer], allow: ["writer"], audit: new Auditor(join(cwd, ".astro", "p1.jsonl")) });
+  expect((await weak.run(ctx(cwd), { id: "1", name: "writer", arguments: "{}" })).failure).toBe("denied");
+
+  const capped = new ToolExecutor({ approveTool: () => true, tools: [readFileTool], allow: ["read_file"], ceiling: ["ghost"], audit: new Auditor(join(cwd, ".astro", "p2.jsonl")) });
+  expect((await capped.run(ctx(cwd), { id: "2", name: "read_file", arguments: '{"path":"a.txt"}' })).failure).toBe("denied");
+
+  const broken = toolOf("broken", async () => ({ output: "ok" }), { class: "root" as never });
+  const invalid = new ToolExecutor({ approveTool: () => true, tools: [broken], allow: ["broken"], audit: new Auditor(join(cwd, ".astro", "p3.jsonl")) });
+  const result = await invalid.run(ctx(cwd), { id: "3", name: "broken", arguments: "{}" });
+  expect(result.failure).toBe("denied");
+  expect(result.code).toBe("invalid_manifest");
+});
+
+test("taxonomy: a tool timeout is timeout", async () => {
+  const cwd = dir();
+  const slow = toolOf("slow", () => new Promise<ToolResult>(() => {}), { timeoutMs: 30 });
+  const ex = new ToolExecutor({ approveTool: () => true, tools: [slow], allow: ["slow"], audit: new Auditor(join(cwd, ".astro", "a4.jsonl")) });
+  expect((await ex.run(ctx(cwd), { id: "1", name: "slow", arguments: "{}" })).failure).toBe("timeout");
+});
+
+test("taxonomy: expired approval is timeout and cancellation is failed", async () => {
+  const cwd = dir();
+  const writer = toolOf("writer", async () => ({ output: "ok" }), { class: "edit", permission: "write", sideEffects: "filesystem" });
+  const waiting = new ToolExecutor({ approveTool: () => new Promise(() => {}), approvalTimeoutMs: 10, tools: [writer], allow: ["writer"], audit: new Auditor(join(cwd, ".astro", "t1.jsonl")) });
+  expect((await waiting.run(ctx(cwd), { id: "1", name: "writer", arguments: "{}" })).failure).toBe("timeout");
+
+  const controller = new AbortController();
+  controller.abort();
+  const stalled = toolOf("stalled", () => new Promise<ToolResult>(() => {}));
+  const ex = new ToolExecutor({ approveTool: () => true, tools: [stalled], allow: ["stalled"], audit: new Auditor(join(cwd, ".astro", "t2.jsonl")) });
+  expect((await ex.run({ ...ctx(cwd), signal: controller.signal }, { id: "2", name: "stalled", arguments: "{}" })).failure).toBe("failed");
+});
+
+test("taxonomy: a throw, an unclassified result and an unknown code are failed", async () => {
+  const cwd = dir();
+  const boom = toolOf("boom", () => { throw new Error("boom"); });
+  const plain = toolOf("plain", async () => ({ output: "no", isError: true }));
+  const bogus = toolOf("bogus", async () => ({ output: "no", isError: true, failure: "bogus" }) as unknown as ToolResult);
+  const ex = new ToolExecutor({ approveTool: () => true, tools: [boom, plain, bogus], allow: ["boom", "plain", "bogus"], audit: new Auditor(join(cwd, ".astro", "a5.jsonl")) });
+  for (const name of ["boom", "plain", "bogus"]) {
+    expect((await ex.run(ctx(cwd), { id: name, name, arguments: "{}" })).failure).toBe("failed");
+  }
+});
+
+test("taxonomy: write_file denial keeps the path out, a write error is failed", async () => {
+  const cwd = dir();
+  // Reserved harness state and an escape are policy denials, not failures.
+  for (const path of [".astro/audit.jsonl", "../escape.txt"]) {
+    const r = await writeFileTool.execute({ path, content: "x" }, ctx(cwd));
+    expect(r.isError).toBe(true);
+    expect(r.failure).toBe("denied");
+    expect(r.output).not.toContain("escape.txt");
+    expect(r.output).not.toContain(cwd);
+  }
+  expect((await writeFileTool.execute({ path: 1, content: "x" }, ctx(cwd))).failure).toBe("invalid");
+  writeFileSync(join(cwd, "blocker"), "x");
+  expect((await writeFileTool.execute({ path: "blocker/child.txt", content: "x" }, ctx(cwd))).failure).toBe("failed");
 });

@@ -6,6 +6,7 @@ import { shannonEntropyBitsPerChar } from "../entropy";
 import { classifyPath } from "../path-class";
 import { redactSecrets } from "../sanitize-external";
 import { estimateTokens } from "../tokens";
+import { failureFrom } from "./contract";
 import { resolveWithin } from "./paths";
 import { ToolError, type Tool, type ToolResult } from "./types";
 
@@ -147,6 +148,7 @@ export const readFileTool: Tool = {
       const lines = fileLines(redactSecrets(readFileSync(resolved, "utf8")));
       return { output: page(lines, offset, ctx.outputLimitTokens) };
     } catch (error) {
+      if (error instanceof ToolError) return failureFrom(error);
       const message = error instanceof Error ? error.message : String(error);
       return failure(`erro ao ler arquivo: ${message}`);
     }

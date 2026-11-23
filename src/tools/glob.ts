@@ -1,8 +1,9 @@
 import { lstatSync, readdirSync, statSync, type Stats } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_OUTPUT_LIMIT } from "../output-limit";
+import { failureFrom } from "./contract";
 import { resolveWithin, canonicalize, isWithin } from "./paths";
-import { ToolError, type Tool, type ToolResult } from "./types";
+import { ToolDeniedError, ToolError, type Tool, type ToolResult } from "./types";
 
 /** Teto de resultados (#534): acima disso a saída é truncada com aviso explícito. */
 const MAX_RESULTS = 500;
@@ -78,10 +79,11 @@ function parseInput(input: unknown): { pattern: string; path: string; includeIgn
     throw new ToolError('"pattern" deve ser uma string não vazia');
   }
   if (isAbsolute(raw.pattern) || WINDOWS_ABSOLUTE.test(raw.pattern)) {
-    throw new ToolError(`padrão absoluto não é permitido: ${raw.pattern}`);
+    // S6/I-03: a policy refusal, typed and without echoing the input pattern.
+    throw new ToolDeniedError("padrão absoluto não é permitido");
   }
   if (raw.pattern.startsWith("~") || escapesRoot(raw.pattern)) {
-    throw new ToolError(`padrão fora do diretório de trabalho: ${raw.pattern}`);
+    throw new ToolDeniedError("padrão fora do diretório de trabalho");
   }
   return {
     pattern: normalizePattern(raw.pattern),
@@ -254,7 +256,7 @@ export const globTool: Tool = {
 
       return { output: JSON.stringify({ files, total, truncated, ...(notice === undefined ? {} : { notice }) }) };
     } catch (error) {
-      if (error instanceof ToolError) return failure(error.message);
+      if (error instanceof ToolError) return failureFrom(error);
       const message = error instanceof Error ? error.message : String(error);
       return failure(`erro no glob: ${message}`);
     }
