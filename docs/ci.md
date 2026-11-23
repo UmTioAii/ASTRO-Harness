@@ -11,12 +11,23 @@ Resumo: jobs que rodam em todo PR, pré-requisitos de runner e equivalente local
 | Job | Runner | O que faz | Equivalente local |
 |---|---|---|---|
 | `test` | ubuntu-latest + windows-latest | `bun install --frozen-lockfile`, `bun run typecheck`, `bun test --timeout 20000` | os mesmos comandos |
+| `audit` | ubuntu-latest | `bun install --frozen-lockfile` + `bun audit`; qualquer advisory reprova | `bun audit` |
 | `eval` | ubuntu-latest | `bun src/cli.ts eval --threshold 0.85 --report eval-report.json` (mock) | idem |
 | `coverage` | ubuntu-latest | `bun test --coverage --coverage-reporter=lcov` + `scripts/coverage-gate.ts` (total e cada slice C1–C4 com registros ≥ 80%) | `bun run test:coverage` |
 | `bench-mock` | ubuntu-latest + windows-latest × filtro `nvidia`/`openrouter` | `bun test tests/bench.test.ts -t "filtro do CI matrix restringe o bench com mocks: <filtro>"` com providers mock; não é required | idem |
 | `secrets` | ubuntu-latest | gitleaks no histórico | — |
 
 A matriz `test` roda nos dois SOs de propósito: há regressões específicas de win32 (paths, quirk de stdout do Bun) e de Linux (POSIX, Docker).
+
+## Gatilhos e custo de runner
+
+| Workflow | Dispara em | Custo |
+|---|---|---|
+| `ci.yml` | todo PR, push em `main` e tag de release `v*` (os mesmos jobs, sem workflow paralelo) | `test` em 2 SOs + `coverage`, `eval`, `audit`, `bench-mock` e `secrets` em 1 SO |
+| `packed-smoke.yml` | manual (`workflow_dispatch`) e noturno | 1 ubuntu, ~2 min e registry; nunca em PR |
+| `bench.yml` | manual e noturno com opt-in `BENCH_NIGHTLY=true` | 1 ubuntu, quota real de provider; nunca em PR |
+
+Tag não remove cobertura: roda exatamente a suíte do `main`, e `audit` falha em qualquer advisory conhecida (#605).
 
 ### Gate de cobertura: contrato do cabeçalho
 
@@ -28,9 +39,9 @@ A matriz `test` roda nos dois SOs de propósito: há regressões específicas de
 - `unmapped` nunca é gate: arquivo fora do mapa não derruba o job.
 - Exit code: `0` só com total e slices aprovados; `1` abaixo do limiar, lcov ausente/sem métricas ou flag inválida.
 
-O bench noturno/ manual fica em `.github/workflows/bench.yml`; métricas, filtro e opt-in em `docs/eval.md`.
+O bench fica em `.github/workflows/bench.yml`; métricas, filtro e opt-in em `docs/eval.md`.
 
-O `smoke:packed` (TUI instalada) fica em `.github/workflows/packed-smoke.yml`, manual (`workflow_dispatch`) e noturno: precisa do registry e leva ~2 min, então não roda em PR. O job é `ubuntu-latest` apenas — regressão de empacotamento no Windows continua coberta só localmente (`bun run smoke:packed`). Detalhes da etapa em `docs/release.md` §5.
+O `smoke:packed` (TUI instalada) fica em `.github/workflows/packed-smoke.yml`; detalhes da etapa em `docs/release.md` §5. Regressão de empacotamento no Windows continua coberta só localmente (`bun run smoke:packed`).
 
 ## Pré-requisitos e comportamento condicional
 
@@ -40,7 +51,7 @@ O `smoke:packed` (TUI instalada) fica em `.github/workflows/packed-smoke.yml`, m
 
 ## Política de merge
 
-- PR só entra com `test` verde nos **dois** sistemas, `eval`, `coverage` e `secrets` verdes, mais **2 veredictos `Review: APPROVE`** no PR (A segurança + B correctness) (`docs/workflow.md` §6).
+- PR só entra com `test` verde nos **dois** sistemas, `eval`, `coverage`, `audit` e `secrets` verdes, mais **2 veredictos `Review: APPROVE`** no PR (A segurança + B correctness) (`docs/workflow.md` §6).
 - Não usar `--admin` para contornar check vermelho. Exceção por causa externa (billing, runner) é registrada no PR com justificativa e issue de correção.
 - Falha intermitente: reexecutar o job; se repetir, abrir issue com o link do run.
 
