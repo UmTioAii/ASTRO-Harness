@@ -52,7 +52,9 @@ const REDACT_URL_USERINFO = /(\/\/[^\s/:@]*:)([^\s/@]+)(@)/g;
 // assignment/delimiter. Stopping at the first space leaked the suffix (#605).
 const SECRET_KEY = "(?:[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?key|secret|password|token(?!s))[A-Za-z0-9_-]*)";
 const QUOTE = `(?:\\\\"|")`;
-const ENV_VALUE = `(?:[^\\s,;}\\]"'\\\\]|[^\\S\\r\\n](?!(?:${SECRET_KEY})[^\\S\\r\\n]*[=:]))*`;
+// The marker is a unit so a second pass consumes it whole (idempotent) instead
+// of stopping at its `]` and leaving a stray bracket.
+const ENV_VALUE = `(?:\\[REDACTED\\]|[^\\s,;}\\]"'\\\\]|[^\\S\\r\\n](?!(?:${SECRET_KEY})[^\\S\\r\\n]*[=:]))*`;
 const REDACT_ENV = new RegExp(
   `\\b(${SECRET_KEY})((?:${QUOTE})?\\s*[=:]\\s*)(?:(${QUOTE})((?:[^"\\\\]|\\\\.)*)\\3|(${ENV_VALUE}))`,
   "gi",

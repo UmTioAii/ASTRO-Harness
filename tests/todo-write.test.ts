@@ -150,8 +150,8 @@ describe("todo_write validação estrita (nada muda no erro)", () => {
 
   test("corta por code point: a redação não parte um par surrogate no teto", async () => {
     const { tool, ctx } = setup();
-    // "TOKEN=abc" cresce 7 unidades ao redigir e empurra o corte para dentro do par do emoji.
-    const content = `TOKEN=abc ${"x".repeat(182)}🚀🚀`;
+    // "TOKEN=abc," grows 7 units when redacted and pushes the cut into the emoji pair.
+    const content = `TOKEN=abc, ${"x".repeat(181)}🚀🚀`;
     const stored = planOf(await tool.execute({ items: [item(content)] }, ctx())).items[0]!.content;
     expect(Array.from(stored)).toHaveLength(MAX_TODO_CONTENT_LENGTH);
     expect(stored.endsWith("🚀")).toBe(true);
