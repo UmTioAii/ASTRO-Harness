@@ -4,6 +4,7 @@ import {
   ModelOverrideError,
   cardFor,
   overrideNotes,
+  validateFacts,
   type OverrideNote,
 } from "../src/models/overrides";
 import { composeEntry } from "../src/providers/catalog";
@@ -34,6 +35,30 @@ describe("provider override validation (#625)", () => {
     const error = rejected(() => card({ reasoning: true, efforts: [] }));
     expect(error.field).toBe("efforts");
     expect(error.message).toContain("gpt-5.5.efforts");
+    expect(error.message).toContain("provider override invalid");
+  });
+
+  test("reasoning false rejects a non-empty effort list (#638)", () => {
+    const error = rejected(() => card({ reasoning: false, efforts: ["1"] }));
+    expect(error.field).toBe("efforts");
+    expect(error.message).toContain("gpt-5.5.efforts");
+    expect(error.source).toBe("override");
+  });
+
+  test("a malformed catalog fact is not blamed on the provider override (#638)", () => {
+    const broken: ModelFacts = { ...MODEL_FACTS["gpt-5.5"], maxOutput: 0 };
+    const error = rejected(() => validateFacts("gpt-5.5", broken, {}));
+    expect(error.field).toBe("maxOutput");
+    expect(error.source).toBe("catalog");
+    expect(error.message).toContain("catalog fact invalid");
+    expect(error.message).not.toContain("provider override");
+  });
+
+  test("a catalog reasoning/effort mismatch names the catalog, not the override (#638)", () => {
+    const broken: ModelFacts = { ...MODEL_FACTS["gpt-5.5"], reasoning: false };
+    const error = rejected(() => validateFacts("gpt-5.5", broken, {}));
+    expect(error.field).toBe("efforts");
+    expect(error.source).toBe("catalog");
   });
 
   test("context and maxOutput must be positive", () => {
