@@ -735,7 +735,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       if (resumed.agent.model !== model.id) {
         throw new ReplayIncompleteError(`modelo do agente "${agentId}" mudou (gravado "${resumed.agent.model}", config "${model.id}"); replay incompleto`);
       }
-      assertResumeIdentity(resumed.agent, identityFor(model), ledger, run);
+      assertResumeIdentity(resumed.agent, identityFor(model), ledger, run, spawnConcurrencyCap(config).cap);
       resumedModel = model;
     } else {
       const agent = config.agents?.[agentId];
@@ -746,7 +746,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       if (resumed.agent.model !== resolved.id) {
         throw new ReplayIncompleteError(`modelo do agente "${agentId}" mudou (gravado "${resumed.agent.model}", config "${resolved.id}"); replay incompleto`);
       }
-      assertResumeIdentity(resumed.agent, identityFor(resolved), ledger, run);
+      assertResumeIdentity(resumed.agent, identityFor(resolved), ledger, run, spawnConcurrencyCap(config).cap);
       resumedModel = resolved;
       resumedProfile = agent.profile;
     }

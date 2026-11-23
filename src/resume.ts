@@ -3,7 +3,7 @@
  * audit nunca é lido. Lacuna ou árvore quebrada vira `replay_incomplete`.
  */
 import type { Ledger, LedgerAgentEntry, RunState } from "./ledger";
-import { assertAccountAvailable, accountRefOf, findAgentLock } from "./agent-lock";
+import { DEFAULT_MAX_PER_ACCOUNT, assertAccountAvailable, accountRefOf, findAgentLock } from "./agent-lock";
 
 /** Replay incompleto: árvore quebrada ou evento ausente (nunca resume parcial). */
 export class ReplayIncompleteError extends Error {
@@ -195,6 +195,7 @@ export function assertResumeIdentity(
   expected: { provider: string; credentialRef?: string },
   ledger: Ledger,
   run: string,
+  maxConcurrent: number = DEFAULT_MAX_PER_ACCOUNT,
 ): void {
   const recordedProvider = agent.provider;
   if (recordedProvider !== undefined && recordedProvider !== expected.provider) {
@@ -222,7 +223,7 @@ export function assertResumeIdentity(
     agent.credentialRef = expected.credentialRef;
     return;
   }
-  assertAccountAvailable(ledger, accountRefOf(expected), { run, agent_id: agent.agent_id });
+  assertAccountAvailable(ledger, accountRefOf(expected), { run, agent_id: agent.agent_id }, maxConcurrent);
   ledger.recordAgentIdentity({
     run,
     agent_id: agent.agent_id,

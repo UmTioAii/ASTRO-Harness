@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import type { AstroConfig, BudgetConfig } from "./core/config";
 import { providerAccountRefFor } from "./core/config";
-import { activeByAccount, DEFAULT_MAX_CONCURRENT_PER_PROVIDER } from "./concurrency";
+import { activeByAccount, DEFAULT_MAX_CONCURRENT_PER_ACCOUNT } from "./concurrency";
 import { budgetStatus } from "./budget";
 import type { Ledger } from "./ledger";
 import { callCost } from "./model-cost";
@@ -207,7 +207,7 @@ export function listModelCandidates(query: CandidateQuery, deps: CandidateDeps):
   }
 
   const activeAccounts = deps.activeAccountCounts ?? activeByAccount(deps.ledger);
-  const maxPerAccount = deps.maxPerAccount ?? DEFAULT_MAX_CONCURRENT_PER_PROVIDER;
+  const maxPerAccount = deps.maxPerAccount ?? DEFAULT_MAX_CONCURRENT_PER_ACCOUNT;
   const candidates: ModelCandidate[] = [];
   const seen = new Set<string>();
 

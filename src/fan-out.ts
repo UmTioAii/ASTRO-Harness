@@ -4,7 +4,7 @@
  * Cada job recebe um sinal próprio: abortar ou falhar um filho não toca nos irmãos.
  */
 import { redactSecrets } from "./sanitize-external";
-import { DEFAULT_MAX_CONCURRENT_PER_PROVIDER } from "./concurrency";
+import { DEFAULT_MAX_CONCURRENT_PER_ACCOUNT } from "./concurrency";
 
 export interface FanOutJob<T> {
   id: string;
@@ -78,7 +78,7 @@ export async function runFanOut<T>(
 
     // ADR-0037: a conta é compartilhada até `maxPerAccount`; contas distintas
     // disputam os `maxActive` slots globais. A ordem de entrada é preservada.
-    const perAccount = opts.maxPerAccount ?? DEFAULT_MAX_CONCURRENT_PER_PROVIDER;
+    const perAccount = opts.maxPerAccount ?? DEFAULT_MAX_CONCURRENT_PER_ACCOUNT;
     assertFanOutBound(perAccount);
     const baseline = opts.activeAccounts ?? new Map<string, number>();
     const byAccount = new Map<string, number>();

@@ -6,10 +6,10 @@
  */
 import type { AstroConfig } from "./core/config";
 import { MAX_ACTIVE_AGENTS } from "./core/config";
-import { activeLocks, DEFAULT_MAX_PER_ACCOUNT, type AgentLock } from "./agent-lock";
+import { activeLocks, DEFAULT_MAX_PER_ACCOUNT } from "./agent-lock";
 import type { Ledger } from "./ledger";
 
-export const DEFAULT_MAX_CONCURRENT_PER_PROVIDER = DEFAULT_MAX_PER_ACCOUNT;
+export const DEFAULT_MAX_CONCURRENT_PER_ACCOUNT = DEFAULT_MAX_PER_ACCOUNT;
 
 export type ConcurrencySource = "request" | "config" | "default";
 
@@ -38,7 +38,7 @@ export function resolveConcurrencyCap(source: { request?: number; config?: numbe
   if (request !== undefined) return { cap: request, source: "request" };
   const config = positiveInteger(source.config);
   if (config !== undefined) return { cap: config, source: "config" };
-  return { cap: DEFAULT_MAX_CONCURRENT_PER_PROVIDER, source: "default" };
+  return { cap: DEFAULT_MAX_CONCURRENT_PER_ACCOUNT, source: "default" };
 }
 
 /** Cap for one spawn: `agents.maxActive` is the explicit tier, `spawn.maxConcurrent` the config tier. */
@@ -80,12 +80,5 @@ export function grantConcurrency(
 export function activeByAccount(ledger: Ledger): Map<string, number> {
   const counts = new Map<string, number>();
   for (const lock of activeLocks(ledger)) counts.set(lock.accountRef, (counts.get(lock.accountRef) ?? 0) + 1);
-  return counts;
-}
-
-/** Active executions per account from a lock snapshot (fan-out admission). */
-export function countByAccount(locks: readonly AgentLock[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const lock of locks) counts.set(lock.accountRef, (counts.get(lock.accountRef) ?? 0) + 1);
   return counts;
 }

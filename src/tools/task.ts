@@ -178,14 +178,16 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         // ADR-0037: the account admits `maxPerAccount - executions already active`;
         // surplus tasks are refused up front instead of oversubscribing a shared credential.
         const perAccount = deps.maxPerAccount ?? 2;
-        const baseline = deps.activeAccounts?.() ?? new Map<string, number>();
+        const baseline = gated ? deps.activeAccounts?.() ?? new Map<string, number>() : new Map<string, number>();
         const admitted = new Map<string, number>();
         const outcomes: Array<FanOutOutcome<string> | undefined> = new Array(tasks.length);
         const runnable: Array<{ task: FanOutTask; index: number; account: string }> = [];
         tasks.forEach((task, index) => {
           const account = deps.accountOf?.(task.agent) ?? task.agent;
           const used = (baseline.get(account) ?? 0) + (admitted.get(account) ?? 0);
-          if (used >= perAccount) {
+          // Serial fan-out never runs siblings concurrently, so account admission
+          // only applies when the flag turns concurrency on (ADR-0008 default).
+          if (gated && used >= perAccount) {
             outcomes[index] = {
               id: `t${index + 1}`,
               ok: false,
