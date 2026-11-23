@@ -1250,8 +1250,6 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ...(config.effort === undefined ? {} : { effort: config.effort }),
         ...(tracer === undefined ? {} : { tracer }),
         ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
-        ...(opts.onTurnEvent === undefined ? {} : { onTurnEvent: opts.onTurnEvent }),
-        ...(opts.turnId === undefined ? {} : { turnId: opts.turnId }),
         resolveIdentity,
         ...(budget === undefined ? {} : { budget }),
         ...(budget === undefined ? {} : { budgetReserve: (m: ModelEntry, profile?: string) => reserveForCall(config, registry, m, profile) }),

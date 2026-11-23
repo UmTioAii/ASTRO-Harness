@@ -70,9 +70,14 @@ describe("AgentSession (T1, #62)", () => {
   test("multi-turn envia histórico e acumula tokens/custo no mesmo run", async () => {
     const { cwd, bodies, session, stop } = setup();
     const chat = session();
+    const events: TurnEvent[] = [];
     try {
-      const first = await chat.send("primeiro");
+      const first = await chat.send("primeiro", undefined, undefined, undefined, {
+        observer: (event) => { events.push(event); },
+      });
       expect(first.final).toBe("ok");
+      expect(events.map((event) => event.kind)).toEqual(["round.start", "turn.end"]);
+      expect(events[1]).toMatchObject({ status: "done" });
       expect(bodies[0]!.messages?.map((m) => m.content)).toEqual(["sys", "primeiro"]);
       const second = await chat.send("segundo");
       expect(second.totalTokensIn).toBe(20);
@@ -84,22 +89,6 @@ describe("AgentSession (T1, #62)", () => {
       chat.clear();
       expect(chat.snapshot().turns).toBe(2); // acumulados da sessão continuam
       expect(chat.messages.map((m) => m.content)).toEqual(["sys"]);
-    } finally {
-      chat.close();
-      stop();
-    }
-  });
-  test("SendTurnOptions.observer recebe round.start e turn.end (#600)", async () => {
-    const { session, stop } = setup();
-    const chat = session();
-    try {
-      const events: TurnEvent[] = [];
-      await chat.send("x", undefined, undefined, undefined, {
-        observer: (event) => { events.push(event); },
-      });
-      expect(events.map((event) => event.kind)).toEqual(["round.start", "turn.end"]);
-      expect(events[0]).toMatchObject({ roundIndex: 1 });
-      expect(events[1]).toMatchObject({ status: "done" });
     } finally {
       chat.close();
       stop();

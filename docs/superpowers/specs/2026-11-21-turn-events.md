@@ -2,7 +2,7 @@
 
 > Objective: expose a live, causal and sanitized event stream for each turn.
 
-- Status: events implemented in #600; reasoning channel (§5) still pending
+- Status: draft (alpha.5, phase P1)
 - Date: 2026-11-21
 - ADR: 0035 (shared with the TUIX spec; planned for this phase, not yet written)
 - Depends on: S1 (round naming)
@@ -66,16 +66,14 @@ consumers, not the timeline. The new observer is an additional, optional callbac
 
 ## 7. Acceptance
 
-- [x] `tool.start` reaches the observer before the tool executes and `tool.end` carries its
+- [ ] `tool.start` reaches the observer before the tool executes and `tool.end` carries its
       real duration and error flag.
-- [x] A turn cancelled mid-tool marks every pending entry as `failed`.
-- [x] A tool whose result contains a secret emits a redacted payload (I-03), and
+- [ ] A turn cancelled mid-tool marks every pending entry as `failed`.
+- [ ] A tool whose result contains a secret emits a redacted payload (I-03), and
       `tool.start.arguments` goes through the same sanitizer before it reaches the observer.
-- [x] An observer that throws does not change the turn outcome.
+- [ ] An observer that throws does not change the turn outcome.
 - [ ] A provider without a reasoning channel emits no reasoning event.
-- [x] `onStep` is gone; `round.start` carries the same timing without exposing a counter.
-
-O canal de raciocínio (§5) fica para a fatia seguinte: #600 entrega só os eventos de turno.
+- [ ] `onStep` is gone; `round.start` carries the same timing without exposing a counter.
 
 ## 8. Out of scope
 

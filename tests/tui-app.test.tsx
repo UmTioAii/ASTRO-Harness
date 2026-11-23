@@ -7,7 +7,7 @@ import { TuiApp } from "../src/tui/app";
 import { SessionStore, type SessionRecord } from "../src/chat/store";
 import { SessionApi } from "../src/chat/session-api";
 import type { ChatSession } from "../src/chat/repl";
-import type { ModelInfo, SessionSnapshot, TurnResult } from "../src/chat/agent-session";
+import type { ModelInfo, SendTurnOptions, SessionSnapshot, TurnResult } from "../src/chat/agent-session";
 import { ProfileManager } from "../src/providers/profile-manager";
 import { projectKey, projectTuiConfigPath } from "../src/home-layout";
 import { validateConfig } from "../src/core/config";
@@ -337,35 +337,80 @@ test("enfileira Enter durante o turno (#560) e atualiza o status após /model", 
   }
 });
 
-test("the conversation carries no turn, round or tool counter (#508, #594)", async () => {
-  class SlowSession extends FakeSession {
-    override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
-      await new Promise((resolve) => setTimeout(resolve, 40));
+const progressSummary = (preset: "default" | "control"): ConfigSummary => ({ configPath: "/tmp/astro.config.json", maxSteps: 7, permissionMode: "ask", approvalTimeoutMs: "300000 (default)", costs: [], budget: "sem budget", knobs: [{ key: "preset", value: preset }] });
+
+test("the conversation carries no turn, round or tool counter in any profile (#508, #594)", async () => {
+  class StepSession extends FakeSession {
+    preset: "default" | "control" = "control"; stepped = false; configSummary(): ConfigSummary { return progressSummary(this.preset); }
+    override async send(
+      prompt: string,
+      signal?: AbortSignal,
+      _onToken?: (text: string) => void,
+      _attachments?: Parameters<ChatSession["send"]>[3],
+      turn?: SendTurnOptions,
+    ): Promise<TurnResult> {
+      this.stepped = true;
+      await new Promise((resolve) => setTimeout(resolve, 80));
       return super.send(prompt, signal);
     }
   }
-  const instance = render(<TuiApp session={new SlowSession()} cwd="/tmp/astro" />);
+  const instance = render(<TuiApp session={new StepSession()} cwd="/tmp/astro" />);
   try {
     instance.stdin.write("conte");
     instance.stdin.write("\r");
     await waitFor(() => frameHas(instance, "pensando…"));
     expect(frameHas(instance, "passo")).toBe(false);
     await waitFor(() => frameHas(instance, "eco:conte"));
+    expect(frameHas(instance, "passo")).toBe(false);
     expect(frameHas(instance, "step(s)")).toBe(false);
     expect(frameHas(instance, "pensando…")).toBe(false);
+  } finally {
+    instance.unmount();
+  }
+  const defaultSession = new StepSession(); defaultSession.preset = "default"; const defaultInstance = render(<TuiApp session={defaultSession} cwd="/tmp/astro" />);
+  try {
+    defaultInstance.stdin.write("conte"); defaultInstance.stdin.write("\r");
+    await waitFor(() => defaultSession.stepped && frameHas(defaultInstance, "pensando…"));
+    expect(frameHas(defaultInstance, "passo")).toBe(false);
+    await waitFor(() => frameHas(defaultInstance, "eco:conte"));
+    expect(frameHas(defaultInstance, "passo")).toBe(false);
+  } finally { defaultInstance.unmount(); }
+});
+
+test("progresso sem evento de passo fica no estado neutro, sem número (#508)", async () => {
+  class NoStepSession extends FakeSession {
+    override async send(prompt: string, signal?: AbortSignal): Promise<TurnResult> {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return super.send(prompt, signal);
+    }
+  }
+  const instance = render(<TuiApp session={new NoStepSession()} cwd="/tmp/astro" />);
+  try {
+    instance.stdin.write("conte");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "pensando…"));
+    expect(frameHas(instance, "passo")).toBe(false);
+    await waitFor(() => frameHas(instance, "eco:conte"));
   } finally {
     instance.unmount();
   }
 });
 
 test("progresso não fica visível depois de um turno com erro (#508)", async () => {
-  class FailingSession extends FakeSession {
-    override async send(): Promise<TurnResult> {
+  class FailingStepSession extends FakeSession {
+    configSummary(): ConfigSummary { return progressSummary("control"); }
+    override async send(
+      _prompt: string,
+      _signal?: AbortSignal,
+      _onToken?: (text: string) => void,
+      _attachments?: Parameters<ChatSession["send"]>[3],
+      turn?: SendTurnOptions,
+    ): Promise<TurnResult> {
       await new Promise((resolve) => setTimeout(resolve, 40));
       throw new Error("falhou");
     }
   }
-  const instance = render(<TuiApp session={new FailingSession()} cwd="/tmp/astro" />);
+  const instance = render(<TuiApp session={new FailingStepSession()} cwd="/tmp/astro" />);
   try {
     instance.stdin.write("conte");
     instance.stdin.write("\r");

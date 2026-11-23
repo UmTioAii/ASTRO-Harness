@@ -1,8 +1,5 @@
-/**
- * Live turn events (#600): a causal, sanitized signal stream for one turn.
- * The observer is an optional consumer; it never changes the turn outcome.
- */
-import { redactSecrets } from "../sanitize-external";
+/** Live turn events (#600): a causal, sanitized stream; the observer never changes the outcome. */
+import { sanitizePromptText } from "../sanitize-external";
 
 export interface TurnUsage {
   inputTokens: number;
@@ -17,11 +14,24 @@ export type TurnEvent =
   | { kind: "tool.end"; turnId: string; callId: string; isError: boolean; durationMs: number; resultKey: string; at: string }
   | { kind: "turn.end"; turnId: string; status: TurnStatus; usage: TurnUsage; at: string };
 
-export type TurnObserver = (event: TurnEvent) => void;
+export type TurnObserver = (event: TurnEvent) => void | Promise<void>;
 
-/** Redige os argumentos antes de qualquer observador (I-03). */
+/** Cap of `tool.start.arguments`: an event is a signal, not a transport. */
+export const MAX_TURN_ARGUMENT_CHARS = 2048;
+
+/** Sanitiza e limita os argumentos antes de qualquer observador (I-03). */
 export function sanitizeTurnArguments(argumentsJson: string): string {
-  return redactSecrets(argumentsJson);
+  const chars = Array.from(sanitizePromptText(argumentsJson));
+  if (chars.length <= MAX_TURN_ARGUMENT_CHARS) return chars.join("");
+  return `${chars.slice(0, MAX_TURN_ARGUMENT_CHARS - 1).join("")}…`;
+}
+
+/** Consome a rejeição de um observador async: o turno nunca depende dele (I-19). */
+function settle(value: unknown): void {
+  if (value === null || typeof value !== "object") return;
+  if (typeof (value as { then?: unknown }).then === "function") {
+    void Promise.resolve(value).catch(() => {});
+  }
 }
 
 export interface TurnEventStreamOptions {
@@ -33,10 +43,7 @@ export interface TurnEventStreamOptions {
 
 type PendingEnd = { isError: boolean; resultKey: string; durationMs?: number };
 
-/**
- * Orders one turn's events causally: a `tool.end` that arrives before its
- * `tool.start` waits for it, and `turn.end` fails every entry still running.
- */
+/** Orders one turn causally; `turn.end` fails every entry still running. */
 export class TurnEventStream {
   readonly #turnId: string;
   readonly #observer: TurnObserver | undefined;
@@ -83,8 +90,9 @@ export class TurnEventStream {
 
   turnEnd(status: TurnStatus, usage: TurnUsage): void {
     if (this.#closed || this.#observer === undefined) return;
-    // The consumer never waits for a result that will not come.
     for (const callId of [...this.#open.keys()]) this.#finish(callId, { isError: true, resultKey: "" });
+    // An end whose start never arrived has no line to fail; drop the buffer.
+    this.#earlyEnds.clear();
     this.#deliver({ kind: "turn.end", turnId: this.#turnId, status, usage, at: this.#at() });
     this.#closed = true;
   }
@@ -103,7 +111,7 @@ export class TurnEventStream {
   #deliver(event: TurnEvent): void {
     if (this.#observer === undefined) return;
     try {
-      this.#observer(event);
+      settle(this.#observer(event));
     } catch {
       // An observer error never changes the turn outcome (#600).
     }

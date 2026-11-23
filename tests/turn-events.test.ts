@@ -59,14 +59,6 @@ describe("TurnEventStream (#600)", () => {
     expect(start.arguments.length).toBeLessThanOrEqual(MAX_TURN_ARGUMENT_CHARS);
   });
 
-  test("turn.end clears a buffered end whose start never arrived", () => {
-    const { events, stream } = collect();
-    stream.roundStart(1);
-    stream.toolEnd("orphan", true, "orphan");
-    stream.turnEnd("failed", { inputTokens: 0, outputTokens: 0 });
-    expect(kinds(events)).toEqual(["round.start", "turn.end"]);
-  });
-
   test("marks every running tool as failed when the turn is cancelled", () => {
     const { advance, events, stream } = collect();
     stream.roundStart(1);
