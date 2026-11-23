@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -447,26 +447,49 @@ describe("limites do host (#474)", () => {
     expect(mock.calls).toHaveLength(0);
   });
 
-  test("run_tests refuses a symlinked filter that leaves the project", async () => {
+  test("run_tests refuses a symlinked filter that leaves the project, even through ..", async () => {
     mock = installNoDockerSpawnMock();
     const mod = await isolatedRunCommand("host-run-tests-symlink");
     mod.configureRunCommand({ mode: "host" });
     const dir = cwd();
     const outside = mkdtempSync(join(tmpdir(), "astro-outside-"));
-    try {
-      symlinkSync(outside, join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
-    } catch {
-      return; // the OS refused the link; nothing to exercise
-    }
+    symlinkSync(outside, join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
     const auditPath = join(dir, ".astro", "audit.jsonl");
     const tool = mod.createRunTestsTool({ config: { command: ["echo", "test"] }, audit: new Auditor(auditPath) });
     const executor = new ToolExecutor({
       tools: [tool], allow: ["run_tests"], audit: new Auditor(auditPath), permissionMode: "ask", approveTool: () => true,
     });
-    const result = await executor.run(ctxOf(dir), {
+    const direct = await executor.run(ctxOf(dir), {
       id: "c1", name: "run_tests", arguments: JSON.stringify({ filter: "link/probe.test.ts" }),
     });
-    expect(result.code).toBe("external_directory");
+    expect(direct.code).toBe("external_directory");
+    // POSIX follows the link before `..`; Win32 normalizes `..` lexically, so the
+    // kernel stays inside and the call is safe there.
+    if (process.platform !== "win32") {
+      const throughDots = await executor.run(ctxOf(dir), {
+        id: "c2", name: "run_tests", arguments: JSON.stringify({ filter: "link/../probe/x.test.ts" }),
+      });
+      expect(throughDots.code).toBe("external_directory");
+    }
+    expect(mock.calls).toHaveLength(0);
+  });
+
+  test("run_tests hard-blocks a critical glob filter on the host", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("host-run-tests-critical-glob");
+    mod.configureRunCommand({ mode: "host" });
+    const dir = cwd();
+    writeFileSync(join(dir, ".env"), "SECRET=1\n");
+    const auditPath = join(dir, ".astro", "audit.jsonl");
+    const tool = mod.createRunTestsTool({ config: { command: ["echo", "test"] }, audit: new Auditor(auditPath) });
+    const executor = new ToolExecutor({
+      tools: [tool], allow: ["run_tests"], audit: new Auditor(auditPath), permissionMode: "ask",
+      approveTool: () => true,
+    });
+    const result = await executor.run(ctxOf(dir), {
+      id: "c1", name: "run_tests", arguments: JSON.stringify({ filter: ".env*" }),
+    });
+    expect(result.code).toBe("path_hard_blocked");
     expect(mock.calls).toHaveLength(0);
   });
 

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve, relative, isAbsolute } from "node:path";
+import { basename, dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { createLexicalHardBlockPrefilter, createPathClassifier, type PathClassifier } from "../path-class";
 import { PATH_HARD_BLOCKED, resolveArtifactRoot, resolveAstroHome, setPerCallApproval, type ApprovalDetail, type PermissionMode } from "../permissions";
 import { redactSecrets } from "../sanitize-external";
@@ -762,8 +762,10 @@ export const MAX_RUN_TESTS_TIMEOUT_MS = 3_600_000;
  * missing path, and a test filter may legitimately name a file that the runner
  * creates.
  */
-function realPathOfNearestExisting(target: string): string {
-  let current = resolve(target);
+function realPathOfNearestExisting(target: string, cwd: string): string {
+  // Keep the raw path (do not `resolve`): `..` after a symlink must be resolved by
+  // the kernel, not lexically, or a link can hide an escape (F-00 shape).
+  let current = isAbsolute(target) ? target : `${cwd}${sep}${target}`;
   const suffix: string[] = [];
   for (;;) {
     try {
@@ -771,7 +773,7 @@ function realPathOfNearestExisting(target: string): string {
       return suffix.length === 0 ? real : join(real, ...suffix.reverse());
     } catch {
       const parent = dirname(current);
-      if (parent === current) return resolve(target);
+      if (parent === current) return current;
       suffix.push(basename(current));
       current = parent;
     }
@@ -800,15 +802,21 @@ function filterOutsideProject(filter: string, ctx: ToolContext): ToolResult | un
     );
   }
   // Symlinks and junctions are resolved against the deepest existing ancestor, so a
-  // link inside the project that points elsewhere is refused too. Glob segments stay
+  // link inside the project that points elsewhere is refused too, including the
+  // `link/../x` shape (the kernel follows the link before `..`). Glob segments stay
   // literal, which keeps the static prefix comparable.
-  const real = realPathOfNearestExisting(resolved);
-  if (!isWithin(realPathOfNearestExisting(resolve(ctx.cwd)), real)) {
+  const real = realPathOfNearestExisting(filter, ctx.cwd);
+  if (!isWithin(realPathOfNearestExisting(ctx.cwd, ctx.cwd), real)) {
     return failureCode(
       "external_directory: run_tests filter cannot leave the project directory",
       "external_directory",
     );
   }
+  // Classify the literal prefix before the first glob metachar, so `.env*` and
+  // `.git/*` cannot sneak past a full-existence check (the Docker path masked them).
+  const globAt = filter.search(/[*?[{]/);
+  const literal = globAt === -1 ? filter : filter.slice(0, globAt);
+  const staticTarget = literal === "" ? ctx.cwd : resolve(ctx.cwd, literal);
   try {
     const classify = createPathClassifier({
       cwd: ctx.cwd,
@@ -818,15 +826,14 @@ function filterOutsideProject(filter: string, ctx: ToolContext): ToolResult | un
       allowCritical: ctx.allowCritical ?? [],
       allowSensitive: ctx.allowSensitive ?? [],
     });
-    if (classify(realpathSync.native(resolved)) === "hard-block") {
+    if (classify(realPathOfNearestExisting(staticTarget, ctx.cwd)) === "hard-block") {
       return failureCode(
         `path_hard_blocked: run_tests filter targets a critical path (${PATH_HARD_BLOCKED})`,
         PATH_HARD_BLOCKED,
       );
     }
   } catch {
-    // Not existing inside the project: the runner cannot read it, and the filter
-    // may be a test name. Nothing to classify.
+    // Nothing to classify; the path does not exist inside the project.
   }
   return undefined;
 }
@@ -1046,6 +1053,7 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
         }
         const env = ctx.env ?? process.env;
         if (executorMode === "bypass" && env[HOST_SHELL_BYPASS_CONFIRMATION_ENV] !== "1") {
+          auditHostDecision(ctx, executorMode, "deny", { reason: "bypass_confirmation_required" });
           return failureCode(
             `host_shell_confirmation_required: em modo bypass run_tests no host exige confirmação explícita ` +
               `(${HOST_SHELL_BYPASS_CONFIRMATION_ENV}=1)`,
@@ -1058,7 +1066,7 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
         }
         // The argv comes from config, never from the model; the filter is one argv item.
         const outcome = await runArgv(argv, ctx, timeoutMs);
-        return finishTestsResult(argv, redactThenTruncate(outcome.output), outcome, startedAt, deps, ctx);
+        return finishTestsResult(argv, outcome.output, outcome, startedAt, deps, ctx);
       }
 
       if (!(await detectDockerAvailable())) {
@@ -1092,7 +1100,7 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
 /** Shared tail for `run_tests`: cap, result, audit. Raw output is already sanitized. */
 function finishTestsResult(
   argv: string[],
-  sanitizedOutput: string,
+  rawOutput: string,
   exit: { code: number | null; timedOut: boolean; cancelled: boolean },
   startedAt: number,
   deps: RunTestsDeps,
@@ -1101,7 +1109,8 @@ function finishTestsResult(
   const durationMs = Date.now() - startedAt;
   const failed = exit.cancelled || exit.timedOut || exit.code !== 0;
   const keep = failed ? "tail" : "head";
-  const capped = capTestsOutput(sanitizedOutput, keep);
+  // Redact first, then apply the failure-aware cap so the tail survives.
+  const capped = capTestsOutput(redactSecrets(rawOutput), keep);
   const result: RunTestsResult = {
     // Same redaction as the audit: the argv comes from config and can carry a secret (I-03).
     command: argv.map((item) => redactSecrets(item)),
