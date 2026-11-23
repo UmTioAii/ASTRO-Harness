@@ -97,7 +97,9 @@ describe("REPL do chat (T1, #62)", () => {
     expect(session.model).toBe("p/m1");
     expect(session.closed).toBe(1);
     expect(io.outputs).toContain("eco:olá");
-    expect(io.outputs.some((line) => line.includes("1 step(s)") && line.includes("US$"))).toBe(true);
+    // #594: the status line keeps tokens and cost but no round counter.
+    expect(io.outputs.some((line) => line.includes("tokens") && line.includes("US$"))).toBe(true);
+    expect(io.outputs.some((line) => line.includes("step(s)"))).toBe(false);
     expect(io.outputs).toContain("contexto limpo");
     expect(io.outputs).toContain("modelo: p/m2");
     expect(io.outputs.some((line) => line.includes("p (openai-compat)") && line.includes("cred=KEY"))).toBe(true);
@@ -513,7 +515,7 @@ describe("REPL do chat (T1, #62)", () => {
     const io = new ScriptedIO(["/usage", "/exit"]);
     await runRepl(session, io);
     const text = io.outputs.join("\n");
-    expect(text).toContain("uso da sessão: 0 turno(s) · in 10 / out 5 tokens · custo US$ 0.001000");
+    expect(text).toContain("uso da sessão: in 10 / out 5 tokens · custo US$ 0.001000");
     expect(text).toContain("budget day: gasto US$ 1.000000 / limite US$ 5.000000 (20%) · restante US$ 4.000000 · aviso em 80%");
     expect(session.closed).toBe(1);
     expect(session.sent).toEqual([]); // /usage nunca cai no send
@@ -524,7 +526,7 @@ describe("REPL do chat (T1, #62)", () => {
     const io = new ScriptedIO(["/usage", "/exit"]);
     await runRepl(session, io);
     const text = io.outputs.join("\n");
-    expect(text).toContain("uso da sessão: 0 turno(s) · in 10 / out 5 tokens · custo US$ 0.001000");
+    expect(text).toContain("uso da sessão: in 10 / out 5 tokens · custo US$ 0.001000");
     expect(text).not.toContain("budget day:");
     expect(session.sent).toEqual([]);
   });

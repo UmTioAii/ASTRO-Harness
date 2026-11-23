@@ -42,7 +42,9 @@ test("bun src/cli.ts chat roda um turno e encerra com /exit", async () => {
     expect(stdout).toContain("ok do mock");
     expect(stdout).toContain("Comandos:"); // a linha /help depois do turno não foi perdida
     expect(stdout).toContain("p (openai-compat)");
-    expect(stdout).toContain("1 step(s)");
+    // #594: the status line keeps tokens but no round counter.
+    expect(stdout).toContain("tokens");
+    expect(stdout).not.toContain("step(s)");
     // sessões vivem na chave do projeto sob $ASTRO_HOME, não no cwd (#468)
     expect(existsSync(join(projectDataDir(cwd, env), "sessions.db"))).toBe(true);
     expect(existsSync(join(cwd, ".astro", "sessions.db"))).toBe(false);

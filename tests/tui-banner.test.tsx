@@ -51,11 +51,12 @@ test("Header renderiza a linha sem caixa e com a saúde (#480)", () => {
 });
 
 test("footerBase só mostra campos com valor (#480)", () => {
-  expect(footerBase({ place: "~", turns: 0, tokensIn: 0, tokensOut: 0, costUsd: null })).toBe("~");
-  expect(footerBase({ place: "~", turns: 2, tokensIn: 10, tokensOut: 5, costUsd: 0.5 }))
-    .toBe("~ · 2 turno(s) · 10/5 tokens · US$ 0.500000");
-  expect(footerBase({ place: "~", turns: 1, tokensIn: 1, tokensOut: 0, costUsd: null }))
-    .toBe("~ · 1 turno(s) · 1/0 tokens");
+  expect(footerBase({ place: "~", tokensIn: 0, tokensOut: 0, costUsd: null })).toBe("~");
+  // #594: the conversation carries no turn counter; tokens and cost stay.
+  expect(footerBase({ place: "~", tokensIn: 10, tokensOut: 5, costUsd: 0.5 }))
+    .toBe("~ · 10/5 tokens · US$ 0.500000");
+  expect(footerBase({ place: "~", tokensIn: 1, tokensOut: 0, costUsd: null }))
+    .toBe("~ · 1/0 tokens");
 });
 
 test("modeColor: só bypass usa cor de alerta (#270)", () => {

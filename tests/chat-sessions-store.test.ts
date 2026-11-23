@@ -115,4 +115,14 @@ describe("confinamento e validação ao ler sessões (T2, #63)", () => {
     const origin = { id: "orig", startedAt: "2026-10-01T09:00:00.000Z" };
     store.write(record({ resumedFrom: origin }));
     expect(store.load("s1").record.resumedFrom).toEqual(origin);
-  });});
+  });
+
+  test("rounds and preset survive a save/load round-trip (#594)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "astro-store-rounds-"));
+    const store = new SessionStore(dir);
+    store.write(record({ id: "with-rounds", rounds: 7 }));
+    expect(store.load("with-rounds").record).toMatchObject({ rounds: 7 });
+    store.write(record({ id: "legacy" }));
+    expect(store.load("legacy").record.rounds).toBeUndefined();
+  });
+});

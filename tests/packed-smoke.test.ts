@@ -225,10 +225,10 @@ test("tuiBootError falha fechado quando o pacote reporta falta de terminal", () 
   expect(semFrame.message).not.toContain("preload");
 });
 
-test("hasClosedTurn e doctorClean não aceitam vizinho numérico", () => {
-  expect(hasClosedTurn("home · 1 turno(s) · 8/1 tokens")).toBe(true);
-  expect(hasClosedTurn("1 turno(s)")).toBe(true);
-  expect(hasClosedTurn("home · 11 turno(s) · 8/1 tokens")).toBe(false);
+test("hasClosedTurn exige o rodapé com tokens do turno, e doctorClean não aceita vizinho numérico", () => {
+  expect(hasClosedTurn("home · 8/1 tokens")).toBe(true);
+  expect(hasClosedTurn("home · 8/1 tokens · US$ 0.000001")).toBe(true);
+  expect(hasClosedTurn("home")).toBe(false);
 
   expect(doctorClean("Resumo: 8 ok, 0 warn, 0 fail")).toBe(true);
   expect(doctorClean("Resumo: 0 fail")).toBe(true);
@@ -244,10 +244,9 @@ test("logHeaderShown exige a linha da tela /log, não a linha da lane no buffer"
 });
 
 test("turnLogged e providerOk ancoram a linha inteira", () => {
-  expect(turnLogged("[turno] turno concluído · 1 step(s)")).toBe(true);
-  expect(turnLogged("[turno] turno concluído · 11 step(s)")).toBe(true);
-  expect(turnLogged("antes [turno] turno concluído · 1 step(s)")).toBe(false);
-  expect(turnLogged("[turno] turno concluído · muitos step(s)")).toBe(false);
+  expect(turnLogged("[turno] turno concluído")).toBe(true);
+  expect(turnLogged("antes [turno] turno concluído")).toBe(false);
+  expect(turnLogged("[turno] turno concluído · 1 step(s)")).toBe(false);
 
   expect(providerOk("mock: ok · 12ms")).toBe(true);
   expect(providerOk("│ mock: ok · 12ms                        │")).toBe(true);

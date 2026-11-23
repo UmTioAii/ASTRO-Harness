@@ -350,9 +350,9 @@ export function completionProblem(
   return undefined;
 }
 
-/** Footer só mostra turnos concluídos (#480): `1 turno(s)` isolado, não `11`. */
-export function hasClosedTurn(output: string, turns = 1): boolean {
-  return new RegExp(`(?:^|\\D)${turns} turno\\(s\\)(?!\\d)`, "m").test(plainOutput(output));
+/** Footer shows usage after a closed turn (#594): tokens prove the turn finished. */
+export function hasClosedTurn(output: string): boolean {
+  return /\d+\/\d+ tokens/.test(plainOutput(output));
 }
 
 /** `Resumo: … 0 fail` do doctor, sem aceitar `10 fail` como vizinho. */
@@ -375,7 +375,7 @@ export function logHeaderShown(output: string, version: string, port: number): b
 
 /** Linha de turno do `/log` (lane `[turno]`), na linha inteira. */
 export function turnLogged(output: string): boolean {
-  return /^\[turno\] turno concluído · \d+ step\(s\)\r?$/m.test(plainOutput(output));
+  return /^\[turno\] turno concluído\r?$/m.test(plainOutput(output));
 }
 
 /** Linha `ok` do health na tela de providers, quando existir. */
