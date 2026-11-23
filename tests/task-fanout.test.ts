@@ -14,6 +14,9 @@ function setup(opts: {
   delegate?: TaskDelegator;
   activeCount?: () => number;
   maxActive?: number;
+  account?: string;
+  activeAccounts?: () => ReadonlyMap<string, number>;
+  maxPerAccount?: number;
 } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "astro-task-fanout-"));
   const audit = new Auditor(join(cwd, "audit.jsonl"));
@@ -35,8 +38,10 @@ function setup(opts: {
     delegate,
     ...(opts.parallel === undefined ? {} : { parallel: opts.parallel }),
     maxActive: opts.maxActive ?? 2,
-    accountOf: (agent) => `account-${agent}`,
+    accountOf: (agent) => opts.account ?? `account-${agent}`,
     ...(opts.activeCount === undefined ? {} : { activeCount: opts.activeCount }),
+    ...(opts.activeAccounts === undefined ? {} : { activeAccounts: opts.activeAccounts }),
+    ...(opts.maxPerAccount === undefined ? {} : { maxPerAccount: opts.maxPerAccount }),
   });
   const ctx = { cwd, run: "r1", agent: "plan", maxSteps: 7 };
   return { tool, audit, probe, ctx };
@@ -68,6 +73,22 @@ describe("task fan-out (A11)", () => {
       tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
     }, ctx);
     expect(JSON.parse(result.output).tasks.map((item: { status: string }) => item.status)).toEqual(["ok", "ok"]);
+    expect(probe.max).toBe(1);
+  });
+
+  test("serial com duas tarefas na mesma conta não é barrado pela admissão concorrente", async () => {
+    const { tool, probe, ctx } = setup({
+      activeCount: () => 1,
+      account: "KEY1",
+      activeAccounts: () => new Map([["KEY1", 1]]),
+      maxPerAccount: 2,
+    });
+    const result = await tool.execute({
+      tasks: [{ agent: "a", prompt: "um" }, { agent: "b", prompt: "dois" }],
+    }, ctx);
+    const parsed = JSON.parse(result.output) as { tasks: Array<{ status: string; output?: string }> };
+    expect(parsed.tasks.map((item) => item.status)).toEqual(["ok", "ok"]);
+    expect(parsed.tasks.map((item) => item.output)).toEqual(["a:um", "b:dois"]);
     expect(probe.max).toBe(1);
   });
 

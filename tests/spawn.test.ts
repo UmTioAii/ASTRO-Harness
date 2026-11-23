@@ -100,17 +100,25 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     expect(properties.maxSteps?.description).toContain("Removido");
   });
 
-  test("sem conta livre o snapshot fica vazio; snapshot velho falha no lock", async () => {
-    const { cfg, ledger, registry, tool, ctx } = setup();
-    // Snapshot emitido antes de as contas serem presas.
+  test("snapshot velho falha fechado quando o provider enche durante a escolha", async () => {
+    const { cfg, ledger, audit, registry, tool, ctx } = setup();
+    // Snapshot emitido antes de o provider encher.
     const snap = listModelCandidates({ need: "writing-code" }, { config: cfg, registry, ledger });
     expect((await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx)).isError).toBe(false);
 
+    // p1 já tem o pai e o sub-1; outra execução ocupa a segunda vaga.
+    acquireAgentLock(ledger, audit, {
+      run: "other", agent_id: "holder", session_id: "other", provider: "p1", credentialRef: "KEY1", accountRef: "KEY1",
+    });
     const stale = await tool.execute({ need: "writing-code", task: "d", model: "p1/m1", snapshot_id: snap.snapshot_id }, ctx);
     expect(stale.isError).toBe(true);
-    expect(JSON.parse(stale.output)).toMatchObject({ error: "account_locked" });
+    expect(JSON.parse(stale.output)).toMatchObject({ error: "spawn_limit_exceeded" });
+    expect(JSON.parse(stale.output).message).toContain("p1");
 
     expect((await tool.execute({ need: "writing-code", task: "b", tools: [] }, ctx)).isError).toBe(false);
+    acquireAgentLock(ledger, audit, {
+      run: "other", agent_id: "holder-p2", session_id: "other", provider: "p2", credentialRef: "KEY2", accountRef: "KEY2",
+    });
     const third = await tool.execute({ need: "writing-code", task: "c", tools: [] }, ctx);
     expect(third.isError).toBe(true);
     expect(JSON.parse(third.output)).toMatchObject({ error: "spawn_limit_exceeded" });
@@ -167,16 +175,18 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     expect(JSON.parse(mismatch.output)).toMatchObject({ error: "candidate_set_changed" });
   });
 
-  test("sem candidato porque contas estão presas em outro run → no_candidates", async () => {
+  test("sem candidato porque as contas estão no limite em outro run → no_candidates", async () => {
     const { ledger, audit, tool, ctx } = setup();
     for (const [provider, key] of [["p1", "KEY1"], ["p2", "KEY2"]] as const) {
-      acquireAgentLock(ledger, audit, {
-        run: "other", agent_id: `holder-${provider}`, session_id: "other", provider, credentialRef: key, accountRef: key,
-      });
+      for (const suffix of ["1", "2"]) {
+        acquireAgentLock(ledger, audit, {
+          run: "other", agent_id: `holder-${provider}-${suffix}`, session_id: "other", provider, credentialRef: key, accountRef: key,
+        });
+      }
     }
     const result = await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx);
     expect(result.isError).toBe(true);
-    expect(JSON.parse(result.output)).toMatchObject({ error: "no_candidates" });
+    expect(JSON.parse(result.output)).toMatchObject({ error: "spawn_limit_exceeded" });
   });
 
   test("reason do chamador preserva o marcador da escolha", async () => {
@@ -187,18 +197,20 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     expect((created as { reason?: string }).reason).toMatch(/^default_rank: preciso de código/);
   });
 
-  test("conta já presa por outro agente exclui o candidato e o spawn falha fechado", async () => {
+  test("conta no limite por outro agente sai dos candidatos e o spawn falha fechado", async () => {
     const { ledger, audit, tool, ctx } = setup();
-    acquireAgentLock(ledger, audit, {
-      run: "other", agent_id: "holder", session_id: "other", provider: "p1", credentialRef: "KEY1", accountRef: "KEY1",
-    });
+    for (const suffix of ["1", "2"]) {
+      acquireAgentLock(ledger, audit, {
+        run: "other", agent_id: `holder-${suffix}`, session_id: "other", provider: "p1", credentialRef: "KEY1", accountRef: "KEY1",
+      });
+    }
     const result = await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx);
     expect(result.isError).toBe(false);
     const body = JSON.parse(result.output) as { model: string };
-    expect(body.model).toBe("p2/m2"); // p1 preso; escolhe p2
+    expect(body.model).toBe("p2/m2"); // p1 no limite; escolhe p2
   });
 
-  test("#551: com 1 provider (1 conta) o spawn é recusado antes da escolha de modelo, com erro claro", async () => {
+  test("#551: com 1 provider, o pai e um filho compartilham a conta; o segundo filho é recusado com erro claro", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-spawn-1p-"));
     const cfg = validateConfig({
       providers: { p1: { kind: "openai-compat", baseUrl: "http://p1/v1", credentialRef: "KEY1" } },
@@ -211,25 +223,24 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     const audit = new Auditor(join(cwd, "audit.jsonl"));
     const registry = new Registry(cfg);
     const spawns = new SpawnRegistry();
-    // Em produção o orchestrator segura a única conta do run (A4):
+    // In production the orchestrator holds the provider account (ADR-0037):
     acquireAgentLock(ledger, audit, {
       run: "r1", agent_id: "planner", session_id: "r1", provider: "p1", credentialRef: "KEY1", accountRef: "KEY1",
     });
     const tool = createSpawnAgentTool({ config: cfg, registry, ledger, audit, cwd, spawns, enabled: true });
     const ctx: ToolContext = { cwd, run: "r1", agent: "planner", allow: ["handoff", "read_file"], maxSteps: 3 };
 
-    const result = await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx);
-    expect(result.isError).toBe(true);
-    const body = JSON.parse(result.output) as { error: string; message: string };
-    // Erro claro de teto (não account_locked tardio): cita as contas disponíveis.
+    const first = await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx);
+    expect(first.isError).toBe(false); // parent + 1 child = 2 executions on the account
+    const second = await tool.execute({ need: "writing-code", task: "b", tools: [] }, ctx);
+    expect(second.isError).toBe(true);
+    const body = JSON.parse(second.output) as { error: string; message: string };
     expect(body.error).toBe("spawn_limit_exceeded");
-    expect(body.message).toContain("conta");
-    // Recusado ANTES da escolha de modelo: nenhum filho registrado nem lock novo.
-    expect(spawns.size).toBe(0);
-    expect(ledger.readAllEntries().some((e) => e.kind === "agent" && e.event === "created" && e.agent_id === "sub-1")).toBe(false);
+    expect(body.message).toContain("concorrência");
+    expect(spawns.size).toBe(1);
   });
 
-  test("#551: teto de agentes ativos é clampado pelas contas declaradas e o erro cita as contas", async () => {
+  test("#551: o limite é por provider, não por conta declarada", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-spawn-clamp-"));
     const cfg = validateConfig({
       providers: {
@@ -255,13 +266,17 @@ describe("tool spawn_agent (S-11, A1/A2/A3/A5)", () => {
     const ctx: ToolContext = { cwd, run: "r1", agent: "planner", allow: ["handoff", "read_file"], maxSteps: 9 };
 
     const first = await tool.execute({ need: "writing-code", task: "a", tools: [] }, ctx);
-    expect(first.isError).toBe(false); // usa a 2ª conta (p2)
+    expect(first.isError).toBe(false); // shares p1 with the parent
+    expect(JSON.parse(first.output).model).toBe("p1/m1");
     const second = await tool.execute({ need: "writing-code", task: "b", tools: [] }, ctx);
-    expect(second.isError).toBe(true);
-    // 2 contas declaradas: o 3º agente vivo (pai + sub-1) já esgota o teto,
-    // e o erro claro cita as contas em vez de drenar quota/RPM no stall do lock.
-    expect(JSON.parse(second.output)).toMatchObject({ error: "spawn_limit_exceeded" });
-    expect(JSON.parse(second.output).message).toContain("conta");
-    expect(spawns.size).toBe(1);
+    expect(second.isError).toBe(false); // p1 is at 2, so it uses p2
+    expect(JSON.parse(second.output).model).toBe("p2/m2");
+    const third = await tool.execute({ need: "writing-code", task: "c", tools: [] }, ctx);
+    expect(third.isError).toBe(false); // p2 has one free slot
+    const fourth = await tool.execute({ need: "writing-code", task: "d", tools: [] }, ctx);
+    expect(fourth.isError).toBe(true);
+    expect(JSON.parse(fourth.output)).toMatchObject({ error: "spawn_limit_exceeded" });
+    expect(JSON.parse(fourth.output).message).toContain("concorrência");
+    expect(spawns.size).toBe(3);
   });
 });

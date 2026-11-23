@@ -93,17 +93,18 @@ describe("fan-out concorrente (A11)", () => {
     }
   });
 
-  test("conta compartilhada nunca roda dois filhos ao mesmo tempo", async () => {
+  test("conta compartilhada roda até dois filhos e serializa o terceiro", async () => {
     const { ledger, audit } = setup();
     const probe: Probe = { active: 0, max: 0, started: [], finished: [] };
     const results = await runFanOut([
       job(ledger, audit, "a", "SHARED", probe, 20),
       job(ledger, audit, "b", "SHARED", probe, 20),
-    ], { parallel: true, maxActive: 2 });
+      job(ledger, audit, "c", "SHARED", probe, 20),
+    ], { parallel: true, maxActive: 3 });
 
-    expect(results.map((result) => result.ok)).toEqual([true, true]);
-    expect(probe.max).toBe(1);
-    expect(probe.started).toEqual(["a", "b"]);
+    expect(results.map((result) => result.ok)).toEqual([true, true, true]);
+    expect(probe.max).toBe(2);
+    expect(probe.started[2]).toBe("c");
   });
 
   test("falha ou aborto de um filho não cancela nem corrompe os irmãos", async () => {
@@ -151,22 +152,26 @@ describe("fan-out concorrente (A11)", () => {
     await expect(runFanOut([], { parallel: true, maxActive: 0 })).rejects.toThrow(/maxActive/);
   });
 
-  test("conta presa fora do grupo recusa o job em vez de rodar junto", async () => {
+  test("conta no limite fora do grupo recusa o job em vez de rodar junto", async () => {
     const { ledger, audit } = setup();
     const probe: Probe = { active: 0, max: 0, started: [], finished: [] };
-    acquireAgentLock(ledger, audit, {
-      run: "outsider", agent_id: "outsider", session_id: "outsider",
-      provider: "p", model: "m", credentialRef: "KEY_B",
-    });
+    for (const [run, agent] of [["outsider-1", "one"], ["outsider-2", "two"]] as const) {
+      acquireAgentLock(ledger, audit, {
+        run, agent_id: agent, session_id: run,
+        provider: "p", model: "m", credentialRef: "KEY_B",
+      });
+    }
     const results = await runFanOut([
       job(ledger, audit, "a", "KEY_A", probe, 5),
       job(ledger, audit, "b", "KEY_B", probe, 5),
     ], { parallel: true, maxActive: 2 });
-    releaseAgentLock(ledger, audit, { run: "outsider", agent_id: "outsider", reason: "completed" });
+    for (const [run, agent] of [["outsider-1", "one"], ["outsider-2", "two"]] as const) {
+      releaseAgentLock(ledger, audit, { run, agent_id: agent, reason: "completed" });
+    }
 
     expect(results[0]).toMatchObject({ id: "a", ok: true });
     expect(results[1]).toMatchObject({ id: "b", ok: false });
-    expect((results[1] as { error: string }).error).toContain("já está em uso");
+    expect((results[1] as { error: string }).error).toContain("já tem 2 execuções");
     expect(ledger.readAll().filter((entry) => entry.agent === "b")).toHaveLength(0);
   });
 });
