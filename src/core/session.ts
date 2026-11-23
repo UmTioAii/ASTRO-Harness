@@ -994,6 +994,10 @@ export interface MultiAgentSessionOptions {
   tracer?: TracerLike;
   /** Recebe deltas de texto quando o provider suporta streaming (T3). */
   onToken?: (text: string) => void;
+  /** Live turn observer (#600); absent = no event stream. */
+  onTurnEvent?: TurnObserver;
+  /** Unique turn id for the event stream; defaults to the run id. */
+  turnId?: string;
   /** Limites de quota por domínio (F6-3); ausente = sem enforcement. */
   quotaLimits?: Record<string, QuotaLimit>;
   /** Limites de time (F7-5): orçamentos por janela (#552) e quotas por agent. */
@@ -1062,6 +1066,8 @@ export async function runMultiAgentSession(
   opts: MultiAgentSessionOptions,
   task: string,
 ): Promise<{ final: string; steps: number; agentsUsed: string[] }> {
+  const turnEvents = turnStream(opts);
+  const turnUsage = { inputTokens: 0, outputTokens: 0 };
   const agentsUsed: string[] = [];
   let currentAgentName = opts.entryAgent;
   let currentAgent = opts.registry.requireAgent(currentAgentName);
@@ -1403,6 +1409,8 @@ export async function runMultiAgentSession(
           opts.ledger.recordBudgetReleased({ run: opts.run, agent: currentAgentName, released: reserveUsd });
         }
       };
+      // Per-agent round signal (#508/#600): the active agent's round orders the events.
+      turnEvents.roundStart(agentSteps);
 
       // Atualizar executor com tools do agent atual
       const executor = new ToolExecutor({
@@ -1470,6 +1478,9 @@ export async function runMultiAgentSession(
         "tokens.in": response.usage.inputTokens,
         "tokens.out": response.usage.outputTokens,
       });
+      turnUsage.inputTokens += response.usage.inputTokens;
+      turnUsage.outputTokens += response.usage.outputTokens;
+
       const identity = effectiveIdentityFor(
         opts.resolveIdentity, response, currentModel, opts.credentialRef, opts.quotaDomain,
       );
@@ -1506,6 +1517,7 @@ export async function runMultiAgentSession(
         cleanupSpawns("completed");
         tracer?.end(stepSpan, { "tool.calls": 0 });
         tracer?.end(rootSpan, { status: "ok", steps: step });
+        turnEvents.turnEnd("done", turnUsage);
         return { final: response.content, steps: step, agentsUsed: agentsUsed.map((value) => redactSecrets(value)) };
       }
 
@@ -1538,6 +1550,7 @@ export async function runMultiAgentSession(
             allow: [...currentTools],
             maxSteps: currentMaxSteps,
             outputLimitTokens: effectiveOutputCap(opts.outputLimit, currentModel.context),
+            onToolEvent: toolObserver(turnEvents),
             ...(opts.env === undefined ? {} : { env: opts.env }),
             ...(opts.protectedPaths === undefined ? {} : { protectedPaths: opts.protectedPaths }),
             ...(opts.secretEnvNames === undefined ? {} : { secretEnvNames: opts.secretEnvNames }),
@@ -1679,6 +1692,7 @@ export async function runMultiAgentSession(
         "error.class": interruptReason(error, opts.signal),
       });
     }
+    turnEvents.turnEnd(isAbortError(error, opts.signal) ? "cancelled" : "failed", turnUsage);
     throw error;
   } finally {
     await compactionBackground.close();

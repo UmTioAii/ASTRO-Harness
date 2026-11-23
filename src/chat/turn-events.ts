@@ -48,7 +48,6 @@ export class TurnEventStream {
   readonly #turnId: string;
   readonly #observer: TurnObserver | undefined;
   readonly #now: () => number;
-  #round: number | undefined;
   #open = new Map<string, number>();
   #earlyEnds = new Map<string, PendingEnd>();
   #closed = false;
@@ -60,8 +59,7 @@ export class TurnEventStream {
   }
 
   roundStart(roundIndex: number): void {
-    if (this.#closed || this.#observer === undefined || (this.#round !== undefined && roundIndex <= this.#round)) return;
-    this.#round = roundIndex;
+    if (this.#closed || this.#observer === undefined) return;
     this.#deliver({ kind: "round.start", turnId: this.#turnId, roundIndex, at: this.#at() });
   }
 
