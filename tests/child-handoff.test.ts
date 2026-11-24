@@ -251,7 +251,9 @@ describe("live child resume handle (ADR-0036, #602)", () => {
     const registry = registryOf();
     const l2 = resolve(registry);
     expect([l2.plan.level, l2.history?.length]).toEqual(["L2", 1]);
-    expect([l2.prompt.includes("add the tests"), l2.prompt.includes("journal:")]).toEqual([true, false]);
+    // L2 restores the session itself; nothing else is injected on top of it.
+    expect([l2.prompt.includes("add the tests"), l2.prompt.includes("journal:"), l2.prompt.includes("implement the login screen")])
+      .toEqual([true, false, false]);
 
     const l1 = resolve(registry, { requested: "L1" });
     // No artifact: L1 rebuilds from the live parent's memory, not the ledger.
