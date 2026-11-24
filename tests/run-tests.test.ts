@@ -214,8 +214,12 @@ describe("run_tests execução no sandbox", () => {
     expect(argv).not.toContain("-c");
 
     const event = audit.readAll().find((entry) => entry.tipo === "tests.result");
-    expect(event?.payload).toMatchObject({ command: "bun test", exitCode: 0, isError: false });
+    // #599: the argv can carry the model filter, so the audit keeps only its hash.
+    expect(event?.payload).toMatchObject({ exitCode: 0, isError: false });
+    expect(event?.payload.command).toBeUndefined();
+    expect(String(event?.payload.commandHash)).toMatch(/^[a-f0-9]{16}$/);
     expect(JSON.stringify(event?.payload)).not.toContain("3 pass");
+    expect(JSON.stringify(event?.payload)).not.toContain("bun test");
   });
 
   test("falha: exit != 0 devolve isError com exitCode e a saída", async () => {
