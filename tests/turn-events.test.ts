@@ -59,6 +59,35 @@ describe("TurnEventStream (#600)", () => {
     expect(start.arguments.length).toBeLessThanOrEqual(MAX_TURN_ARGUMENT_CHARS);
   });
 
+  test("delivers one sanitized reasoning event with no result payload (I-03)", () => {
+    const { events, stream } = collect();
+    stream.roundStart(1);
+    stream.reasoning("plano com chave sk-abcdefgh12345678\nsegunda linha com \u001b[31mcor");
+
+    expect(kinds(events)).toEqual(["round.start", "reasoning"]);
+    const event = events[1]!;
+    if (event.kind !== "reasoning") throw new Error("expected reasoning");
+    expect(event.turnId).toBe("turn-1");
+    expect(event.text).not.toContain("sk-abcdefgh12345678");
+    expect(event.text).toContain("[REDACTED]");
+    // A block keeps its line breaks; only invisible controls die.
+    expect(event.text).toContain("\nsegunda linha");
+    expect(event.text).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/);
+    expect("resultKey" in event).toBe(false);
+    expect("usage" in event).toBe(false);
+  });
+
+  test("emits no reasoning event for an empty text or after the turn ended", () => {
+    const { events, stream } = collect();
+    stream.reasoning("");
+    stream.reasoning("   \n  ");
+    expect(events).toEqual([]);
+    stream.reasoning("plano");
+    stream.turnEnd("done", { inputTokens: 0, outputTokens: 0 });
+    stream.reasoning("tarde demais");
+    expect(kinds(events)).toEqual(["reasoning", "turn.end"]);
+  });
+
   test("marks every running tool as failed when the turn is cancelled", () => {
     const { advance, events, stream } = collect();
     stream.roundStart(1);
