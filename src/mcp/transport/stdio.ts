@@ -92,7 +92,7 @@ export class StdioTransport {
   };
 
   #onError = (error: Error): void => {
-    this.#failAll(new MCPError(`MCP transport failed: ${error.message}`));
+    this.#failAll(new MCPError(`MCP transport failed: ${this.#detail(error)}`));
   };
 
   #onExit = (): void => {
@@ -128,10 +128,27 @@ export class StdioTransport {
       pending.reject(new MCPError(this.#failure.message));
     }
     this.#pending.clear();
+    this.#shutdown(); // the child must not outlive a transport that can no longer be used
+  }
+
+  /** Ends stdin and kills the child once; the error guards stay attached until its stdio closes. */
+  #shutdown(): void {
+    if (this.#closing) return;
+    this.#closing = true;
+    const child = this.#proc;
+    if (child === undefined) return;
+    child.stdin.end();
+    child.kill();
   }
 
   #closedError(): MCPError {
     return new MCPError(this.#failure?.message ?? "transport MCP fechado");
+  }
+
+  /** Bounds the variable part so the description stays small whatever the config (#643). */
+  #detail(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.length <= 200 ? message : `${message.slice(0, 200)}…`;
   }
 
   /** Writes one JSON-RPC line; a write/pipe failure fails every pending call (#643). */
@@ -148,7 +165,7 @@ export class StdioTransport {
   }
 
   #writeError(error: unknown): MCPError {
-    return new MCPError(`MCP transport write failed: ${error instanceof Error ? error.message : String(error)}`);
+    return new MCPError(`MCP transport write failed: ${this.#detail(error)}`);
   }
 
   request(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -174,17 +191,12 @@ export class StdioTransport {
   }
 
   /**
-   * Closes once: fails the pending calls, flushes and kills the child. Error guards stay
-   * attached until the child stdio closes, because flushing a queued write can hit a pipe
-   * with no reader and must fail the calls instead of escaping (#643).
+   * Closes once: fails the pending calls (which reaps the child) and makes sure the flush and the
+   * kill happened. Error guards stay attached until the child stdio closes, because flushing a
+   * queued write can hit a pipe with no reader and must fail the calls instead of escaping (#643).
    */
   close(): void {
-    if (this.#closing) return;
-    this.#closing = true;
     this.#failAll(new MCPError("transport MCP fechado"));
-    const child = this.#proc;
-    if (child === undefined) return;
-    child.stdin.end();
-    child.kill();
+    this.#shutdown();
   }
 }

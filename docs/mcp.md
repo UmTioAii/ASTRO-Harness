@@ -28,7 +28,7 @@ Cliente MCP (Model Context Protocol) no ASTRO (C2, #56): config `mcpServers`, tr
 
 Timeout por requisição nos três: aborta só a própria pendência; o transporte segue usável.
 
-Stdio pipe failure: an `error` on the child's stdin/stdout, or a failed write/flush, fails **every** pending request with an `MCPError` that describes the transport failure and closes the transport (#643); `close()` is idempotent.
+Stdio pipe failure: an `error` on the child's stdin/stdout, or a failed write/flush, fails **every** pending request with an `MCPError` that describes the transport failure, closes the transport and kills the child — the failure path reaps it, not only `close()` (#643). Later calls keep that first cause, and the stream detail is capped at 200 characters so the description stays bounded whatever the config. `close()` is idempotent.
 
 Redirect não é seguido nos transports `http` e `sse` (GET e POST usam `redirect: "error"`): 3xx vira falha de rede e o header de credencial nunca chega ao destino do `Location` (I-03); no connect isso marca o servidor indisponível e, numa requisição já aberta, o erro sobe ao chamador.
 
@@ -70,7 +70,7 @@ Servidor MCP stdio é **código arbitrário**: roda com env sanitizado e o `comm
 
 Kill de árvore no win32 e dreno de stderr no stdio (#115); framing SSE CRLF no sse (micro-PR pendente).
 
-`close()` while a `connectAll` handshake is still parked waits for that `initialize` to answer or hit `timeoutMs` before the child is killed (the connecting client is not in `state.client` yet). Closing the client that is still connecting is the next slice (#643 follow-up).
+`close()` while a `connectAll` handshake is still parked waits for that `initialize` to answer or hit `timeoutMs` before the child is killed (the connecting client is not in `state.client` yet). This is pre-existing and bounded; the intended behaviour for the next slice is to close the client that is still connecting, so shutdown never waits for the handshake.
 
 ## Referências
 
