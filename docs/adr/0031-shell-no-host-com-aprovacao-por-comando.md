@@ -1,6 +1,6 @@
 # ADR-0031: shell em `auto` - Docker quando disponível, host com aprovação
 
-- Status: aceita
+- Status: substituída por ADR-0034 (#599)
 - Data: 2026-11-20
 - Issue: #474
 - Decisões relacionadas: D-24, I-03, I-11, I-19, ADR-0027

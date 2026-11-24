@@ -53,6 +53,34 @@ Sem canal interativo a escolha é **prosseguir com aviso**, não recusar: os ter
 - Registro inválido (campo desconhecido, versão vazia, data fora do ISO) é erro que cita só o caminho, nunca o conteúdo.
 - No boot, registro inválido encerra com erro (não dá para registrar um aceite confiável); no `/terms` o mesmo erro vira aviso e a sessão continua.
 
+## Shell risk consent (#599)
+
+The shell runs on the user's machine with the user's authority (ADR-0034), so the risk
+is acknowledged once at the same gate as the terms. `SHELL_CONSENT_LINES`
+(`src/shell-consent.ts`) is the normative text; the list below is its copy.
+
+1. The shell runs on your machine with your authority, outside a container.
+2. A model-requested command needs your approval unless a shell rule allows it.
+3. The allowlist, the scanner and the hard-blocks are guardrails, not a guarantee.
+
+| Surface | Behaviour |
+|---|---|
+| `astro` / `astro chat` with a TTY | after the terms, asks once per version; only Enter accepts |
+| Decline | nothing is written and the shell stays off for the session; the next interactive start asks again |
+| No TTY (`run`, `eval`, CI) | never asks and never writes; the per-command approval gate remains the control |
+| `/terms` | shows the shell consent status next to the terms status |
+
+Recorded in `$ASTRO_HOME/state.json` next to `terms`, with the same atomic write
+(`0600`, directory `0700` on POSIX):
+
+```json
+{ "shell": { "version": "1", "acceptedAt": "2026-11-23T12:00:00.000Z" } }
+```
+
+Only version and date. The record itself is the audit trail: no event per acceptance,
+the same scope choice as #479, while each shell decision emits `host_shell.decision`
+with a command hash, effect and origin. Bumping `SHELL_CONSENT_VERSION` asks again.
+
 ## Pendências
 
 - Revisão jurídica do texto acima é obrigatória antes de publicar (checklist do PR de #479).
