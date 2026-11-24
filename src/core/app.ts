@@ -56,7 +56,7 @@ import { buildChildHandoffArtifact, ChildDelegationError, ChildResumeError, Chil
 import { AgentMessageBus } from "../handoff/bus";
 import { createAgentMessageTool } from "../tools/agent-message";
 import { createListModelCandidatesTool } from "../tools/list-model-candidates";
-import { createTaskTool } from "../tools/task";
+import { createTaskTool, type TaskToolDeps } from "../tools/task";
 import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-search";
 import { createSearchAndReadTool } from "../tools/web-search-read";
 import { createWebFetchTool } from "../tools/web-fetch";
@@ -1084,7 +1084,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   // #602: the only door to the opt-in child-to-child bus; deny by default (I-01).
   toolsByName.set("agent_message", createAgentMessageTool({ bus: () => childBus }));
   // C4 (#58): delegação síncrona e isolada; o filho não herda mensagens do pai.
-  toolsByName.set("task", createTaskTool({
+  const taskDeps: TaskToolDeps = {
     audit,
     knownAgents: () => registry.listAgentNames(),
     parallel: config.spawn?.parallel === true,
@@ -1219,7 +1219,6 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         const used = ledger.readAll().filter((entry) => entry.run === redactSecrets(childRun));
         const bounds = ledger.seqBoundsOfRun(childRun);
         const brief = childBrief({ whatWasTried: [`child steps: ${used.length}`, `error: ${reason}`] });
-        let handoffId: string | undefined;
         try {
           const artifact = buildChildHandoffArtifact({
             run: childRun,
@@ -1236,7 +1235,6 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           });
           const entry = ledger.recordHandoff("handoff.created", childRun, artifact, { agent: fromAgent });
           audit.append({ run: childRun, agent: fromAgent, tipo: "handoff.created", payload: { handoff_id: entry.handoff_id, artifact: entry.artifact } });
-          handoffId = entry.handoff_id;
           // L3 fallback: scope, brief and journal stay; the live session is gone.
           handle.brief = brief;
           handle.artifact = entry.artifact;
@@ -1245,30 +1243,59 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           // Best effort: a ledger failure never masks the child's real error.
         }
         if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
-        // The failure names the child and its artifact, so the parent can rebuild (L3).
-        throw new ChildDelegationError(childRun, error instanceof Error ? error.message : String(error), handoffId);
+        // The failure names the child run, so a resume can rebuild it (L3).
+        throw new ChildDelegationError(childRun, error instanceof Error ? error.message : String(error));
       });
       handle.history = [...result.messages, { role: "assistant", content: result.final }];
       return { output: result.final, sessionId: childRun };
     },
-    resume: async ({ sessionId, instruction, level, fromAgent, run: callerRun, signal }) => {
+    resume: async ({ sessionId, instruction, level, fromAgent, run: callerRun, signal, callerAllow, callerPermission, maxSteps, step }) => {
       let handle: ChildSessionHandle | undefined;
       try {
+        const session = sessionId.trim();
+        // Without a handle, the child run in the id names its ledger artifact.
+        const artifact = childResumes.get(session) === undefined
+          ? ledger.readHandoffs().filter((entry) => entry.kind === "handoff.created" && entry.artifact.run === session).at(-1)?.artifact
+          : undefined;
+        const used = artifact === undefined ? [] : ledger.readAll().filter((entry) => entry.run === redactSecrets(session));
         const resolved = resolveChildResume(childResumes, {
-          sessionId, instruction,
+          sessionId: session, instruction,
           ...(level === undefined ? {} : { requested: level }),
           caller: { run: callerRun, agent: fromAgent },
+          ...(artifact === undefined ? {} : {
+            artifact,
+            journal: { steps: used.length, tokens: used.reduce((sum, entry) => sum + entry.tokensIn + entry.tokensOut, 0) },
+          }),
         });
         handle = resolved.handle;
-        const resumed = await handle.run(resolved.prompt, {
-          ...(resolved.history === undefined ? {} : { history: resolved.history }),
+        if (handle !== undefined) {
+          const resumed = await handle.run(resolved.prompt, {
+            ...(resolved.history === undefined ? {} : { history: resolved.history }),
+            ...(signal === undefined ? {} : { signal }),
+          });
+          // L2 keeps the reopened session in memory; nothing is persisted.
+          handle.history = [...resumed.messages, { role: "assistant", content: resumed.final }];
+          return {
+            status: "ok", output: resumed.final, sessionId: handle.session, level: resolved.plan.level,
+            source: resolved.plan.source, restored: resolved.plan.restored, truncated: resolved.truncated,
+          };
+        }
+        // L3 rebuild without the live handle: delegate the artifact's agent
+        // again under this caller's ceiling (I-01/I-02), never the config root.
+        if (resolved.agent === undefined) throw new ChildResumeError("session_missing", "no child run to rebuild");
+        const rebuilt = await taskDeps.delegate({
+          agent: resolved.agent, prompt: resolved.prompt, fromAgent,
+          ...(callerAllow === undefined ? {} : { callerAllow }),
+          ...(callerPermission === undefined ? {} : { callerPermission }),
+          ...(maxSteps === undefined ? {} : { maxSteps }),
+          ...(step === undefined ? {} : { step }),
           ...(signal === undefined ? {} : { signal }),
         });
-        // L2 keeps the reopened session in memory; nothing is persisted.
-        handle.history = [...resumed.messages, { role: "assistant", content: resumed.final }];
         return {
-          status: "ok", output: resumed.final, level: resolved.plan.level,
-          source: resolved.plan.source, restored: resolved.plan.restored, truncated: resolved.truncated,
+          status: "ok", output: typeof rebuilt === "string" ? rebuilt : rebuilt.output,
+          sessionId: typeof rebuilt === "string" ? session : rebuilt.sessionId ?? session,
+          level: resolved.plan.level, source: resolved.plan.source,
+          restored: resolved.plan.restored, truncated: resolved.truncated,
         };
       } catch (error) {
         if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
@@ -1282,7 +1309,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         };
       }
     },
-  }));
+  };
+  toolsByName.set("task", createTaskTool(taskDeps));
   for (const tool of loaded.tools) {
     if (!toolsByName.has(tool.manifest.name)) toolsByName.set(tool.manifest.name, tool);
   }

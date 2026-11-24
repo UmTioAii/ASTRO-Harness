@@ -41,11 +41,19 @@ export interface TaskResumeInput {
   level?: TaskResumeLevel;
   fromAgent: string;
   run: string;
+  /** Caller scope (I-01/I-02): a rebuild derives the child from it, never from the config root. */
+  callerAllow?: readonly string[];
+  callerPermission?: AgentPermission;
+  maxSteps?: number;
+  step?: number;
   signal?: AbortSignal;
 }
 
 export type TaskResumeOutcome =
-  | { status: "ok"; output: string; level: TaskResumeLevel; source: "request" | "default" | "fallback"; restored: readonly string[]; truncated: boolean }
+  | {
+      status: "ok"; output: string; sessionId: string; level: TaskResumeLevel;
+      source: "request" | "default" | "fallback"; restored: readonly string[]; truncated: boolean;
+    }
   | { status: "error"; error: TaskResumeErrorCode; message: string };
 
 export type TaskResumer = (input: TaskResumeInput) => Promise<TaskResumeOutcome>;
@@ -217,7 +225,12 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           const resumed = await resume({
             sessionId, instruction,
             ...(level === undefined ? {} : { level }),
-            fromAgent: ctx.agent, run: ctx.run,
+            fromAgent: ctx.agent,
+            run: ctx.run,
+            ...(ctx.allow === undefined ? {} : { callerAllow: ctx.allow }),
+            ...(ctx.permission === undefined ? {} : { callerPermission: ctx.permission }),
+            ...(ctx.maxSteps === undefined ? {} : { maxSteps: ctx.maxSteps }),
+            ...(ctx.step === undefined ? {} : { step: ctx.step }),
             ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
           });
           deps.audit.append({
@@ -231,7 +244,7 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
           });
           return resumed.status === "error"
             ? { output: JSON.stringify({ error: resumed.error, session_id: sessionId, message: redactSecrets(resumed.message) }), isError: true }
-            : { output: JSON.stringify({ session_id: sessionId, level: resumed.level, source: resumed.source, restored: resumed.restored, truncated: resumed.truncated, output: resumed.output }) };
+            : { output: JSON.stringify({ session_id: resumed.sessionId, level: resumed.level, source: resumed.source, restored: resumed.restored, truncated: resumed.truncated, output: resumed.output }) };
         } catch (error) {
           if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
           return { output: redactSecrets(error instanceof Error ? error.message : String(error)), isError: true };
@@ -392,14 +405,10 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         // Aprovação pendente ou pausa por não-progresso interrompem o run pai
         // em ponto seguro (I-19); não viram erro de tool.
         if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
-        // A failed child names its session and artifact so the parent can reach L3.
+        // A failed child names its run so the parent can reach L3 through it.
         if (error instanceof ChildDelegationError) {
           return {
-            output: JSON.stringify({
-              error: "child_failed", session_id: error.session,
-              ...(error.handoffId === undefined ? {} : { handoff_id: error.handoffId }),
-              message: redactSecrets(error.message),
-            }),
+            output: JSON.stringify({ error: "child_failed", session_id: error.session, message: redactSecrets(error.message) }),
             isError: true,
           };
         }
