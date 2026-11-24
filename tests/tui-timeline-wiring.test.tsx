@@ -8,10 +8,11 @@ import type { TurnEvent } from "../src/chat/turn-events";
 import type { ChatMessage } from "../src/providers/types";
 import type { Entry } from "../src/tui/commands";
 import { TuiApp } from "../src/tui/app";
+import { createApprovalBridge } from "../src/tui/approvals";
 import { renderTimeline, renderTimelineZones } from "../src/tui/timeline";
 import { TimelineTurnStore } from "../src/tui/timeline-store";
 import { TimelineZone } from "../src/tui/timeline-zones";
-import { waitFor } from "./helpers/wait";
+import { TurnGate, waitFor } from "./helpers/wait";
 
 const status = { model: "anthropic/claude-sonnet-4", mode: "ask", costUsd: 0.0021 };
 const at = "2026-11-24T12:00:00.000Z";
@@ -22,6 +23,14 @@ const end = (callId: string, isError: boolean, durationMs = 120): TurnEvent => (
   kind: "tool.end", turnId: "t", callId, isError, durationMs, resultKey: callId, at,
 });
 const turnEnd: TurnEvent = { kind: "turn.end", turnId: "t", status: "done", usage: { inputTokens: 1, outputTokens: 1 }, at };
+
+function resultOf(final: string) {
+  return {
+    final, model: "p/m1", steps: 1, tokensIn: 0, tokensOut: 0, costUsd: 0.001,
+    totalTokensIn: 0, totalTokensOut: 0, totalCostUsd: 0.001,
+    contextTokens: 0, contextLimit: 100, contextRatio: 0, warning: false, trimmed: false,
+  };
+}
 
 function fakeSession(overrides: Record<string, unknown> = {}): ChatSession {
   return {
@@ -194,3 +203,187 @@ test("callId edge cases keep one entry and never read the prototype chain (#653)
   store.apply({ ...turnEnd, status: "cancelled" });
   expect(store.turn.entries[0]).toMatchObject({ status: "ok" });
 });
+
+test("ctrl+o expands the live tool body by callId and ctrl+t never invents reasoning (#635, I-03)", async () => {
+  const secret = "sk-abcdefghijklmnop123456";
+  const messages: ChatMessage[] = [];
+  const gate = new TurnGate();
+  const session = fakeSession({
+    snapshot: () => ({
+      id: "s1", startedAt: at, model: "p/m1", messages, turns: 0,
+      tokensIn: 0, tokensOut: 0, costUsd: 0.001,
+    }),
+    send: async (
+      _prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, _attachments?: unknown,
+      turn?: { observer?: (event: TurnEvent) => void },
+    ) => {
+      turn?.observer?.(start("c1", "read_file", { path: "src/a.ts" }));
+      messages.push({ role: "tool", content: `line one\n  indented\ntoken=${secret}`, toolCallId: "c1" });
+      await gate.enter();
+      turn?.observer?.(end("c1", false));
+      turn?.observer?.(turnEnd);
+      return resultOf("done:inspect");
+    },
+  });
+  const instance = render(<TuiApp session={session} cwd={mkdtempSync(join(tmpdir(), "astro-tui-expand-"))} />);
+  try {
+    instance.stdin.write("inspect");
+    instance.stdin.write("\r");
+    await waitFor(
+      () => gate.parked === 1 && (instance.lastFrame() ?? "").includes("▸ read_file src/a.ts"),
+      "running tool line",
+    );
+    const collapsed = (instance.lastFrame() ?? "").split("\n");
+    const promptAt = collapsed.findIndex((line) => line.includes("> inspect"));
+    const toolAt = collapsed.findIndex((line) => line.includes("read_file"));
+    // Collapsed is one line: no body, and no reasoning line when the provider emitted none.
+    expect(collapsed.join("\n")).not.toContain("line one");
+    expect(collapsed.join("\n")).not.toContain("reasoning");
+
+    instance.stdin.write("\u000f"); // ctrl+o
+    await waitFor(() => (instance.lastFrame() ?? "").includes("line one"), "expanded tool body");
+    const expanded = (instance.lastFrame() ?? "").split("\n");
+    expect(expanded.join("\n")).toContain("[REDACTED]");
+    expect(expanded.join("\n")).not.toContain(secret);
+    expect(expanded.join("\n")).toContain("    indented");
+    // Expansion only appends lines: nothing above the tool entry moves.
+    expect(expanded.findIndex((line) => line.includes("> inspect"))).toBe(promptAt);
+    expect(expanded.findIndex((line) => line.includes("read_file"))).toBe(toolAt);
+
+    instance.stdin.write("\u0014"); // ctrl+t: no reasoning was emitted, so no line appears
+    await waitFor(() => (instance.lastFrame() ?? "").includes("recolhido"), "ctrl+t handled");
+    expect(instance.lastFrame()).not.toContain("reasoning");
+
+    gate.release();
+    await waitFor(() => (instance.lastFrame() ?? "").includes("✓ read_file src/a.ts"), "tool moved to ok");
+  } finally {
+    instance.unmount();
+  }
+}, 15_000);
+
+test("approval takes over the composer zone while the running timeline stays visible (#635)", async () => {
+  const bridge = createApprovalBridge();
+  const session = fakeSession({
+    send: async (
+      _prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, _attachments?: unknown,
+      turn?: { observer?: (event: TurnEvent) => void },
+    ) => {
+      turn?.observer?.(start("c1", "run_command", { command: "bun test" }));
+      await bridge.approveTool({ name: "run_command", action: "shell", mode: "ask" });
+      turn?.observer?.(end("c1", false));
+      turn?.observer?.(turnEnd);
+      return resultOf("eco:run tests");
+    },
+  });
+  const instance = render(
+    <TuiApp session={session} cwd={mkdtempSync(join(tmpdir(), "astro-tui-approval-zone-"))} approvals={bridge} />,
+  );
+  try {
+    instance.stdin.write("run tests");
+    instance.stdin.write("\r");
+    await waitFor(
+      () => (instance.lastFrame() ?? "").includes("▸ command: bun test") && (instance.lastFrame() ?? "").includes("[n] deny"),
+      "approval over the live timeline",
+    );
+    const frame = instance.lastFrame() ?? "";
+    // The timeline is still visible and the editor composer yielded to the approval line.
+    expect(frame).toContain("▸ command: bun test");
+    expect(frame).not.toContain("❯");
+    // The choices stay visible on the hint line even when the question line clips.
+    expect(frame).toContain("s once · a always");
+
+    instance.stdin.write("s");
+    instance.stdin.write("\r");
+    await waitFor(() => (instance.lastFrame() ?? "").includes("✓ command: bun test"), "approved tool moved to ok");
+    await waitFor(() => (instance.lastFrame() ?? "").includes("eco:run tests"), "turn answered");
+    expect(instance.lastFrame()).not.toContain("[n] deny");
+  } finally {
+    instance.unmount();
+  }
+}, 15_000);
+
+test("cancelling a turn marks running tool entries failed (#635)", async () => {
+  let committed: Entry | undefined;
+  const session = fakeSession({
+    send: async (
+      _prompt: string, signal?: AbortSignal, _onToken?: (text: string) => void, _attachments?: unknown,
+      turn?: { observer?: (event: TurnEvent) => void },
+    ) => {
+      turn?.observer?.(start("c1", "read_file", { path: "a.ts" }));
+      await new Promise<void>((_resolve, reject) => {
+        if (signal?.aborted === true) {
+          reject(new Error("cancelado"));
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(new Error("cancelado")), { once: true });
+      });
+      return resultOf("unreachable");
+    },
+  });
+  let exits = 0;
+  const instance = render(
+    <TuiApp
+      session={session}
+      cwd="/tmp/astro"
+      onExit={() => { exits++; }}
+      onTimelineEntry={(entry) => { committed = entry; }}
+    />,
+  );
+  try {
+    instance.stdin.write("read");
+    instance.stdin.write("\r");
+    await waitFor(() => (instance.lastFrame() ?? "").includes("▸ read_file a.ts"), "tool running");
+    instance.stdin.write("\u0003"); // ctrl+c aborts the turn
+    await waitFor(() => exits === 1, "session exits");
+    expect(committed?.timeline?.entries[0]).toMatchObject({ kind: "tool", callId: "c1", status: "failed" });
+  } finally {
+    instance.unmount();
+  }
+}, 15_000);
+
+test("the streamed partial is sanitized while it renders (#635, I-03)", async () => {
+  const secret = "sk-abcdefghijklmnop123456";
+  const gate = new TurnGate();
+  const session = fakeSession({
+    send: async (
+      _prompt: string, _signal?: AbortSignal, onToken?: (text: string) => void,
+    ) => {
+      onToken?.(`parcial ${secret}`);
+      await gate.enter();
+      return resultOf("fim:oi");
+    },
+  });
+  const instance = render(
+    <TuiApp session={session} cwd={mkdtempSync(join(tmpdir(), "astro-tui-partial-"))} streamThrottleMs={0} />,
+  );
+  try {
+    instance.stdin.write("oi");
+    instance.stdin.write("\r");
+    await waitFor(() => gate.parked === 1 && (instance.lastFrame() ?? "").includes("parcial"), "partial stream");
+    expect(instance.lastFrame()).toContain("[REDACTED]");
+    expect(instance.lastFrame()).not.toContain(secret);
+    gate.release();
+    await waitFor(() => (instance.lastFrame() ?? "").includes("fim:oi"), "turn answered");
+  } finally {
+    instance.unmount();
+  }
+}, 15_000);
+
+test("the assistant final answer is sanitized before Markdown renders it (#653, I-03)", async () => {
+  const secret = "sk-abcdefghijklmnop123456";
+  const session = fakeSession({
+    send: async () => resultOf(`chave: ${secret}\n    indented line`),
+  });
+  const instance = render(<TuiApp session={session} cwd={mkdtempSync(join(tmpdir(), "astro-tui-answer-"))} />);
+  try {
+    instance.stdin.write("mostre a chave");
+    instance.stdin.write("\r");
+    await waitFor(() => (instance.lastFrame() ?? "").includes("[REDACTED]"), "redacted answer");
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).not.toContain(secret);
+    expect(frame).toContain("[REDACTED]");
+    expect(frame).toContain("    indented line");
+  } finally {
+    instance.unmount();
+  }
+}, 15_000);

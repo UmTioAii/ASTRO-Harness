@@ -118,6 +118,24 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     expect(await moveDecision).toBe(false); // 'n' continua negando
   });
 
+  test("cada aprovação carrega o hint das opções no composer (#635)", async () => {
+    const bridge = createApprovalBridge();
+    const tool = bridge.approveTool({ name: "run_command", action: "shell", mode: "ask" });
+    expect(bridge.current()?.hint).toContain("s once");
+    bridge.answer("n");
+    expect(await tool).toBe(false);
+
+    const swapDecision = bridge.approveSwap(swap);
+    expect(bridge.current()?.hint).toBe("s aprova · n nega");
+    bridge.answer("n");
+    expect(await swapDecision).toBe(false);
+
+    // askText não tem opções fixas: o composer usa o hint neutro
+    void bridge.askText("confiar nesta pasta? (s/n)");
+    expect(bridge.current()?.hint).toBeUndefined();
+    bridge.answer("n");
+  });
+
   test("askText publica a pergunta crua na TUI e resolve com a resposta (#267)", async () => {
     const bridge = createApprovalBridge();
     const seen: Array<string | undefined> = [];
