@@ -4,14 +4,9 @@
  * HandoffArtifactV1 at the 512-token level, never the parent transcript.
  */
 import { estimateTokens } from "../tokens";
-import { compactDraft } from "./compact";
 import {
-  buildHandoffArtifact,
-  handoffId,
-  type HandoffArtifactV1,
-  type HandoffBudget,
-  type HandoffCompaction,
-  type HandoffDraft,
+  CHILD_OUTPUT_FORMAT_MAX_CHARS, HandoffError, buildHandoffArtifact, handoffId,
+  type HandoffArtifactV1, type HandoffBudget, type HandoffCompaction, type HandoffDraft,
   type HandoffSourceRefs,
 } from "./types";
 
@@ -28,46 +23,79 @@ export interface ChildHandoffInput {
   fromProfile?: string; toProfile?: string; sourceRefs?: HandoffSourceRefs;
 }
 
-const FIELD_CHARS = 200, FORMAT_CHARS = 160, ITEM_CHARS = 120, MAX_ITEMS = 4;
+const FIELD_CHARS = 200, ITEM_CHARS = 120, MAX_ITEMS = 4;
+const serializedTokens = (value: unknown): number => estimateTokens(JSON.stringify(value));
 const clip = (value: string, max = FIELD_CHARS): string => value.trim().slice(0, max);
-const clipList = (values: readonly string[]): string[] =>
-  values.slice(0, MAX_ITEMS).map((value) => clip(value, ITEM_CHARS)).filter((value) => value.length > 0);
+const normalizeList = (values: readonly string[]): string[] =>
+  values.map((value) => value.trim()).filter((value) => value.length > 0);
+function clipList(values: readonly string[], field: string, dropped: Set<string>): string[] {
+  const normalized = normalizeList(values);
+  const clipped = normalized.slice(0, MAX_ITEMS).map((value) => clip(value, ITEM_CHARS)).filter((value) => value.length > 0);
+  if (JSON.stringify(clipped) !== JSON.stringify(normalized)) dropped.add(field);
+  return clipped;
+}
 const draftOf = (brief: ChildBrief): HandoffDraft => ({
   task: brief.objective, objective: brief.objective, decisions: brief.whatWasTried,
   constraints: brief.constraints, next_steps: brief.boundaries,
 });
 
 /**
- * Clips each field and list, then lets `compactDraft` drop `what was tried`
- * when the 512-token ceiling is still exceeded. Objective, output format and
- * constraints survive; boundaries only shrink by clipping.
+ * Clips each field and list, then trims the serialized draft until it fits
+ * `maxTokens`: `what was tried` first, then boundaries, constraints, objective
+ * and output format. The clipping is measured on `JSON.stringify`, so newline,
+ * control and surrogate escapes cannot inflate the 512-token level.
  */
 export function boundChildBrief(brief: ChildBrief, maxTokens = CHILD_BRIEF_MAX_TOKENS): BoundedChildBrief {
+  const dropped = new Set<string>();
+  const objective = brief.objective.trim();
+  const outputFormat = brief.outputFormat.trim() || "final text summary";
   const normalized: ChildBrief = {
-    objective: brief.objective.trim(), outputFormat: brief.outputFormat.trim() || "final text summary",
-    constraints: brief.constraints.map((value) => value.trim()),
-    whatWasTried: brief.whatWasTried.map((value) => value.trim()),
-    boundaries: brief.boundaries.map((value) => value.trim()),
+    objective, outputFormat,
+    constraints: normalizeList(brief.constraints),
+    whatWasTried: normalizeList(brief.whatWasTried),
+    boundaries: normalizeList(brief.boundaries),
   };
-  const clipped: ChildBrief = {
-    objective: clip(normalized.objective), outputFormat: clip(normalized.outputFormat, FORMAT_CHARS),
-    constraints: clipList(normalized.constraints), whatWasTried: clipList(normalized.whatWasTried),
-    boundaries: clipList(normalized.boundaries),
+  const current: ChildBrief = {
+    objective: clip(objective),
+    outputFormat: clip(outputFormat, CHILD_OUTPUT_FORMAT_MAX_CHARS),
+    constraints: clipList(normalized.constraints, "constraints", dropped),
+    whatWasTried: clipList(normalized.whatWasTried, "decisions", dropped),
+    boundaries: clipList(normalized.boundaries, "next_steps", dropped),
   };
-  const originalTokens = estimateTokens(JSON.stringify(normalized));
-  const compacted = compactDraft(draftOf(clipped), maxTokens);
-  const bounded: ChildBrief = {
-    objective: clipped.objective, outputFormat: clipped.outputFormat,
-    constraints: compacted.draft.constraints, whatWasTried: compacted.draft.decisions,
-    boundaries: compacted.draft.next_steps,
-  };
-  const returnedTokens = estimateTokens(JSON.stringify(draftOf(bounded)));
-  const droppedFields = compacted.compaction.droppedFields;
-  const truncated = JSON.stringify(clipped) !== JSON.stringify(normalized) || droppedFields.length > 0;
+  if (current.objective !== objective) dropped.add("objective");
+  if (current.outputFormat !== outputFormat) dropped.add("child_output_format");
+  const originalTokens = serializedTokens(normalized);
+  while (serializedTokens(draftOf(current)) > maxTokens) {
+    if (current.whatWasTried.length > 0) {
+      current.whatWasTried = [];
+      dropped.add("decisions");
+    } else if (current.boundaries.length > 0) {
+      current.boundaries = current.boundaries.slice(0, -1);
+      dropped.add("next_steps");
+    } else if (current.constraints.length > 0) {
+      current.constraints = current.constraints.slice(0, -1);
+      dropped.add("constraints");
+    } else if (current.objective.length > 1) {
+      current.objective = current.objective.slice(0, -1);
+      dropped.add("objective");
+    } else if (current.outputFormat.length > 1) {
+      current.outputFormat = current.outputFormat.slice(0, -1);
+      dropped.add("child_output_format");
+    } else {
+      break;
+    }
+  }
+  const returnedTokens = serializedTokens(draftOf(current));
+  if (returnedTokens > maxTokens) {
+    throw new HandoffError("handoff_artifact_mismatch", `child brief exceeds ${maxTokens} tokens after clipping`);
+  }
+  const droppedFields = [...dropped];
   return {
-    brief: bounded,
-    compaction: truncated ? { strategy: "truncate", droppedFields } : { strategy: "none", droppedFields: [] },
-    truncated,
+    brief: current,
+    compaction: droppedFields.length === 0
+      ? { strategy: "none", droppedFields: [] }
+      : { strategy: "truncate", droppedFields },
+    truncated: droppedFields.length > 0,
     originalTokens,
     returnedTokens,
   };
@@ -91,16 +119,33 @@ export function buildChildHandoffArtifact(input: ChildHandoffInput): HandoffArti
 
 export type ChildResumeLevel = "L1" | "L2" | "L3";
 
+const CHILD_RESUME_LEVELS: readonly string[] = ["L1", "L2", "L3"];
+
+/** Boundary parser: model JSON must match the union exactly; unknown values are not a rebuild. */
+export function parseChildResumeLevel(value: unknown): ChildResumeLevel | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && CHILD_RESUME_LEVELS.includes(value)) return value as ChildResumeLevel;
+  throw new HandoffError("handoff_mismatch", "invalid resume level; use L1, L2 or L3");
+}
+
 /** Context a resume may restore. The parent transcript is not a member. */
 export type RestoredContext = "brief" | "child_session" | "journal";
 
-export interface ChildResumeInput { requested?: ChildResumeLevel; sessionAvailable: boolean; artifact?: HandoffArtifactV1; }
+export interface ChildResumeInput {
+  /** Explicit parent request; omitted means L2 while the session is live. */
+  requested?: ChildResumeLevel;
+  /** Child run to reopen; required for L2 when no artifact carries it. */
+  sessionId?: string;
+  sessionAvailable: boolean;
+  artifact?: HandoffArtifactV1;
+}
 
 export interface ChildResumePlan {
   level: ChildResumeLevel; source: "request" | "default" | "fallback"; restored: RestoredContext[];
   brief?: ChildBrief; childSession?: string; handoffId?: string;
   /** L3 only: the ledger interval the brief is rebuilt from. */
-  sourceRefs?: HandoffSourceRefs; unavailable?: "artifact_missing";
+  sourceRefs?: HandoffSourceRefs;
+  unavailable?: "artifact_missing" | "session_missing";
 }
 
 function briefFromArtifact(artifact: HandoffArtifactV1): ChildBrief {
@@ -116,27 +161,38 @@ function briefFromArtifact(artifact: HandoffArtifactV1): ChildBrief {
  * journal and is the automatic fallback when the session is gone.
  */
 export function planChildResume(input: ChildResumeInput): ChildResumePlan {
+  const requested = parseChildResumeLevel(input.requested);
   const artifact = input.artifact;
   const brief = artifact === undefined ? undefined : briefFromArtifact(artifact);
   const common = {
     ...(brief === undefined ? {} : { brief }),
     ...(artifact === undefined ? {} : { handoffId: handoffId(artifact) }),
   };
-  if (input.requested === "L1") {
+  if (requested === "L1") {
     return { level: "L1", source: "request", restored: brief === undefined ? [] : ["brief"], ...common };
   }
-  if ((input.requested === "L2" || input.requested === undefined) && input.sessionAvailable) {
+  if ((requested === "L2" || requested === undefined) && input.sessionAvailable) {
+    const session = input.sessionId ?? artifact?.run;
+    if (session === undefined) {
+      return {
+        level: "L2", source: requested === "L2" ? "request" : "default",
+        restored: [], unavailable: "session_missing",
+      };
+    }
     return {
-      level: "L2", source: input.requested === "L2" ? "request" : "default",
-      restored: brief === undefined ? ["child_session"] : ["brief", "child_session"], ...common,
-      ...(artifact === undefined ? {} : { childSession: artifact.run }),
+      level: "L2", source: requested === "L2" ? "request" : "default",
+      restored: brief === undefined ? ["child_session"] : ["brief", "child_session"],
+      ...common, childSession: session,
     };
   }
   if (artifact === undefined) {
-    return { level: "L3", source: input.requested === "L3" ? "request" : "fallback", restored: [], unavailable: "artifact_missing" };
+    return {
+      level: "L3", source: requested === "L3" ? "request" : "fallback",
+      restored: [], unavailable: "artifact_missing",
+    };
   }
   return {
-    level: "L3", source: input.requested === "L3" ? "request" : "fallback",
+    level: "L3", source: requested === "L3" ? "request" : "fallback",
     restored: ["brief", "journal"], ...common,
     ...(artifact.source_refs === undefined ? {} : { sourceRefs: artifact.source_refs }),
   };

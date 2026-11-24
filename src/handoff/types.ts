@@ -141,11 +141,21 @@ function asObject(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Teto do `child_output_format` do handoff de filho (ADR-0036). */
+export const CHILD_OUTPUT_FORMAT_MAX_CHARS = 160;
+
 function asString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     mismatch(`campo "${field}" deve ser string não vazia`);
   }
   return value;
+}
+
+/** String não vazia com teto de tamanho (ADR-0036: leitura não aceita campo sem limite). */
+function asBoundedString(value: unknown, field: string, max: number): string {
+  const text = asString(value, field);
+  if (text.length > max) mismatch(`field "${field}" exceeds ${max} characters`);
+  return text;
 }
 
 /** Valida lista de strings obrigatória (artefato v1). */
@@ -170,8 +180,13 @@ function asPositiveInt(value: unknown, field: string): number {
 }
 
 const COMPACTION_STRATEGIES: readonly string[] = ["summary", "truncate", "none"];
-/** Campos que a compactação pode dropar (F-25): open_questions, depois decisions. */
-const DROPPABLE_FIELDS: readonly string[] = ["open_questions", "decisions"];
+/**
+ * Fields a compaction may drop or clip: `open_questions`/`decisions` first,
+ * then the child brief fields added by ADR-0036.
+ */
+const DROPPABLE_FIELDS: readonly string[] = [
+  "open_questions", "decisions", "objective", "child_output_format", "constraints", "next_steps",
+];
 
 /** Valida os campos opcionais de compactação/referência (F-25). */
 function validateCompactFields(raw: Record<string, unknown>): {
@@ -251,7 +266,7 @@ export function validateHandoffArtifact(value: unknown): HandoffArtifactV1 {
     ...validateHandoffDraft(raw),
     ...(raw.from_profile === undefined ? {} : { from_profile: asString(raw.from_profile, "from_profile") }),
     ...(raw.to_profile === undefined ? {} : { to_profile: asString(raw.to_profile, "to_profile") }),
-    ...(raw.child_output_format === undefined ? {} : { child_output_format: asString(raw.child_output_format, "child_output_format") }),
+    ...(raw.child_output_format === undefined ? {} : { child_output_format: asBoundedString(raw.child_output_format, "child_output_format", CHILD_OUTPUT_FORMAT_MAX_CHARS) }),
     ...validateCompactFields(raw),
   };
 }
