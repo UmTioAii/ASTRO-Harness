@@ -14,6 +14,8 @@ export interface WebSearchBackendConfig {
   provider: WebSearchProvider;
   /** Name of the env var with the key; absent = the backend is skipped. */
   apiKeyEnv?: string;
+  /** Declared endpoint; absent = the provider default. Required for `custom`. */
+  baseUrl?: string;
 }
 
 /** Configuração `webSearch` (validação em `src/core/config.ts`). */
@@ -297,7 +299,7 @@ function backoffMs(attempt: number, random: () => number): number {
 }
 
 /** Primary first, then the declared chain (#604); order is the declared order. */
-function backendChain(config: WebSearchConfig): Array<WebSearchBackendConfig & { baseUrl?: string }> {
+function backendChain(config: WebSearchConfig): WebSearchBackendConfig[] {
   return [{
     provider: config.provider, apiKeyEnv: config.apiKeyEnv,
     ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
@@ -313,7 +315,7 @@ type BackendOutcome =
 
 /** One backend with its own retry budget; a failure is returned, never thrown. */
 async function requestBackend(
-  backend: WebSearchBackendConfig & { baseUrl?: string },
+  backend: WebSearchBackendConfig,
   input: ParsedInput, key: string, ctx: ToolContext, io: RequestIo,
 ): Promise<BackendOutcome> {
   const { url, init } = requestFor(backend, input, key);

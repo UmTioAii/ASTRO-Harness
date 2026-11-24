@@ -41,6 +41,7 @@ As camadas e as regras de merge são de ADR-0029; esta seção aplica o recorte 
 |---|---|---|---|---|---|
 | providers e models | camadas 2–3 | lê | lê + CRUD guiado (provider/perfil) | lê + CRUD guiado (provider/perfil) | compartilhado: contrato do run |
 | pricing, quota, paths, MCP, plugins | camadas 2-3 | lê | lê | lê | compartilhado; edição só no arquivo. `quota` e `team.agentQuotas` só são aplicados no preset `control` (#617); no `default` ficam declarados e ignorados, com aviso no load |
+| `webSearch` (`provider`, `apiKeyEnv`, `baseUrl`, `fallback[]`) | camadas 2-3 | lê | lê | lê | shared: run contract. Each `fallback[]` entry may declare its own `baseUrl` (same URL rules as the primary), and `custom` enters the chain only with one (#604) |
 | provider ativo | `activeProfileId` (store legado hoje; `config.json` após #459/#492) | `--provider` efêmero | tela; só perfil global | `/provider use`; só global | compartilhado; flag CLI-only |
 | modelo do turno | `agent.model`/`modelPool` (camadas 2–3) | sem flag | `/model` em runtime; `lastModel` só vale sem `agent.model` declarado (#497) | só config; `/model` em runtime | compartilhado; memória TUI-only |
 | `permissions.mode` | camada 3 | `--permission-mode`/env efêmeros | `/config` grava; `/mode` runtime | `/config <chave> <valor>` grava; `/mode` runtime | compartilhado; persistência TUI+REPL (#558) |
@@ -97,7 +98,7 @@ A TUI e o REPL **não** criam store de configuração próprio. O contrato é es
 - #459 importa `providers.json` uma vez para `config.json` e marca `migrations.providers`; depois disso o legado é import-only (preservado byte a byte, não lido, escrita recusada com `ProfileStoreMigratedError`, nome planejado em #459).
 - `trusted.json` é importado e preservado (#403); depois de `migrations.trust` não é mais lido, mas `saveTrustedStore` não recusa escrita em caminho explícito — diferente de `providers.json` após #459.
 - Antes de #459, o CRUD da TUI/REPL ainda grava o store legado; é a janela de migração, não uma segunda fonte. Quando #459 entrar e antes de #492, o CRUD recusa; o alvo é um só: `config.json`.
-- Config schema (ADR-0028/0033, #493/#594): both layers validate each source before merging; the supported target is `2.1.0` and the newest layer version wins. Absent = `0.0.0`, migrated in memory; a future major fails closed. `astro config migrate [--config <path>] [--apply]` remains the only migration writer. Unversioned/`1.x` `run.maxTurns` is refused because its old round meaning changed to turns in schema 2; `/config run.maxTurns` is the explicit opt-in. `agent.maxSteps` is a readable round alias, and `sandbox` maps to `shell.mode` only in memory: user-authored configuration is never silently rewritten.
+- Config schema (ADR-0028/0033, #493/#594): both layers validate each source before merging; the supported target is `2.2.0` and the newest layer version wins. Absent = `0.0.0`, migrated in memory; a future major fails closed. `astro config migrate [--config <path>] [--apply]` remains the only migration writer. Unversioned/`1.x` `run.maxTurns` is refused because its old round meaning changed to turns in schema 2; `/config run.maxTurns` is the explicit opt-in. `agent.maxSteps` is a readable round alias, and `sandbox` maps to `shell.mode` only in memory: user-authored configuration is never silently rewritten.
 
 ## Lacunas de implementação
 

@@ -181,30 +181,45 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
 /** Placeholders de URL que o runner resolve para servidores loopback próprios. */
 const URL_PLACEHOLDERS = new Set(["providerUrl", "providerDownUrl", "mcpUrl", "searchUrl", "pageUrl"]);
 
+/**
+ * Diagnostic form of a fixture URL: only `protocol//host`. Userinfo, path and
+ * query stay out of the message, so a token pasted into an endpoint is not
+ * copied into the report JSON or any log (I-03). Unparsable values print no
+ * fragment of the input.
+ */
+function endpointLabel(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "(URL não parseável)";
+  }
+}
+
 /** URL de fixture só aponta para loopback; o resto da rede fica fora do golden. */
 function assertLoopbackUrl(raw: string, field: string): void {
   const placeholder = /^\{\{([A-Za-z0-9_]+)\}\}$/.exec(raw);
   if (placeholder !== null) {
     if (!URL_PLACEHOLDERS.has(placeholder[1]!)) {
-      throw new Error(`cenário com placeholder de URL desconhecido em ${field}: ${raw}`);
+      throw new Error(`cenário com placeholder de URL desconhecido em ${field}: {{${placeholder[1]}}}`);
     }
     return; // resolvido para 127.0.0.1 pelo próprio runner
   }
   if (raw.includes("{{")) {
-    throw new Error(`cenário com placeholder de URL não suportado em ${field}: ${raw}`);
+    throw new Error(`cenário com placeholder de URL não suportado em ${field}`);
   }
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new Error(`cenário com URL inválida em ${field}: ${raw}`);
+    throw new Error(`cenário com URL inválida em ${field}: ${endpointLabel(raw)}`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`cenário com URL não-http em ${field}: ${raw}`);
+    throw new Error(`cenário com URL não-http em ${field}: ${endpointLabel(raw)}`);
   }
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   const loopback = host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
-  if (!loopback) throw new Error(`cenário com URL não-loopback em ${field}: ${raw}`);
+  if (!loopback) throw new Error(`cenário com URL não-loopback em ${field}: ${endpointLabel(raw)}`);
 }
 
 function configUrls(config: Record<string, unknown> | undefined): Array<{ field: string; url: string }> {
@@ -223,7 +238,16 @@ function configUrls(config: Record<string, unknown> | undefined): Array<{ field:
       if (isRecord(server)) add(`mcpServers.${name}.url`, server.url);
     }
   }
-  if (isRecord(config.webSearch)) add("webSearch.baseUrl", config.webSearch.baseUrl);
+  if (isRecord(config.webSearch)) {
+    add("webSearch.baseUrl", config.webSearch.baseUrl);
+    // Chain entries are fixture surface too (#604): a literal endpoint is
+    // validated with the entry that declares it.
+    if (Array.isArray(config.webSearch.fallback)) {
+      for (const [index, entry] of config.webSearch.fallback.entries()) {
+        if (isRecord(entry)) add(`webSearch.fallback[${index}].baseUrl`, entry.baseUrl);
+      }
+    }
+  }
   if (isRecord(config.team)) add("team.auditWebhook", config.team.auditWebhook);
   if (isRecord(config.telemetry)) add("telemetry.endpoint", config.telemetry.endpoint);
   return urls;
@@ -546,15 +570,17 @@ function assertEffectiveLoopback(config: AstroConfig): void {
       assertLoopbackUrl(base, field);
     };
     check("webSearch.baseUrl", config.webSearch.baseUrl ?? DEFAULT_BASE[config.webSearch.provider]);
-    // The whole chain is a fixture surface, not only the primary (#604). A chain
-    // entry has no baseUrl, so name the default endpoint that failed and why it
-    // cannot be overridden here.
+    // The whole chain is a fixture surface, not only the primary (#604): every
+    // declared baseUrl is validated, and an entry without one names the provider
+    // default that failed and how to override it.
     for (const [index, entry] of (config.webSearch.fallback ?? []).entries()) {
-      const base = DEFAULT_BASE[entry.provider];
+      const base = entry.baseUrl ?? DEFAULT_BASE[entry.provider];
       if (base === undefined || base === "") {
-        throw new Error(`cenário com webSearch.fallback[${index}] (${entry.provider}) sem endpoint padrão; o golden não pode declarar esse fallback`);
+        throw new Error(`cenário com webSearch.fallback[${index}].baseUrl ausente; declare um endpoint loopback para o backend "${entry.provider}"`);
       }
-      assertLoopbackUrl(base, `webSearch.fallback[${index}] (endpoint padrão de ${entry.provider}; o golden não pode sobrescrevê-lo)`);
+      assertLoopbackUrl(base, entry.baseUrl === undefined
+        ? `webSearch.fallback[${index}].baseUrl (endpoint padrão de ${entry.provider}; declare um baseUrl loopback)`
+        : `webSearch.fallback[${index}].baseUrl`);
     }
   }
   if (config.team?.auditWebhook !== undefined) {

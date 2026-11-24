@@ -10,9 +10,9 @@ Summary: `web_search` queries a configurable backend chain and returns deduplica
 | `apiKeyEnv` | yes | — | **name** of an environment variable; a value that looks like a secret is rejected (I-03) |
 | `baseUrl` | `custom` only | backend endpoint | `http(s)` without credential/metadata; in `google` it may carry `cx` |
 | `defaultMaxResults` | no | 5 | integer 1..10 |
-| `fallback` | no | — | ordered list of `{provider, apiKeyEnv?}`, tried after the primary (#604) |
+| `fallback` | no | — | ordered list of `{provider, apiKeyEnv?, baseUrl?}`, tried after the primary (#604) |
 
-Each fallback entry repeats the key rule (a name, never a value) and the chain may not repeat a backend, including the primary. `custom` cannot enter the chain because it has no declared endpoint; use it as the primary. An entry without `apiKeyEnv` has no credential and is skipped. The key is read from the run `env` at call time. No other host variable reaches the backend; the `web.search` audit records `{query, provider, resultsCount, duration, status, cacheHit, backends, backendsTotal}` with the query redacted.
+Each fallback entry repeats the key rule (a name, never a value) and may declare its own `baseUrl` under the same URL rules as the primary. The chain may not repeat a backend, including the primary. `custom` enters the chain only when it declares `baseUrl`, because it has no default endpoint. An entry without `apiKeyEnv` has no credential and is skipped. The key is read from the run `env` at call time. No other host variable reaches the backend; the `web.search` audit records `{query, provider, resultsCount, duration, status, cacheHit, backends, backendsTotal}` with the query redacted.
 
 ## Declared fallback (#604)
 
@@ -51,4 +51,4 @@ Search results are external data. The manifest marks `risk: low`, `permission: r
 
 ## Dev opt-in (outbound)
 
-`ASTRO_ALLOW_PRIVATE_URLS=1` (per process and children, dev only) releases loopback, RFC1918, ULA and reserved ranges (`0.0.0.0/8`, multicast) in URLs validated by `outboundUrlProblem`; CGNAT (100.64/10), metadata (ULA `fd00:ec2::/64` and `fd20:ce::/64`, mapped IPv4 and known hosts) and link-local stay blocked. `webSearch.baseUrl` uses only `urlProblem` (any provider): it accepts loopback/RFC1918/ULA; the golden runner rejects a declared fallback backend whose default endpoint is not loopback; a plugin provider `baseUrl` in `astro.config.json` does not pass through `outboundUrlProblem` (pre-existing limit).
+`ASTRO_ALLOW_PRIVATE_URLS=1` (per process and children, dev only) releases loopback, RFC1918, ULA and reserved ranges (`0.0.0.0/8`, multicast) in URLs validated by `outboundUrlProblem`; CGNAT (100.64/10), metadata (ULA `fd00:ec2::/64` and `fd20:ce::/64`, mapped IPv4 and known hosts) and link-local stay blocked. `webSearch.baseUrl` and every `fallback[].baseUrl` use only `urlProblem` (any provider): they accept loopback/RFC1918/ULA; the golden runner validates each declared fallback `baseUrl` (the backend default when absent) and names the failing entry when it is not loopback; a plugin provider `baseUrl` in `astro.config.json` does not pass through `outboundUrlProblem` (pre-existing limit).

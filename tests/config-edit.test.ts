@@ -129,7 +129,7 @@ describe("updateConfigKnobs (#558)", () => {
   });
 
   test("schema opt-in never downgrades a newer minor", () => {
-    for (const [version, expected] of [[undefined, "2.1.0"], ["1.0.0", "2.1.0"], ["2.2.0", "2.2.0"]] as const) {
+    for (const [version, expected] of [[undefined, "2.2.0"], ["1.0.0", "2.2.0"], ["2.3.0", "2.3.0"]] as const) {
       const path = writeProject({ ...BASE, version });
       updateConfigKnobs(path, { "run.maxTurns": "1000" }, { env: { ASTRO_NO_GLOBAL_CONFIG: "1" } });
       expect(loadConfigRaw(path).version).toBe(expected);

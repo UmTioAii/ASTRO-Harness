@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
-import { validateConfig } from "../src/core/config";
+import { ConfigError, validateConfig } from "../src/core/config";
 import {
   createWebSearchTool, webSearchSecretEnvNames, type WebSearchConfig, type WebSearchDeps,
 } from "../src/tools/web-search";
@@ -76,8 +76,74 @@ describe("webSearch.fallback (#604)", () => {
     expect(invalid([{ provider: "ghost" }])).toThrow(/webSearch\.fallback\[0\]\.provider/);
     expect(invalid([{ provider: "brave" }, { provider: "brave" }])).toThrow(/webSearch\.fallback\[1\]\.provider/);
     expect(invalid([{ provider: "exa" }])).toThrow(/webSearch\.fallback\[0\]\.provider/);
-    expect(invalid([{ provider: "custom" }])).toThrow(/fallback\[0\]\.provider/);
+    expect(invalid([{ provider: "custom" }])).toThrow(/fallback\[0\]\.baseUrl/);
     expect(invalid([{ provider: "brave", apiKeyEnv: "sk-live-abcdef123456" }])).toThrow(/fallback\[0\]\.apiKeyEnv/);
+  });
+
+  test("accepts a per-entry baseUrl and lets custom into the chain only with one", () => {
+    const webSearch = (fallback: unknown[]) => ({ provider: "exa", apiKeyEnv: "PRIMARY_KEY", fallback });
+    const config = validateConfig({
+      ...structuredClone(base),
+      webSearch: webSearch([
+        { provider: "brave", apiKeyEnv: "BRAVE_KEY", baseUrl: "https://brave.example.test" },
+        { provider: "custom", apiKeyEnv: "BRAVE_KEY", baseUrl: "https://custom.example.test/search" },
+      ]),
+    });
+    expect(config.webSearch?.fallback).toEqual([
+      { provider: "brave", apiKeyEnv: "BRAVE_KEY", baseUrl: "https://brave.example.test" },
+      { provider: "custom", apiKeyEnv: "BRAVE_KEY", baseUrl: "https://custom.example.test/search" },
+    ]);
+    const invalid = (fallback: unknown[]) => () => validateConfig({ ...structuredClone(base), webSearch: webSearch(fallback) });
+    // `custom` has no default endpoint: without baseUrl the entry is refused naming the field.
+    expect(invalid([{ provider: "custom", apiKeyEnv: "BRAVE_KEY" }])).toThrow(ConfigError);
+    expect(invalid([{ provider: "custom", apiKeyEnv: "BRAVE_KEY" }])).toThrow(/webSearch\.fallback\[0\]\.baseUrl/);
+    // Same URL safety rules as the primary endpoint.
+    for (const baseUrl of [
+      "ftp://search.example.test",
+      "https://user:pass@search.example.test",
+      "http://169.254.169.254/latest/meta-data",
+    ]) {
+      expect(invalid([{ provider: "brave", baseUrl }])).toThrow(ConfigError);
+      expect(invalid([{ provider: "brave", baseUrl }])).toThrow(/webSearch\.fallback\[0\]\.baseUrl/);
+    }
+  });
+
+  test("a fallback entry with a declared baseUrl is called there, including custom", async () => {
+    const calls: string[] = [];
+    const BRAVE_DECLARED = "https://brave.declared.test";
+    const CUSTOM_DECLARED = "https://custom.declared.test";
+    const fetchImpl = routedFetch([
+      [PRIMARY_BASE, () => new Response("boom", { status: 503 })],
+      [BRAVE_DECLARED, () => new Response("boom", { status: 503 })],
+      [CUSTOM_DECLARED, () => Response.json({ results: [{ title: "C", url: "https://c.test/p", text: "custom" }] })],
+    ], calls);
+    const { tool, cwd } = setup({
+      provider: "exa",
+      apiKeyEnv: "PRIMARY_KEY",
+      fallback: [
+        { provider: "brave", apiKeyEnv: "FALLBACK_KEY", baseUrl: BRAVE_DECLARED },
+        { provider: "custom", apiKeyEnv: "FALLBACK_KEY", baseUrl: CUSTOM_DECLARED },
+      ],
+    }, { fetchImpl });
+    const output = parse((await tool.execute({ query: "astro" }, ctx(cwd))).output);
+    expect(output.provider).toBe("custom");
+    expect(output.results).toEqual([{ id: 1, title: "C", url: "https://c.test/p", snippet: "custom" }]);
+    expect(calls.filter((url) => url.startsWith(`${BRAVE_DECLARED}/res/v1/web/search`))).toHaveLength(3);
+    expect(calls.filter((url) => url.startsWith(CUSTOM_DECLARED))).toHaveLength(1);
+    // A declared endpoint never falls back to the provider default.
+    expect(calls.some((url) => url.startsWith(BRAVE_BASE))).toBe(false);
+  });
+
+  test("a transport failure is audited with the direct network reason", async () => {
+    const calls: string[] = [];
+    const fetchImpl = routedFetch([
+      [BRAVE_BASE, () => Response.json({ web: { results: [{ title: "B", url: "https://b.test", description: "ok" }] } })],
+    ], calls);
+    const { tool, audit, cwd } = setup(chain, { fetchImpl });
+    await tool.execute({ query: "astro" }, ctx(cwd));
+    const payload = audit.readAll().find((item) => item.tipo === "web.search")?.payload;
+    expect((payload?.backends as Array<Record<string, unknown>>)[0])
+      .toEqual({ provider: "exa", status: 0, durationMs: expect.any(Number), reason: "network" });
   });
 
   test("falls back on transport failure and audits bounded codes per backend", async () => {
