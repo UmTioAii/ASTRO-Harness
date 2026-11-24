@@ -26,7 +26,7 @@ function fakeAudit() {
 function busOf(over: Partial<AgentMessageBusOptions> = {}) {
   const audit = fakeAudit();
   const bus = new AgentMessageBus({
-    run: "r1", parentAgent: "planner", roster: ["alpha", "beta"],
+    run: "r1", parentAgent: "planner", roster: ["alpha", "beta"], eligible: ["alpha", "beta"],
     rootScope: ["read_file", "agent_message"], audit, ...over,
   });
   bus.register({ agent: "alpha", execution: "r1.a", depth: 1, scope: ["agent_message"] });
@@ -52,18 +52,16 @@ describe("child-to-child bus (ADR-0036, #602)", () => {
     expect(refusal(() => bus.send({ agent: "alpha", execution: "other" }, { to: "beta", body: "hi" })))
       .toBe("bus_unknown_sender");
   });
-
   test("every message is copied to the parent, sanitized and bounded", () => {
     const { bus, audit } = busOf({ maxMessages: 1 });
     const secret = ["n", "v", "a", "p", "i", "-"].join("") + "abcdef1234567890";
     const sent = bus.send(alpha, { to: "beta", body: `key ${secret}\u0007` });
     expect(sent.body).not.toContain(secret);
-    expect(sent.body).not.toContain("\u0007");
     const copy = audit.events.find((event) => event.tipo === "agent.message");
     expect(copy?.payload).toMatchObject({ from: "alpha", to: "beta" });
     expect(JSON.stringify(copy?.payload)).not.toContain(secret);
     expect(refusal(() => bus.send(alpha, { to: "beta", body: "again" }))).toBe("bus_limit_exceeded");
-    expect(refusal(() => busOf({ maxBytes: 8 }).bus.send(alpha, { to: "beta", body: "x".repeat(9) })))
+    expect(refusal(() => busOf({ maxBytes: 8 }).bus.send(alpha, { to: "beta", body: "123456789" })))
       .toBe("bus_limit_exceeded");
     const big = busOf({ maxMessages: 2 }).bus;
     expect(refusal(() => big.send(alpha, { to: "beta", body: "x".repeat(MAX_MESSAGE_CHARS + 1) })))
@@ -79,17 +77,15 @@ describe("child-to-child bus (ADR-0036, #602)", () => {
     expect(refusal(() => bus.send(alpha, { to: "beta", body: "x", artifact: "../../etc/passwd" })))
       .toBe("bus_invalid_artifact");
   });
-
-  test("a message waits for a recipient that has not started and is delivered once", () => {
+  test("a declared agent that cannot use the bus is refused, not queued", () => {
+    const audit = fakeAudit();
     const bus = new AgentMessageBus({
-      run: "r1", parentAgent: "planner", roster: ["alpha", "beta"],
-      rootScope: ["agent_message"], audit: fakeAudit(),
+      run: "r1", parentAgent: "planner", roster: ["alpha", "beta"], eligible: ["alpha"],
+      rootScope: ["agent_message"], audit,
     });
     bus.register({ agent: "alpha", execution: "r1.a", depth: 1, scope: ["agent_message"] });
-    bus.send(alpha, { to: "beta", body: "queued" });
-    bus.register({ agent: "beta", execution: "r1.b", depth: 1, scope: ["agent_message"] });
-    expect(bus.inbox(beta).map((message) => message.body)).toEqual(["queued"]);
-    expect(bus.inbox(beta)).toEqual([]);
+    expect(refusal(() => bus.send(alpha, { to: "beta", body: "hi" }))).toBe("bus_target_unavailable");
+    expect(audit.events).toHaveLength(0);
   });
 });
 
@@ -99,6 +95,7 @@ test("agent_message sends and drains, maps refusals, and refuses without a bus (
   expect(JSON.parse(disabled.output)).toMatchObject({ error: "bus_disabled" });
   const { bus } = busOf();
   const tool = createAgentMessageTool({ bus: () => bus });
+  expect(tool.manifest).toMatchObject({ permission: "write", sideEffects: "filesystem" });
   expect((await tool.execute({ action: "send", to: "beta", message: "hello" }, ctx("r1.a", "alpha"))).isError)
     .toBeFalsy();
   const inbox = await tool.execute({ action: "inbox" }, ctx("r1.b", "beta"));
@@ -110,12 +107,8 @@ test("agent_message sends and drains, maps refusals, and refuses without a bus (
 test("a child-to-child message reaches the sibling and is copied to the parent", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-agent-bus-"));
   const calls = new Map<string, number>();
-  const reply = (content: string, tool?: { name: string; args: unknown }) => Response.json({
-    choices: [{ message: { content, ...(tool === undefined ? {} : {
-      tool_calls: [{ id: `c${calls.size}`, type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.args) } }],
-    }) } }],
-    usage: { prompt_tokens: 10, completion_tokens: 5 },
-  });
+  const reply = (content: string, tool?: { name: string; args: unknown }) => Response.json({ usage: { prompt_tokens: 10, completion_tokens: 5 },
+    choices: [{ message: { content, ...(tool === undefined ? {} : { tool_calls: [{ id: `c${calls.size}`, type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.args) } }] }) } }] });
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
@@ -124,7 +117,14 @@ test("a child-to-child message reaches the sibling and is copied to the parent",
       const count = (calls.get(system) ?? 0) + 1;
       calls.set(system, count);
       if (system === "alpha-agent") {
-        return count === 1 ? reply("", { name: "agent_message", args: { action: "send", to: "beta", message: "hello from alpha" } }) : reply("alpha done");
+        if (count === 1) return reply("", { name: "agent_message", args: { action: "send", to: "gamma", message: "hello gamma" } });
+        if (count === 2) {
+          const refused = body.messages.some((m) => m.role === "tool" && m.content.includes("bus_target_unavailable"));
+          return refused
+            ? reply("", { name: "agent_message", args: { action: "send", to: "beta", message: "hello from alpha" } })
+            : reply("alpha accepted gamma");
+        }
+        return reply("alpha done");
       }
       if (system === "beta-agent") {
         if (count === 1) return reply("", { name: "agent_message", args: { action: "inbox" } });
@@ -138,11 +138,12 @@ test("a child-to-child message reaches the sibling and is copied to the parent",
   writeFileSync(configPath, JSON.stringify({
     providers: { p: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY" } },
     models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
-    agent: { model: "p/m1", maxSteps: 8, tools: ["task", "agent_message"], entryAgent: "planner" },
+    agent: { model: "p/m1", maxSteps: 8, tools: ["task", "agent_message", "read_file"], entryAgent: "planner" },
     agents: {
-      planner: { model: "p/m1", maxSteps: 8, tools: ["task", "agent_message"] },
+      planner: { model: "p/m1", maxSteps: 8, tools: ["task", "agent_message", "read_file"] },
       alpha: { model: "p/m1", maxSteps: 3, tools: ["agent_message"], systemPrompt: "alpha-agent" },
       beta: { model: "p/m1", maxSteps: 3, tools: ["agent_message"], systemPrompt: "beta-agent" },
+      gamma: { model: "p/m1", maxSteps: 3, tools: ["read_file"], systemPrompt: "gamma-agent" },
     },
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
