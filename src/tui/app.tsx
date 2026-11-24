@@ -14,7 +14,7 @@ import { attachmentSizeLabel, materializePrompt } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
 import { dedupeKey, type LoadedAttachment } from "../attachments/model";
 import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
-import { redactSecrets, sanitizePromptText } from "../sanitize-external";
+import { redactSecrets, sanitizeBlockText, sanitizePromptText } from "../sanitize-external";
 import { runCommand, type CommandState, type Entry } from "./commands";
 import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
@@ -41,7 +41,7 @@ import type { ProfileManager } from "../providers/profile-manager";
 import { budgetSegment, quotaSegment } from "../chat/usage";
 import { createThrottledSink, STREAM_THROTTLE_MS } from "./stream";
 import { HISTORY_LIMIT, visibleWindow } from "./history";
-import { renderTimelineZones, sanitizeBlockText, type TimelineTurnStatus, type TimelineView } from "./timeline";
+import { renderTimelineZones, type TimelineTurnStatus, type TimelineView } from "./timeline";
 import { TimelineTurnStore } from "./timeline-store";
 import { TimelineZone } from "./timeline-zones";
 

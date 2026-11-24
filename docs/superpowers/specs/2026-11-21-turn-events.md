@@ -58,12 +58,15 @@ predecessor arrives. When a turn is cancelled or fails, every entry still `runni
 runtime-only `reasoning` string on `CompletionResponse`, filled from `reasoning_content`
 deltas when the model card declares `reasoning: true` (`cardFor` over the provider catalog;
 a card the catalog does not declare exposes none). `runSession` turns it into one
-`reasoning` event per completion, sanitized per line by `TurnEventStream` (line breaks kept,
-invisible controls and secrets removed, I-03). It is never persisted, never sent back to the
-provider, never logged and never replayed on resume; the UI renders it only when present.
-The Codex Responses transport has no `reasoning_content` field, so it emits no reasoning
-event — no placeholder is produced (ADR-0035). Reasoning tokens already arrive inside the
-provider's output count; the channel never adds them again.
+`reasoning` event per completion. The text goes through the same block pipeline as the
+renderer (ANSI out, whole-text `redactSecrets`, then each line), so a multi-line PEM dies
+before delivery; a block larger than `MAX_REASONING_CHARS` (16k code points) is cut with
+`…`. It is never persisted, never sent back to the provider, never logged and never replayed
+on resume; the UI renders it only when present.
+The Codex Responses transport has no `reasoning_content`; its reasoning summaries use
+another event and are tracked in #661, so that transport emits no reasoning event yet — no
+placeholder is produced (ADR-0035). Reasoning tokens already arrive inside the provider's
+output count; the channel never adds them again.
 
 ## 6. Existing hooks are unchanged
 
