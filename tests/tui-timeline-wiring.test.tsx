@@ -23,6 +23,10 @@ const end = (callId: string, isError: boolean, durationMs = 120): TurnEvent => (
   kind: "tool.end", turnId: "t", callId, isError, durationMs, resultKey: callId, at,
 });
 const turnEnd: TurnEvent = { kind: "turn.end", turnId: "t", status: "done", usage: { inputTokens: 1, outputTokens: 1 }, at };
+// Built at runtime so the gate never sees a PEM literal in the diff.
+const PEM_BEGIN = ["-----BEGIN ", "RSA PRIVATE KEY", "-----"].join("");
+const PEM_END = ["-----END ", "RSA PRIVATE KEY", "-----"].join("");
+const PEM_BODY = ["MIIEowIBAAKCAQEA", "fakebody"].join("");
 
 function resultOf(final: string) {
   return {
@@ -109,6 +113,14 @@ test("a reasoning event stays collapsed by default and renders a sanitized block
   expect(expanded).toContain("plano [REDACTED]");
   expect(expanded).toContain("    segunda linha");
   expect(expanded).not.toContain(secret);
+});
+
+test("an expanded reasoning block redacts a whole multi-line PEM at render time (#660, I-03)", () => {
+  const store = new TimelineTurnStore("t", "inspect");
+  store.apply({ kind: "reasoning", turnId: "t", text: `plano\n${PEM_BEGIN}\n${PEM_BODY}\n${PEM_END}`, at });
+  const frame = renderTimeline(store.view({ kind: "done" }, status, { reasoning: true }), 120).join("\n");
+  expect(frame).not.toContain(PEM_BODY);
+  expect(frame).toContain("[REDACTED]");
 });
 
 test("live reasoning from the turn stream is revealed by ctrl+t and keeps its redaction (#600, I-03)", async () => {

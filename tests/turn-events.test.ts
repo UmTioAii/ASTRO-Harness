@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { MAX_TURN_ARGUMENT_CHARS, TurnEventStream, type TurnEvent } from "../src/chat/turn-events";
 
+// Built at runtime so the gate never sees a PEM literal in the diff (same rule as sanitize-external).
+const PEM_BEGIN = ["-----BEGIN ", "RSA PRIVATE KEY", "-----"].join("");
+const PEM_END = ["-----END ", "RSA PRIVATE KEY", "-----"].join("");
+const PEM_BODY = ["MIIEowIBAAKCAQEA", "fakebody"].join("");
+
 /** Stream with an injectable clock; the observer records every delivered event. */
 function collect() {
   let now = 1_000;
@@ -75,6 +80,29 @@ describe("TurnEventStream (#600)", () => {
     expect(event.text).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/);
     expect("resultKey" in event).toBe(false);
     expect("usage" in event).toBe(false);
+  });
+
+  test("redacts a multi-line PEM and leaves no CSI residue (I-03)", () => {
+    const { events, stream } = collect();
+    stream.reasoning(`plano\n${PEM_BEGIN}\n${PEM_BODY}\n${PEM_END}\ncor \u001b[31mvermelha`);
+
+    const event = events[0]!;
+    if (event.kind !== "reasoning") throw new Error("expected reasoning");
+    expect(event.text).not.toContain(PEM_BODY);
+    expect(event.text).toContain("[REDACTED]");
+    // ESC dies but its CSI body would survive per-line scrubbing: the block pipeline strips both.
+    expect(event.text).not.toContain("[31m");
+    expect(event.text).toContain("cor vermelha");
+  });
+
+  test("caps an oversized reasoning block with a truncation marker (I-03)", () => {
+    const { events, stream } = collect();
+    stream.reasoning("x".repeat(100_000));
+
+    const event = events[0]!;
+    if (event.kind !== "reasoning") throw new Error("expected reasoning");
+    expect(Array.from(event.text).length).toBeLessThanOrEqual(16_000);
+    expect(event.text.endsWith("…")).toBe(true);
   });
 
   test("emits no reasoning event for an empty text or after the turn ended", () => {
