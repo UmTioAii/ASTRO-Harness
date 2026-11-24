@@ -18,6 +18,8 @@ export interface TaskDelegatorInput {
   maxSteps?: number;
   /** Parent step that delegated; the exceptional handoff records it (ADR-0036). */
   step?: number;
+  /** Opt-in child-to-child bus for this delegation (ADR-0036); absent = parent only. */
+  bus?: boolean;
   signal?: AbortSignal;
   /** Allowlist efetiva do chamador (I-01): teto do filho. */
   callerAllow?: readonly string[];
@@ -60,6 +62,7 @@ const PARAMETERS = {
     agent: { type: "string", description: "Agente nomeado que recebe a tarefa" },
     prompt: { type: "string", description: "Tarefa do subagente (não herda o histórico do pai)" },
     context: { type: "string", description: "Contexto explícito passado ao subagente (opcional)" },
+    bus: { type: "boolean", description: "Opt in to the bounded child-to-child bus; every message is copied to you" },
     tasks: {
       type: "array",
       minItems: 1,
@@ -127,6 +130,8 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
     },
     async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
       const raw = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
+      if (raw.bus !== undefined && typeof raw.bus !== "boolean") return invalid("field 'bus' must be a boolean");
+      const bus = raw.bus === true;
       /**
        * A2/A4: o teto conta agentes vivos; a flag `spawn.parallel` é quem
        * liga a concorrência (o serial pré-#499 não é barrado por slot). Sem a
@@ -154,6 +159,7 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         fromAgent: ctx.agent,
         ...(ctx.maxSteps === undefined ? {} : { maxSteps: ctx.maxSteps }),
         ...(ctx.step === undefined ? {} : { step: ctx.step }),
+        ...(bus ? { bus: true } : {}),
         ...(signal === undefined ? {} : { signal }),
         ...(ctx.allow === undefined ? {} : { callerAllow: ctx.allow }),
         ...(ctx.permission === undefined ? {} : { callerPermission: ctx.permission }),
@@ -215,6 +221,7 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
               toAgent: task.agent,
               promptHash: taskPromptHash(task.prompt),
               taskId: `t${index + 1}`,
+              ...(bus ? { bus: true } : {}),
             },
           });
         }
@@ -298,7 +305,7 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         run: ctx.run,
         agent: ctx.agent,
         tipo: "task.delegated",
-        payload: { fromAgent: ctx.agent, toAgent: agent, promptHash: taskPromptHash(composed) },
+        payload: { fromAgent: ctx.agent, toAgent: agent, promptHash: taskPromptHash(composed), ...(bus ? { bus: true } : {}) },
       });
       try {
         const final = await delegation({ agent, prompt: composed }, ctx.signal);

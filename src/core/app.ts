@@ -49,6 +49,8 @@ import { createMemoryWriteTool } from "../tools/memory-write";
 import { loadMemory, memoryPrompt } from "../memory";
 import { handoffTool } from "../tools/handoff";
 import { buildChildHandoffArtifact, type ChildBrief } from "../handoff/children";
+import { AgentMessageBus } from "../handoff/bus";
+import { createAgentMessageTool } from "../tools/agent-message";
 import { createListModelCandidatesTool } from "../tools/list-model-candidates";
 import { createTaskTool } from "../tools/task";
 import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-search";
@@ -1043,6 +1045,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   // Preenchidos depois de resolver a allowlist/modo; a closure da task lê no call.
   let childTools: readonly Tool[] = [];
   let taskPermissionMode: PermissionMode = "ask";
+  let childBus: AgentMessageBus | undefined;
   // S-09: candidatos dependem do config/ledger/registry deste run.
   toolsByName.set("list_model_candidates", createListModelCandidatesTool(() => ({
     config,
@@ -1062,6 +1065,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     ...(quotaLimits === undefined ? {} : { quotaLimits }),
     ...(budget === undefined ? {} : { budget: () => effectiveBudget(budget, ledger, run) }),
   }));
+  // #602: the only door to the opt-in child-to-child bus; deny by default (I-01).
+  toolsByName.set("agent_message", createAgentMessageTool({ bus: () => childBus }));
   // C4 (#58): delegação síncrona e isolada; o filho não herda mensagens do pai.
   toolsByName.set("task", createTaskTool({
     audit,
@@ -1079,7 +1084,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ? `provider:${targetModel.provider}`
         : providerAccountRefFor(targetModel.provider, provider);
     },
-    delegate: async ({ agent, prompt, fromAgent, step, maxSteps, signal, callerAllow, callerPermission }) => {
+    delegate: async ({ agent, prompt, fromAgent, step, maxSteps, signal, bus, callerAllow, callerPermission }) => {
       const target = registry.requireAgent(agent);
       const targetModel = registry.resolveModel(target);
       // A11: sem spawn.parallel o filho compartilha a conta já travada pelo
@@ -1114,6 +1119,15 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       // Run própria para o filho: não sobrescreve o estado do run pai no ledger.
       const childRun = `${run}.task.${randomUUID()}`;
       runIds.add(redactSecrets(childRun));
+      // #602: only a direct child whose scope fits the root joins the bus.
+      if (bus === true && allow.includes("agent_message")) {
+        const names = registry.listAgentNames().filter((name) => name !== fromAgent);
+        childBus ??= new AgentMessageBus({
+          run, parentAgent: fromAgent, rootScope: callerAllow ?? config.agent.tools, audit, roster: names,
+          eligible: names.filter((name) => (registry.requireAgent(name).tools ?? config.agent.tools).includes("agent_message")),
+        });
+        childBus.register({ agent, execution: childRun, depth: 1, scope: allow });
+      }
       const targetIdentity = providerIdentity(config, targetModel.provider);
       const childProvider = sameAccount
         ? providerFor(targetModel, target.profile, target.modelRouting)
