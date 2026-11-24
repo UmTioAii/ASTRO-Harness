@@ -1,23 +1,39 @@
 import { spawn } from "node:child_process";
+import type { EventEmitter } from "node:events";
+import type { Readable, Writable } from "node:stream";
 import { sanitizedEnv } from "../../tools/run-command";
 import { MCPError } from "../types";
 
 /**
- * Transport stdio do MCP (#56): JSON-RPC 2.0 delimitado por newline no
- * stdin/stdout de um processo. O servidor é código arbitrário — o ambiente é
- * o mesmo sanitizado do run_command (I-03): nada de chaves do host, só o `env`
- * explícito da config.
+ * MCP stdio transport (#56): newline-delimited JSON-RPC 2.0 on a process's
+ * stdin/stdout. The server is arbitrary code — the environment is the same
+ * sanitized one as run_command (I-03): no host keys, only the config's explicit `env`.
  */
 export interface StdioTransportOptions { command: string; args: string[]; env?: Record<string, string>; timeoutMs: number; secretEnvNames?: readonly string[] }
+
+/**
+ * Child surface the transport touches: `spawn` satisfies it, and a test attaches a
+ * scripted child so a broken pipe is an explicit event instead of an OS race (#643).
+ */
+export interface StdioChild {
+  readonly stdin: Writable;
+  readonly stdout: Readable;
+  kill(): unknown;
+  on: EventEmitter["on"];
+  off: EventEmitter["off"];
+}
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 
 export class StdioTransport {
-  #proc: ReturnType<typeof spawn> | undefined;
+  #proc: StdioChild | undefined;
   #nextId = 1;
   readonly #pending = new Map<number, Pending>();
   readonly #timeoutMs: number;
   #closed = false;
+  #closing = false;
+  /** Reason for the first transport failure: calls after it receive the real cause (#643). */
+  #failure: MCPError | undefined;
   #buffer = "";
 
   private constructor(timeoutMs: number) {
@@ -25,20 +41,31 @@ export class StdioTransport {
   }
 
   static connect(opts: StdioTransportOptions): StdioTransport {
-    const transport = new StdioTransport(opts.timeoutMs);
-    transport.#proc = spawn(opts.command, opts.args, {
+    const child = spawn(opts.command, opts.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...sanitizedEnv(process.env, opts.secretEnvNames ?? []), ...(opts.env ?? {}) },
       windowsHide: true,
     });
-    transport.#proc.stdout!.setEncoding("utf8");
-    transport.#proc.stdout!.on("data", (chunk: string) => transport.#onData(chunk));
-    transport.#proc.on("error", (error) => transport.#failAll(error));
-    transport.#proc.on("exit", () => transport.#failAll(new MCPError("processo do servidor MCP encerrou")));
+    return StdioTransport.fromChild(child, opts.timeoutMs);
+  }
+
+  /** Wraps an already-spawned child: `connect` spawns, tests attach a scripted one (#643). */
+  static fromChild(child: StdioChild, timeoutMs: number): StdioTransport {
+    const transport = new StdioTransport(timeoutMs);
+    transport.#proc = child;
+    child.stdout.setEncoding("utf8");
+    // Error guards live as long as the transport does: a broken pipe fails the pending
+    // calls instead of escaping as an uncaught exception (#643).
+    child.stdout.on("data", transport.#onData);
+    child.stdout.on("error", transport.#onError);
+    child.stdin.on("error", transport.#onError);
+    child.on("error", transport.#onError);
+    child.on("exit", transport.#onExit);
+    child.on("close", transport.#onClose);
     return transport;
   }
 
-  #onData(chunk: string): void {
+  #onData = (chunk: string): void => {
     this.#buffer += chunk;
     let index;
     while ((index = this.#buffer.indexOf("\n")) >= 0) {
@@ -49,9 +76,9 @@ export class StdioTransport {
       try {
         message = JSON.parse(line) as typeof message;
       } catch {
-        continue; // linha inválida não derruba o transport
+        continue; // an invalid line does not take the transport down
       }
-      if (typeof message.id !== "number") continue; // notificação do servidor: ignorada por ora
+      if (typeof message.id !== "number") continue; // server notification: ignored for now
       const pending = this.#pending.get(message.id);
       if (pending === undefined) continue;
       this.#pending.delete(message.id);
@@ -62,21 +89,87 @@ export class StdioTransport {
         pending.resolve(message.result);
       }
     }
+  };
+
+  #onError = (error: Error): void => {
+    this.#failAll(new MCPError(`MCP transport failed: ${this.#detail(error)}`));
+  };
+
+  #onExit = (): void => {
+    this.#failAll(new MCPError("processo do servidor MCP encerrou"));
+  };
+
+  #onClose = (): void => {
+    // 'close' can arrive without 'exit'/'error' through the fromChild seam: fail the pending
+    // calls before dropping the guards, so nothing waits for the timeout (#643).
+    this.#failAll(new MCPError("processo do servidor MCP encerrou"));
+    this.#detach();
+  };
+
+  /** Removes only the listeners this transport added; called when the child stdio closes. */
+  #detach(): void {
+    const child = this.#proc;
+    if (child === undefined) return;
+    child.stdout.off("data", this.#onData);
+    child.stdout.off("error", this.#onError);
+    child.stdin.off("error", this.#onError);
+    child.off("error", this.#onError);
+    child.off("exit", this.#onExit);
+    child.off("close", this.#onClose);
   }
 
+  /** Fails every pending call once; the first failure is the reason later calls see. */
   #failAll(error: Error): void {
+    if (this.#closed) return;
     this.#closed = true;
+    this.#failure = error instanceof MCPError ? error : new MCPError(error.message);
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer);
-      pending.reject(error);
+      pending.reject(new MCPError(this.#failure.message));
     }
     this.#pending.clear();
+    this.#shutdown(); // the child must not outlive a transport that can no longer be used
+  }
+
+  /** Ends stdin and kills the child once; the error guards stay attached until its stdio closes. */
+  #shutdown(): void {
+    if (this.#closing) return;
+    this.#closing = true;
+    const child = this.#proc;
+    if (child === undefined) return;
+    child.stdin.end();
+    child.kill();
+  }
+
+  #closedError(): MCPError {
+    return new MCPError(this.#failure?.message ?? "transport MCP fechado");
+  }
+
+  /** Bounds the variable part so the description stays small whatever the config (#643). */
+  #detail(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.length <= 200 ? message : `${message.slice(0, 200)}…`;
+  }
+
+  /** Writes one JSON-RPC line; a write/pipe failure fails every pending call (#643). */
+  #write(line: string): void {
+    const stdin = this.#proc?.stdin;
+    if (stdin === undefined || this.#closed) return;
+    try {
+      stdin.write(line, (error) => {
+        if (error !== undefined && error !== null) this.#failAll(this.#writeError(error));
+      });
+    } catch (error) {
+      this.#failAll(this.#writeError(error)); // destroyed stream: write throws
+    }
+  }
+
+  #writeError(error: unknown): MCPError {
+    return new MCPError(`MCP transport write failed: ${this.#detail(error)}`);
   }
 
   request(method: string, params: Record<string, unknown>): Promise<unknown> {
-    if (this.#closed || this.#proc === undefined) {
-      return Promise.reject(new MCPError("transport MCP fechado"));
-    }
+    if (this.#closed || this.#proc === undefined) return Promise.reject(this.#closedError());
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -84,24 +177,26 @@ export class StdioTransport {
         reject(new MCPError(`timeout de ${this.#timeoutMs}ms no MCP ${method}`));
       }, this.#timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
-      this.#proc!.stdin!.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (error) => {
-        if (error !== undefined && error !== null) {
-          this.#pending.delete(id);
-          clearTimeout(timer);
-          reject(new MCPError(`falha ao escrever no MCP: ${String(error)}`));
-        }
-      });
+      this.#write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     });
   }
 
   notify(method: string, params: Record<string, unknown>): void {
-    if (!this.#closed && this.#proc !== undefined) this.#proc.stdin!.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+    this.#write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
   }
 
-  /** True depois que o processo encerrou ou o transport foi fechado. */
+  /** True after the process exited or the transport was closed. */
   get closed(): boolean {
     return this.#closed;
   }
 
-  close(): void { this.#failAll(new MCPError("transport MCP fechado")); this.#proc?.stdin?.end(); this.#proc?.kill(); }
+  /**
+   * Closes once: fails the pending calls (which reaps the child) and makes sure the flush and the
+   * kill happened. Error guards stay attached until the child stdio closes, because flushing a
+   * queued write can hit a pipe with no reader and must fail the calls instead of escaping (#643).
+   */
+  close(): void {
+    this.#failAll(new MCPError("transport MCP fechado"));
+    this.#shutdown();
+  }
 }
