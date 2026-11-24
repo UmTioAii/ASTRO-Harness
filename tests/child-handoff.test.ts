@@ -395,4 +395,31 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
       expect(JSON.stringify(resumed.messages)).not.toContain("x".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1));
     } finally { h.server.stop(true); }
   });
+
+  test("a failed child names its session so L3 is reachable", async () => {
+    const h = harness({
+      plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "implement" })
+        : call === 2 ? toolCall("task", { session_id: String(toolResult(body)?.session_id), instruction: "recover" })
+          : final("parent-final"),
+      child: (call) => call === 1 ? new Response("bad request", { status: 400 }) : final("child-recovered"),
+    });
+    try {
+      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "recover-child",
+        env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
+      expect(result.final).toBe("parent-final");
+      // The failed delegation result carries the child id and its artifact id.
+      const failure = toolResult(h.bodies.find((body) => body.messages[0]?.content === "plan-agent"
+        && body.messages.some((message) => message.role === "tool"))!);
+      expect(failure).toMatchObject({ error: "child_failed", session_id: expect.stringContaining(".task.") });
+      expect(typeof failure?.handoff_id).toBe("string");
+      const created = new Ledger(join(h.cwd, ".astro", "ledger.jsonl")).readHandoffs()
+        .filter((entry) => entry.kind === "handoff.created");
+      expect(created).toHaveLength(1);
+      // The default resume of a dead session with an artifact is the L3 fallback.
+      const resumed = h.bodies.filter((body) => body.messages[0]?.content === "child-agent")[1]!;
+      const prompt = JSON.stringify(resumed.messages);
+      expect([prompt.includes("recover"), prompt.includes("child build"), prompt.includes("implement")]).toEqual([true, true, false]);
+      expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ level: "L3", source: "fallback", output: "child-recovered" });
+    } finally { h.server.stop(true); }
+  });
 });
