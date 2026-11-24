@@ -5,6 +5,7 @@
  * A11 (ADR-0008): `tasks` faz fan-out; paralelo só com `spawn.parallel`.
  */
 import { createHash } from "node:crypto";
+import { ChildDelegationError } from "../handoff/children";
 import { runFanOut, type FanOutJob, type FanOutOutcome } from "../fan-out";
 import { NoProgressError } from "../loop-guard";
 import { PermissionPendingError, type AgentPermission } from "../permissions";
@@ -391,6 +392,17 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         // Aprovação pendente ou pausa por não-progresso interrompem o run pai
         // em ponto seguro (I-19); não viram erro de tool.
         if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
+        // A failed child names its session and artifact so the parent can reach L3.
+        if (error instanceof ChildDelegationError) {
+          return {
+            output: JSON.stringify({
+              error: "child_failed", session_id: error.session,
+              ...(error.handoffId === undefined ? {} : { handoff_id: error.handoffId }),
+              message: redactSecrets(error.message),
+            }),
+            isError: true,
+          };
+        }
         return {
           output: redactSecrets(error instanceof Error ? error.message : String(error)),
           isError: true,

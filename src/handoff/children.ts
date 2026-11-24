@@ -216,6 +216,18 @@ export const RESUME_INSTRUCTION_MAX_CHARS = 2000;
 /** Bounded live-handle store; an evicted session is honestly `session_missing`. */
 export const CHILD_SESSION_HANDLES_MAX = 32;
 
+/** The child failed after its run existed; the result names it so L3 is reachable. */
+export class ChildDelegationError extends Error {
+  readonly session: string;
+  readonly handoffId?: string;
+  constructor(session: string, message: string, handoffId?: string) {
+    super(message);
+    this.name = "ChildDelegationError";
+    this.session = session;
+    this.handoffId = handoffId;
+  }
+}
+
 /** One delegated child, live for the parent run only: L2 reopens `history` in memory. */
 export interface ChildSessionHandle {
   /** Child run id: the session id `task.resume` takes. */

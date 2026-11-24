@@ -52,7 +52,7 @@ import { writeFileTool } from "../tools/write-file";
 import { createMemoryWriteTool } from "../tools/memory-write";
 import { loadMemory, memoryPrompt } from "../memory";
 import { handoffTool } from "../tools/handoff";
-import { buildChildHandoffArtifact, ChildResumeError, ChildSessionRegistry, resolveChildResume, type ChildBrief, type ChildSessionHandle } from "../handoff/children";
+import { buildChildHandoffArtifact, ChildDelegationError, ChildResumeError, ChildSessionRegistry, resolveChildResume, type ChildBrief, type ChildSessionHandle } from "../handoff/children";
 import { AgentMessageBus } from "../handoff/bus";
 import { createAgentMessageTool } from "../tools/agent-message";
 import { createListModelCandidatesTool } from "../tools/list-model-candidates";
@@ -1219,6 +1219,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         const used = ledger.readAll().filter((entry) => entry.run === redactSecrets(childRun));
         const bounds = ledger.seqBoundsOfRun(childRun);
         const brief = childBrief({ whatWasTried: [`child steps: ${used.length}`, `error: ${reason}`] });
+        let handoffId: string | undefined;
         try {
           const artifact = buildChildHandoffArtifact({
             run: childRun,
@@ -1235,6 +1236,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           });
           const entry = ledger.recordHandoff("handoff.created", childRun, artifact, { agent: fromAgent });
           audit.append({ run: childRun, agent: fromAgent, tipo: "handoff.created", payload: { handoff_id: entry.handoff_id, artifact: entry.artifact } });
+          handoffId = entry.handoff_id;
           // L3 fallback: scope, brief and journal stay; the live session is gone.
           handle.brief = brief;
           handle.artifact = entry.artifact;
@@ -1242,7 +1244,9 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         } catch {
           // Best effort: a ledger failure never masks the child's real error.
         }
-        throw error;
+        if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
+        // The failure names the child and its artifact, so the parent can rebuild (L3).
+        throw new ChildDelegationError(childRun, error instanceof Error ? error.message : String(error), handoffId);
       });
       handle.history = [...result.messages, { role: "assistant", content: result.final }];
       return { output: result.final, sessionId: childRun };
