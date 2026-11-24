@@ -6,29 +6,25 @@
 import { ARTIFACT_REF_PATTERN } from "../internal-ids";
 import { sanitizePromptText } from "../sanitize-external";
 
-/** Per-run ceilings: messages and bytes are cumulative, not in flight. */
 export const MAX_BUS_MESSAGES = 32;
 export const MAX_BUS_BYTES = 8_192;
-/** A note, not a transcript: a larger payload must travel as an artifact ref. */
 export const MAX_MESSAGE_CHARS = 500;
 export const MAX_MESSAGE_BYTES = 1_024;
 export type AgentBusRefusal =
-  | "bus_broadcast_refused" | "bus_parent_address" | "bus_unknown_recipient" | "bus_ambiguous_recipient"
-  | "bus_self_address" | "bus_invalid_body" | "bus_message_too_large" | "bus_limit_exceeded"
-  | "bus_invalid_artifact" | "bus_unknown_sender" | "bus_duplicate_execution" | "bus_depth_exceeded"
-  | "bus_scope_exceeded";
+  | "bus_broadcast_refused" | "bus_parent_address" | "bus_unknown_recipient" | "bus_target_unavailable"
+  | "bus_ambiguous_recipient" | "bus_self_address" | "bus_invalid_body" | "bus_message_too_large"
+  | "bus_limit_exceeded" | "bus_invalid_artifact" | "bus_unknown_sender" | "bus_duplicate_execution"
+  | "bus_depth_exceeded" | "bus_scope_exceeded";
 export class AgentBusError extends Error {
   readonly code: AgentBusRefusal;
   constructor(code: AgentBusRefusal, message: string) { super(message); this.name = "AgentBusError"; this.code = code; }
 }
 const refuse = (code: AgentBusRefusal, message: string): never => { throw new AgentBusError(code, message); };
-
 export interface BusAudit {
   append(event: { run: string; agent?: string; tipo: string; payload?: Record<string, unknown> }): unknown;
 }
 export interface BusParticipant {
   agent: string;
-  /** The child execution (the child session's `run`); the bus never guesses it. */
   execution: string;
   depth: number;
   scope: readonly string[];
@@ -37,9 +33,8 @@ export interface AgentMessage { id: string; from: string; fromExecution: string;
 export interface AgentMessageBusOptions {
   run: string;
   parentAgent: string;
-  /** Declared agents of this run (the parent excluded); no discovery beyond it. */
   roster: readonly string[];
-  /** Effective allowlist of the run's root agent (I-02 ceiling). */
+  eligible: readonly string[];
   rootScope: readonly string[];
   audit: BusAudit;
   maxMessages?: number;
@@ -48,11 +43,11 @@ export interface AgentMessageBusOptions {
 export interface BusSendInput { to: string; body: string; artifact?: string; }
 const BROADCAST = /^(?:\*|all|everyone|broadcast|@all)$/i;
 const ADDRESS_SEPARATORS = /[,;\s]/;
-
 export class AgentMessageBus {
   readonly #run: string;
   readonly #parentAgent: string;
   readonly #roster: ReadonlySet<string>;
+  readonly #eligible: ReadonlySet<string>;
   readonly #rootScope: ReadonlySet<string>;
   readonly #audit: BusAudit;
   readonly #maxMessages: number;
@@ -64,14 +59,13 @@ export class AgentMessageBus {
   constructor(opts: AgentMessageBusOptions) {
     this.#run = opts.run; this.#parentAgent = opts.parentAgent;
     this.#roster = new Set(opts.roster);
+    this.#eligible = new Set(opts.eligible);
     this.#rootScope = new Set(opts.rootScope);
     this.#audit = opts.audit;
     this.#maxMessages = opts.maxMessages ?? MAX_BUS_MESSAGES;
     this.#maxBytes = opts.maxBytes ?? MAX_BUS_BYTES;
   }
   list(): readonly BusParticipant[] { return [...this.#participants.values()]; }
-
-  /** Only a direct child (depth one) whose scope fits the root may join. */
   register(input: BusParticipant): BusParticipant {
     if (input.depth !== 1) refuse("bus_depth_exceeded", "child-to-child messages are depth one only");
     if (this.#participants.has(input.execution)) refuse("bus_duplicate_execution", "this execution is already on the bus");
@@ -84,7 +78,6 @@ export class AgentMessageBus {
     }
     return participant;
   }
-
   send(from: { execution: string; agent: string }, input: BusSendInput): AgentMessage {
     const sender = this.#sender(from);
     const to = typeof input.to === "string" ? input.to.trim() : "";
@@ -92,6 +85,7 @@ export class AgentMessageBus {
     if (to === "" || BROADCAST.test(to) || ADDRESS_SEPARATORS.test(to)) refuse("bus_broadcast_refused", "direct addressing only; name one sibling agent");
     if (to === sender.agent) refuse("bus_self_address", "a child cannot address itself");
     if (!this.#roster.has(to)) refuse("bus_unknown_recipient", "recipient is not part of this run");
+    if (!this.#eligible.has(to)) refuse("bus_target_unavailable", "recipient cannot use the bus in this run");
     if (typeof input.body !== "string") refuse("bus_invalid_body", "message body must be text");
     const body = sanitizePromptText(input.body).trim();
     const artifact = input.artifact;
@@ -116,14 +110,12 @@ export class AgentMessageBus {
     mailbox.push(message);
     this.#count += 1;
     this.#bytes += bytes;
-    // Copy to the parent (I-04): bounded, sanitized, and never the raw tool output.
     this.#audit.append({ run: this.#run, agent: sender.agent, tipo: "agent.message", payload: {
       id: message.id, from: message.from, to: message.to, fromExecution: message.fromExecution,
       bytes: message.bytes, body: message.body, ...(message.artifact === undefined ? {} : { artifact: message.artifact }),
     } });
     return message;
   }
-
   inbox(from: { execution: string; agent: string }): readonly AgentMessage[] {
     const sender = this.#sender(from);
     const messages = this.#mailboxes.get(sender.execution) ?? [];

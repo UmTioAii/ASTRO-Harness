@@ -1121,9 +1121,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       runIds.add(redactSecrets(childRun));
       // #602: only a direct child whose scope fits the root joins the bus.
       if (bus === true && allow.includes("agent_message")) {
+        const names = registry.listAgentNames().filter((name) => name !== fromAgent);
         childBus ??= new AgentMessageBus({
-          run, parentAgent: fromAgent, rootScope: callerAllow ?? config.agent.tools, audit,
-          roster: registry.listAgentNames().filter((name) => name !== fromAgent),
+          run, parentAgent: fromAgent, rootScope: callerAllow ?? config.agent.tools, audit, roster: names,
+          eligible: names.filter((name) => (registry.requireAgent(name).tools ?? config.agent.tools).includes("agent_message")),
         });
         childBus.register({ agent, execution: childRun, depth: 1, scope: allow });
       }
