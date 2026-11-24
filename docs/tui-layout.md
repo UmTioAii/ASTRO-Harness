@@ -94,12 +94,20 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 |---|---|---|
 | usuário | `> texto` | inalterado |
 | shell `!cmd` | caixa com `$ cmd · cwd: … · exit: 0\|erro`, saída no corpo | `exit` é `0`/`erro` porque o contrato `ToolResult` não traz código numérico |
-| thinking | caixa com `pensando…` + stream parcial | ctrl+t recolhe/mostra; some no fim do turno |
-| resposta | Markdown | inalterado |
+| thinking | caixa com `pensando…` + stream parcial | ctrl+t recolhe/mostra; reasoning ainda sem evento (#635); stream sanitizado (I-03); some no fim do turno |
+| tool | `▸ read_file src/a.ts` → `✓`/`✗` com duração | ctrl+o expande o corpo redigido, sempre por `callId` (ADR-0035); recolhido fica em uma linha |
+| resposta | Markdown | sanitizada em bloco antes de renderizar (I-03) |
 
 - Durante o turno o editor continua editável; Enter coloca a mensagem na fila (`fila: N` acima do input) e o dreno acontece no fim do turno, na ordem digitada.
 - Tab completa; o 1º Enter aplica a completion na linha e o próximo Enter confirma e roda (#471). Linha já exata ao comando destacado roda no 1º Enter; linha com argumento submete direto; completions de `@arquivo` não seguram o Enter.
 - O REPL (`astro chat`) fica com linhas planas: fora de escopo desta issue.
+
+## Expansão e aprovação (#635)
+
+- Recolhido por padrão: a entrada de tool fica em uma linha; `ctrl+o` acrescenta o corpo abaixo dela, sem reflow do que está acima.
+- `ctrl+t` está ligado só ao bloco thinking; a expansão de reasoning do renderer fica inerte até `TurnEvent` carregar reasoning (registrado em #635). O corpo expandido passa por `sanitizeBlockText` (ANSI, tabs e segredos) antes da medição de largura (I-03); um OSC não terminado não apaga as linhas seguintes.
+- A aprovação ocupa a zona do composer e a pergunta quebra em várias linhas, então o fim de um comando perigoso continua visível em 80 colunas; a resposta digitada e o cursor ficam na linha de baixo. `tab` abre o diff quando existe.
+- Cancelar o turno (`ctrl+c`) marca toda entrada `running` como `failed`.
 
 ## /log
 

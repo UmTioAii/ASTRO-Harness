@@ -3,7 +3,7 @@
  * No Ink import, no TTY, no I/O; the Ink zones only compose these strings.
  * Contract: docs/adr/0035-tui-timeline.md.
  */
-import { sanitizePromptText } from "../sanitize-external";
+import { redactSecrets, sanitizePromptText } from "../sanitize-external";
 
 export type TimelineToolStatus = "running" | "ok" | "failed";
 export type TimelineTurnStatus = "running" | "done" | "failed" | "cancelled";
@@ -82,16 +82,24 @@ export function clipLine(text: string, max: number): string {
   return `${out}…`;
 }
 
-const ANSI = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+/** OSC/CSI: the OSC arm never crosses a newline, so an unterminated `ESC]` cannot eat the next lines. */
+const ANSI = /\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+/** Tabs are indentation in Makefiles and diffs; four spaces keep it visible after the control scrub. */
+const TAB = "    ";
 
 /** One-line field: invisible marks and secrets removed (I-03), whitespace collapsed. */
 function inline(text: string): string {
   return sanitizePromptText(text).replace(/\s+/g, " ").trim();
 }
 
-/** One block line: ANSI removed, then controls and secrets redacted (I-03); indentation kept. */
+/** One block line: ANSI removed, tabs expanded, then controls and secrets redacted (I-03); indentation kept. */
 function blockLine(text: string): string {
-  return sanitizePromptText(text.replace(ANSI, "")).trimEnd();
+  return sanitizePromptText(text.replace(ANSI, "").replace(/\t/g, TAB)).trimEnd();
+}
+
+/** Whole block: ANSI removed first, then each line sanitized so line breaks and indentation survive (I-03). */
+export function sanitizeBlockText(text: string): string {
+  return redactSecrets(text.replace(ANSI, "")).split(/\r?\n/).map(blockLine).join("\n");
 }
 export function formatDuration(ms: number): string {
   const seconds = ms / 1000;
