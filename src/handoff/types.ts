@@ -141,7 +141,7 @@ function asObject(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-/** Teto do `child_output_format` do handoff de filho (ADR-0036). */
+/** Maximum child output-format length (ADR-0036). */
 export const CHILD_OUTPUT_FORMAT_MAX_CHARS = 160;
 
 function asString(value: unknown, field: string): string {
@@ -151,7 +151,7 @@ function asString(value: unknown, field: string): string {
   return value;
 }
 
-/** String não vazia com teto de tamanho (ADR-0036: leitura não aceita campo sem limite). */
+/** Non-empty string with a size ceiling (ADR-0036: read-back rejects unbounded fields). */
 function asBoundedString(value: unknown, field: string, max: number): string {
   const text = asString(value, field);
   if (text.length > max) mismatch(`field "${field}" exceeds ${max} characters`);
