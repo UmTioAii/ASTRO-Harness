@@ -108,14 +108,14 @@ test("o banner saiu: a identidade vem da zona vazia da timeline (#595)", async (
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-identity-"));
   const instance = render(<TuiApp session={session} cwd={cwd} />);
   try {
-    await waitFor(() => frameHas(instance, "ASTRO"));
+    await waitFor(() => frameHas(instance, "astro · /help"));
     const frame = instance.lastFrame() ?? "";
     // No version/provider/health header line survives: the wordmark is the empty-state identity zone.
     expect(frame).not.toMatch(/ASTRO v\d+\.\d+\.\d+/);
     expect(frame).not.toContain("· n/d");
     expect(frame).not.toContain("https://");
-    // The empty state still opens with the wordmark and the welcome line.
-    expect(frame).toContain("ASTRO");
+    // The empty state still opens with the identity zone and the welcome line.
+    expect(frame).toMatch(/ASTRO|█▀▀█/);
     expect(frame).toContain("astro · /help");
     // Zone 4 keeps the model and the mode.
     expect(frame).toContain("p/m1");
@@ -178,17 +178,20 @@ test("mostra boas-vindas, status e responde um turno", async () => {
   }
 });
 
-test("status bar mostra saúde n/d e atualiza após troca de provider", async () => {
+test("a saúde do provider vai para o /log após troca de provider (#514)", async () => {
   const session = new FakeSession();
   const cwd = mkdtempSync(join(tmpdir(), "astro-tui-health-"));
   const instance = render(<TuiApp session={session} cwd={cwd} />);
   try {
-    await waitFor(() => frameHas(instance, "· n/d"));
+    await waitFor(() => frameHas(instance, "enter envia"));
     expect(session.healthCalls).toBe(0);
     instance.stdin.write("/provider use p");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "· ok"));
+    await waitFor(() => frameHas(instance, "provider: p/m1"));
     expect(session.healthCalls).toBe(1);
+    instance.stdin.write("/log");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "saúde: p ok"));
   } finally {
     instance.unmount();
   }
@@ -201,11 +204,16 @@ test("saúde de um provider não é reaproveitada por outro após /model", async
   try {
     instance.stdin.write("/provider use p");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "· ok"));
+    await waitFor(() => frameHas(instance, "provider: p/m1"));
     instance.stdin.write("/model p2/m2");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "· n/d"));
+    await waitFor(() => frameHas(instance, "modelo: p2/m2"));
     expect(session.healthCalls).toBe(1);
+    // Only the checked provider has a health line; p2 never inherits p's state.
+    instance.stdin.write("/log");
+    instance.stdin.write("\r");
+    await waitFor(() => frameHas(instance, "saúde: p ok"));
+    expect(frameHas(instance, "saúde: p2")).toBe(false);
   } finally {
     instance.unmount();
   }
@@ -1434,7 +1442,7 @@ test("estado repetido aparece uma vez só na sessão (#480)", async () => {
     await waitFor(() => frameHas(instance, "modelo: p/m1"));
     instance.stdin.write("/model p/m2");
     instance.stdin.write("\r");
-    await waitFor(() => frameHas(instance, "p/m2 · n/d"));
+    await waitFor(() => frameHas(instance, "p/m2 · /tmp/astro"));
     const frame = instance.lastFrame() ?? "";
     expect(frame.split("modelo: p/m2").length - 1).toBe(1);
   } finally {

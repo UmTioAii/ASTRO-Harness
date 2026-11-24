@@ -200,9 +200,9 @@ test("live tool transitions come from tool.start/tool.end and redact arguments (
   }
 }, 10_000);
 
-test("footer at 80 columns keeps the model only in the header and follows the documented order (#635)", async () => {
+test("footer at 80 columns carries the model once and follows the documented order (#595)", async () => {
   for (const [mode, expected] of [
-    ["ask", "/tmp/astro (main) · US$ 0.001000 · modo: ask"], ["bypass", "/tmp/astro (main) · US$ 0.001000 · modo: bypass"],
+    ["ask", "p/m1 · /tmp/astro (main) · US$ 0.001000 · modo: ask"], ["bypass", "p/m1 · /tmp/astro (main) · US$ 0.001000 · modo: bypass"],
   ] as const) {
     const instance = render(<TuiApp session={fakeSession({ permissionMode: () => mode })} cwd="/tmp/astro" branch="main" />);
     try {
@@ -210,6 +210,7 @@ test("footer at 80 columns keeps the model only in the header and follows the do
       instance.stdout.emit("resize");
       await waitFor(() => (instance.lastFrame() ?? "").includes("enter envia"));
       const frame = instance.lastFrame() ?? "";
+      // The header is gone, so the model appears exactly once, in zone 4.
       expect(frame.split("p/m1")).toHaveLength(2);
       expect(frame.trimEnd().split("\n").at(-1)).toBe(expected);
     } finally {

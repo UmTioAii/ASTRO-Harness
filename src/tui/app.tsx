@@ -20,7 +20,7 @@ import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
 import type { ShellRunner } from "./shell";
 import { COMMANDS, applyCompletion, commandDescription, completionItems, enterAction, suggestionWindow } from "./editor";
-import { Header, budgetColor, footerBase, modeColor, packageVersion } from "./banner";
+import { budgetColor, footerBase, modeColor, packageVersion } from "./footer";
 import { appendLog, laneLine, sessionHeaderLine, tailLog } from "./log";
 import { LogScreen } from "./log-screen";
 import { errorLine } from "./error-hint";
@@ -214,7 +214,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   };
   const exitRequested = useRef(false);
   const [status, setStatus] = useState<Status>(() => statusOf(session.snapshot()));
-  const [health, setHealth] = useState<{ provider: string; state: "ok" | "down" } | undefined>(undefined);
   const healthToken = useRef(0);
   const activeProvider = (): string => session.providerName?.() ?? session.snapshot().model.split("/")[0]!;
   const refreshHealth = async (): Promise<void> => {
@@ -225,7 +224,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       const report = await session.health();
       if (token !== healthToken.current) return;
       const state = providerHealth(report, provider);
-      setHealth(state === undefined ? undefined : { provider, state });
       // Só transições de saúde vão para o /log (#514, docs/tui-layout.md §/log)
       if (state !== undefined) {
         const line = laneLine("saúde", `saúde: ${provider} ${state}`); // lane separada (#560)
@@ -235,7 +233,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         }
       }
     } catch {
-      if (token === healthToken.current) setHealth(undefined);
+      // check failed: nothing to log, and no stale health survives (the banner that showed it is gone, #595)
     }
   };
   const [screen, setScreen] = useState<{ mode: "list" | "add" | "edit" | "remove"; target?: string } | undefined>(undefined);
@@ -1023,22 +1021,12 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
           try {
             session.reload?.();
             healthToken.current++;
-            setHealth(undefined);
             setStatus(statusOf(session.snapshot()));
           } catch (error) {
             setEntries((current) => [...current, { kind: "error", text: errorLine(error, messageOf(error)) }]);
           }
         }}
-        {...(session.probeProvider === undefined ? {} : { onTest: async (id: string) => {
-          const token = ++healthToken.current;
-          const check = await session.probeProvider!(id);
-          if (token !== healthToken.current) return check;
-          if (id === activeProvider()) {
-            const state = providerHealth({ status: check.status === "ok" ? "ok" : "down", checks: [check] }, id);
-            setHealth(state === undefined ? undefined : { provider: id, state });
-          }
-          return check;
-        } })}
+        {...(session.probeProvider === undefined ? {} : { onTest: (id: string) => session.probeProvider!(id) })}
         {...(session.loginCodex === undefined ? {} : { onLogin: (id: string, signal?: AbortSignal) => session.loginCodex!(id, signal) })}
         {...(saveSecret === undefined ? {} : { onSaveSecret: saveSecret })}
         {...(discardSecret === undefined ? {} : { onDiscardSecret: discardSecret })}
@@ -1051,8 +1039,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const selectedIndex = suggestions.length === 0 ? 0 : Math.min(selected, suggestions.length - 1);
   const win = suggestionWindow(suggestions.length, selectedIndex);
   const visibleSuggestions = suggestions.slice(win.start, win.end);
-  const providerId = session.providerName?.() ?? status.model.split("/")[0]!;
-  const healthState = health?.provider === providerId ? health.state : "n/d";
   const inputLines = input.split("\n");
   // Modo de permissão sempre visível (#270); bypass em cor de alerta
   const mode = session.permissionMode?.() ?? DEFAULT_PERMISSION_MODE;
@@ -1063,7 +1049,6 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const composerMark = renderTimelineZones({ state: { kind: "done" }, status: timelineStatus }, width).composer[0] ?? "❯";
   return (
     <Box flexDirection="column">
-      <Header colors={colors} provider={providerId} model={status.model} health={healthState} />
       {liveTimeline.current === undefined && entries.every((entry) => entry.kind === "info")
         ? <TimelineZone view={{ state: { kind: "empty" }, status: timelineStatus }} width={width} zone="identity" />
         : null}
@@ -1141,6 +1126,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       })}
       {win.end < suggestions.length ? <Text dimColor>  …</Text> : null}
       <Text dimColor>
+        {status.model}
+        {" · "}
         {footerBase({
           place,
           tokensIn: status.tokensIn,

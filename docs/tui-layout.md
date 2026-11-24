@@ -12,7 +12,7 @@ Onde cada informação da TUI vive: header de identidade, footer de números, er
 
 | Elemento | Hoje | Depois |
 |---|---|---|
-| Header | Caixa com versão, provider, modelo, endpoint, estado e modo; pode passar de 80 colunas | Uma linha sem caixa: versão, provider/modelo e saúde |
+| Header | Caixa com versão, provider, modelo, endpoint, estado e modo; pode passar de 80 colunas | Removido (#595): a identidade do estado vazio vem da zona 1 da timeline |
 | Footer | Repete provider, modelo, saúde e modo; mostra contadores e custo quando há | Só campos com valor; modo sempre; bypass em vermelho |
 | Erro | Linha vermelha sem saída + toast com o mesmo texto | Linha vermelha com próximo passo, uma vez, sem toast |
 | Estado | Aviso reimpresso a cada turno e às vezes em toast | Uma linha cinza, uma vez por sessão |
@@ -24,30 +24,17 @@ Onde cada informação da TUI vive: header de identidade, footer de números, er
 | Endpoint | No header, competindo com modelo | `/log`, no cabeçalho da sessão |
 | Modo | No header e no footer | Só no footer; bypass também pinta a borda do input |
 
-## Header
+## Identidade
 
-Formato: `ASTRO v<versão> · <provider>/<modelo> · <saúde>`
-
-| Caso | Linha | Colunas |
-|---|---|---|
-| Par mais longo do catálogo: `nvidia/meta/llama-3.3-70b-instruct` | `ASTRO v0.1.0-alpha.4 · nvidia/meta/llama-3.3-70b-instruct · ok` | 62 |
-| Limite sintético: provider `openai-compatible` (sem modelos) com o modelo mais longo | `ASTRO v0.1.0-alpha.4 · openai-compatible/meta/llama-3.3-70b-instruct · ok` | 73 |
-| O mesmo, sem check | `… · n/d` | 74 |
-| O mesmo, provider fora | `… · down` | 75 |
-
-- Teto de 80 colunas. Versão, provider, modelo e saúde são os únicos campos.
-- Acima de 80, o modelo é cortado no meio com `…` até sobrar 8 colunas para ele; se ainda passar, o provider é cortado no meio. A saúde nunca é cortada e a linha nunca quebra.
-- Um id de provider pode chegar a 64 colunas (limite do slug); é por isso que o corte do provider existe, mesmo sem caso no catálogo.
-- Saúde é `ok`, `n/d` ou `down`; `down` em vermelho, `n/d` em cinza.
-- Endpoint sai do header e aparece no cabeçalho da sessão em `/log`: é dado de diagnóstico, não de estado. A versão fica porque é o primeiro dado de um bug report.
-- A borda da caixa sai; a cor do texto segue a saúde.
+O estado vazio mostra o wordmark `ASTRO` da zona 1 da timeline (`renderTimelineZones`, ADR-0035); não há mais linha de header. Versão, provider, endpoint e saúde saem da tela principal: a versão e o endpoint ficam no cabeçalho da sessão em `/log`, e a saúde só aparece lá como transição (#514).
 
 ## Footer
 
-Formato: `pasta · in/out tokens · custo · orçamento · modo`
+Formato: `modelo · pasta · in/out tokens · custo · orçamento · modo`
 
 | Campo | Quando aparece |
 |---|---|
+| modelo | Sempre; é a única aparição do modelo na tela (#595) |
 | pasta | Sempre; `~` para o home |
 | tokens | Só quando `in + out > 0` |
 | custo | Só quando o preço é conhecido; sem `n/d` |
@@ -55,7 +42,6 @@ Formato: `pasta · in/out tokens · custo · orçamento · modo`
 | modo | Sempre: `ask`, `auto` ou `bypass` |
 
 - `bypass` sai em vermelho e pinta a borda do input de vermelho; é o único modo com cor.
-- Nenhum campo do header reaparece aqui; enquanto o header existir (remoção adiada para a próxima slice de #635), identidade e modelo ficam nele e o footer usa a zona 4 do ADR-0035 sem o modelo.
 
 ## Erro
 
@@ -139,8 +125,8 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 
 ## Como verificar
 
-- Header: a tabela acima é o teste; 62 no par real mais longo do catálogo e 73 no limite sintético, ambos abaixo de 80.
-- Footer: nenhum campo do header aparece nele.
+- Identidade: o estado vazio é o wordmark da zona 1; nenhuma linha de versão ou saúde aparece na tela principal.
+- Footer: nenhum campo do header reaparece (não há header); o modelo aparece uma vez, no footer.
 - Avisos: nenhum texto aparece nos dois lugares; o de contexto tem a primeira ocorrência inline e as repetições em `/log`.
 
 ## Fora de escopo
