@@ -1,4 +1,5 @@
 /** Status footer of the TUI (zone 4): only fields with a value, one line (#480, #595). */
+import { sanitizePromptText } from "../sanitize-external";
 import { packageVersion as manifestVersion } from "../version";
 import type { ThemeColors } from "./theme";
 
@@ -28,6 +29,11 @@ export function footerBase(data: FooterData): string {
   if (data.tokensIn + data.tokensOut > 0) parts.push(`${data.tokensIn}/${data.tokensOut} tokens`);
   if (data.costUsd !== null) parts.push(`US$ ${data.costUsd.toFixed(6)}`);
   return parts.join(" · ");
+}
+
+/** Model segment of zone 4: a redacted one-line field, same rule as the timeline (I-03). */
+export function footerModel(model: string): string {
+  return sanitizePromptText(model);
 }
 
 /** Mode indicator colour: only `bypass` warns (#270). */

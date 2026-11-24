@@ -10,7 +10,7 @@ import type { CommandState, Entry } from "./commands";
 import { COMMANDS, completionItems, suggestionWindow } from "./editor";
 import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import type { ShellRunner } from "./shell";
-import { budgetColor, footerBase, modeColor, packageVersion } from "./footer";
+import { budgetColor, footerBase, footerModel, modeColor, packageVersion } from "./footer";
 import { appendLog, laneLine, sessionHeaderLine, tailLog } from "./log";
 import { errorLine } from "./error-hint";
 import { indexFiles } from "./files";
@@ -357,7 +357,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         win={win}
       />
       <Text dimColor>
-        {status.model}
+        {footerModel(status.model)}
         {" · "}
         {footerBase({
           place,
