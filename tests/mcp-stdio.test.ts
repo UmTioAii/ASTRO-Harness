@@ -207,6 +207,7 @@ test("stream error fails every pending call with MCPError without an uncaught th
     expect(failure instanceof Error ? failure.message : "").toMatch(/EPIPE/); // the described failure is the transport one
   }
   expect(transport.closed).toBe(true);
+  expect(scripted.kills()).toBe(1); // the transport failure reaps the child
   const afterFailure = await rejection(transport.request("tools/call", {}));
   expect(afterFailure).toBeInstanceOf(MCPError);
   expect(afterFailure instanceof Error ? afterFailure.message : "").toMatch(/EPIPE/); // later calls keep the cause
@@ -249,6 +250,18 @@ test("close is idempotent, fails the pending call and leaves no listeners on the
   expect(scripted.events.listenerCount("error")).toBe(0);
   expect(scripted.events.listenerCount("exit")).toBe(0);
   expect(scripted.events.listenerCount("close")).toBe(0);
+});
+
+test("a long stream error is capped in the MCPError message", async () => {
+  const scripted = scriptedChild();
+  const transport = StdioTransport.fromChild(scripted.child, 5000);
+  const pending = rejection(transport.request("tools/call", {}));
+
+  const long = new Error("x".repeat(5000));
+  expect(() => scripted.stdin.emit("error", long)).not.toThrow();
+  const failure = await pending;
+  expect(failure).toBeInstanceOf(MCPError);
+  expect(failure instanceof Error ? failure.message.length : 0).toBeLessThanOrEqual(240); // bounded whatever the config
 });
 
 test("child close without exit fails the pending call instead of waiting for the timeout", async () => {
