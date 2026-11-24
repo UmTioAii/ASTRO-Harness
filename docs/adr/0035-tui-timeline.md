@@ -29,3 +29,4 @@ The TUIX spec defines a four-zone continuous-flow screen and S5a (#600) already 
 - One contract: `callId` is the identity from `tool.start` through `tool.end` and the body map, and `status` is `running` until `tool.end` maps `isError` to `ok`/`failed`.
 - The renderer is testable at every width without a terminal; snapshots pin the six states at 120/80/60 and a property test covers 40–200.
 - Styling, live wiring, expansion keys, approval focus, `banner.tsx` removal and `app.tsx` size stay in the Ink slice (#635).
+- `ctrl+o`/`ctrl+t` are live flags applied when a line is printed: committed `<Static>` lines keep the expansion state they were printed with and are never rewritten (docs/tui-layout.md §Expansions, #595).

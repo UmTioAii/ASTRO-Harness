@@ -1,134 +1,115 @@
-# Layout da TUI
+# TUI layout
 
-Onde cada informação da TUI vive: header de identidade, footer de números, erro com próximo passo e log sob demanda (#480).
+Four continuous-flow zones: identity only in the empty state, an append-only conversation, a stable composer and a status footer (#595, ADR-0035).
 
-## Princípios
+Owner files: `src/tui/timeline.ts` (pure renderer and zones), `src/tui/app.tsx` (composition), `src/tui/screens.tsx` (full-screen screens), `src/tui/keys.ts` (composer keys).
 
-- Uma informação, um lugar. Se o header mostra, o footer não repete.
-- Cor tem significado: vermelho é erro ou risco, amarelo é aviso, cinza é estado.
-- Silêncio por padrão: nada é reimpresso; o que já foi dito vai para `/log`.
+## Zones
 
-## Antes e depois
-
-| Elemento | Hoje | Depois |
+| Zone | Contents | When |
 |---|---|---|
-| Header | Caixa com versão, provider, modelo, endpoint, estado e modo; pode passar de 80 colunas | Removido (#595): a identidade do estado vazio vem da zona 1 da timeline |
-| Footer | Repete provider, modelo, saúde e modo; mostra contadores e custo quando há | Só campos com valor; modo sempre; bypass em vermelho |
-| Erro | Linha vermelha sem saída + toast com o mesmo texto | Linha vermelha com próximo passo, uma vez, sem toast |
-| Estado | Aviso reimpresso a cada turno e às vezes em toast | Uma linha cinza, uma vez por sessão |
-| Progresso | `pensando…`, sem contador | `pensando…` em bloco, recolhível com ctrl+t (#560); contadores só em `/usage`, `/config` e relatório (#594) |
-| Shell `!cmd` | saída como linha de info/erro | bloco com borda: `$ cmd · cwd: … · exit: 0\|erro` + saída (#560) |
-| Entrada durante o turno | descartada | fila (`fila: N`), enviada ao fim do turno (#560) |
-| Enter com menu aberto | submete o prefixo digitado | 1º Enter aplica a completion, 2º Enter roda (#471, #560) |
-| Status do turno | Entrada `[modelo] N step(s) · tokens · total` na conversa + toast | Só em `/log`, sem contador de rodada (#594) |
-| Endpoint | No header, competindo com modelo | `/log`, no cabeçalho da sessão |
-| Modo | No header e no footer | Só no footer; bypass também pinta a borda do input |
+| 1 identity | `ASTRO` wordmark | Empty state only: no live turn and every entry is `info` |
+| 2 timeline | prompt, reasoning, tools, answer, errors, notices | Append-only history plus the live turn |
+| 3 composer | input box with `❯`, approval takeover, hint, completions | Always the line above the footer |
+| 4 status | `modelo · pasta · tokens · custo · orçamento · modo` | Always last |
 
-## Identidade
+- Zone 2 never shows a step, round or tool counter (#594). Durations (`420ms`, `4s`) and a curated cost are allowed.
+- The tool glyph is `▸` running, `✓` ok, `✗` failed, and changes in place; lines above never reflow.
+- Approval replaces the composer contents while the timeline stays visible.
+- The model appears once, in zone 4. Version, provider, endpoint and health left the main screen; version/endpoint live in `/log`, health only as a `/log` transition.
+- Footer order is `modelo · pasta · in/out tokens · custo · orçamento · modo`; only fields with a value appear, except `modelo` and `modo`. `bypass` is red and also paints the input border.
 
-O estado vazio mostra o wordmark `ASTRO` da zona 1 da timeline (`renderTimelineZones`, ADR-0035); não há mais linha de header. Versão, provider, endpoint e saúde saem da tela principal: a versão e o endpoint ficam no cabeçalho da sessão em `/log`, e a saúde só aparece lá como transição (#514).
+## Widths
 
-## Footer
-
-Formato: `modelo · pasta · in/out tokens · custo · orçamento · modo`
-
-| Campo | Quando aparece |
+| Width | Layout |
 |---|---|
-| modelo | Sempre; é a única aparição do modelo na tela (#595) |
-| pasta | Sempre; `~` para o home |
-| tokens | Só quando `in + out > 0` |
-| custo | Só quando o preço é conhecido; sem `n/d` |
-| orçamento | Só quando há orçamento configurado; vermelho no teto, amarelo no aviso |
-| modo | Sempre: `ask`, `auto` ou `bypass` |
+| 120+ | 100-column cap, 2-column indent, full model, block wordmark |
+| 80–119 | Full width, no indent, durations, full model |
+| 60–79 | 2-column indent, no durations, last model segment |
+| below 60 | No indent, `ASTRO` text wordmark |
 
-- `bypass` sai em vermelho e pinta a borda do input de vermelho; é o único modo com cor.
+`renderTimeline` never emits a line wider than the supplied width; the property test covers 40–200. Ink wraps the untouched footer and approval text if the terminal is narrower.
 
-## Erro
+## States
 
-Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem em que aconteceu.
-
-| Classe | Próximo passo |
+| State | Zone 2–3 |
 |---|---|
-| `auth` | `revise a credencial com /provider` (ou `defina <VAR> no ambiente`) |
-| `hard_quota` | `troque de modelo com /model` |
-| `transient_rate_limit` | `aguarde e repita; o retry já tentou` |
-| `network_timeout` | `repita; se persistir, aumente providers.<nome>.timeoutMs` (#475) |
-| `outage` | `repita ou troque com /model` |
-| `invalid_request` | `ajuste o pedido; /help lista os comandos` |
-| configuração inválida | `rode astro doctor` |
-| tool negada | `ajuste permissions.tools ou aprove a chamada` |
-| sem provider | `configure com /provider` |
+| empty | wordmark, `astro · /help para comandos · /exit para sair` |
+| thinking | `▸ thinking` (no counter) and the streamed partial in a bordered block |
+| streaming | sanitized partial answer |
+| approval | question wraps above the timeline; answer line and `enter responde · ctrl+c cancela` |
+| error | `✗ mensagem` plus `→ próximo passo` |
+| done | committed prompt, entries, answer and the composer |
 
-- Mensagem continua redigida (I-03); o próximo passo nunca repete segredo nem URL com chave.
-- Erro fatal encerra a sessão depois de imprimir a linha; não vira toast.
+## Expansions and `<Static>` (#635, #595)
 
-## Estado
+- Collapsed by default. `ctrl+o` reveals tool bodies keyed by `callId`; `ctrl+t` collapses the thinking block and reveals reasoning only when the provider emitted it (never a placeholder).
+- Every expanded body crosses `sanitizeBlockText` (ANSI, whole-block secrets, per-line sanitizing) before width measurement (I-03).
+- **Decision: the flags are live-and-append-only.** `ctrl+o`/`ctrl+t` apply immediately to the live turn and to entries printed while the flag is ON. Committed turns go through Ink `<Static>` and are printed once, so a later toggle never rewrites scrollback: a turn committed expanded stays expanded, one committed collapsed stays collapsed. Reopening history is out of scope; the next turn follows the current flag.
+- Rationale: `<Static>` is append-only by design; rewriting it would reparse and reflow the whole transcript and break stable scrollback. Covered by `tests/tui-timeline-wiring.test.tsx` (expanded history survives a toggle; the next live turn follows the flag).
+- Cancelling with `ctrl+c` marks every `running` entry `failed`.
 
-- Uma linha cinza, uma vez por sessão: provider ativado, modelo trocado, sessão retomada.
-- Texto idêntico não se repete na mesma sessão.
-- Aviso que muda a resposta (contexto ≥80%) fica amarelo, inline, uma vez; as repetições vão para `/log`.
+## Bindings
 
-## Progresso
+`/help` mirrors the composer, leader and approval rows below; every screen also prints its own hint line.
 
-- A conversa nunca mostra contador de turno, rodada ou ferramenta (#594). Enquanto o turno roda, o bloco mostra `pensando…`; números de progresso vivem em `/usage`, `/config` e no relatório.
-- O bloco some quando o turno termina (sucesso, erro ou abort), porque o progresso só renderiza com turno em andamento.
-- Nenhum número é inventado: sem sinal de progresso, fica só `pensando…`.
-
-## Blocos e fila (#560)
-
-| Bloco | Render | Notas |
+| Context | Binding | Action |
 |---|---|---|
-| usuário | `> texto` | inalterado |
-| shell `!cmd` | caixa com `$ cmd · cwd: … · exit: 0\|erro`, saída no corpo | `exit` é `0`/`erro` porque o contrato `ToolResult` não traz código numérico |
-| thinking | caixa com `pensando…` + stream parcial | ctrl+t recolhe/mostra; reasoning ainda sem evento (#635); stream sanitizado (I-03); some no fim do turno |
-| tool | `▸ read_file src/a.ts` → `✓`/`✗` com duração | ctrl+o expande o corpo redigido, sempre por `callId` (ADR-0035); recolhido fica em uma linha |
-| resposta | Markdown | sanitizada em bloco antes de renderizar (I-03) |
+| composer | `enter` | Send; during a turn enqueues (`fila: N`); with a completion selected, applies it first |
+| composer | `shift+enter` | Newline (kitty `CSI 13;2u` or legacy linefeed) |
+| composer | `tab` | Complete command or `@arquivo`; with a completion menu, applies the selection |
+| composer | `↑` / `↓` | Move the completion selection |
+| composer | `backspace` / `delete` | Delete one character |
+| composer | `ctrl+o` | Toggle tool output expansion |
+| composer | `ctrl+t` | Toggle the thinking block and the reasoning body |
+| composer | `ctrl+c` / `ctrl+d` | Cancel the running turn and exit; a second request exits without waiting |
+| leader | `ctrl+x c` | Clear the context |
+| leader | `ctrl+x e` / `ctrl+x q` | Exit |
+| leader | `ctrl+x m` | List models |
+| leader | `ctrl+x n` | New conversation (clear the context) |
+| leader | `ctrl+x l` | List saved sessions |
+| leader | `ctrl+x t` | Cycle the theme |
+| approval | `enter responde` | Submit the typed answer |
+| approval | `s aprova uma vez`, `a aprova sempre` | Approve this call only, or the tool for the session (shell: prefix rule) |
+| approval | `r recusa`, `n nega` | Reject and cancel pending approvals, or deny this one |
+| approval | `tab ver diff` | Open the diff overlay when the call carries a patch |
+| screens | `esc` | Close the screen or overlay |
+| screens | `↑` / `↓` | Move the cursor |
+| screens | `enter` | Confirm the selection |
+| screens | `ctrl+c` / `ctrl+d` | Exit |
+| sessions screen | `r` / `d`; `s`/`n` confirm | Rename / delete; delete confirmation |
+| model picker | `tab`; `ctrl+f` | Move; favourite the current model |
+| config screen | `m`; `r`; `e`; `c` / `x` | Mode menu; revoke trust; edit knob; confirm bypass / revoke |
+| providers screen | `m`, `→`, `t`, `enter` | Action menu, choose model, test, activate |
+| diff viewer | `j` / `k`, `page up` / `page down`, `q` | Scroll and close |
+| log screen | `esc` | Back to the conversation |
 
-- Durante o turno o editor continua editável; Enter coloca a mensagem na fila (`fila: N` acima do input) e o dreno acontece no fim do turno, na ordem digitada.
-- Tab completa; o 1º Enter aplica a completion na linha e o próximo Enter confirma e roda (#471). Linha já exata ao comando destacado roda no 1º Enter; linha com argumento submete direto; completions de `@arquivo` não seguram o Enter.
-- O REPL (`astro chat`) fica com linhas planas: fora de escopo desta issue.
+## Error and state
 
-## Expansão e aprovação (#635)
-
-- Recolhido por padrão: a entrada de tool fica em uma linha; `ctrl+o` acrescenta o corpo abaixo dela, sem reflow do que está acima.
-- `ctrl+t` recolhe o bloco thinking e alterna o corpo de reasoning da timeline (`#600`); quando o provider não emite reasoning não aparece linha nem placeholder (ADR-0035). O corpo expandido passa por `sanitizeBlockText` (ANSI, tabs e segredos) antes da medição de largura (I-03); um OSC não terminado não apaga as linhas seguintes.
-- A aprovação ocupa a zona do composer e a pergunta quebra em várias linhas, então o fim de um comando perigoso continua visível em 80 colunas; a resposta digitada e o cursor ficam na linha de baixo. `tab` abre o diff quando existe.
-- Cancelar o turno (`ctrl+c`) marca toda entrada `running` como `failed`.
+- Error: `erro: <mensagem> · <próximo passo>`, red, once, in order; the message is redacted (I-03). A fatal error prints the line and ends the session.
+- State (provider activated, model changed, session resumed): gray, once per session; identical text does not repeat. A context warning (≥80%) stays inline once; repeats go to `/log`.
 
 ## /log
 
-| Move para `/log` | Fica inline |
+| Goes to `/log` | Stays inline |
 |---|---|
-| Cabeçalho da sessão: versão, provider, modelo e endpoint | mensagens do usuário e do assistente |
-| `turno concluído` | erro com próximo passo |
-| Linha `[modelo] tokens · total` por turno | pergunta de aprovação e diff |
-| Transições de saúde do provider | `pensando…` (sem contador) |
-| Avisos de orçamento repetidos | aviso de contexto, uma vez |
-| Repetições do aviso de contexto | |
-| Detalhe de tool: nome, duração, custo | |
+| Session header: version, provider, model, endpoint | user and assistant messages |
+| `turno concluído` and the per-turn usage line | error with a next step |
+| Provider health transitions | approval question and diff |
+| Repeated budget, quota and context warnings | the thinking block (no counter) |
 
-- `/log` abre a tela com o buffer da sessão; `/log <n>` mostra as últimas `n` linhas.
-- Cada linha do buffer carrega a lane no prefixo — `[sessão]`, `[turno]`, `[saúde]`, `[aviso]` (#560) — e a sanitização (I-03) continua no `appendLog`.
-- O buffer é de memória: a fonte durável continua sendo audit/ledger.
-- `AgentSession.send` expõe o observador de turno (#600) com `round.start`, `tool.start`, `tool.end` e `turn.end`; a timeline da TUI consome esses eventos ao vivo (#635), e o buffer de `/log` continua sem consumi-los. `onStep` saiu: o progresso não expõe contador.
-- Implementação (#514): buffer ring em `src/tui/log.ts` (`LOG_CAP = 1000`, linhas sanitizadas com `redactSecrets` + controle), tela em `src/tui/log-screen.tsx`, comando em `src/tui/commands.ts` (`openLog`) ligado em `src/tui/app.tsx`. Cabeçalho da sessão (com endpoint), resumo por turno, transições de saúde e avisos repetidos de orçamento/contexto são anexados ao buffer com `laneLine` (#560); no REPL `/log` avisa que é só da TUI.
+- `/log` opens the in-memory buffer; `/log <n>` shows the last `n` lines. Each line carries its lane (`[sessão]`, `[turno]`, `[saúde]`, `[aviso]`) and is sanitized by `appendLog` (I-03). The buffer is memory-only; audit/ledger stay durable.
 
-## Estados removidos
+## Removed states
 
-- Endpoint no header.
-- Provider, modelo, saúde e modo repetidos no footer.
-- Toast de turno concluído.
-- Toast de erro duplicando a linha de erro.
-- Linha de status por turno na área de conversa.
-- `pensando…` coexistindo com toast de conclusão.
-- Contador de passo/rodada na conversa (`passo n/max`); contadores vivem em `/usage`, `/config` e no relatório (#594).
+Endpoint and health in the main screen; provider/model/mode repeated across zones; turn-complete toast; error toast duplicating the error line; per-turn status line in the conversation; step or round counters in the conversation.
 
-## Como verificar
+## How to verify
 
-- Identidade: o estado vazio é o wordmark da zona 1; nenhuma linha de versão ou saúde aparece na tela principal.
-- Footer: nenhum campo do header reaparece (não há header); o modelo aparece uma vez, no footer.
-- Avisos: nenhum texto aparece nos dois lugares; o de contexto tem a primeira ocorrência inline e as repetições em `/log`.
+- Zones: `tests/tui-frame.test.tsx` pins the empty and completed frames at 80 columns; `tests/tui-timeline.test.ts` covers widths and states.
+- Bindings: `tests/tui-help.test.ts` requires every token above in `/help` and in this file.
+- Expansions: `tests/tui-timeline-wiring.test.tsx` covers live expansion, redaction and the append-only history.
 
-## Fora de escopo
+## Out of scope
 
-- Tema, mouse e novos keybinds.
+Themes, mouse, new keybindings, subagent trees and image rendering.
