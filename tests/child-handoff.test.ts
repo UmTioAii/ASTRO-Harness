@@ -95,6 +95,8 @@ describe("child resume levels (ADR-0036)", () => {
       .toMatchObject({ level: "L2", restored: ["child_session"], childSession: "r1.task.live" });
     expect(planChildResume({ sessionAvailable: true }))
       .toMatchObject({ level: "L2", restored: [], unavailable: "session_missing" });
+    expect(planChildResume({ sessionAvailable: true, sessionId: " " }))
+      .toMatchObject({ level: "L2", restored: [], unavailable: "session_missing" });
   });
 
   test("an unknown level is rejected instead of widening to L3", () => {
