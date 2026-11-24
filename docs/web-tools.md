@@ -1,6 +1,6 @@
 # Web tools
 
-Summary: `web_search` queries a configurable backend chain and returns deduplicated, stably citable results; `web_fetch` downloads one page. External content is untrusted and never executed.
+Summary: `web_search` queries a configurable backend chain and returns deduplicated, stably citable results; `search_and_read` adds bounded page reads; `web_fetch` downloads one page. External content is untrusted and never executed.
 
 ## Configuration (`webSearch`)
 
@@ -36,6 +36,12 @@ Redirects are not followed (`redirect: "error"`): the key never reaches another 
 - **Citations** — every result carries a numeric `id`, injected after dedupe. The manifest tells the model to cite `[n]`. Ids are unique inside a run and restart at 1 in a new run; a cache hit replays the same ids, so a citation always maps to a result actually returned in that run.
 - **Cache** — bounded (32 entries, oldest evicted) and in memory, keyed by a SHA-256 digest of the resolved backend (provider and `baseUrl`), canonical query (case/whitespace insensitive) and the call options: the query text never becomes a key, so a pasted secret is not retained by the `Map`, and two queries that both redact to the same display text stay distinct. A fallback result is stored and read under the backend that answered, never served as a primary hit. An identical call inside the same run is answered from the cache without requesting the backend that produced it (`cacheHit: true`); only successful calls are cached, so when a fallback produced the entry the earlier backends are probed again first and spend their retry budget before the hit. A call without the configured credential fails (or skips that backend) and is audited even when an entry exists; the cache and the id counter are cleared when the tool serves a different `run`.
 - Only successful calls are cached; errors and aborted calls never are.
+
+## `search_and_read` (#604)
+
+`{query, maxResults?, recencyDays?, depth?}` runs `web_search` and reads the top `depth` results through `web_fetch`, both through the session executor: the same allowlist, timeout and audit apply, so the agent must also allow `web_search` and `web_fetch` (I-01), and the search cache and `[n]` ids are the ones `web_search` already uses in the run. `depth` is an integer 1..5, default 3; anything else is rejected with the `invalid` failure code before any network call. Results keep the `[n]` ids; the page text is untrusted and attached as `content`. A read that fails does not fail the tool when another page succeeded, and its result carries the bounded `readError` produced by the read step: `invalid_url`, `network`, `http_<status>` or `content_type` (a redirect or DNS refusal is `invalid_url`, not a retryable `network`).
+
+The output is a JSON envelope capped by `manifest.output` and the session cap (S6, `docs/tools-contract.md`). Pages are read only up to their share of the budget, then cut, never dropped; under a ceiling too small for all results the list degrades to fewer results instead of failing. `truncated: true` plus a `notice` carries the same marker as other tools, and `ToolResult.truncation` reports `characters` when page text was cut (counting the text the budgeted read fetched) or `results` when results were omitted. Audit: the delegated `web.search` (redacted query) and `web.fetch` (host, no query/hash), plus one `web.read {depth, resultsCount, readCount, failedCount, truncated, aborted, reason?, duration}`. No credential reaches the audit, and a cancelled call or ceiling degradation still leaves a `web.read` record with `aborted`/`reason: "ceiling"`.
 
 ## Limit and backoff
 

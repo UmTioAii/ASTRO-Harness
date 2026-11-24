@@ -52,7 +52,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/eval.md` | Ao rodar `eval`/`bench`, ler success rate, filtro de provider/modelo ou agendamento de CI (`#59`) | ~70 |
 | `docs/release.md` | Ao preparar, publicar ou reverter uma versão npm (#230) | ~150 |
 | `docs/mcp.md` | Ao configurar servidores MCP, transports, reconexão ou modelo de confiança | ~60 |
-| `docs/web-tools.md` | Ao configurar `webSearch` ou usar `web_search`/`web_fetch` | ~60 |
+| `docs/web-tools.md` | Ao configurar `webSearch` ou usar `web_search`/`search_and_read`/`web_fetch` | ~60 |
 | `docs/todo-write.md` | Ao usar ou alterar `todo_write` (plano do run, F-17) | ~40 |
 | `docs/run-tests.md` | Ao configurar `run.tests` ou usar/alterar `run_tests` (F-15, #538) | ~55 |
 | `docs/tools-contract.md` | Ao criar/alterar uma tool: teto, marcador, redação e taxonomia de falha (#603) | ~55 |

@@ -51,8 +51,11 @@ async function readCapped(response: Response, limit: number): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function failure(message: string): ToolResult {
-  return { output: redactSecrets(message), isError: true };
+/** Bounded read code, so a composite can classify the failure without parsing prose. */
+type WebFetchCode = "invalid_url" | "network" | "aborted" | "content_type" | `http_${number}`;
+
+function failure(message: string, code?: WebFetchCode): ToolResult {
+  return { output: redactSecrets(message), isError: true, ...(code === undefined ? {} : { code }) };
 }
 
 interface ParsedInput {
@@ -241,7 +244,7 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
       try {
         for (let hop = 0; hop <= maxRedirects; hop += 1) {
           const problem = await resolvedOutboundUrlProblem(current, { allowPrivate });
-          if (problem !== undefined) return failure(`web_fetch: URL recusada (${problem})`);
+          if (problem !== undefined) return failure(`web_fetch: URL recusada (${problem})`, "invalid_url");
           const response = await fetchImpl(current, { redirect: "manual", signal: ctx.signal });
           status = response.status;
           finalUrl = current;
@@ -259,9 +262,9 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
         if (ctx.signal?.aborted === true) {
           deps.audit.append({ run: ctx.run, agent: ctx.agent, tipo: "web.fetch",
             payload: { url: auditUrl(parsed.url), status: 0, contentLength: 0, duration: Date.now() - started } });
-          return failure("web_fetch cancelada");
+          return failure("web_fetch cancelada", "aborted");
         }
-        return failure(`web_fetch falhou: ${error instanceof Error ? error.message : String(error)}`);
+        return failure(`web_fetch falhou: ${error instanceof Error ? error.message : String(error)}`, "network");
       }
 
       const contentLength = body.length;
@@ -269,15 +272,26 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
         payload: { url: auditUrl(finalUrl), status, contentLength, duration: Date.now() - started } });
 
       if (status < 200 || status >= 300) {
-        return failure(`web_fetch falhou (${status})`);
+        return failure(`web_fetch falhou (${status})`, `http_${status}`);
       }
       if (contentType !== "" && !TEXT_TYPES.test(contentType)) {
-        return failure(`web_fetch: tipo de conteúdo não suportado (${contentType.split(";")[0]})`);
+        return failure(`web_fetch: tipo de conteúdo não suportado (${contentType.split(";")[0]})`, "content_type");
       }
       // Sem Content-Type, trata como HTML e sanitiza (não devolve tags cruas).
-      const text = contentType === "" || /html|xml/i.test(contentType) ? htmlToText(body, parsed.format) : body;
       // ADR-0027: redige o corpo ANTES do slice/cap — segredo cortado na borda não vaza (I-03).
-      return { output: redactSecrets(text).slice(0, parsed.maxLength) };
+      const rendered = redactSecrets(contentType === "" || /html|xml/i.test(contentType)
+        ? htmlToText(body, parsed.format)
+        : body);
+      if (rendered.length <= parsed.maxLength) return { output: rendered };
+      return {
+        output: rendered.slice(0, parsed.maxLength),
+        truncation: {
+          removed: rendered.length - parsed.maxLength,
+          total: rendered.length,
+          unit: "characters",
+          hint: "raise maxLength to read the rest of the page",
+        },
+      };
     },
   };
 }
