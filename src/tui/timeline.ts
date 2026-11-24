@@ -93,6 +93,11 @@ function inline(text: string): string {
 function blockLine(text: string): string {
   return sanitizePromptText(text.replace(ANSI, "")).trimEnd();
 }
+
+/** Whole block: ANSI removed first, then each line sanitized so line breaks and indentation survive (I-03). */
+export function sanitizeBlockText(text: string): string {
+  return text.replace(ANSI, "").split(/\r?\n/).map((line) => sanitizePromptText(line).trimEnd()).join("\n");
+}
 export function formatDuration(ms: number): string {
   const seconds = ms / 1000;
   return ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}s`;

@@ -6,6 +6,8 @@ import type { ToolApprover } from "../tools/executor";
 
 export interface ApprovalQuestion {
   text: string;
+  /** One-line choices for the composer hint (#635); sanitized at render (I-03). */
+  hint?: string;
   /** Anexo do diff da tool `edit` para o overlay da TUI (#64); já chega redacted (I-03). */
   diff?: { path: string; content: string };
   resolve(answer: string): void;
@@ -33,6 +35,7 @@ export function createApprovalBridge(): ApprovalBridge {
     text: string,
     diff?: { path: string; content: string },
     signal?: AbortSignal,
+    hint?: string,
   ): Promise<string> => new Promise((resolve) => {
     let settled = false;
     let onAbort: (() => void) | undefined;
@@ -53,6 +56,7 @@ export function createApprovalBridge(): ApprovalBridge {
     signal?.addEventListener("abort", onAbort, { once: true });
     pending = {
       text,
+      ...(hint === undefined ? {} : { hint }),
       ...(diff === undefined ? {} : { diff }),
       resolve: finish,
     };
@@ -60,9 +64,14 @@ export function createApprovalBridge(): ApprovalBridge {
   });
 
   return {
-    approveSwap: async (request: SwapRequest) => isYes(await ask(swapPrompt(request))),
-    onBudgetExceeded: async (status: BudgetStatus) => budgetChoice(await ask(budgetPrompt(status))),
-    approveTool: async (request, wait) => toolChoice(await ask(toolPrompt(request), request.diff, wait?.signal), request.perCall === true),
+    approveSwap: async (request: SwapRequest) => isYes(await ask(swapPrompt(request), undefined, undefined, "s aprova · n nega")),
+    onBudgetExceeded: async (status: BudgetStatus) =>
+      budgetChoice(await ask(budgetPrompt(status), undefined, undefined, "c continua · l baixa · p para")),
+    approveTool: async (request, wait) =>
+      toolChoice(
+        await ask(toolPrompt(request), request.diff, wait?.signal, "s once · a always · r reject · n deny"),
+        request.perCall === true,
+      ),
     askText: ask,
     subscribe: (fn) => {
       listener = fn;

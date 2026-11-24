@@ -41,7 +41,7 @@ import type { ProfileManager } from "../providers/profile-manager";
 import { budgetSegment, quotaSegment } from "../chat/usage";
 import { createThrottledSink, STREAM_THROTTLE_MS } from "./stream";
 import { HISTORY_LIMIT, visibleWindow } from "./history";
-import { renderTimelineZones, type TimelineTurnStatus } from "./timeline";
+import { renderTimelineZones, sanitizeBlockText, type TimelineTurnStatus, type TimelineView } from "./timeline";
 import { TimelineTurnStore } from "./timeline-store";
 import { TimelineZone } from "./timeline-zones";
 
@@ -90,7 +90,15 @@ function messageOf(error: unknown): string {
   return redactSecrets(error instanceof Error ? error.message : String(error));
 }
 
-function EntryLine({ entry, colors }: { entry: Entry; colors: ThemeColors }): ReactElement {
+function EntryLine({
+  entry,
+  colors,
+  expanded,
+}: {
+  entry: Entry;
+  colors: ThemeColors;
+  expanded?: TimelineView["expanded"];
+}): ReactElement {
   const { columns } = useWindowSize();
   const width = columns !== undefined && columns > 0 ? columns : 80;
   if (entry.kind === "timeline" && entry.timeline !== undefined) {
@@ -99,6 +107,7 @@ function EntryLine({ entry, colors }: { entry: Entry; colors: ThemeColors }): Re
       status: { model: "", mode: "" },
       turn: entry.timeline,
       ...(entry.results === undefined ? {} : { results: entry.results }),
+      ...(expanded === undefined ? {} : { expanded }),
     };
     return <TimelineZone view={view} width={width} zone="timeline" />;
   }
@@ -173,6 +182,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const [queued, setQueued] = useState(0);
   /** Bloco thinking recolhido com ctrl+t durante o stream (#560). */
   const [thinkingCollapsed, setThinkingCollapsed] = useState(false);
+  /** Expansion is collapsed by default (ADR-0035): ctrl+o reveals tool bodies, ctrl+t reveals reasoning. */
+  const [expanded, setExpanded] = useState<{ tools: boolean; reasoning: boolean }>({ tools: false, reasoning: false });
   const [initialConfig] = useState(() => loadTuiConfig(cwd));
   const [theme, setTheme] = useState<Theme>(initialConfig.theme);
   const colors = getThemeColors(theme);
@@ -186,8 +197,19 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const turn = useRef<AbortController | undefined>(undefined);
   /** Current turn's live timeline (#635); history entries keep completed turns. */
   const liveTimeline = useRef<TimelineTurnStore | undefined>(undefined);
+  /** First message of the live turn: ctrl+o reads bodies from here only. */
+  const liveMessagesFrom = useRef(0);
   const [, setTimelineTick] = useState(0);
   const refreshTimeline = (): void => setTimelineTick((tick) => tick + 1);
+  /** ctrl+o syncs the live bodies before expanding, so output exists while the turn still runs. */
+  const toggleToolOutput = (): void => {
+    const live = liveTimeline.current;
+    if (live !== undefined) {
+      live.setResultsFromMessages(session.snapshot().messages.slice(liveMessagesFrom.current));
+      refreshTimeline();
+    }
+    setExpanded((current) => ({ ...current, tools: !current.tools }));
+  };
   const exitRequested = useRef(false);
   const [status, setStatus] = useState<Status>(() => statusOf(session.snapshot()));
   const [health, setHealth] = useState<{ provider: string; state: "ok" | "down" } | undefined>(undefined);
@@ -532,6 +554,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       return;
     }
     const messagesBefore = session.snapshot().messages.length;
+    liveMessagesFrom.current = messagesBefore;
     const timeline = new TimelineTurnStore(`turn-${Date.now()}`, text);
     liveTimeline.current = timeline;
     refreshTimeline();
@@ -586,7 +609,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       const timelineEntry = commitTimeline("done");
       appendEntries([
         timelineEntry,
-        { kind: "assistant", text: result.final },
+        { kind: "assistant", text: sanitizeBlockText(result.final) },
         // Aviso que muda a resposta fica inline uma vez; repetição é estado (#480).
         ...(contextNote === undefined ? [] : [{ kind: "info" as const, state: true, text: contextNote }]),
         ...(result.trimmed ? [{ kind: "info" as const, state: true, text: "turno antigo descartado" }] : []),
@@ -674,9 +697,15 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
     // #560: o editor continua editável durante o turno; Enter enfileira a mensagem.
     const streaming = busy || busyRef.current;
     if (streaming) leader.current = false; // leader não vale durante o stream
+    if (ctrl && value === "o") {
+      // ctrl+o expands the tool bodies, redacted and keyed by callId (#635)
+      toggleToolOutput();
+      return;
+    }
     if (ctrl && value === "t") {
-      // ctrl+t recolhe/mostra o bloco de thinking (#560)
+      // ctrl+t expands reasoning and collapses the live thinking block (#560, #635)
       setThinkingCollapsed((current) => !current);
+      setExpanded((current) => ({ ...current, reasoning: !current.reasoning }));
       return;
     }
     if (!streaming && leader.current) {
@@ -1027,8 +1056,17 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const mode = session.permissionMode?.() ?? DEFAULT_PERMISSION_MODE;
   // Four TUIX zones (#635): the components only render `renderTimelineZones` lines.
   const timelineStatus = { model: status.model, mode, costUsd: status.costUsd };
-  const liveView = liveTimeline.current?.view({ kind: "done" }, timelineStatus);
+  const liveView = liveTimeline.current?.view({ kind: "done" }, timelineStatus, expanded);
   const composerMark = renderTimelineZones({ state: { kind: "done" }, status: timelineStatus }, width).composer[0] ?? "❯";
+  // Approval owns the composer zone while the timeline stays above it (ADR-0035).
+  const approvalComposer = question === undefined ? undefined : renderTimelineZones({
+    state: {
+      kind: "approval",
+      question: `${question.text}${question.diff === undefined ? "" : " · tab ver diff"}`,
+      answerHint: input === "" ? (question.hint ?? "enter responde · ctrl+c cancela") : `${input}▏`,
+    },
+    status: timelineStatus,
+  }, width).composer;
   return (
     <Box flexDirection="column">
       <Header colors={colors} provider={providerId} model={status.model} health={healthState} />
@@ -1037,7 +1075,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         : null}
       {hiddenEntries > 0 ? <Text dimColor>{`… ${hiddenEntries} mensagens anteriores`}</Text> : null}
       <Static items={entries}>
-        {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} />}
+        {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} expanded={expanded} />}
       </Static>
       {liveView === undefined ? null : <TimelineZone view={liveView} width={width} zone="timeline" />}
       {busy ? (
@@ -1048,29 +1086,38 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
               ? "pensando… recolhido (ctrl+t mostra)"
               : "pensando…"}
           </Text>
-          {thinkingCollapsed || partial === undefined ? null : <Text>{partial}</Text>}
+          {thinkingCollapsed || partial === undefined ? null : <Text>{sanitizeBlockText(partial)}</Text>}
         </Box>
       ) : null}
-      {question === undefined ? null : (
-        <Text color={colors.warning}>
-          {question.text}
-          {question.diff === undefined ? null : " · tab ver diff"}
-        </Text>
-      )}
       {toasts.map((toast) => (
         <Text key={toast.id} color={toast.kind === "error" ? colors.error : toast.kind === "warning" ? colors.warning : colors.accent}>
           {toastLine(toast)}
         </Text>
       ))}
       {queued > 0 ? <Text color={colors.warning}>{`fila: ${queued} na fila (enviada ao fim do turno)`}</Text> : null}
-      <Box marginTop={1} borderStyle="round" borderColor={mode === "bypass" ? colors.error : colors.accent} paddingX={1} flexDirection="column">
-        {inputLines.map((line, index) => (
-          <Box key={index}>
-            <Text color={colors.accent}>{index === 0 ? `${composerMark} ` : "  "}</Text>
-            <Text>{line}</Text>
-            {index === inputLines.length - 1 ? <Text inverse> </Text> : null}
-          </Box>
-        ))}
+      <Box
+        marginTop={1}
+        borderStyle="round"
+        borderColor={question !== undefined ? colors.warning : mode === "bypass" ? colors.error : colors.accent}
+        paddingX={1}
+        flexDirection="column"
+      >
+        {approvalComposer === undefined
+          ? inputLines.map((line, index) => (
+              <Box key={index}>
+                <Text color={colors.accent}>{index === 0 ? `${composerMark} ` : "  "}</Text>
+                <Text>{line}</Text>
+                {index === inputLines.length - 1 ? <Text inverse> </Text> : null}
+              </Box>
+            ))
+          : approvalComposer.map((line, index) => (
+              <Text
+                key={index}
+                {...(index === 0 ? { color: colors.warning } : { dimColor: input === "" })}
+              >
+                {line}
+              </Text>
+            ))}
       </Box>
       {question === undefined ? (
         <Text dimColor>
