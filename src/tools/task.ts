@@ -44,7 +44,7 @@ export interface TaskResumeInput {
 }
 
 export type TaskResumeOutcome =
-  | { status: "ok"; output: string; level: TaskResumeLevel; source: "request" | "default" | "fallback"; restored: readonly string[] }
+  | { status: "ok"; output: string; level: TaskResumeLevel; source: "request" | "default" | "fallback"; restored: readonly string[]; truncated: boolean }
   | { status: "error"; error: TaskResumeErrorCode; message: string };
 
 export type TaskResumer = (input: TaskResumeInput) => Promise<TaskResumeOutcome>;
@@ -224,13 +224,13 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
             payload: {
               fromAgent: ctx.agent, session: sessionId, instructionHash: taskPromptHash(instruction),
               ...(resumed.status === "ok"
-                ? { level: resumed.level, source: resumed.source, restored: resumed.restored }
+                ? { level: resumed.level, source: resumed.source, restored: resumed.restored, truncated: resumed.truncated }
                 : { error: resumed.error }),
             },
           });
           return resumed.status === "error"
             ? { output: JSON.stringify({ error: resumed.error, session_id: sessionId, message: redactSecrets(resumed.message) }), isError: true }
-            : { output: JSON.stringify({ session_id: sessionId, level: resumed.level, source: resumed.source, restored: resumed.restored, output: resumed.output }) };
+            : { output: JSON.stringify({ session_id: sessionId, level: resumed.level, source: resumed.source, restored: resumed.restored, truncated: resumed.truncated, output: resumed.output }) };
         } catch (error) {
           if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
           return { output: redactSecrets(error instanceof Error ? error.message : String(error)), isError: true };

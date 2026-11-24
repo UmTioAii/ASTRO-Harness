@@ -1264,13 +1264,14 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         handle.history = [...resumed.messages, { role: "assistant", content: resumed.final }];
         return {
           status: "ok", output: resumed.final, level: resolved.plan.level,
-          source: resolved.plan.source, restored: resolved.plan.restored,
+          source: resolved.plan.source, restored: resolved.plan.restored, truncated: resolved.truncated,
         };
       } catch (error) {
         if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
         if (error instanceof ChildResumeError) return { status: "error", error: error.code, message: error.message };
-        // The live session died on the resume: the next attempt rebuilds (L3).
-        if (handle !== undefined) handle.history = undefined;
+        // Only a cancelled session is gone; a retryable provider class keeps
+        // the history so the next default resume is still L2 (ADR-0036).
+        if (handle !== undefined && isAbortError(error, signal)) handle.history = undefined;
         return {
           status: "error", error: "resume_failed",
           message: redactSecrets(error instanceof Error ? error.message : String(error)),

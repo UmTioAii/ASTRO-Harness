@@ -267,9 +267,10 @@ describe("live child resume handle (ADR-0036, #602)", () => {
   });
 
   test("the resumed prompt bounds the instruction and the brief", () => {
-    const prompt = resolve(registryOf({ brief: brief({ objective: "o".repeat(4000) }) }),
-      { instruction: "i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 500), requested: "L1" }).prompt;
-    expect([prompt.includes("i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1)), prompt.includes("o".repeat(201))]).toEqual([false, false]);
+    const bounded = resolve(registryOf({ brief: brief({ objective: "o".repeat(4000) }) }),
+      { instruction: "i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 500), requested: "L1" });
+    expect([bounded.truncated, bounded.prompt.includes("i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1)), bounded.prompt.includes("o".repeat(201))])
+      .toEqual([true, false, false]);
   });
 
   test("an evicted handle is session_missing", () => {

@@ -253,7 +253,7 @@ export class ChildSessionRegistry {
 export function resolveChildResume(
   registry: ChildSessionRegistry,
   request: { sessionId: string; instruction: string; requested?: ChildResumeLevel; caller: { run: string; agent: string } },
-): { handle: ChildSessionHandle; plan: ChildResumePlan; history?: readonly ChatMessage[]; prompt: string } {
+): { handle: ChildSessionHandle; plan: ChildResumePlan; history?: readonly ChatMessage[]; prompt: string; truncated: boolean } {
   const session = typeof request.sessionId === "string" ? request.sessionId.trim() : "";
   const handle = session === "" ? undefined : registry.get(session);
   if (handle === undefined) {
@@ -275,30 +275,36 @@ export function resolveChildResume(
   }
   const live = plan.level === "L2" && handle.history !== undefined;
   const brief = plan.brief ?? (live || plan.level === "L1" ? handle.brief : undefined);
+  const built = buildResumePrompt(plan, request.instruction, {
+    ...(brief === undefined ? {} : { brief }),
+    ...(handle.journal === undefined ? {} : { journal: handle.journal }),
+  });
   return {
     handle, plan,
     ...(live ? { history: handle.history } : {}),
-    prompt: buildResumePrompt(plan, request.instruction, {
-      ...(brief === undefined ? {} : { brief }),
-      ...(handle.journal === undefined ? {} : { journal: handle.journal }),
-    }),
+    prompt: built.prompt,
+    truncated: built.truncated,
   };
 }
 
-/** The resumed prompt: a bounded instruction plus what the plan restored. */
+/**
+ * The resumed prompt: a bounded instruction plus what the plan restored.
+ * `truncated` reports a cut instruction so the parent never assumes the tail
+ * was delivered.
+ */
 export function buildResumePrompt(
   plan: ChildResumePlan,
   instruction: string,
   options: { brief?: ChildBrief; journal?: { steps: number; tokens: number } } = {},
-): string {
+): { prompt: string; truncated: boolean } {
   const text = typeof instruction === "string" ? instruction.trim() : "";
-  const clipped = text.length > RESUME_INSTRUCTION_MAX_CHARS
-    ? `${text.slice(0, RESUME_INSTRUCTION_MAX_CHARS)}\n(instruction truncated)`
-    : text;
+  const truncated = text.length > RESUME_INSTRUCTION_MAX_CHARS;
+  const clipped = truncated ? `${text.slice(0, RESUME_INSTRUCTION_MAX_CHARS)}\n(instruction truncated)` : text;
   const brief = options.brief === undefined ? "" : `\n\nbrief: ${JSON.stringify(boundChildBrief(options.brief).brief)}`;
   const journal = plan.restored.includes("journal") && options.journal !== undefined
     ? `\n\njournal: ${options.journal.steps} steps, ${options.journal.tokens} tokens`
     : "";
-  return `resume ${plan.level} (${plan.source}); restored: ${plan.restored.join(", ") || "instruction only"}`
+  const prompt = `resume ${plan.level} (${plan.source}); restored: ${plan.restored.join(", ") || "instruction only"}`
     + `\n\ninstruction:\n${clipped}${brief}${journal}`;
+  return { prompt, truncated };
 }
