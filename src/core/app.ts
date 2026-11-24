@@ -48,6 +48,7 @@ import { writeFileTool } from "../tools/write-file";
 import { createMemoryWriteTool } from "../tools/memory-write";
 import { loadMemory, memoryPrompt } from "../memory";
 import { handoffTool } from "../tools/handoff";
+import { buildChildHandoffArtifact, type ChildBrief } from "../handoff/children";
 import { createListModelCandidatesTool } from "../tools/list-model-candidates";
 import { createTaskTool } from "../tools/task";
 import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-search";
@@ -1078,7 +1079,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ? `provider:${targetModel.provider}`
         : providerAccountRefFor(targetModel.provider, provider);
     },
-    delegate: async ({ agent, prompt, maxSteps, signal, callerAllow, callerPermission }) => {
+    delegate: async ({ agent, prompt, fromAgent, step, maxSteps, signal, callerAllow, callerPermission }) => {
       const target = registry.requireAgent(agent);
       const targetModel = registry.resolveModel(target);
       // A11: sem spawn.parallel o filho compartilha a conta já travada pelo
@@ -1157,7 +1158,42 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ...(budget === undefined ? {} : { budgetReserve: (m: ModelEntry, profile?: string) => reserveForCall(config, registry, m, profile) }),
         ...(resolveIdentity === undefined ? {} : { resolveIdentity }),
         ...(target.profile === undefined ? {} : { agentProfile: target.profile }),
-      }, prompt);
+      }, prompt).catch((error) => {
+        // ADR-0036: only an exceptional child writes an artifact, at the
+        // compact level, never the parent transcript.
+        const reason = error instanceof Error ? error.name : "child_failed";
+        const used = ledger.readAll().filter((entry) => entry.run === redactSecrets(childRun));
+        const bounds = ledger.seqBoundsOfRun(childRun);
+        const brief: ChildBrief = {
+          // The free prompt never enters the artifact (I-03, D-11/#551): the
+          // objective is a stable label carrying only the task hash.
+          objective: `child ${agent} · task #${shortTaskHash(prompt)}`,
+          outputFormat: "final text summary",
+          constraints: [...allow],
+          whatWasTried: [`child steps: ${used.length}`, `error: ${reason}`],
+          boundaries: ["scope: parent allowlist", "no parent transcript", "no grandchild"],
+        };
+        try {
+          const artifact = buildChildHandoffArtifact({
+            run: childRun,
+            from: fromAgent,
+            to: agent,
+            sourceStep: step ?? 1,
+            budgetSpent: {
+              tokens: used.reduce((sum, entry) => sum + entry.tokensIn + entry.tokensOut, 0),
+              usd: used.reduce((sum, entry) => sum + (entry.costUsd ?? 0), 0),
+            },
+            brief,
+            ...(target.profile === undefined ? {} : { toProfile: target.profile }),
+            ...(bounds === undefined ? {} : { sourceRefs: { ledger_id: ledger.id(), seq_start: bounds.start, seq_end: bounds.end } }),
+          });
+          const entry = ledger.recordHandoff("handoff.created", childRun, artifact, { agent: fromAgent });
+          audit.append({ run: childRun, agent: fromAgent, tipo: "handoff.created", payload: { handoff_id: entry.handoff_id, artifact: entry.artifact } });
+        } catch {
+          // Best effort: a ledger failure never masks the child's real error.
+        }
+        throw error;
+      });
       return result.final;
     },
   }));

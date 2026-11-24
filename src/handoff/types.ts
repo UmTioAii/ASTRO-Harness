@@ -81,6 +81,8 @@ export interface HandoffArtifactV1 extends HandoffDraft {
   budget_spent: HandoffBudget;
   from_profile?: string;
   to_profile?: string;
+  /** Required output format of an exceptional child handoff (ADR-0036). */
+  child_output_format?: string;
   source_refs?: HandoffSourceRefs;
   artifacts?: HandoffArtifactRef[];
   compaction?: HandoffCompaction;
@@ -98,6 +100,7 @@ export interface HandoffBuildArgs {
   draft: HandoffDraft;
   fromProfile?: string;
   toProfile?: string;
+  childOutputFormat?: string;
   sourceRefs?: HandoffSourceRefs;
   artifacts?: HandoffArtifactRef[];
   compaction?: HandoffCompaction;
@@ -138,11 +141,21 @@ function asObject(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Maximum child output-format length (ADR-0036). */
+export const CHILD_OUTPUT_FORMAT_MAX_CHARS = 160;
+
 function asString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     mismatch(`campo "${field}" deve ser string não vazia`);
   }
   return value;
+}
+
+/** Non-empty string with a size ceiling (ADR-0036: read-back rejects unbounded fields). */
+function asBoundedString(value: unknown, field: string, max: number): string {
+  const text = asString(value, field);
+  if (text.length > max) mismatch(`field "${field}" exceeds ${max} characters`);
+  return text;
 }
 
 /** Valida lista de strings obrigatória (artefato v1). */
@@ -167,8 +180,13 @@ function asPositiveInt(value: unknown, field: string): number {
 }
 
 const COMPACTION_STRATEGIES: readonly string[] = ["summary", "truncate", "none"];
-/** Campos que a compactação pode dropar (F-25): open_questions, depois decisions. */
-const DROPPABLE_FIELDS: readonly string[] = ["open_questions", "decisions"];
+/**
+ * Fields a compaction may drop or clip: `open_questions`/`decisions` first,
+ * then the child brief fields added by ADR-0036.
+ */
+const DROPPABLE_FIELDS: readonly string[] = [
+  "open_questions", "decisions", "objective", "child_output_format", "constraints", "next_steps",
+];
 
 /** Valida os campos opcionais de compactação/referência (F-25). */
 function validateCompactFields(raw: Record<string, unknown>): {
@@ -248,6 +266,7 @@ export function validateHandoffArtifact(value: unknown): HandoffArtifactV1 {
     ...validateHandoffDraft(raw),
     ...(raw.from_profile === undefined ? {} : { from_profile: asString(raw.from_profile, "from_profile") }),
     ...(raw.to_profile === undefined ? {} : { to_profile: asString(raw.to_profile, "to_profile") }),
+    ...(raw.child_output_format === undefined ? {} : { child_output_format: asBoundedString(raw.child_output_format, "child_output_format", CHILD_OUTPUT_FORMAT_MAX_CHARS) }),
     ...validateCompactFields(raw),
   };
 }
@@ -271,6 +290,7 @@ export function buildHandoffArtifact(args: HandoffBuildArgs): HandoffArtifactV1 
     ...(args.draft.open_questions === undefined ? {} : { open_questions: args.draft.open_questions }),
     ...(args.fromProfile === undefined ? {} : { from_profile: args.fromProfile }),
     ...(args.toProfile === undefined ? {} : { to_profile: args.toProfile }),
+    ...(args.childOutputFormat === undefined ? {} : { child_output_format: args.childOutputFormat }),
     ...(args.sourceRefs === undefined ? {} : { source_refs: args.sourceRefs }),
     ...(args.artifacts === undefined || args.artifacts.length === 0 ? {} : { artifacts: args.artifacts }),
     // Compactação sempre auditada: sem perda é strategy "none" (F-25)
@@ -294,6 +314,7 @@ export function sanitizeHandoffArtifact(a: HandoffArtifactV1): HandoffArtifactV1
     ...(a.open_questions === undefined ? {} : { open_questions: a.open_questions.map((value) => redactSecrets(value)) }),
     ...(a.from_profile === undefined ? {} : { from_profile: redactSecrets(a.from_profile) }),
     ...(a.to_profile === undefined ? {} : { to_profile: redactSecrets(a.to_profile) }),
+    ...(a.child_output_format === undefined ? {} : { child_output_format: redactSecrets(a.child_output_format) }),
     ...(a.artifacts === undefined ? {} : { artifacts: a.artifacts.map((r) => ({ ...r, path: redactSecrets(r.path) })) }),
     ...(a.compaction === undefined ? {} : { compaction: { ...a.compaction, droppedFields: a.compaction.droppedFields.map((value) => redactSecrets(value)) } }),
   };

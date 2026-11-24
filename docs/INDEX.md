@@ -25,6 +25,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/adr/0034-host-shell-default-consent-audit.md` | Host shell as the default path: ordered rules, scanner, approvals, risk consent and hashed audit (#599) | ~60 |
 | `docs/adr/0033-turn-round-limits-and-profiles.md` | Turn/round limits, schema 2 aliases and Default/Control precedence (#594) | ~30 |
 | `docs/adr/0035-tui-timeline.md` | Timeline contract shared by the pure renderer and turn events: entries, ordering, labels, redaction, width bands (#595) | ~45 |
+| `docs/adr/0036-agents-handoff-and-resume-levels.md` | Agents, child handoff and the L1/L2/L3 resume levels (#602) | ~45 |
 | `docs/adr/0037-per-account-concurrency-and-bounded-agents.md` | Per-account concurrency, bounded spawn and shared-account budget (#602) | ~45 |
 | `docs/superpowers/plans/` | Ao executar uma frente do planejamento; roadmap de issues abertas em `2026-11-01-roadmap-execucao-issues-abertas.md` | 1 por frente |
 | `docs/superpowers/specs/` | Antes de implementar uma frente aprovada; anexos em `2026-11-08-anexos-attachments-design.md` (#392) | 1 por frente |
