@@ -124,6 +124,7 @@ export function createSearchAndReadTool(deps: SearchAndReadDeps): Tool {
       const targets = visible.slice(0, depth);
       const omittedResults = parsed.results.length - visible.length;
       const texts = new Map<number, string>();
+      const totals = new Map<number, number>();
       const failures: Array<{ id: number; reason: ReadFailureReason }> = [];
       let truncated = false;
       const record = (aborted = false, reason?: "ceiling"): void => {
@@ -166,6 +167,7 @@ export function createSearchAndReadTool(deps: SearchAndReadDeps): Tool {
           continue;
         }
         texts.set(target.id, read.output);
+        totals.set(target.id, read.truncation?.unit === "characters" ? read.truncation.total : read.output.length);
       }
       let pageChars = pageBudget;
       const build = (limit: number): Record<string, unknown> => envelope(visible.map((item) => {
@@ -179,17 +181,20 @@ export function createSearchAndReadTool(deps: SearchAndReadDeps): Tool {
         pageChars = Math.floor(pageChars * 0.8);
         payload = build(pageChars);
       }
-      let cutPages = 0;
+      let totalChars = 0;
+      let keptChars = 0;
       for (const target of targets) {
         const text = texts.get(target.id);
-        if (text !== undefined && text.length > pageChars) cutPages += 1;
+        if (text === undefined) continue;
+        totalChars += totals.get(target.id) ?? text.length;
+        keptChars += Math.min(text.length, pageChars);
       }
-      truncated = omittedResults > 0 || cutPages > 0;
+      truncated = omittedResults > 0 || totalChars > keptChars;
       record();
       if (!truncated) return { output: JSON.stringify(payload) };
       const report = omittedResults > 0
         ? { removed: omittedResults, total: parsed.results.length, unit: "results" }
-        : { removed: cutPages, total: targets.length, unit: "pages" };
+        : { removed: totalChars - keptChars, total: totalChars, unit: "characters" };
       const { field, marker } = truncationReport({ ...report, hint: ceiling.hint });
       return { output: JSON.stringify({ ...payload, truncated: true, notice: marker }), truncation: field };
     },

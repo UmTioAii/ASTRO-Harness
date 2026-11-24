@@ -278,9 +278,20 @@ export function createWebFetchTool(deps: WebFetchDeps): Tool {
         return failure(`web_fetch: tipo de conteúdo não suportado (${contentType.split(";")[0]})`, "content_type");
       }
       // Sem Content-Type, trata como HTML e sanitiza (não devolve tags cruas).
-      const text = contentType === "" || /html|xml/i.test(contentType) ? htmlToText(body, parsed.format) : body;
       // ADR-0027: redige o corpo ANTES do slice/cap — segredo cortado na borda não vaza (I-03).
-      return { output: redactSecrets(text).slice(0, parsed.maxLength) };
+      const rendered = redactSecrets(contentType === "" || /html|xml/i.test(contentType)
+        ? htmlToText(body, parsed.format)
+        : body);
+      if (rendered.length <= parsed.maxLength) return { output: rendered };
+      return {
+        output: rendered.slice(0, parsed.maxLength),
+        truncation: {
+          removed: rendered.length - parsed.maxLength,
+          total: rendered.length,
+          unit: "characters",
+          hint: "raise maxLength to read the rest of the page",
+        },
+      };
     },
   };
 }
