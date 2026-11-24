@@ -223,7 +223,16 @@ function configUrls(config: Record<string, unknown> | undefined): Array<{ field:
       if (isRecord(server)) add(`mcpServers.${name}.url`, server.url);
     }
   }
-  if (isRecord(config.webSearch)) add("webSearch.baseUrl", config.webSearch.baseUrl);
+  if (isRecord(config.webSearch)) {
+    add("webSearch.baseUrl", config.webSearch.baseUrl);
+    // Chain entries are fixture surface too (#604): a literal endpoint is
+    // validated with the entry that declares it.
+    if (Array.isArray(config.webSearch.fallback)) {
+      for (const [index, entry] of config.webSearch.fallback.entries()) {
+        if (isRecord(entry)) add(`webSearch.fallback[${index}].baseUrl`, entry.baseUrl);
+      }
+    }
+  }
   if (isRecord(config.team)) add("team.auditWebhook", config.team.auditWebhook);
   if (isRecord(config.telemetry)) add("telemetry.endpoint", config.telemetry.endpoint);
   return urls;
@@ -546,15 +555,17 @@ function assertEffectiveLoopback(config: AstroConfig): void {
       assertLoopbackUrl(base, field);
     };
     check("webSearch.baseUrl", config.webSearch.baseUrl ?? DEFAULT_BASE[config.webSearch.provider]);
-    // The whole chain is a fixture surface, not only the primary (#604). A chain
-    // entry has no baseUrl, so name the default endpoint that failed and why it
-    // cannot be overridden here.
+    // The whole chain is a fixture surface, not only the primary (#604): every
+    // declared baseUrl is validated, and an entry without one names the provider
+    // default that failed and how to override it.
     for (const [index, entry] of (config.webSearch.fallback ?? []).entries()) {
-      const base = DEFAULT_BASE[entry.provider];
+      const base = entry.baseUrl ?? DEFAULT_BASE[entry.provider];
       if (base === undefined || base === "") {
-        throw new Error(`cenário com webSearch.fallback[${index}] (${entry.provider}) sem endpoint padrão; o golden não pode declarar esse fallback`);
+        throw new Error(`cenário com webSearch.fallback[${index}].baseUrl ausente; declare um endpoint loopback para o backend "${entry.provider}"`);
       }
-      assertLoopbackUrl(base, `webSearch.fallback[${index}] (endpoint padrão de ${entry.provider}; o golden não pode sobrescrevê-lo)`);
+      assertLoopbackUrl(base, entry.baseUrl === undefined
+        ? `webSearch.fallback[${index}].baseUrl (endpoint padrão de ${entry.provider}; declare um baseUrl loopback)`
+        : `webSearch.fallback[${index}].baseUrl`);
     }
   }
   if (config.team?.auditWebhook !== undefined) {

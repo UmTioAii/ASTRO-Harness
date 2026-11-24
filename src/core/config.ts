@@ -1816,26 +1816,39 @@ function expectWebSearchKeyEnv(value: unknown, field: string): string {
   return name;
 }
 
-/** One backend of the declared chain (#604): provider plus an optional key name. */
+/**
+ * One backend of the declared chain (#604): provider, optional key name and an
+ * optional endpoint. `baseUrl` follows the primary's URL rules; `custom` has no
+ * default endpoint, so it only enters the chain declaring one.
+ */
 function validateWebSearchBackend(value: unknown, field: string): WebSearchBackendConfig {
   const raw = expectObject(value, field);
-  const known = new Set(["provider", "apiKeyEnv"]);
+  const known = new Set(["provider", "apiKeyEnv", "baseUrl"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) fail(`config inválida: "${field}.${key}" desconhecido`);
   }
   const provider = expectWebSearchProvider(raw.provider, `${field}.provider`);
-  if (provider === "custom") {
-    fail(`config inválida: "${field}.provider" não aceita "custom" na cadeia (sem endpoint declarado); use-o como provider principal`);
-  }
   const apiKeyEnv = raw.apiKeyEnv === undefined ? undefined : expectWebSearchKeyEnv(raw.apiKeyEnv, `${field}.apiKeyEnv`);
-  return { provider, ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }) };
+  const baseUrl = raw.baseUrl === undefined ? undefined : expectString(raw.baseUrl, `${field}.baseUrl`);
+  if (baseUrl !== undefined) {
+    const problem = urlProblem(baseUrl);
+    if (problem !== undefined) fail(`config inválida: "${field}.baseUrl" ${problem}`);
+  }
+  if (provider === "custom" && baseUrl === undefined) {
+    fail(`config inválida: "${field}.baseUrl" é obrigatório para o provider "custom" na cadeia`);
+  }
+  return {
+    provider,
+    ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+  };
 }
 
 /**
  * Valida `webSearch` (#57, #604): a chave é sempre um NOME de variável de
  * ambiente (I-03); `custom` exige baseUrl; a cadeia `fallback` é ordenada, sem
- * backend repetido (nem o principal) e com chave de ambiente opcional por
- * entrada. Default de resultados 5, teto 10.
+ * backend repetido (nem o principal) e com chave de ambiente e endpoint
+ * opcionais por entrada. Default de resultados 5, teto 10.
  */
 function validateWebSearch(value: unknown): WebSearchConfig {
   const raw = expectObject(value, "webSearch");
@@ -1890,7 +1903,7 @@ function validateWebSearch(value: unknown): WebSearchConfig {
  * validação), minor soma chave opcional retrocompatível, patch só corrige
  * mensagem. O alvo hoje é o major 1.
  */
-export const CONFIG_SCHEMA_VERSION = "2.1.0";
+export const CONFIG_SCHEMA_VERSION = "2.2.0";
 
 const CONFIG_SCHEMA_MAJOR = Number(CONFIG_SCHEMA_VERSION.split(".")[0]);
 
@@ -2015,7 +2028,7 @@ const CONFIG_SHAPE: ConfigShape = {
     compaction: { keys: ["buffer"] },
     webSearch: {
       keys: ["provider", "apiKeyEnv", "baseUrl", "defaultMaxResults", "fallback"],
-      children: { fallback: { items: { keys: ["provider", "apiKeyEnv"] } } },
+      children: { fallback: { items: { keys: ["provider", "apiKeyEnv", "baseUrl"] } } },
     },
     memory: { keys: ["maxChars"] },
     paths: { keys: ["ledger", "audit"] },
