@@ -4,6 +4,7 @@
  * HandoffArtifactV1 at the 512-token level, never the parent transcript.
  */
 import { estimateTokens } from "../tokens";
+import type { ChatMessage } from "../providers/types";
 import {
   CHILD_OUTPUT_FORMAT_MAX_CHARS, HandoffError, buildHandoffArtifact, handoffId,
   type HandoffArtifactV1, type HandoffBudget, type HandoffCompaction, type HandoffDraft,
@@ -196,4 +197,116 @@ export function planChildResume(input: ChildResumeInput): ChildResumePlan {
     restored: ["brief", "journal"], ...common,
     ...(artifact.source_refs === undefined ? {} : { sourceRefs: artifact.source_refs }),
   };
+}
+
+/** Stable refusal codes for `task.resume`; a resume never starts a fresh run. */
+export type ChildResumeErrorCode = "session_missing" | "artifact_missing" | "resume_forbidden";
+
+export class ChildResumeError extends Error {
+  readonly code: ChildResumeErrorCode;
+  constructor(code: ChildResumeErrorCode, message: string) {
+    super(message);
+    this.name = "ChildResumeError";
+    this.code = code;
+  }
+}
+
+/** Ceiling for the parent's extra instruction; the brief keeps its 512-token level. */
+export const RESUME_INSTRUCTION_MAX_CHARS = 2000;
+/** Bounded live-handle store; an evicted session is honestly `session_missing`. */
+export const CHILD_SESSION_HANDLES_MAX = 32;
+
+/** One delegated child, live for the parent run only: L2 reopens `history` in memory. */
+export interface ChildSessionHandle {
+  /** Child run id: the session id `task.resume` takes. */
+  session: string;
+  /** Run and agent that delegated; nobody else may resume (I-18). */
+  parentRun: string;
+  parentAgent: string;
+  childAgent: string;
+  /** In-memory brief; L1 reruns from it when no artifact was written. */
+  brief: ChildBrief;
+  history?: readonly ChatMessage[];
+  artifact?: HandoffArtifactV1;
+  /** Ledger digest an L3 rebuild may cite; counts only, never prompt text. */
+  journal?: { steps: number; tokens: number };
+  run(prompt: string, options?: { history?: readonly ChatMessage[]; signal?: AbortSignal }): Promise<{
+    final: string; steps: number; messages: readonly ChatMessage[];
+  }>;
+}
+
+export class ChildSessionRegistry {
+  readonly #handles = new Map<string, ChildSessionHandle>();
+  constructor(readonly limit = CHILD_SESSION_HANDLES_MAX) {}
+  register(handle: ChildSessionHandle): void {
+    this.#handles.delete(handle.session);
+    this.#handles.set(handle.session, handle);
+    for (const oldest of this.#handles.keys()) {
+      if (this.#handles.size <= this.limit) break;
+      this.#handles.delete(oldest);
+    }
+  }
+  get(session: string): ChildSessionHandle | undefined { return this.#handles.get(session); }
+}
+
+/** Resolves one resume; a missing live session or artifact is a typed refusal, never a fresh run. */
+export function resolveChildResume(
+  registry: ChildSessionRegistry,
+  request: { sessionId: string; instruction: string; requested?: ChildResumeLevel; caller: { run: string; agent: string } },
+): { handle: ChildSessionHandle; plan: ChildResumePlan; history?: readonly ChatMessage[]; prompt: string; truncated: boolean } {
+  const session = typeof request.sessionId === "string" ? request.sessionId.trim() : "";
+  const handle = session === "" ? undefined : registry.get(session);
+  if (handle === undefined) {
+    throw new ChildResumeError("session_missing", "child session is not live in this run; a resume never starts a fresh run");
+  }
+  if (handle.parentRun !== request.caller.run || handle.parentAgent !== request.caller.agent) {
+    throw new ChildResumeError("resume_forbidden", "only the agent that delegated this child may resume it");
+  }
+  const plan = planChildResume({
+    ...(request.requested === undefined ? {} : { requested: request.requested }),
+    sessionId: session,
+    sessionAvailable: handle.history !== undefined,
+    ...(handle.artifact === undefined ? {} : { artifact: handle.artifact }),
+  });
+  if (plan.unavailable !== undefined) {
+    throw new ChildResumeError(plan.unavailable, plan.unavailable === "session_missing"
+      ? "the child session is gone and no live handle names it"
+      : "the child session is gone and no artifact can rebuild it");
+  }
+  const live = plan.level === "L2" && handle.history !== undefined;
+  // L2 restores the session itself: the in-memory brief is only for L1, which
+  // has no session to reopen (ADR-0036). L3 takes its brief from the artifact.
+  const brief = plan.brief ?? (plan.level === "L1" ? handle.brief : undefined);
+  const built = buildResumePrompt(plan, request.instruction, {
+    ...(brief === undefined ? {} : { brief }),
+    ...(handle.journal === undefined ? {} : { journal: handle.journal }),
+  });
+  return {
+    handle, plan,
+    ...(live ? { history: handle.history } : {}),
+    prompt: built.prompt,
+    truncated: built.truncated,
+  };
+}
+
+/**
+ * The resumed prompt: a bounded instruction plus what the plan restored.
+ * `truncated` reports a cut instruction so the parent never assumes the tail
+ * was delivered.
+ */
+export function buildResumePrompt(
+  plan: ChildResumePlan,
+  instruction: string,
+  options: { brief?: ChildBrief; journal?: { steps: number; tokens: number } } = {},
+): { prompt: string; truncated: boolean } {
+  const text = typeof instruction === "string" ? instruction.trim() : "";
+  const truncated = text.length > RESUME_INSTRUCTION_MAX_CHARS;
+  const clipped = truncated ? `${text.slice(0, RESUME_INSTRUCTION_MAX_CHARS)}\n(instruction truncated)` : text;
+  const brief = options.brief === undefined ? "" : `\n\nbrief: ${JSON.stringify(boundChildBrief(options.brief).brief)}`;
+  const journal = plan.restored.includes("journal") && options.journal !== undefined
+    ? `\n\njournal: ${options.journal.steps} steps, ${options.journal.tokens} tokens`
+    : "";
+  const prompt = `resume ${plan.level} (${plan.source}); restored: ${plan.restored.join(", ") || "instruction only"}`
+    + `\n\ninstruction:\n${clipped}${brief}${journal}`;
+  return { prompt, truncated };
 }
