@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
+import { Auditor } from "../src/audit";
 import { bootChat } from "../src/chat/boot";
 import { nodeReplIO } from "../src/chat/node-io";
 import { loadHomeState, saveHomeState } from "../src/home-state";
@@ -17,6 +18,7 @@ import {
   shellConsentReport,
 } from "../src/shell-consent";
 import { saveTermsAcceptance } from "../src/terms";
+import { ToolExecutor } from "../src/tools/executor";
 import { installNoDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
 import { listShellDecisions, shellHarness } from "./helpers/shell-harness";
 
