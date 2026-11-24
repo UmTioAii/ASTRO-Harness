@@ -81,6 +81,8 @@ export interface HandoffArtifactV1 extends HandoffDraft {
   budget_spent: HandoffBudget;
   from_profile?: string;
   to_profile?: string;
+  /** Required output format of an exceptional child handoff (ADR-0036). */
+  child_output_format?: string;
   source_refs?: HandoffSourceRefs;
   artifacts?: HandoffArtifactRef[];
   compaction?: HandoffCompaction;
@@ -98,6 +100,7 @@ export interface HandoffBuildArgs {
   draft: HandoffDraft;
   fromProfile?: string;
   toProfile?: string;
+  childOutputFormat?: string;
   sourceRefs?: HandoffSourceRefs;
   artifacts?: HandoffArtifactRef[];
   compaction?: HandoffCompaction;
@@ -248,6 +251,7 @@ export function validateHandoffArtifact(value: unknown): HandoffArtifactV1 {
     ...validateHandoffDraft(raw),
     ...(raw.from_profile === undefined ? {} : { from_profile: asString(raw.from_profile, "from_profile") }),
     ...(raw.to_profile === undefined ? {} : { to_profile: asString(raw.to_profile, "to_profile") }),
+    ...(raw.child_output_format === undefined ? {} : { child_output_format: asString(raw.child_output_format, "child_output_format") }),
     ...validateCompactFields(raw),
   };
 }
@@ -271,6 +275,7 @@ export function buildHandoffArtifact(args: HandoffBuildArgs): HandoffArtifactV1 
     ...(args.draft.open_questions === undefined ? {} : { open_questions: args.draft.open_questions }),
     ...(args.fromProfile === undefined ? {} : { from_profile: args.fromProfile }),
     ...(args.toProfile === undefined ? {} : { to_profile: args.toProfile }),
+    ...(args.childOutputFormat === undefined ? {} : { child_output_format: args.childOutputFormat }),
     ...(args.sourceRefs === undefined ? {} : { source_refs: args.sourceRefs }),
     ...(args.artifacts === undefined || args.artifacts.length === 0 ? {} : { artifacts: args.artifacts }),
     // Compactação sempre auditada: sem perda é strategy "none" (F-25)
@@ -294,6 +299,7 @@ export function sanitizeHandoffArtifact(a: HandoffArtifactV1): HandoffArtifactV1
     ...(a.open_questions === undefined ? {} : { open_questions: a.open_questions.map((value) => redactSecrets(value)) }),
     ...(a.from_profile === undefined ? {} : { from_profile: redactSecrets(a.from_profile) }),
     ...(a.to_profile === undefined ? {} : { to_profile: redactSecrets(a.to_profile) }),
+    ...(a.child_output_format === undefined ? {} : { child_output_format: redactSecrets(a.child_output_format) }),
     ...(a.artifacts === undefined ? {} : { artifacts: a.artifacts.map((r) => ({ ...r, path: redactSecrets(r.path) })) }),
     ...(a.compaction === undefined ? {} : { compaction: { ...a.compaction, droppedFields: a.compaction.droppedFields.map((value) => redactSecrets(value)) } }),
   };

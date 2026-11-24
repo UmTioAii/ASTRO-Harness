@@ -16,6 +16,8 @@ export interface TaskDelegatorInput {
   prompt: string;
   fromAgent: string;
   maxSteps?: number;
+  /** Parent step that delegated; the exceptional handoff records it (ADR-0036). */
+  step?: number;
   signal?: AbortSignal;
   /** Allowlist efetiva do chamador (I-01): teto do filho. */
   callerAllow?: readonly string[];
@@ -151,6 +153,7 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
         prompt: task.prompt,
         fromAgent: ctx.agent,
         ...(ctx.maxSteps === undefined ? {} : { maxSteps: ctx.maxSteps }),
+        ...(ctx.step === undefined ? {} : { step: ctx.step }),
         ...(signal === undefined ? {} : { signal }),
         ...(ctx.allow === undefined ? {} : { callerAllow: ctx.allow }),
         ...(ctx.permission === undefined ? {} : { callerPermission: ctx.permission }),
