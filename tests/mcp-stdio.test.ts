@@ -1,9 +1,14 @@
 import { expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { validateConfig } from "../src/core/config";
 import { MCPClient } from "../src/mcp/client";
+import { StdioTransport, type StdioChild } from "../src/mcp/transport/stdio";
+import { MCPError } from "../src/mcp/types";
+import { waitFor } from "./helpers/wait";
 import type { MCPServerConfig } from "../src/core/config";
 
 const SERVER_SRC = `
@@ -51,6 +56,31 @@ import { writeFileSync } from "node:fs";
 writeFileSync(process.env.PID_FILE, String(process.pid));
 process.stdin.resume();
 `;
+
+/**
+ * Scripted child for the transport: the test owns stdin/stdout, so the broken pipe
+ * is an explicit event instead of an OS race (#643).
+ */
+function scriptedChild(): { child: StdioChild; stdin: PassThrough; stdout: PassThrough; events: EventEmitter; kills: () => number } {
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const events = new EventEmitter();
+  let kills = 0;
+  const child = Object.assign(events, {
+    stdin,
+    stdout,
+    kill: () => {
+      kills += 1;
+      return true;
+    },
+  });
+  return { child, stdin, stdout, events, kills: () => kills };
+}
+
+/** Captures the rejection eagerly: close() rejects a pending call synchronously. */
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(() => undefined, (error: unknown) => error);
+}
 
 async function waitUntilDead(pid: number): Promise<boolean> {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -159,3 +189,80 @@ test("client stdio aplica timeout por requisição e fecha limpo", async () => {
   const httpish = stdioServer(script, { transport: "http", url: "http://mcp" });
   await expect(MCPClient.connect(httpish)).rejects.toThrow(/falha|timeout/);
 }, 15_000);
+
+test("stream error fails every pending call with MCPError without an uncaught throw", async () => {
+  const scripted = scriptedChild();
+  const transport = StdioTransport.fromChild(scripted.child, 5000);
+  expect(scripted.stdin.listenerCount("error")).toBe(1); // guards live as long as the transport does
+  expect(scripted.stdout.listenerCount("error")).toBe(1);
+
+  const first = rejection(transport.request("tools/call", { name: "echo" }));
+  const second = rejection(transport.request("tools/call", { name: "echo" }));
+  const epipe = Object.assign(new Error("EPIPE: broken pipe, write"), { code: "EPIPE" });
+  // An 'error' with no listener takes the process down; the emit must not throw (#643).
+  expect(() => scripted.stdin.emit("error", epipe)).not.toThrow();
+
+  for (const failure of await Promise.all([first, second])) {
+    expect(failure).toBeInstanceOf(MCPError);
+    expect(failure instanceof Error ? failure.message : "").toMatch(/EPIPE/); // the described failure is the transport one
+  }
+  expect(transport.closed).toBe(true);
+  const afterFailure = await rejection(transport.request("tools/call", {}));
+  expect(afterFailure).toBeInstanceOf(MCPError);
+  expect(afterFailure instanceof Error ? afterFailure.message : "").toMatch(/EPIPE/); // later calls keep the cause
+});
+
+test("write failure marks every pending call as a transport failure", async () => {
+  const scripted = scriptedChild();
+  scripted.stdin.resume(); // drains: the first call write completes before the pipe dies
+  const transport = StdioTransport.fromChild(scripted.child, 800);
+  const first = rejection(transport.request("tools/call", {}));
+  await waitFor(() => scripted.stdin.writableLength === 0, "first write drained into the pipe");
+
+  scripted.stdin.destroy(); // reader gone before the next flush
+  const second = rejection(transport.request("tools/call", {}));
+
+  for (const failure of await Promise.all([first, second])) {
+    expect(failure).toBeInstanceOf(MCPError);
+    expect(failure instanceof Error ? failure.message : "").toMatch(/write failed/); // also fails the call already in flight
+  }
+  expect(transport.closed).toBe(true);
+});
+
+test("close is idempotent, fails the pending call and leaves no listeners on the child", async () => {
+  const scripted = scriptedChild();
+  const transport = StdioTransport.fromChild(scripted.child, 5000);
+  const pending = rejection(transport.request("tools/call", {}));
+
+  transport.close();
+  expect(() => transport.close()).not.toThrow();
+  expect(scripted.kills()).toBe(1); // the second close does not repeat end/kill
+  const failure = await pending;
+  expect(failure).toBeInstanceOf(MCPError);
+  expect(failure instanceof Error ? failure.message : "").toMatch(/fechado/);
+  expect(transport.closed).toBe(true);
+
+  scripted.events.emit("close"); // Node emits 'close' after the child stdio closes
+  expect(scripted.stdin.listenerCount("error")).toBe(0);
+  expect(scripted.stdout.listenerCount("error")).toBe(0);
+  expect(scripted.stdout.listenerCount("data")).toBe(0);
+  expect(scripted.events.listenerCount("error")).toBe(0);
+  expect(scripted.events.listenerCount("exit")).toBe(0);
+  expect(scripted.events.listenerCount("close")).toBe(0);
+});
+
+test("child close without exit fails the pending call instead of waiting for the timeout", async () => {
+  const scripted = scriptedChild();
+  const transport = StdioTransport.fromChild(scripted.child, 2000);
+  const pending = rejection(transport.request("tools/call", {}));
+  expect(scripted.stdin.listenerCount("error")).toBe(1);
+
+  scripted.events.emit("close"); // stdio closed with no exit/error (reachable through the fromChild seam)
+  const failure = await pending;
+  expect(failure).toBeInstanceOf(MCPError);
+  expect(failure instanceof Error ? failure.message : "").toMatch(/encerrou/); // not the 2000ms timeout
+  expect(transport.closed).toBe(true);
+  expect(scripted.stdin.listenerCount("error")).toBe(0);
+  expect(scripted.stdout.listenerCount("data")).toBe(0);
+  expect(await rejection(transport.request("tools/call", {}))).toBeInstanceOf(MCPError);
+});
