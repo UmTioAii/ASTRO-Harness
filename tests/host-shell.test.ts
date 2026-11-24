@@ -280,7 +280,8 @@ describe("run_command on the host by default, approved per command (#474, #599)"
     const denyEvent = auditEvents(auditPath).find((event) =>
       event.tipo === "host_shell.decision" && (event.payload as { reason?: string }).reason === "bypass_confirmation_required");
     expect(denyEvent?.payload).toMatchObject({
-      effect: "deny", origin: "mode", stage: "execution", reason: "bypass_confirmation_required",
+      effect: "deny", origin: "mode", stage: "execution", tool: "run_command", transport: "host",
+      reason: "bypass_confirmation_required",
     });
 
     const allowed = await executor.run(
