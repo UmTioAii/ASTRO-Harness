@@ -223,6 +223,14 @@ describe("web_search canonical dedupe, citations and cache (#604)", () => {
       .not.toBe(searchCacheKey({ provider: "exa", query: "busca outro-valor-sintetico", maxResults: 5 }));
   });
 
+  test("the cache key is scoped to the resolved backend, not only to the query", () => {
+    const options = { query: "astro", maxResults: 5 };
+    const declared = searchCacheKey({ provider: "brave", baseUrl: "https://a.search.test", ...options });
+    expect(declared).not.toBe(searchCacheKey({ provider: "brave", baseUrl: "https://b.search.test", ...options }));
+    expect(declared).not.toBe(searchCacheKey({ provider: "exa", baseUrl: "https://a.search.test", ...options }));
+    expect(declared).not.toBe(searchCacheKey({ provider: "brave", ...options }));
+  });
+
   test("collapses duplicates by canonical URL keeping the best snippet and the first position", async () => {
     const fetchImpl = mockFetch(() => Response.json({
       results: [

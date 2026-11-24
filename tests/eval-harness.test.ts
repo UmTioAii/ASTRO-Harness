@@ -421,7 +421,7 @@ describe("eval harness (F5-2)", () => {
     }
   });
 
-  test("runCase recusa fallback de webSearch sem endpoint loopback", async () => {
+  test("runCase recusa fallback de webSearch sem baseUrl loopback declarado", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-websearch-fallback-"));
     const caseDir = writeScenarioCase(root, "01-web-fallback", {
       schema: 1,
@@ -443,7 +443,63 @@ describe("eval harness (F5-2)", () => {
     await expect(runScenario(
       JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
       { cwd, caseDir, task: "tarefa" },
-    )).rejects.toThrow(/loopback.*fallback\[0\] \(endpoint padrão de google; o golden não pode sobrescrevê-lo\)/);
+    )).rejects.toThrow(/loopback.*fallback\[0\]\.baseUrl \(endpoint padrão de google; declare um baseUrl loopback\)/);
+  });
+
+  test("runCase recusa fallback de webSearch com baseUrl declarado fora do loopback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-websearch-fallback-declared-"));
+    const caseDir = writeScenarioCase(root, "01-web-fallback-declared", {
+      schema: 1,
+      kind: "app",
+      env: { EVAL_WEB_KEY: "eval-web-secret-123" },
+      config: {
+        agent: { model: "mock/mock-1", maxSteps: 6, tools: ["web_search"] },
+        webSearch: {
+          provider: "exa",
+          apiKeyEnv: "EVAL_WEB_KEY",
+          baseUrl: "http://127.0.0.1:9",
+          fallback: [{
+            provider: "google",
+            apiKeyEnv: "EVAL_WEB_KEY",
+            baseUrl: "https://www.googleapis.com/customsearch/v1",
+          }],
+        },
+      },
+      turns: [{ toolCalls: [{ name: "web_search", arguments: { query: "astro" } }] }, { content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-web-fallback-declared-cwd-"));
+    await expect(runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    )).rejects.toThrow(/não-loopback em webSearch\.fallback\[0\]\.baseUrl: https:\/\/www\.googleapis\.com/);
+  });
+
+  test("runCase aceita uma cadeia de webSearch com baseUrl loopback por entrada", async () => {
+    const root = mkdtempSync(join(tmpdir(), "astro-websearch-chain-"));
+    const caseDir = writeScenarioCase(root, "01-web-chain", {
+      schema: 1,
+      kind: "app",
+      env: { EVAL_WEB_KEY: "eval-web-secret-123" },
+      config: {
+        agent: { model: "mock/mock-1", maxSteps: 6, tools: ["web_search"] },
+        webSearch: {
+          provider: "brave",
+          apiKeyEnv: "EVAL_WEB_KEY",
+          baseUrl: "{{searchUrl}}",
+          fallback: [{ provider: "exa", apiKeyEnv: "EVAL_WEB_KEY", baseUrl: "{{searchUrl}}" }],
+        },
+      },
+      search: { results: [{ title: "A", url: "https://a.test/p", snippet: "ok" }] },
+      turns: [{ toolCalls: [{ name: "web_search", arguments: { query: "astro" } }] }, { content: "ok" }],
+      expect: { final: "ok", searchRequests: 1 },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-web-chain-cwd-"));
+    const result = await runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    );
+    expect(result.diffSummary).toEqual([]);
   });
 
   test("runCase recusa telemetry habilitado com endpoint público default", async () => {
