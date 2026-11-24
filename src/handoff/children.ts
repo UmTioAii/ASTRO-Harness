@@ -172,7 +172,7 @@ export function planChildResume(input: ChildResumeInput): ChildResumePlan {
     return { level: "L1", source: "request", restored: brief === undefined ? [] : ["brief"], ...common };
   }
   if ((requested === "L2" || requested === undefined) && input.sessionAvailable) {
-    const session = input.sessionId ?? artifact?.run;
+    const session = input.sessionId?.trim() || artifact?.run;
     if (session === undefined) {
       return {
         level: "L2", source: requested === "L2" ? "request" : "default",
