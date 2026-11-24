@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir, networkInterfaces } from "node:os";
@@ -14,8 +14,27 @@ import {
   type EvalReport,
 } from "../src/eval/harness";
 import { evalRunEnv, runScenario, type ScenarioSpec } from "../src/eval/scenario";
+import { snapshotEnv } from "./helpers/env-guard";
 
 const GOLDEN_ROOT = join(import.meta.dir, "..", "eval", "golden");
+
+/**
+ * Env vars and globals this file mutates. A test that hits its timeout never
+ * reaches its own `finally` and the runner moves on to the next file, so the
+ * snapshot taken at load is restored in `afterAll`, which runs after a timeout
+ * and after a test throws mid-file (#656).
+ */
+const restoreEnv = snapshotEnv([
+  "ASTRO_HOME", "ASTRO_NO_GLOBAL_CONFIG", "ASTRO_ALLOW_PRIVATE_URLS", "HOME", "USERPROFILE",
+]);
+const originalServe = Bun.serve;
+const originalFetch = globalThis.fetch;
+
+afterAll(() => {
+  Bun.serve = originalServe;
+  globalThis.fetch = originalFetch;
+  restoreEnv();
+});
 
 interface ScenarioCaseOptions {
   task?: string;
