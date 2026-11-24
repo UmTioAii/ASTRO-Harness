@@ -6,11 +6,12 @@ import { runTask } from "../src/core/app";
 import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
 import {
-  CHILD_BRIEF_MAX_TOKENS, ChildResumeError, ChildSessionRegistry, RESUME_INSTRUCTION_MAX_CHARS,
+  CHILD_BRIEF_MAX_TOKENS, CHILD_SESSION_HANDLES_MAX, ChildResumeError, ChildSessionRegistry, RESUME_INSTRUCTION_MAX_CHARS,
   boundChildBrief, buildChildHandoffArtifact, parseChildResumeLevel, planChildResume,
   resolveChildResume, type ChildBrief, type ChildResumeLevel, type ChildSessionHandle,
 } from "../src/handoff/children";
 import { validateHandoffArtifact } from "../src/handoff/types";
+import { createTaskTool, type TaskResumer } from "../src/tools/task";
 import { testEnv } from "./setup";
 
 const final = (content: string): Response =>
@@ -129,7 +130,7 @@ interface Harness {
 }
 type Body = Harness["bodies"][number];
 function harness(handlers: { plan: (call: number, body: Body) => Response; child: (call: number, body: Body) => Response },
-  opts: { checkpointAt?: number } = {}): Harness {
+  opts: { checkpointAt?: number; planSteps?: number } = {}): Harness {
   const cwd = mkdtempSync(join(tmpdir(), "astro-child-"));
   const calls = { plan: 0, child: 0 };
   const bodies: Harness["bodies"] = [];
@@ -145,7 +146,7 @@ function harness(handlers: { plan: (call: number, body: Body) => Response; child
     models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
     agent: { model: "p/m1", maxSteps: 5, tools: ["task", "read_file"], entryAgent: "plan" },
     agents: {
-      plan: { model: "p/m1", maxSteps: 3, tools: ["task", "read_file"], permission: "full", systemPrompt: "plan-agent" },
+      plan: { model: "p/m1", maxSteps: opts.planSteps ?? 3, tools: ["task", "read_file"], permission: "full", systemPrompt: "plan-agent" },
       build: { model: "p/m1", maxSteps: 2, tools: [], permission: "write", systemPrompt: "child-agent" },
     },
     ...(opts.checkpointAt === undefined ? {} : { run: { checkpointAt: opts.checkpointAt } }),
@@ -270,6 +271,36 @@ describe("live child resume handle (ADR-0036, #602)", () => {
       { instruction: "i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 500), requested: "L1" }).prompt;
     expect([prompt.includes("i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1)), prompt.includes("o".repeat(201))]).toEqual([false, false]);
   });
+
+  test("an evicted handle is session_missing", () => {
+    const registry = new ChildSessionRegistry();
+    for (let index = 0; index <= CHILD_SESSION_HANDLES_MAX; index += 1) registry.register(handle({ session: `r1.task.${index}` }));
+    expect(codeOf(() => resolve(registry, { sessionId: "r1.task.0" }))).toBe("session_missing");
+    expect(resolve(registry, { sessionId: `r1.task.${CHILD_SESSION_HANDLES_MAX}` }).plan.level).toBe("L2");
+  });
+
+  test("createTaskTool refuses a resume from an agent that did not delegate", async () => {
+    const registry = registryOf();
+    const resume: TaskResumer = async (input) => {
+      try {
+        const resolved = resolveChildResume(registry, {
+          sessionId: input.sessionId, instruction: input.instruction,
+          ...(input.level === undefined ? {} : { requested: input.level }),
+          caller: { run: input.run, agent: input.fromAgent },
+        });
+        return { status: "ok", output: resolved.prompt, level: resolved.plan.level, source: resolved.plan.source,
+          restored: resolved.plan.restored, truncated: resolved.truncated };
+      } catch (error) {
+        if (error instanceof ChildResumeError) return { status: "error", error: error.code, message: error.message };
+        throw error;
+      }
+    };
+    const cwd = mkdtempSync(join(tmpdir(), "astro-resume-tool-"));
+    const tool = createTaskTool({ audit: new Auditor(join(cwd, "audit.jsonl")), knownAgents: () => [], delegate: async () => "no", resume });
+    const result = await tool.execute({ session_id: "r1.task.live", instruction: "continue" }, { cwd, run: "r1", agent: "qa" });
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.output)).toMatchObject({ error: "resume_forbidden", session_id: "r1.task.live" });
+  });
 });
 
 describe("task.resume live handle (ADR-0036, #602)", () => {
@@ -319,6 +350,46 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
         env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
       expect([result.final, h.calls.child]).toEqual(["parent-final", 0]);
       expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ error: "session_missing", session_id: "r1.task.missing" });
+    } finally { h.server.stop(true); }
+  });
+
+  test("a retryable resume failure keeps the live session for the next resume", async () => {
+    const h = harness({
+      plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "implement" })
+        : call === 2 ? toolCall("task", { session_id: String(toolResult(body)?.session_id), instruction: "first attempt" })
+          : call === 3 ? toolCall("task", { session_id: String(toolResult(body)?.session_id), instruction: "second attempt" })
+            : final("parent-final"),
+      // 5xx is a retryable class: it must not retire the live session.
+      child: (call, body) => JSON.stringify(body.messages).includes("first attempt")
+        ? new Response("provider outage", { status: 500 })
+        : call === 1 ? final("child-summary") : final("child-continued"),
+    }, { planSteps: 4 });
+    try {
+      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "retry-resume",
+        env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
+      expect(result.final).toBe("parent-final");
+      const retried = h.bodies.find((body) => body.messages[0]?.content === "child-agent"
+        && JSON.stringify(body.messages).includes("second attempt"));
+      expect(retried).toBeDefined();
+      expect(JSON.stringify(retried!.messages)).toContain("child-summary");
+      expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ level: "L2", source: "default", output: "child-continued" });
+    } finally { h.server.stop(true); }
+  });
+
+  test("a 3000-character instruction reports the cut in the tool result", async () => {
+    const instruction = "x".repeat(3000);
+    const h = harness({
+      plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "implement" })
+        : call === 2 ? toolCall("task", { session_id: String(toolResult(body)?.session_id), instruction })
+          : final("parent-final"),
+      child: (call) => call === 1 ? final("child-summary") : final("child-continued"),
+    });
+    try {
+      await runTask({ configPath: h.configPath, cwd: h.cwd, task: "truncated",
+        env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
+      expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ truncated: true, level: "L2" });
+      const resumed = h.bodies.filter((body) => body.messages[0]?.content === "child-agent")[1]!;
+      expect(JSON.stringify(resumed.messages)).not.toContain("x".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1));
     } finally { h.server.stop(true); }
   });
 });
