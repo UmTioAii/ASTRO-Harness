@@ -26,6 +26,12 @@ export class TimelineTurnStore {
     switch (event.kind) {
       case "round.start":
         return false;
+      case "reasoning": {
+        // One block per completion; empty text never becomes a placeholder line.
+        if (event.text.trim() === "") return false;
+        this.#entries = [...this.#entries, { kind: "reasoning", text: event.text }];
+        return true;
+      }
       case "tool.start": {
         const entry: ToolEntry = {
           kind: "tool", callId: event.callId, name: event.name, arguments: event.arguments, status: "running",

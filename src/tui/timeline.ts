@@ -9,7 +9,7 @@ export type TimelineToolStatus = "running" | "ok" | "failed";
 export type TimelineTurnStatus = "running" | "done" | "failed" | "cancelled";
 
 export type TimelineEntry =
-  | { kind: "reasoning"; text: string; durationMs: number }
+  | { kind: "reasoning"; text: string; durationMs?: number }
   | { kind: "tool"; callId: string; name: string; arguments: string; status: TimelineToolStatus; durationMs?: number }
   | { kind: "answer"; markdown: string }
   | { kind: "error"; message: string; hint?: string }

@@ -2,11 +2,11 @@
 
 > Objective: expose a live, causal and sanitized event stream for each turn.
 
-- Status: events implemented in #600; reasoning channel (§5) still pending
+- Status: implemented in #600 (events and reasoning channel)
 - Date: 2026-11-21
-- ADR: 0035 (shared with the TUIX spec; planned for this phase, not yet written)
+- ADR: 0035 (shared with the TUIX spec)
 - Depends on: S1 (round naming)
-- Owner files: `src/chat/agent-session.ts`, `src/tools/executor.ts`, `src/chat/hooks.ts`
+- Owner files: `src/chat/turn-events.ts`, `src/core/session.ts`, `src/providers/openai-compat.ts`, `src/tui/timeline-store.ts`
 
 ## 1. Goal
 
@@ -30,6 +30,7 @@ observer, without reading audit files back.
 ```ts
 type TurnEvent =
   | { kind: "round.start"; turnId: string; roundIndex: number; at: string }
+  | { kind: "reasoning"; turnId: string; text: string; at: string }
   | { kind: "tool.start"; turnId: string; callId: string; name: string; arguments: string; at: string }
   | { kind: "tool.end"; turnId: string; callId: string; isError: boolean;
       durationMs: number; resultKey: string; at: string }
@@ -54,9 +55,15 @@ predecessor arrives. When a turn is cancelled or fails, every entry still `runni
 ## 5. Reasoning channel
 
 `ChatMessage` has no reasoning field (`src/providers/types.ts:11`). The adapter gains a
-runtime-only `reasoning` string, filled from `reasoning_content` deltas when the model card
-declares `reasoning: true`. It is never persisted, never sent back to the provider and never
-logged; the UI renders it only when present.
+runtime-only `reasoning` string on `CompletionResponse`, filled from `reasoning_content`
+deltas when the model card declares `reasoning: true` (`cardFor` over the provider catalog;
+a card the catalog does not declare exposes none). `runSession` turns it into one
+`reasoning` event per completion, sanitized per line by `TurnEventStream` (line breaks kept,
+invisible controls and secrets removed, I-03). It is never persisted, never sent back to the
+provider, never logged and never replayed on resume; the UI renders it only when present.
+The Codex Responses transport has no `reasoning_content` field, so it emits no reasoning
+event — no placeholder is produced (ADR-0035). Reasoning tokens already arrive inside the
+provider's output count; the channel never adds them again.
 
 ## 6. Existing hooks are unchanged
 
@@ -72,10 +79,10 @@ consumers, not the timeline. The new observer is an additional, optional callbac
 - [x] A tool whose result contains a secret emits a redacted payload (I-03), and
       `tool.start.arguments` goes through the same sanitizer before it reaches the observer.
 - [x] An observer that throws does not change the turn outcome.
-- [ ] A provider without a reasoning channel emits no reasoning event.
+- [x] A provider without a reasoning channel emits no reasoning event.
+- [x] Reasoning from a card that declares it reaches the observer sanitized, and no result
+      payload travels with the event.
 - [x] `onStep` is gone; `round.start` carries the same timing without exposing a counter.
-
-O canal de raciocínio (§5) fica para a fatia seguinte: #600 entrega só os eventos de turno.
 
 ## 8. Out of scope
 

@@ -105,7 +105,7 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 ## Expansão e aprovação (#635)
 
 - Recolhido por padrão: a entrada de tool fica em uma linha; `ctrl+o` acrescenta o corpo abaixo dela, sem reflow do que está acima.
-- `ctrl+t` está ligado só ao bloco thinking; a expansão de reasoning do renderer fica inerte até `TurnEvent` carregar reasoning (registrado em #635). O corpo expandido passa por `sanitizeBlockText` (ANSI, tabs e segredos) antes da medição de largura (I-03); um OSC não terminado não apaga as linhas seguintes.
+- `ctrl+t` recolhe o bloco thinking e alterna o corpo de reasoning da timeline (`#600`); quando o provider não emite reasoning não aparece linha nem placeholder (ADR-0035). O corpo expandido passa por `sanitizeBlockText` (ANSI, tabs e segredos) antes da medição de largura (I-03); um OSC não terminado não apaga as linhas seguintes.
 - A aprovação ocupa a zona do composer e a pergunta quebra em várias linhas, então o fim de um comando perigoso continua visível em 80 colunas; a resposta digitada e o cursor ficam na linha de baixo. `tab` abre o diff quando existe.
 - Cancelar o turno (`ctrl+c`) marca toda entrada `running` como `failed`.
 

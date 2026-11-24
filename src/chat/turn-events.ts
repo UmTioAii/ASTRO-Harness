@@ -10,6 +10,7 @@ export type TurnStatus = "done" | "failed" | "cancelled";
 
 export type TurnEvent =
   | { kind: "round.start"; turnId: string; roundIndex: number; at: string }
+  | { kind: "reasoning"; turnId: string; text: string; at: string }
   | { kind: "tool.start"; turnId: string; callId: string; name: string; arguments: string; at: string }
   | { kind: "tool.end"; turnId: string; callId: string; isError: boolean; durationMs: number; resultKey: string; at: string }
   | { kind: "turn.end"; turnId: string; status: TurnStatus; usage: TurnUsage; at: string };
@@ -24,6 +25,14 @@ export function sanitizeTurnArguments(argumentsJson: string): string {
   const chars = Array.from(sanitizePromptText(argumentsJson));
   if (chars.length <= MAX_TURN_ARGUMENT_CHARS) return chars.join("");
   return `${chars.slice(0, MAX_TURN_ARGUMENT_CHARS - 1).join("")}…`;
+}
+
+/**
+ * Reasoning is a block: sanitize each line so invisible controls and secrets die
+ * while the line breaks the renderer needs survive (I-03).
+ */
+export function sanitizeReasoningText(text: string): string {
+  return text.replace(/\r\n?/g, "\n").split("\n").map((line) => sanitizePromptText(line)).join("\n");
 }
 
 /** Consome a rejeição de um observador async: o turno nunca depende dele (I-19). */
@@ -61,6 +70,14 @@ export class TurnEventStream {
   roundStart(roundIndex: number): void {
     if (this.#closed || this.#observer === undefined) return;
     this.#deliver({ kind: "round.start", turnId: this.#turnId, roundIndex, at: this.#at() });
+  }
+
+  /** One sanitized block per provider completion; an absent or empty text emits nothing. */
+  reasoning(text: string): void {
+    if (this.#closed || this.#observer === undefined) return;
+    const clean = sanitizeReasoningText(text);
+    if (clean.trim() === "") return;
+    this.#deliver({ kind: "reasoning", turnId: this.#turnId, text: clean, at: this.#at() });
   }
 
   toolStart(callId: string, name: string, argumentsJson: string): void {

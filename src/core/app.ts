@@ -25,6 +25,8 @@ import { sendAuditWebhook } from "../team";
 import { resolveTaskSkill } from "../skills/executor";
 import { CredentialMissingError, resolveCredentialValue } from "../credential-ref";
 import { Vault, vaultPath } from "../vault";
+import { cardFor } from "../models/overrides";
+import { PROVIDER_CATALOG } from "../providers/catalog";
 import type { AuditEvent } from "../audit";
 import { budgetStatus, effectiveBudget, raiseDeniedLabel, restrictBudget, BudgetExceededError, type BudgetDecider, type BudgetStatus } from "../budget";
 import { MaxRoundsError, runSession, runMultiAgentSession, type EffectiveIdentity, type IdentityResolver, type MultiAgentSessionOptions } from "./session";
@@ -273,6 +275,14 @@ function isCodexOAuth(p: ProviderConfig): p is CodexOAuthProviderConfig {
 }
 
 /**
+ * The reasoning channel follows the model card (#600): a card the catalog does
+ * not declare exposes none, so the adapter never invents a reasoning line.
+ */
+function cardDeclaresReasoning(model: ModelEntry): boolean {
+  return cardFor(`${model.provider}/${model.id}`, PROVIDER_CATALOG)?.reasoning === true;
+}
+
+/**
  * Instancia o provider do modelo pelo `kind`. Segredos vêm do ambiente
  * (`env[credentialRef]`) ou do cofre local (`vault:<credentialId>`), sempre em
  * memória; no Codex, do arquivo de credenciais em modo leitura.
@@ -308,6 +318,7 @@ export function createProvider(
         ...(providerConfig.streamTimeoutMs === undefined ? {} : { streamTimeoutMs: providerConfig.streamTimeoutMs }),
         providerName: model.provider,
         ...(model.call === undefined ? {} : { call: model.call }),
+        reasoning: cardDeclaresReasoning(model),
       }),
       ...(credentialRef === undefined ? {} : { credentialRef }),
       quotaDomain,
