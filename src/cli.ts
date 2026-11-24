@@ -46,6 +46,7 @@ import type { SwapApprover } from "./approval";
 import type { BudgetChoice, BudgetDecider, BudgetStatus } from "./budget";
 import { trustChoice, trustPrompt, type TrustAsk } from "./trust";
 import { ttyTermsAsk, TERMS_UNATTENDED_NOTICE } from "./terms";
+import { ttyShellConsentAsk } from "./shell-consent";
 import { bootChat } from "./chat/boot";
 import { runSetup, ttySetupIO } from "./chat/setup";
 import { continueTask, findCheckpointAgents, loadCheckpoint, type NoProgressDecider } from "./loop-guard";
@@ -1470,7 +1471,8 @@ async function main(argv: string[]): Promise<number> {
       // #479: o portão dos termos roda antes do readline do REPL — dois readlines
       // de terminal no mesmo stdin disputam o mesmo chunk. Recusa sai sem gravar
       // nada; sem TTY (stdin em pipe, CI) segue com um aviso e sem registrar aceite.
-      const boot = await bootChat({ ask: ttyTermsAsk() });
+      // #599: o consentimento de risco do shell é pedido logo depois dos termos.
+      const boot = await bootChat({ ask: ttyTermsAsk(), shellAsk: ttyShellConsentAsk() });
       if (boot.kind === "declined") {
         console.error("termos de uso não aceitos — saindo sem gravar nada");
         return 1;

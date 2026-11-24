@@ -4,17 +4,22 @@ import { dirname } from "node:path";
 import { statePath } from "./astro-home";
 import { looksLikeSecret } from "./secrets";
 
-/** Termos de uso aceitos (#479): só a versão curta e a data ISO, sem credencial nem dado pessoal. */
-export interface TermsAcceptance {
+/** A consent record (#479, #599): only the short version and the ISO date, no credential or personal data. */
+export interface ConsentRecord {
   version: string;
   acceptedAt: string;
 }
+
+/** Terms acceptance (#479); the shape is shared with the shell-risk consent (#599). */
+export type TermsAcceptance = ConsentRecord;
 
 export interface AstroHomeState {
   version: 1;
   trust: { folders: string[] };
   migrations: { providers: boolean; trust: boolean };
-  terms?: TermsAcceptance;
+  terms?: ConsentRecord;
+  /** Shell-risk consent (#599), recorded next to the terms acceptance. */
+  shell?: ConsentRecord;
 }
 
 const EMPTY_STATE: AstroHomeState = {
@@ -42,15 +47,38 @@ export class HomeStateUnwritableError extends Error {
 }
 
 /** Versão curta e opaca; a data é o `toISOString()` do aceite. */
-const TERMS_VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$/;
+const CONSENT_VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** One consent record; `field` names it in the error, and the value is never echoed. */
+function validateConsent(value: unknown, field: "terms" | "shell"): ConsentRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`estado global inválido: "${field}" deve ser um objeto`);
+  }
+  const record = value as Record<string, unknown>;
+  // Campo desconhecido é erro, nunca ignorado: o registro guarda só versão e data.
+  if (Object.keys(record).some((key) => key !== "version" && key !== "acceptedAt")) {
+    throw new Error(`estado global inválido: "${field}" contém campo desconhecido`);
+  }
+  if (typeof record.version !== "string" || !CONSENT_VERSION_PATTERN.test(record.version)) {
+    throw new Error(`estado global inválido: "${field}.version" deve ser uma versão curta`);
+  }
+  if (
+    typeof record.acceptedAt !== "string"
+    || !ISO_DATE_PATTERN.test(record.acceptedAt)
+    || Number.isNaN(Date.parse(record.acceptedAt))
+  ) {
+    throw new Error(`estado global inválido: "${field}.acceptedAt" deve ser uma data ISO`);
+  }
+  return { version: record.version, acceptedAt: record.acceptedAt };
+}
 
 function validateHomeState(value: unknown): AstroHomeState {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("estado global inválido: raiz deve ser um objeto");
   }
   const root = value as Record<string, unknown>;
-  if (Object.keys(root).some((key) => !["version", "trust", "migrations", "terms"].includes(key))) {
+  if (Object.keys(root).some((key) => !["version", "trust", "migrations", "terms", "shell"].includes(key))) {
     throw new Error("estado global inválido: campo desconhecido");
   }
   if (root.version !== 1) throw new Error('estado global inválido: "version" deve ser 1');
@@ -78,33 +106,17 @@ function validateHomeState(value: unknown): AstroHomeState {
   ) {
     throw new Error("estado global inválido: migrações inválidas");
   }
-  let terms: TermsAcceptance | undefined;
+  let terms: ConsentRecord | undefined;
   if (root.terms !== undefined) {
-    if (typeof root.terms !== "object" || root.terms === null || Array.isArray(root.terms)) {
-      throw new Error('estado global inválido: "terms" deve ser um objeto');
-    }
-    const record = root.terms as Record<string, unknown>;
-    // Campo desconhecido é erro, nunca ignorado: o registro guarda só versão e data.
-    if (Object.keys(record).some((key) => key !== "version" && key !== "acceptedAt")) {
-      throw new Error('estado global inválido: "terms" contém campo desconhecido');
-    }
-    if (typeof record.version !== "string" || !TERMS_VERSION_PATTERN.test(record.version)) {
-      throw new Error('estado global inválido: "terms.version" deve ser uma versão curta');
-    }
-    if (
-      typeof record.acceptedAt !== "string"
-      || !ISO_DATE_PATTERN.test(record.acceptedAt)
-      || Number.isNaN(Date.parse(record.acceptedAt))
-    ) {
-      throw new Error('estado global inválido: "terms.acceptedAt" deve ser uma data ISO');
-    }
-    terms = { version: record.version, acceptedAt: record.acceptedAt };
+    terms = validateConsent(root.terms, "terms");
   }
+  const shell = root.shell === undefined ? undefined : validateConsent(root.shell, "shell");
   return {
     version: 1,
     trust: { folders: [...new Set(folders)] },
     migrations: { providers: migrations.providers, trust: migrations.trust },
     ...(terms === undefined ? {} : { terms }),
+    ...(shell === undefined ? {} : { shell }),
   };
 }
 
