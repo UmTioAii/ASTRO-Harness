@@ -1031,8 +1031,9 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   if (config.webSearch !== undefined) {
     const webSearchDeps = { config: config.webSearch, audit, env };
     toolsByName.set("web_search", createWebSearchTool(webSearchDeps));
-    // search_and_read (#604): same chain, cache and citations; reads the top results.
-    toolsByName.set("search_and_read", createSearchAndReadTool(webSearchDeps));
+    // search_and_read (#604): delegates to web_search/web_fetch through the
+    // session executor, so the allowlist, cache/ids and audit are the same.
+    toolsByName.set("search_and_read", createSearchAndReadTool({ audit }));
   }
   // web_fetch (#57): sem config; allowlist e permissão continuam valendo (I-01).
   toolsByName.set("web_fetch", createWebFetchTool({ audit }));

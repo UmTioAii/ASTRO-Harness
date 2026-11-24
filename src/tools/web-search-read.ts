@@ -1,18 +1,18 @@
 /**
- * Tool `search_and_read` (#604): runs `web_search` and reads the top `depth`
- * results like `web_fetch`; content is untrusted and cut to the output ceiling.
+ * Tool `search_and_read` (#604): delegates the search and the page reads to the
+ * session executor, so the same `web_search` cache/[n] ids and the same
+ * allowlist, timeout and audit apply (I-01). Content is untrusted and cut to
+ * the output contract ceiling.
  */
-import { outboundUrlProblem, privateUrlsAllowed } from "../url-safety";
 import { contentBudgetChars, failureFrom, failureResult, truncationReport } from "./contract";
-import { createWebFetchTool } from "./web-fetch";
-import { createWebSearchTool, type WebSearchDeps } from "./web-search";
 import { ToolError, type AuditLike, type Tool, type ToolContext, type ToolResult } from "./types";
 
 /** Pages read when `depth` is absent; one call never opens more than `MAX_DEPTH`. */
 export const DEFAULT_DEPTH = 3;
 export const MAX_DEPTH = 5;
-const PAGE_MAX_CHARS = 50_000;
 const CEILING_TOKENS = 3000;
+/** Inner tools the composition calls; both must be in the agent allowlist (I-01). */
+const REQUIRED_TOOLS = ["web_search", "web_fetch"] as const;
 
 type ReadFailureReason = "invalid_url" | "network" | "content_type" | `http_${number}`;
 type SearchOutput = {
@@ -20,24 +20,8 @@ type SearchOutput = {
   results: Array<{ id: number; title: string; url: string; snippet: string }>;
 };
 
-export interface SearchAndReadDeps extends WebSearchDeps {
-  allowPrivate?: boolean;
-  maxRedirects?: number;
-  format?: "markdown" | "text";
-}
-
-/** Forwards the delegated audit without the search query or the fetched URL host (#604, I-03). */
-function filteredAudit(target: AuditLike): AuditLike {
-  return {
-    append(event) {
-      const payload = event.payload === undefined ? undefined : { ...event.payload };
-      if (payload !== undefined) {
-        delete payload.query;
-        delete payload.url;
-      }
-      target.append(payload === undefined ? { ...event } : { ...event, payload });
-    },
-  };
+export interface SearchAndReadDeps {
+  audit: AuditLike;
 }
 
 function parseDepth(input: unknown): number {
@@ -52,25 +36,19 @@ function parseDepth(input: unknown): number {
   return raw;
 }
 
-/** Bounded code for a read that did not return a page; never a message or URL. */
-function failureReason(status: number): ReadFailureReason {
-  return status === 0 ? "network" : status >= 200 && status < 300 ? "content_type" : `http_${status}`;
+/** The read step returns a bounded code; never parse its prose. */
+function isReadFailureReason(value: unknown): value is ReadFailureReason {
+  return value === "invalid_url" || value === "network" || value === "content_type"
+    || (typeof value === "string" && /^http_\d{3}$/.test(value));
 }
 
 export function createSearchAndReadTool(deps: SearchAndReadDeps): Tool {
-  const allowPrivate = deps.allowPrivate ?? privateUrlsAllowed();
-  const format = deps.format ?? "markdown";
-  let lastStatus = 0;
-  // Sequential reads: the last HTTP status maps a failed read to a bounded reason.
-  const trackingFetch = async (url: string, init?: RequestInit): Promise<Response> => {
-    const response = await (deps.fetchImpl ?? fetch)(url, init);
-    lastStatus = response.status;
-    return response;
+  let innerSeq = 0;
+  const nextCallId = (label: string): string => {
+    innerSeq += 1;
+    return `search_and_read-${label}-${innerSeq}`;
   };
-  const searchTool = createWebSearchTool({ ...deps, audit: filteredAudit(deps.audit) });
-  const fetchTool = createWebFetchTool({
-    audit: filteredAudit(deps.audit), fetchImpl: trackingFetch, allowPrivate, maxRedirects: deps.maxRedirects,
-  });
+
   const tool: Tool = {
     manifest: {
       name: "search_and_read",
@@ -102,7 +80,22 @@ export function createSearchAndReadTool(deps: SearchAndReadDeps): Tool {
       } catch (error) {
         return failureFrom(error);
       }
-      const searched = await searchTool.execute(input, ctx);
+      const executor = ctx.executor;
+      if (executor === undefined) {
+        return failureResult("search_and_read requires the session executor", "denied");
+      }
+      // Fail closed: this composition calls both inner tools, so both must be
+      // named by the effective allowlist; the executor checks them again (I-01).
+      const missing = REQUIRED_TOOLS.filter((name) => ctx.allow === undefined || !ctx.allow.includes(name));
+      if (missing.length > 0) {
+        return failureResult(`search_and_read requires ${missing.join(" and ")} in the agent allowlist`, "denied");
+      }
+      // The final envelope is capped below; intermediate results must not be
+      // truncated by the session cap or the search JSON becomes unreadable.
+      const innerCtx = { ...ctx, outputLimitTokens: undefined };
+      const searched = await executor.run(innerCtx, {
+        id: nextCallId("search"), name: "web_search", arguments: JSON.stringify(input),
+      });
       if (searched.isError === true) return searched;
       let parsed: SearchOutput;
       try {
@@ -110,50 +103,72 @@ export function createSearchAndReadTool(deps: SearchAndReadDeps): Tool {
       } catch {
         return failureResult("search_and_read: unreadable search output", "failed");
       }
+
       const started = Date.now();
       const isAborted = (): boolean => ctx.signal?.aborted === true;
-      const targets = parsed.results.slice(0, depth);
       const ceiling = tool.manifest.output!;
       const contentCap = contentBudgetChars(ceiling, ctx);
       const envelope = (results: unknown[]): Record<string, unknown> =>
         ({ query: parsed.query, provider: parsed.provider, depth, untrusted: true, results });
       // Reserve the worst case per read target (content or a bounded readError)
       // before fetching, so metadata alone can never pass the ceiling.
-      const reserved = parsed.results.map((item, index) => (index < targets.length
-        ? { ...item, content: "", readError: "content_type" } : item));
-      const metadataChars = JSON.stringify(envelope(reserved)).length;
-      if (metadataChars > contentCap) {
-        return failureResult("search_and_read: output ceiling too small for the search results", "failed");
+      const reserved = (items: SearchOutput["results"]): unknown[] => items.map((item, index) =>
+        (index < Math.min(depth, items.length) ? { ...item, content: "", readError: "content_type" } : item));
+      let visible = parsed.results;
+      let metadataChars = JSON.stringify(envelope(reserved(visible))).length;
+      // A tiny ceiling degrades to fewer results instead of failing the call.
+      while (visible.length > 1 && metadataChars > contentCap) {
+        visible = visible.slice(0, -1);
+        metadataChars = JSON.stringify(envelope(reserved(visible))).length;
       }
+      const targets = visible.slice(0, depth);
+      const omittedResults = parsed.results.length - visible.length;
       const texts = new Map<number, string>();
       const failures: Array<{ id: number; reason: ReadFailureReason }> = [];
       let truncated = false;
-      const record = (aborted = false): void => {
+      const record = (aborted = false, reason?: "ceiling"): void => {
         deps.audit.append({ run: ctx.run, agent: ctx.agent, tipo: "web.read", payload: {
           depth, resultsCount: parsed.results.length, readCount: texts.size,
-          failedCount: failures.length, truncated, aborted, duration: Date.now() - started,
+          failedCount: failures.length, truncated, aborted,
+          ...(reason === undefined ? {} : { reason }),
+          duration: Date.now() - started,
         } });
       };
+      if (metadataChars > contentCap) {
+        truncated = true;
+        record(false, "ceiling");
+        return failureResult("search_and_read: output ceiling too small for the search results", "failed");
+      }
+      if (isAborted()) {
+        record(true);
+        return failureResult("search_and_read cancelled", "failed");
+      }
+      const pageBudget = targets.length === 0 ? 0 : Math.max(1, Math.floor((contentCap - metadataChars) / targets.length));
       for (const target of targets) {
-        if (isAborted()) return failureResult("search_and_read cancelled", "failed");
-        if (outboundUrlProblem(target.url, { allowPrivate }) !== undefined) {
-          failures.push({ id: target.id, reason: "invalid_url" });
-          continue;
+        if (isAborted()) {
+          record(true);
+          return failureResult("search_and_read cancelled", "failed");
         }
-        lastStatus = 0;
-        const read = await fetchTool.execute({ url: target.url, format, maxLength: PAGE_MAX_CHARS }, ctx);
+        // `+1` tells a page cut at the budget apart from one that ended exactly there.
+        const read = await executor.run(innerCtx, {
+          id: nextCallId("read"), name: "web_fetch",
+          arguments: JSON.stringify({ url: target.url, format: "markdown", maxLength: pageBudget + 1 }),
+        });
         if (read.isError === true) {
           if (isAborted()) {
             record(true);
             return failureResult("search_and_read cancelled", "failed");
           }
-          failures.push({ id: target.id, reason: failureReason(lastStatus) });
+          const reason = read.failure === "denied"
+            ? "invalid_url"
+            : isReadFailureReason(read.code) ? read.code : "network";
+          failures.push({ id: target.id, reason });
           continue;
         }
         texts.set(target.id, read.output);
       }
-      let pageChars = targets.length === 0 ? 0 : Math.max(0, Math.floor((contentCap - metadataChars) / targets.length));
-      const build = (limit: number): Record<string, unknown> => envelope(parsed.results.map((item) => {
+      let pageChars = pageBudget;
+      const build = (limit: number): Record<string, unknown> => envelope(visible.map((item) => {
         const text = texts.get(item.id);
         if (text !== undefined) return { ...item, content: text.slice(0, limit) };
         const failure = failures.find((entry) => entry.id === item.id);
@@ -164,20 +179,18 @@ export function createSearchAndReadTool(deps: SearchAndReadDeps): Tool {
         pageChars = Math.floor(pageChars * 0.8);
         payload = build(pageChars);
       }
-      let totalChars = 0;
-      let keptChars = 0;
+      let cutPages = 0;
       for (const target of targets) {
         const text = texts.get(target.id);
-        if (text === undefined) continue;
-        totalChars += text.length;
-        keptChars += Math.min(text.length, pageChars);
+        if (text !== undefined && text.length > pageChars) cutPages += 1;
       }
-      truncated = totalChars > keptChars;
+      truncated = omittedResults > 0 || cutPages > 0;
       record();
       if (!truncated) return { output: JSON.stringify(payload) };
-      const { field, marker } = truncationReport({
-        removed: totalChars - keptChars, total: totalChars, unit: "characters", hint: ceiling.hint,
-      });
+      const report = omittedResults > 0
+        ? { removed: omittedResults, total: parsed.results.length, unit: "results" }
+        : { removed: cutPages, total: targets.length, unit: "pages" };
+      const { field, marker } = truncationReport({ ...report, hint: ceiling.hint });
       return { output: JSON.stringify({ ...payload, truncated: true, notice: marker }), truncation: field };
     },
   };
