@@ -130,6 +130,12 @@ describe("shell-risk consent (#599)", () => {
     expect(shellConsentReport(path)).toContain("not accepted");
     saveShellConsent({ version: SHELL_CONSENT_VERSION, acceptedAt: ISO }, path);
     expect(shellConsentReport(path)).toContain(ISO);
+    // A stale record must not read as current: the status flags the mismatch.
+    saveShellConsent({ version: "0", acceptedAt: ISO }, path);
+    const stale = shellConsentReport(path);
+    expect(stale).toContain("version 0");
+    expect(stale).toContain(`version ${SHELL_CONSENT_VERSION}`);
+    expect(stale).toMatch(/asks again/i);
   });
 
   test("the chat gate asks the shell consent right after the terms and records both", async () => {
@@ -164,5 +170,27 @@ describe("declined shell consent disables the shell (#599)", () => {
     // A record (or no record) keeps the shell on: only an explicit decline disables it.
     mod.setShellConsent("unrecorded");
     expect((await gatedRun(mod, "echo consent")).result.isError).toBeFalsy();
+  });
+
+  test("run_tests is refused before the prompt when the consent was declined", async () => {
+    mock = installNoDockerSpawnMock();
+    const mod = await isolatedRunCommand("consent-declined-tests");
+    mod.configureRunCommand({ mode: "host" });
+    mod.setShellConsent("declined");
+    const cwd = mkdtempSync(join(tmpdir(), "astro-shell-consent-"));
+    const auditPath = join(cwd, ".astro", "audit.jsonl");
+    const tool = mod.createRunTestsTool({ config: { command: ["echo", "test"] }, audit: new Auditor(auditPath) });
+    let prompts = 0;
+    const executor = new ToolExecutor({
+      tools: [tool], allow: ["run_tests"], audit: new Auditor(auditPath), permissionMode: "ask",
+      approveTool: () => { prompts++; return true; },
+    });
+    const result = await executor.run(
+      { cwd, run: "r1", agent: "coder", env: { ...process.env } },
+      { id: "c1", name: "run_tests", arguments: "{}" },
+    );
+    expect(result.code).toBe("shell_consent_declined");
+    expect(prompts).toBe(0);
+    expect(mock.calls).toHaveLength(0);
   });
 });
