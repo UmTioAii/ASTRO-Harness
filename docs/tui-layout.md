@@ -116,7 +116,7 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 - `/log` abre a tela com o buffer da sessão; `/log <n>` mostra as últimas `n` linhas.
 - Cada linha do buffer carrega a lane no prefixo — `[sessão]`, `[turno]`, `[saúde]`, `[aviso]` (#560) — e a sanitização (I-03) continua no `appendLog`.
 - O buffer é de memória: a fonte durável continua sendo audit/ledger.
-- `AgentSession.send` expõe o observador de turno (#600) com `round.start`, `tool.start`, `tool.end` e `turn.end`; o buffer ainda não consome esses eventos, e as linhas de tool são da TUIX. `onStep` saiu: o progresso não expõe contador.
+- `AgentSession.send` expõe o observador de turno (#600) com `round.start`, `tool.start`, `tool.end` e `turn.end`; a timeline da TUI consome esses eventos ao vivo (#635), e o buffer de `/log` continua sem consumi-los. `onStep` saiu: o progresso não expõe contador.
 - Implementação (#514): buffer ring em `src/tui/log.ts` (`LOG_CAP = 1000`, linhas sanitizadas com `redactSecrets` + controle), tela em `src/tui/log-screen.tsx`, comando em `src/tui/commands.ts` (`openLog`) ligado em `src/tui/app.tsx`. Cabeçalho da sessão (com endpoint), resumo por turno, transições de saúde e avisos repetidos de orçamento/contexto são anexados ao buffer com `laneLine` (#560); no REPL `/log` avisa que é só da TUI.
 
 ## Estados removidos

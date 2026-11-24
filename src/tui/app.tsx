@@ -1,5 +1,5 @@
 /** TUI (T2): conversa, entrada e status bar. Consome apenas a ChatSession. */
-import { Box, Static, Text, useInput } from "ink";
+import { Box, Static, Text, useInput, useWindowSize } from "ink";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { parseCommand, type ReplCommand } from "../chat/commands";
 import { statusLine, type ChatSession } from "../chat/repl";
@@ -20,7 +20,7 @@ import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
 import type { ShellRunner } from "./shell";
 import { COMMANDS, applyCompletion, commandDescription, completionItems, enterAction, suggestionWindow } from "./editor";
-import { Header, budgetColor, footerBase, modeColor, packageVersion } from "./banner";
+import { Header, budgetColor, footerBase, packageVersion } from "./banner";
 import { appendLog, laneLine, sessionHeaderLine, tailLog } from "./log";
 import { LogScreen } from "./log-screen";
 import { errorLine } from "./error-hint";
@@ -41,6 +41,9 @@ import type { ProfileManager } from "../providers/profile-manager";
 import { budgetSegment, quotaSegment } from "../chat/usage";
 import { createThrottledSink, STREAM_THROTTLE_MS } from "./stream";
 import { HISTORY_LIMIT, visibleWindow } from "./history";
+import { renderTimelineZones } from "./timeline";
+import { TimelineTurnStore } from "./timeline-store";
+import { TimelineZone } from "./timeline-zones";
 
 export interface TuiAppProps {
   session: ChatSession;
@@ -86,6 +89,17 @@ function messageOf(error: unknown): string {
 }
 
 function EntryLine({ entry, colors }: { entry: Entry; colors: ThemeColors }): ReactElement {
+  const { columns } = useWindowSize();
+  const width = columns !== undefined && columns > 0 ? columns : 80;
+  if (entry.kind === "timeline" && entry.timeline !== undefined) {
+    const view = {
+      state: { kind: "done" as const },
+      status: { model: "", mode: "" },
+      turn: entry.timeline,
+      ...(entry.results === undefined ? {} : { results: entry.results }),
+    };
+    return <TimelineZone view={view} width={width} zone="timeline" />;
+  }
   if (entry.kind === "user") return <Text color={colors.accent}>{"> "}{entry.text}</Text>;
   if (entry.kind === "assistant") return <Markdown text={entry.text} />;
   if (entry.kind === "error") return <Text color={colors.error}>{entry.text}</Text>;
@@ -130,6 +144,8 @@ export function activateProvider(
 }
 
 export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, manager, onExit, toastTtlMs = TOAST_TTL_MS, streamThrottleMs = STREAM_THROTTLE_MS, historyLimit = HISTORY_LIMIT, saveSecret, discardSecret }: TuiAppProps): ReactElement {
+  const { columns } = useWindowSize();
+  const width = columns !== undefined && columns > 0 ? columns : 80;
   const [entries, setEntries] = useState<Entry[]>([{ kind: "info", text: WELCOME }]);
   /** Estado da sessão aparece uma vez por sessão (#480): só entradas marcadas. */
   const appendEntries = (added: Entry[]): void => {
@@ -166,6 +182,10 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const leader = useRef(false);
   const busyRef = useRef(false);
   const turn = useRef<AbortController | undefined>(undefined);
+  /** Current turn's live timeline (#635); history entries keep completed turns. */
+  const liveTimeline = useRef<TimelineTurnStore | undefined>(undefined);
+  const [, setTimelineTick] = useState(0);
+  const refreshTimeline = (): void => setTimelineTick((tick) => tick + 1);
   const exitRequested = useRef(false);
   const [status, setStatus] = useState<Status>(() => statusOf(session.snapshot()));
   const [health, setHealth] = useState<{ provider: string; state: "ok" | "down" } | undefined>(undefined);
@@ -509,7 +529,11 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       if (outcome.exit) finish();
       return;
     }
-    setEntries((current) => [...current, { kind: "user", text }]);
+    const messagesBefore = session.snapshot().messages.length;
+    // The prompt lives in the timeline entry; completed turns are appended to history below.
+    const timeline = new TimelineTurnStore(`turn-${Date.now()}`, text);
+    liveTimeline.current = timeline;
+    refreshTimeline();
     busyRef.current = true;
     const controller = new AbortController();
     turn.current = controller;
@@ -525,6 +549,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       const prompt = materializePrompt(command.text, pendingAttachments.current);
       const attachments = pendingAttachments.current;
       const turnOptions: SendTurnOptions = {
+        // Live timeline (#635): the observer only updates rendered state.
+        observer: (event) => { if (timeline.apply(event)) refreshTimeline(); },
         ...(attachments.length === 0 ? {} : { attachments, approveAttachment }),
       };
       const result = await session.send(
@@ -546,16 +572,32 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         if (contextInlineRef.current) logLine(laneLine("aviso", contextNote));
         else contextInlineRef.current = true;
       }
+      timeline.setResultsFromMessages(session.snapshot().messages.slice(messagesBefore));
+      timeline.complete("done");
+      liveTimeline.current = undefined;
+      refreshTimeline();
       appendEntries([
+        { kind: "timeline", text: "", timeline: timeline.turn, results: timeline.results },
         { kind: "assistant", text: result.final },
         // Aviso que muda a resposta fica inline uma vez; repetição é estado (#480).
         ...(contextNote === undefined ? [] : [{ kind: "info" as const, state: true, text: contextNote }]),
         ...(result.trimmed ? [{ kind: "info" as const, state: true, text: "turno antigo descartado" }] : []),
       ]);
     } catch (error) {
-      appendEntries([{ kind: "error", text: errorLine(error, messageOf(error)) }]);
+      if (timeline.status === "running") timeline.complete("failed");
+      liveTimeline.current = undefined;
+      refreshTimeline();
+      appendEntries([
+        { kind: "timeline", text: "", timeline: timeline.turn, results: timeline.results },
+        { kind: "error", text: errorLine(error, messageOf(error)) },
+      ]);
       if (isFatalSessionError(error)) exitRequested.current = true;
     } finally {
+      if (liveTimeline.current === timeline) {
+        if (timeline.status === "running") timeline.complete("failed");
+        liveTimeline.current = undefined;
+        refreshTimeline();
+      }
       sink.flush(); // invalida timer pendente: nenhum delta emite depois do turno
       setPartial(undefined);
       const saved = persist(true);
@@ -979,13 +1021,24 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const inputLines = input.split("\n");
   // Modo de permissão sempre visível (#270); bypass em cor de alerta
   const mode = session.permissionMode?.() ?? DEFAULT_PERMISSION_MODE;
+  // Four TUIX zones (#635): the components only render `renderTimelineZones` lines.
+  const timelineStatus = { model: status.model, mode: `modo: ${mode}`, costUsd: status.costUsd };
+  const emptyView = { state: { kind: "empty" as const }, status: timelineStatus };
+  const live = liveTimeline.current;
+  const liveView = live?.view({ kind: "done" }, timelineStatus);
+  const showIdentity = live === undefined && entries.every((entry) => entry.kind === "info");
+  const composerMark = renderTimelineZones({ state: { kind: "done" }, status: timelineStatus }, width).composer[0] ?? "❯";
+  const footerLead = footerBase({ place, tokensIn: status.tokensIn, tokensOut: status.tokensOut, costUsd: null });
+  const footerStatus = renderTimelineZones({ state: { kind: "done" }, status: timelineStatus }, width).status[0] ?? "";
   return (
     <Box flexDirection="column">
       <Header colors={colors} provider={providerId} model={status.model} health={healthState} />
+      {showIdentity ? <TimelineZone view={emptyView} width={width} zone="identity" /> : null}
       {hiddenEntries > 0 ? <Text dimColor>{`… ${hiddenEntries} mensagens anteriores`}</Text> : null}
       <Static items={entries}>
         {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} />}
       </Static>
+      {liveView === undefined ? null : <TimelineZone view={liveView} width={width} zone="timeline" />}
       {busy ? (
         // Bloco thinking (#560): rótulo com passo + stream parcial, recolhível com ctrl+t
         <Box flexDirection="column" borderStyle="round" borderColor={colors.warning} paddingX={1}>
@@ -1012,7 +1065,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       <Box marginTop={1} borderStyle="round" borderColor={mode === "bypass" ? colors.error : colors.accent} paddingX={1} flexDirection="column">
         {inputLines.map((line, index) => (
           <Box key={index}>
-            <Text color={colors.accent}>{index === 0 ? "> " : "  "}</Text>
+            <Text color={colors.accent}>{index === 0 ? `${composerMark} ` : "  "}</Text>
             <Text>{line}</Text>
             {index === inputLines.length - 1 ? <Text inverse> </Text> : null}
           </Box>
@@ -1036,13 +1089,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         );
       })}
       {win.end < suggestions.length ? <Text dimColor>  …</Text> : null}
-      <Text dimColor>
-        {footerBase({
-          place,
-          tokensIn: status.tokensIn,
-          tokensOut: status.tokensOut,
-          costUsd: status.costUsd,
-        })}
+      <Text dimColor color={mode === "bypass" ? colors.error : undefined}>
+        {footerLead}
         {budget === undefined ? null : (
           <Text
             {...(budgetColor(budget, colors) === undefined
@@ -1052,8 +1100,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
             {` · ${budgetSegment(budget)}`}
           </Text>
         )}
-        {" · modo: "}
-        <Text color={modeColor(mode, colors)}>{mode}</Text>
+        {` · ${footerStatus}`}
       </Text>
     </Box>
   );

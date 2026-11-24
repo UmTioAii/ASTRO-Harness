@@ -210,3 +210,25 @@ export function renderTimeline(view: TimelineView, width: number): string[] {
   add(parts.join(" · "));
   return lines;
 }
+
+/** The four TUIX zones (#635), split from the rendered frame so Ink only joins strings. */
+export interface TimelineZones {
+  readonly identity: readonly string[];
+  readonly timeline: readonly string[];
+  readonly composer: readonly string[];
+  readonly status: readonly string[];
+}
+
+export function renderTimelineZones(view: TimelineView, width: number): TimelineZones {
+  const lines = renderTimeline(view, width);
+  // Status is always last; composer is one line, two while an approval owns it.
+  const composerLength = view.state.kind === "approval" ? 2 : 1;
+  const boundary = lines.length - 1 - composerLength;
+  const body = lines.slice(0, boundary);
+  return {
+    identity: view.state.kind === "empty" ? body : [],
+    timeline: view.state.kind === "empty" ? [] : body,
+    composer: lines.slice(boundary, boundary + composerLength),
+    status: lines.slice(boundary + composerLength),
+  };
+}
