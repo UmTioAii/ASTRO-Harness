@@ -89,6 +89,6 @@ describe("boot do chat: portão dos termos antes do I/O (#479)", () => {
     const source = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
     // Um `nodeReplIO()` no cli voltaria a abrir o readline antes do portão dos termos.
     expect(source).not.toContain("nodeReplIO(");
-    expect(source).toContain("bootChat({ ask: ttyTermsAsk() })");
+    expect(source).toContain("bootChat({ ask: ttyTermsAsk(), shellAsk: ttyShellConsentAsk() })");
   });
 });

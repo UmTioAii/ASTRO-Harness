@@ -6,7 +6,9 @@ import { ProfileManager } from "../providers/profile-manager";
 import { NoProviderError, NO_PROVIDER_MESSAGE, loadEffectiveConfig, loadProjectConfig, projectLayerRefs } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { runSetup, ttySetupIO } from "../chat/setup";
+import { ensureShellConsent, SHELL_CONSENT_DECLINED_NOTICE, ttyShellConsentAsk, type ShellConsentAsk } from "../shell-consent";
 import { ensureTermsAccepted, ttyTermsAsk, type TermsAsk } from "../terms";
+import { setShellConsent } from "../tools/run-command";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
 import { createSecretHandlers } from "./vault-secret";
@@ -123,21 +125,32 @@ export interface BootTuiTermsOptions {
   path?: string;
   /** Canal interativo; ausente = sem TTY (não pergunta, não grava). */
   ask?: TermsAsk;
+  /** Canal do consentimento de risco do shell (#599); ausente = sem TTY. */
+  shellAsk?: ShellConsentAsk;
   /** Relógio do teste; default `new Date()`. */
   now?: () => Date;
 }
 
 /**
  * Espelha o `bootChat`: o portão dos termos roda antes de `ensureFirstRun`, da
- * config e da sessão, e a recusa sai sem gravar nada.
+ * config e da sessão, e a recusa sai sem gravar nada. #599: o consentimento de
+ * risco do shell é pedido logo depois, e recusá-lo desliga o shell da sessão.
  */
 export async function bootTuiTerms(opts: BootTuiTermsOptions = {}): Promise<TuiTermsBoot> {
+  const path = opts.path ?? statePath(opts.env ?? process.env);
   const decision = await ensureTermsAccepted({
-    path: opts.path ?? statePath(opts.env ?? process.env),
+    path,
     ...(opts.ask === undefined ? {} : { ask: opts.ask }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
   });
   if (decision.kind === "declined") return { kind: "declined" };
+  const shell = await ensureShellConsent({
+    path,
+    ...(opts.shellAsk === undefined ? {} : { ask: opts.shellAsk }),
+    ...(opts.now === undefined ? {} : { now: opts.now }),
+  });
+  if (shell.kind === "declined") console.error(SHELL_CONSENT_DECLINED_NOTICE);
+  setShellConsent(shell.kind === "declined" ? "declined" : shell.kind === "unattended" ? "unrecorded" : "accepted");
   return decision.kind === "unattended" ? { kind: "unattended" } : { kind: "ready" };
 }
 
@@ -209,7 +222,9 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
   }
   try {
     // #479: termos de uso antes de qualquer escrita (config, sessão, estado).
-    const terms = await bootTuiTerms({ env: opts.env ?? process.env, ask: ttyTermsAsk() });
+    const terms = await bootTuiTerms({
+      env: opts.env ?? process.env, ask: ttyTermsAsk(), shellAsk: ttyShellConsentAsk(),
+    });
     if (terms.kind === "declined") {
       console.error("termos de uso não aceitos — saindo sem gravar nada");
       return 1;

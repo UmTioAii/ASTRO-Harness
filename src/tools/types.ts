@@ -155,7 +155,7 @@ export interface ToolPermissionHint {
   /** Sanitized message for a deny; never the raw command. */
   message?: string;
   /** Policy origin for the audit record (#599 review). */
-  origin?: "rule" | "external_directory" | "unparsable" | "approval";
+  origin?: "rule" | "external_directory" | "unparsable" | "approval" | "consent";
 }
 
 /** Result of persisting an `always` approval (#599); failure carries a stable reason. */

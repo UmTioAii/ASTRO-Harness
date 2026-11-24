@@ -5,6 +5,7 @@
 import { createInterface } from "node:readline";
 import { statePath } from "./astro-home";
 import { loadHomeState, saveHomeState, type TermsAcceptance } from "./home-state";
+import { shellConsentReport } from "./shell-consent";
 
 export type { TermsAcceptance };
 
@@ -62,12 +63,13 @@ function termsWithStatus(status: string): string {
 /**
  * `/terms` nunca lança (#591): estado ilegível vira aviso que cita só o caminho.
  * A mensagem do erro pode carregar o conteúdo do arquivo, então não é impressa (I-03).
+ * #599: o mesmo relatório mostra o consentimento de risco do shell.
  */
 export function termsReport(path: string = statePath()): string {
   try {
-    return formatTerms(loadTermsAcceptance(path));
+    return `${formatTerms(loadTermsAcceptance(path))}\n\n${shellConsentReport(path)}`;
   } catch {
-    return termsWithStatus(`estado global ilegível em ${path} — não foi possível ler o aceite; corrija o arquivo ou apague o campo "terms"`);
+    return `${termsWithStatus(`estado global ilegível em ${path} — não foi possível ler o aceite; corrija o arquivo ou apague o campo "terms"`)}\n\n${shellConsentReport(path)}`;
   }
 }
 

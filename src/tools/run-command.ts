@@ -114,6 +114,22 @@ let shellApprovals: readonly ShellRule[] = [];
 let projectConfigPath: string | undefined;
 let shellExternalDirectory: ShellExternalDirectory | undefined;
 let dockerProbe: Promise<boolean> | undefined;
+/** Shell-risk consent (#599): only an explicit decline disables the shell. */
+let shellConsent: ShellConsentState = "unrecorded";
+
+export type ShellConsentState = "accepted" | "declined" | "unrecorded";
+
+/** Stable code of a shell refused because the risk consent was declined. */
+export const SHELL_CONSENT_DECLINED = "shell_consent_declined";
+
+/**
+ * Records the shell-risk consent decided at boot (#599). A decline disables the
+ * host shell for the session; `unrecorded` (no interactive channel) keeps the
+ * per-command approval gate exactly as before.
+ */
+export function setShellConsent(state: ShellConsentState): void {
+  shellConsent = state;
+}
 
 /**
  * Só aceita engine Linux: no Windows o Docker Desktop pode estar em modo
@@ -584,6 +600,19 @@ function failureCode(message: string, code: string): ToolResult {
   return { output: redactSecrets(message), isError: true, code };
 }
 
+/** A declined consent is a policy deny before the matrix: no prompt, no spawn (#599). */
+const CONSENT_DECLINED_MESSAGE =
+  "shell_consent_declined: the shell-risk consent was declined for this session; " +
+  "accept it at the next interactive start";
+
+function consentDenied(): ToolPermissionHint {
+  return { decision: "deny", origin: "consent", code: SHELL_CONSENT_DECLINED, message: CONSENT_DECLINED_MESSAGE };
+}
+
+function consentRefusal(): ToolResult {
+  return failureCode(CONSENT_DECLINED_MESSAGE, SHELL_CONSENT_DECLINED);
+}
+
 /**
  * Executa no host (#474) depois de: allowlist/ceiling (executor), gate de
  * permissão com o comando no prompt (executor) e hard-block de path (executor).
@@ -713,6 +742,7 @@ const shellPolicyFor = (command: string, cwd: string): ShellPolicyResult =>
 
 /** Policy before the permission matrix (#599); `default` keeps the matrix in charge. */
 function runCommandPolicyHint(input: unknown, ctx: ToolContext): ToolPermissionHint | undefined {
+  if (shellConsent === "declined") return consentDenied();
   const command = commandOf(input);
   const policy = command === undefined ? undefined : shellPolicyFor(command, ctx.cwd);
   if (policy === undefined || policy.origin === "default") return undefined;
@@ -808,6 +838,10 @@ export const runCommandTool: Tool = {
       const message = error instanceof Error ? error.message : String(error);
       return failure(message);
     }
+
+    // A declined consent disables the shell for the session (#599), even on a
+    // direct call: the gate already refused it with `shell_consent_declined`.
+    if (shellConsent === "declined") return consentRefusal();
 
     // Slice 4b (I-19): `sandbox: false` NÃO executa no host - recusa sem spawnar e sem ecoar o comando.
     if (commandMode === "disabled") {
@@ -1121,6 +1155,9 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
     // pediria aprovação de shell sem mostrar o que roda (cwd é rw no sandbox).
     approvalDetail: materialCommand,
 
+    /** #599: a declined consent refuses before the prompt; the matrix asks otherwise. */
+    permissionHint: () => shellConsent === "declined" ? consentDenied() : undefined,
+
     async execute(input, ctx: ToolContext): Promise<ToolResult> {
       let filter: string | undefined;
       try {
@@ -1140,6 +1177,9 @@ export function createRunTestsTool(deps: RunTestsDeps): Tool {
           code: TESTS_NOT_CONFIGURED,
         };
       }
+
+      // A declined consent disables the shell for the session (#599).
+      if (shellConsent === "declined") return consentRefusal();
 
       // `off` disables the shell; `host` runs the configured argv directly, behind the
       // same executor gate/approval as run_command; `docker` keeps the container path.
