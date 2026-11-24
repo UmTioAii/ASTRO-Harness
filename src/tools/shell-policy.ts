@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -116,6 +117,15 @@ export function scanShellCommand(command: string): ShellScan {
 }
 
 const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Correlation digest of a shell decision (D-11): 16 hex chars of SHA-256, never
+ * the command. Short on purpose: audit keeps it readable, and a 64-hex value
+ * would be treated as a secret by the redactor.
+ */
+export function shellCommandHash(command: string): string {
+  return createHash("sha256").update(command).digest("hex").slice(0, 16);
+}
 
 /** Prefix of a saved `always` approval: first subcommand, plus the git subcommand (#599). */
 export function approvalPattern(command: string): string | undefined {

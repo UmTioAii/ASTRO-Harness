@@ -19,26 +19,14 @@ import {
 } from "../src/shell-consent";
 import { saveTermsAcceptance } from "../src/terms";
 import { ToolExecutor } from "../src/tools/executor";
-import { installNoDockerSpawnMock, isolatedRunCommand, type DockerMock, type RunCommandModule } from "./helpers/docker-mock";
+import { installNoDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
+import { listShellDecisions, shellHarness } from "./helpers/shell-harness";
 
 const ISO = "2026-11-20T12:00:00.000Z";
 const stateFile = (): string => join(mkdtempSync(join(tmpdir(), "astro-shell-consent-")), "home", "state.json");
 
 let mock: DockerMock | undefined;
 afterEach(() => { mock?.restore(); mock = undefined; });
-
-/** Runs one command through the real gate; returns the result and the prompts it saw. */
-async function gatedRun(mod: RunCommandModule, command: string) {
-  const cwd = mkdtempSync(join(tmpdir(), "astro-shell-consent-"));
-  const requests: unknown[] = [];
-  const executor = new ToolExecutor({
-    tools: [mod.runCommandTool], allow: ["run_command"], audit: new Auditor(join(cwd, ".astro", "audit.jsonl")),
-    permissionMode: "ask", approveTool: (request) => { requests.push(request); return true; },
-  });
-  const result = await executor.run({ cwd, run: "r1", agent: "coder", env: { ...process.env } },
-    { id: "c1", name: "run_command", arguments: JSON.stringify({ command }) });
-  return { result, requests };
-}
 
 describe("shell-risk consent (#599)", () => {
   test("the text is versioned and names authority, approval and the allowlist limit", () => {
@@ -158,18 +146,20 @@ describe("shell-risk consent (#599)", () => {
 });
 
 describe("declined shell consent disables the shell (#599)", () => {
-  test("run_command is refused without a prompt and never spawns", async () => {
+  test("run_command is refused without a prompt, never spawns and is audited with its origin", async () => {
     mock = installNoDockerSpawnMock();
     const mod = await isolatedRunCommand("consent-declined");
-    mod.configureRunCommand({ mode: "host", rules: [{ match: "*", effect: "allow" }] });
+    const harness = await shellHarness(mod, { rules: [{ match: "*", effect: "allow" }], approve: () => true });
     mod.setShellConsent("declined");
-    const denied = await gatedRun(mod, "echo consent");
-    expect(denied.result.code).toBe("shell_consent_declined");
-    expect(denied.requests).toHaveLength(0);
+    const denied = await harness.run("echo consent");
+    expect(denied.code).toBe("shell_consent_declined");
+    expect(harness.requests).toHaveLength(0);
     expect(mock.calls).toHaveLength(0);
+    expect(listShellDecisions(harness.auditPath)[0])
+      .toMatchObject({ effect: "deny", origin: "consent", reason: "shell_consent_declined" });
     // A record (or no record) keeps the shell on: only an explicit decline disables it.
     mod.setShellConsent("unrecorded");
-    expect((await gatedRun(mod, "echo consent")).result.isError).toBeFalsy();
+    expect((await harness.run("echo consent")).isError).toBeFalsy();
   });
 
   test("run_tests is refused before the prompt when the consent was declined", async () => {
