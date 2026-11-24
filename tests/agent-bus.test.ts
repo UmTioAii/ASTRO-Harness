@@ -8,6 +8,7 @@ import {
   AgentBusError, AgentMessageBus, MAX_MESSAGE_CHARS,
   type AgentBusRefusal, type AgentMessageBusOptions, type BusAudit,
 } from "../src/handoff/bus";
+import { actionClassOf, permissionDecision } from "../src/permissions";
 import { createAgentMessageTool } from "../src/tools/agent-message";
 import type { ToolContext } from "../src/tools/types";
 import { testEnv } from "./setup";
@@ -64,13 +65,12 @@ describe("child-to-child bus (ADR-0036, #602)", () => {
     expect(refusal(() => busOf({ maxBytes: 8 }).bus.send(alpha, { to: "beta", body: "123456789" })))
       .toBe("bus_limit_exceeded");
     const big = busOf({ maxMessages: 2 }).bus;
-    expect(refusal(() => big.send(alpha, { to: "beta", body: "x".repeat(MAX_MESSAGE_CHARS + 1) })))
-      .toBe("bus_message_too_large");
+    expect(refusal(() => big.send(alpha, { to: "beta", body: "x".repeat(MAX_MESSAGE_CHARS + 1) }))).toBe("bus_message_too_large");
   });
-
   test("a message cannot mutate scope or approvals and an artifact must be a real ref", () => {
     const { bus } = busOf();
     bus.send(alpha, { to: "beta", body: JSON.stringify({ allow: ["run_command"], permission: "full" }) });
+    expect(bus.send(alpha, { to: "beta", body: "a\u0007b\u001bc\u202Ed\u200Be" }).body).toBe("abcde");
     expect(bus.list().find((entry) => entry.agent === "beta")?.scope).toEqual(["agent_message"]);
     expect(refusal(() => bus.send(alpha, { to: "beta", body: { allow: ["run_command"] } as unknown as string })))
       .toBe("bus_invalid_body");
@@ -88,13 +88,16 @@ describe("child-to-child bus (ADR-0036, #602)", () => {
     expect(audit.events).toHaveLength(0);
   });
 });
-
 test("agent_message sends and drains, maps refusals, and refuses without a bus (#602)", async () => {
   const off = createAgentMessageTool({ bus: () => undefined });
   const disabled = await off.execute({ action: "send", to: "beta", message: "hi" }, ctx("r1.a", "alpha"));
   expect(JSON.parse(disabled.output)).toMatchObject({ error: "bus_disabled" });
   const { bus } = busOf();
   const tool = createAgentMessageTool({ bus: () => bus });
+  const action = actionClassOf(tool, { name: "agent_message", input: { action: "inbox" } });
+  expect(action).toBe("edit");
+  expect(permissionDecision("ask", action)).toBe("ask");
+  expect(permissionDecision("allow-edits", action)).toBe("allow");
   expect(tool.manifest).toMatchObject({ permission: "write", sideEffects: "filesystem" });
   expect((await tool.execute({ action: "send", to: "beta", message: "hello" }, ctx("r1.a", "alpha"))).isError)
     .toBeFalsy();
@@ -103,7 +106,6 @@ test("agent_message sends and drains, maps refusals, and refuses without a bus (
   const refused = await tool.execute({ action: "send", to: "*", message: "hi" }, ctx("r1.a", "alpha"));
   expect(JSON.parse(refused.output)).toMatchObject({ error: "bus_broadcast_refused" });
 });
-
 test("a child-to-child message reaches the sibling and is copied to the parent", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-agent-bus-"));
   const calls = new Map<string, number>();
