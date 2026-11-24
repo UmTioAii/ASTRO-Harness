@@ -14,25 +14,25 @@ import {
   type EvalReport,
 } from "../src/eval/harness";
 import { evalRunEnv, runScenario, type ScenarioSpec } from "../src/eval/scenario";
-import { snapshotEnv } from "./helpers/env-guard";
+import { snapshotEnv, trackBunServe } from "./helpers/env-guard";
 
 const GOLDEN_ROOT = join(import.meta.dir, "..", "eval", "golden");
 
 /**
- * Env vars and globals this file mutates. A test that hits its timeout never
- * reaches its own `finally` and the runner moves on to the next file, so the
- * snapshot taken at load is restored in `afterAll`, which runs after a timeout
- * and after a test throws mid-file (#656).
+ * Env vars, globals and loopback listeners this file mutates. A test that hits
+ * its timeout never reaches its own `finally` and the runner moves on to the
+ * next file, so the state captured at load is restored in `afterAll`, which
+ * runs after a timeout and after a test throws mid-file (#656).
  */
 const restoreEnv = snapshotEnv([
   "ASTRO_HOME", "ASTRO_NO_GLOBAL_CONFIG", "ASTRO_ALLOW_PRIVATE_URLS", "HOME", "USERPROFILE",
 ]);
-const originalServe = Bun.serve;
+const servers = trackBunServe();
 const originalFetch = globalThis.fetch;
 
 afterAll(() => {
-  Bun.serve = originalServe;
   globalThis.fetch = originalFetch;
+  servers.restore();
   restoreEnv();
 });
 

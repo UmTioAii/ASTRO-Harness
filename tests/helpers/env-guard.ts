@@ -14,3 +14,43 @@ export function snapshotEnv(keys: readonly string[]): () => void {
     }
   };
 }
+
+interface StoppableServer {
+  stop(force?: boolean): void;
+}
+
+interface ServeSurface {
+  serve: (options: unknown) => StoppableServer;
+}
+
+export interface ServerTracker {
+  /** Servers started while the tracker was installed, in start order. */
+  readonly started: readonly StoppableServer[];
+  /** Stops whatever is still running and restores the original `Bun.serve`. */
+  restore(): void;
+}
+
+/**
+ * Wraps `Bun.serve` so the caller can close listeners a test left behind (#656).
+ * A test that hits its timeout skips its own `finally`, but the file's
+ * `afterAll` still runs and stops the residue.
+ */
+export function trackBunServe(): ServerTracker {
+  const bun = Bun as unknown as ServeSurface;
+  const base = bun.serve;
+  const started: StoppableServer[] = [];
+  bun.serve = (options) => {
+    const server = base(options);
+    started.push(server);
+    return server;
+  };
+  return {
+    started,
+    restore() {
+      bun.serve = base;
+      for (const server of started.reverse()) {
+        try { server.stop(true); } catch { /* already stopped */ }
+      }
+    },
+  };
+}
