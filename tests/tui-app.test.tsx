@@ -103,18 +103,23 @@ function frameHas(instance: ReturnType<typeof render>, text: string): boolean {
   return (instance.lastFrame() ?? "").replace(/\s+/g, " ").includes(text);
 }
 
-test("header no topo mostra versão, provider, modelo e saúde, sem endpoint (#480)", async () => {
+test("o banner saiu: a identidade vem da zona vazia da timeline (#595)", async () => {
   const session = new FakeSession();
-  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-banner-"));
+  const cwd = mkdtempSync(join(tmpdir(), "astro-tui-identity-"));
   const instance = render(<TuiApp session={session} cwd={cwd} />);
   try {
-    await waitFor(() => frameHas(instance, "ASTRO v"));
-    const frame = (instance.lastFrame() ?? "").replace(/\s+/g, " ");
-    expect(frame).toMatch(/ASTRO v\d+\.\d+\.\d+/);
-    expect(frame).toContain("p/m1");
-    expect(frame).toContain("· n/d");
-    expect(frame).not.toContain("estado:");
+    await waitFor(() => frameHas(instance, "ASTRO"));
+    const frame = instance.lastFrame() ?? "";
+    // No version/provider/health header line survives: the wordmark is the empty-state identity zone.
+    expect(frame).not.toMatch(/ASTRO v\d+\.\d+\.\d+/);
+    expect(frame).not.toContain("· n/d");
     expect(frame).not.toContain("https://");
+    // The empty state still opens with the wordmark and the welcome line.
+    expect(frame).toContain("ASTRO");
+    expect(frame).toContain("astro · /help");
+    // Zone 4 keeps the model and the mode.
+    expect(frame).toContain("p/m1");
+    expect(frame).toContain("modo: ask");
   } finally {
     instance.unmount();
   }
