@@ -3,10 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "../src/core/app";
+import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
 import {
-  CHILD_BRIEF_MAX_TOKENS, boundChildBrief, buildChildHandoffArtifact, parseChildResumeLevel,
-  planChildResume, type ChildBrief, type ChildResumeLevel,
+  CHILD_BRIEF_MAX_TOKENS, ChildResumeError, ChildSessionRegistry, RESUME_INSTRUCTION_MAX_CHARS,
+  boundChildBrief, buildChildHandoffArtifact, parseChildResumeLevel, planChildResume,
+  resolveChildResume, type ChildBrief, type ChildResumeLevel, type ChildSessionHandle,
 } from "../src/handoff/children";
 import { validateHandoffArtifact } from "../src/handoff/types";
 import { testEnv } from "./setup";
@@ -125,7 +127,8 @@ interface Harness {
   cwd: string; configPath: string; bodies: Array<{ messages: Array<{ role: string; content: string }> }>;
   calls: { plan: number; child: number }; server: ReturnType<typeof Bun.serve>;
 }
-function harness(handlers: { plan: (call: number) => Response; child: (call: number) => Response },
+type Body = Harness["bodies"][number];
+function harness(handlers: { plan: (call: number, body: Body) => Response; child: (call: number, body: Body) => Response },
   opts: { checkpointAt?: number } = {}): Harness {
   const cwd = mkdtempSync(join(tmpdir(), "astro-child-"));
   const calls = { plan: 0, child: 0 };
@@ -133,8 +136,8 @@ function harness(handlers: { plan: (call: number) => Response; child: (call: num
   const server = Bun.serve({ port: 0, async fetch(req) {
     const body = (await req.json()) as Harness["bodies"][number];
     bodies.push(body);
-    if (body.messages[0]?.content === "child-agent") return handlers.child(++calls.child);
-    return handlers.plan(++calls.plan);
+    if (body.messages[0]?.content === "child-agent") return handlers.child(++calls.child, body);
+    return handlers.plan(++calls.plan, body);
   } });
   const configPath = join(cwd, "astro.config.json");
   writeFileSync(configPath, JSON.stringify({
@@ -211,6 +214,135 @@ describe("task handoff artifact tier", () => {
       expect(disk).not.toContain(marker);
       expect(disk).not.toContain("CHILD-OBJECTIVE");
       expect(existsSync(join(h.cwd, ".astro", "sessions"))).toBe(false);
+    } finally { h.server.stop(true); }
+  });
+});
+
+describe("live child resume handle (ADR-0036, #602)", () => {
+  const handle = (over: Partial<ChildSessionHandle> = {}): ChildSessionHandle => ({
+    session: "r1.task.live", parentRun: "r1", parentAgent: "plan", childAgent: "build", brief: brief(),
+    history: [{ role: "assistant", content: "child did half" }],
+    run: async () => ({ final: "resumed", steps: 1, messages: [] }),
+    ...over,
+  });
+  const resolve = (registry: ChildSessionRegistry, over: Record<string, unknown> = {}) =>
+    resolveChildResume(registry, {
+      sessionId: "r1.task.live", instruction: "add the tests",
+      caller: { run: "r1", agent: "plan" }, ...over,
+    } as Parameters<typeof resolveChildResume>[1]);
+  const codeOf = (fn: () => unknown): string | undefined => {
+    try { fn(); return undefined; } catch (error) { return error instanceof ChildResumeError ? error.code : "unexpected"; }
+  };
+
+  test("only the delegating parent resumes; another execution or run is refused", () => {
+    const registry = new ChildSessionRegistry();
+    registry.register(handle());
+    expect(resolve(registry).plan).toMatchObject({ level: "L2", source: "default", restored: ["child_session"] });
+    expect(codeOf(() => resolve(registry, { caller: { run: "r1.task.sibling", agent: "build" } }))).toBe("resume_forbidden");
+    expect(codeOf(() => resolve(registry, { caller: { run: "r2", agent: "plan" } }))).toBe("resume_forbidden");
+    expect(codeOf(() => resolve(registry, { sessionId: "r1.task.gone" }))).toBe("session_missing");
+    expect(codeOf(() => resolve(registry, { sessionId: " " }))).toBe("session_missing");
+  });
+
+  test("L2 restores the live session; L1 only on request; a dead session rebuilds (L3)", () => {
+    const registry = new ChildSessionRegistry();
+    registry.register(handle());
+    const l2 = resolve(registry);
+    expect(l2.plan.level).toBe("L2");
+    expect(l2.history).toHaveLength(1);
+    expect(l2.prompt).toContain("add the tests");
+    expect(l2.prompt).not.toContain("journal:");
+
+    const l1 = resolve(registry, { requested: "L1" });
+    expect(l1.plan).toMatchObject({ level: "L1", restored: ["brief"] });
+    expect(l1.history).toBeUndefined();
+    expect(l1.prompt).toContain("implement the login screen");
+
+    const dead = new ChildSessionRegistry();
+    dead.register(handle({ history: undefined, artifact: artifact(), journal: { steps: 3, tokens: 640 } }));
+    const l3 = resolve(dead);
+    expect(l3.plan).toMatchObject({ level: "L3", source: "fallback", restored: ["brief", "journal"] });
+    expect(l3.history).toBeUndefined();
+    expect(l3.prompt).toContain("journal: 3 steps");
+    expect(l3.prompt).toContain("implement the login screen");
+    expect(l3.prompt).not.toContain("child did half");
+
+    const neither = new ChildSessionRegistry();
+    neither.register(handle({ history: undefined }));
+    expect(codeOf(() => resolve(neither))).toBe("artifact_missing");
+    expect(codeOf(() => resolve(registry, { requested: "L3" }))).toBe("artifact_missing");
+  });
+
+  test("the resumed prompt stays inside the instruction and brief bounds", () => {
+    const registry = new ChildSessionRegistry();
+    registry.register(handle({ brief: brief({ objective: "o".repeat(4000), whatWasTried: ["w".repeat(400)] }) }));
+    const huge = "i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 500);
+    const resolution = resolve(registry, { instruction: huge, requested: "L1" });
+    expect(resolution.prompt).not.toContain("i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1));
+    expect(resolution.prompt).not.toContain("o".repeat(201));
+    expect(resolution.prompt.length).toBeLessThan(RESUME_INSTRUCTION_MAX_CHARS + 4096);
+  });
+});
+
+describe("task.resume live handle (ADR-0036, #602)", () => {
+  const sessionOf = (body: Body): string => {
+    for (const message of body.messages) {
+      if (typeof message.content !== "string" || !message.content.includes("session_id")) continue;
+      try { return (JSON.parse(message.content) as { session_id?: string }).session_id ?? ""; } catch { /* not the tool result */ }
+    }
+    return "";
+  };
+
+  test("L2 reopens the live child, keeps its scope and returns the result to the parent", async () => {
+    const instruction = "INSTRUCTION-MARKER add the tests";
+    const marker = "PARENT-RESUME-TASK";
+    const h = harness({
+      plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "implement" })
+        : call === 2 ? toolCall("task", { session_id: sessionOf(body), instruction })
+          : final("parent-final"),
+      child: (call) => call === 1 ? final("child-summary")
+        : call === 2 ? toolCall("task", { agent: "plan", prompt: "grandchild" })
+          : final("child-continued"),
+    });
+    try {
+      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: marker,
+        env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
+      expect(result.final).toBe("parent-final");
+      const childBodies = h.bodies.filter((body) => body.messages[0]?.content === "child-agent");
+      expect(childBodies).toHaveLength(3);
+      // L2 carries the live child history plus the parent instruction.
+      expect(JSON.stringify(childBodies[1]!.messages)).toContain("child-summary");
+      expect(JSON.stringify(childBodies[1]!.messages)).toContain(instruction);
+      // The resumed child keeps its own allowlist: `task` is not its tool (I-01/I-02).
+      expect(JSON.stringify(childBodies[2]!.messages)).toContain("permitida para o agent");
+      const parentMessages = JSON.stringify(h.bodies.at(-1)!.messages);
+      expect(parentMessages).toContain('"level":"L2"');
+      expect(parentMessages).toContain('"source":"default"');
+      expect(parentMessages).toContain("child-continued");
+      // Nothing persisted: no artifact, no transcript, no instruction text (I-03).
+      expect(new Ledger(join(h.cwd, ".astro", "ledger.jsonl")).readHandoffs()).toHaveLength(0);
+      expect(existsSync(join(h.cwd, ".astro", "sessions"))).toBe(false);
+      const disk = readFileSync(join(h.cwd, ".astro", "ledger.jsonl"), "utf8")
+        + readFileSync(join(h.cwd, ".astro", "audit.jsonl"), "utf8");
+      expect(disk).not.toContain(marker);
+      expect(disk).not.toContain(instruction);
+      const resumed = new Auditor(join(h.cwd, ".astro", "audit.jsonl")).readAll().find((event) => event.tipo === "task.resumed");
+      expect(resumed?.payload).toMatchObject({ fromAgent: "plan", level: "L2", source: "default" });
+      expect(JSON.stringify(resumed)).not.toContain(instruction);
+    } finally { h.server.stop(true); }
+  });
+
+  test("a resume with no live session is typed, not a fresh child run", async () => {
+    const h = harness({
+      plan: (call) => call === 1 ? toolCall("task", { session_id: "r1.task.missing", instruction: "continue" }) : final("parent-final"),
+      child: () => final("should-not-run"),
+    });
+    try {
+      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "resume-missing",
+        env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
+      expect(result.final).toBe("parent-final");
+      expect(h.calls.child).toBe(0);
+      expect(JSON.stringify(h.bodies.at(-1)!.messages)).toContain('"error":"session_missing"');
     } finally { h.server.stop(true); }
   });
 });
