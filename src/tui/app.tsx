@@ -1109,7 +1109,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
                 {question.diff === undefined ? null : " · tab ver diff"}
               </Text>
               {input === ""
-                ? <Text dimColor>{sanitizePromptText(question.hint ?? "enter responde · ctrl+c cancela")}</Text>
+                ? <Text dimColor>{"enter responde · ctrl+c cancela"}</Text>
                 : (
                   <Text>
                     <Text color={colors.accent}>{"❯ "}</Text>

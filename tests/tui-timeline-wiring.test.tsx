@@ -289,8 +289,9 @@ test("approval takes over the composer zone while the running timeline stays vis
     // The timeline is still visible and the editor composer yielded to the approval line.
     expect(frame).toContain("▸ command: bun test");
     expect(frame).not.toContain("❯");
-    // The choices stay visible on the hint line even when the question line clips.
-    expect(frame).toContain("s once · a always");
+    // The composer shows the neutral prompt; the choices live in the wrapped question.
+    expect(frame).toContain("enter responde");
+    expect(frame).toContain("[n] deny");
 
     instance.stdin.write("s");
     instance.stdin.write("\r");
