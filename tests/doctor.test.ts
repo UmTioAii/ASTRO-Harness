@@ -645,15 +645,93 @@ test("model check shows a provider override next to the catalog value (#625)", (
 
 test("a malformed override fails the model check naming the field (#625)", () => {
   const report = runChecks(facts({
-    model: {
+    modelErrors: [{
       ref: "codex/gpt-5.5",
-      overrides: [],
-      overrideError: { field: "efforts", reason: "reasoning requires at least one effort level" },
-    },
+      field: "efforts",
+      reason: "reasoning requires at least one effort level",
+      source: "override",
+    }],
   }));
-  const check = report.checks.find((item) => item.name === "model");
+  const check = report.checks.find((item) => item.name === "model:codex/gpt-5.5");
   expect(check?.level).toBe("fail");
   expect(check?.detail).toContain("efforts");
+  expect(exitCode(report)).toBe(1);
+});
+
+test("each recorded malformed offer is one fail check, active or not (#638)", () => {
+  const report = runChecks(facts({
+    model: {
+      ref: "codex/gpt-5.5",
+      overrides: [{ field: "context", effective: "64000", catalog: "400000" }],
+    },
+    modelErrors: [
+      { ref: "nvidia/gpt-5.5", field: "efforts", reason: "reasoning requires at least one effort level", source: "override" },
+      { ref: "openrouter/openai/gpt-4o-mini", field: "maxOutput", reason: "cannot exceed context 4000", source: "override" },
+    ],
+  }));
+  const checks = report.checks.filter((item) => item.name.startsWith("model:"));
+  expect(checks.map((item) => item.name)).toEqual(["model:nvidia/gpt-5.5", "model:openrouter/openai/gpt-4o-mini"]);
+  expect(checks.every((item) => item.level === "fail")).toBe(true);
+  expect(exitCode(report)).toBe(1);
+});
+
+test("a malformed offer names its source: catalog fact or provider override (#638)", () => {
+  const report = runChecks(facts({
+    modelErrors: [{ ref: "demo/gpt-5.5", field: "maxOutput", reason: "must be a positive integer (got 0)", source: "catalog" }],
+  }));
+  const check = report.checks.find((item) => item.name === "model:demo/gpt-5.5");
+  expect(check?.detail).toContain("malformed catalog fact");
+  expect(check?.detail).not.toContain("malformed provider override");
+});
+
+function catalogConfig(agentModel: string, modelId: string): string {
+  return JSON.stringify({
+    providers: { demo: { kind: "openai-compat", baseUrl: "https://demo.example/v1", credentialRef: "DEMO_KEY" } },
+    models: [{ provider: "demo", id: modelId, tags: ["writing-code"], context: 8192 }],
+    agent: { model: agentModel, maxSteps: 2, tools: ["read_file"] },
+    paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+  });
+}
+
+test("collectFacts carries the active model overrides from the composed catalog (#638)", () => {
+  const projectCwd = sandbox();
+  writeFileSync(join(projectCwd, "astro.config.json"), catalogConfig("demo/gpt-5.5", "gpt-5.5"), "utf8");
+  const catalog = [composeEntry({
+    key: "demo", name: "Demo", kind: "openai-compat",
+    models: [{ ref: "gpt-5.5", price: null, free: false, overrides: { context: 64_000 } }],
+  })];
+  const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    catalog,
+    env: { ...process.env, ASTRO_NO_GLOBAL_CONFIG: "1", ASTRO_HOME: join(projectCwd, "home") },
+    checkPrivate: () => true,
+  });
+  expect(collected.model?.ref).toBe("demo/gpt-5.5");
+  expect(collected.model?.overrides[0]).toEqual({ field: "context", effective: "64000", catalog: "400000" });
+});
+
+test("collectFacts reports a malformed offer that is not the active model (#638)", () => {
+  const projectCwd = sandbox();
+  const active = "meta/llama-3.3-70b-instruct";
+  writeFileSync(join(projectCwd, "astro.config.json"), catalogConfig(`demo/${active}`, active), "utf8");
+  const catalog = [composeEntry({
+    key: "demo", name: "Demo", kind: "openai-compat",
+    models: [
+      { ref: "gpt-5.5", price: null, free: false, overrides: { reasoning: true, efforts: [] } },
+      { ref: "meta/llama-3.3-70b-instruct", price: null, free: false },
+    ],
+  })];
+  const collected = collectFacts(process.cwd(), {
+    projectCwd,
+    catalog,
+    env: { ...process.env, ASTRO_NO_GLOBAL_CONFIG: "1", ASTRO_HOME: join(projectCwd, "home") },
+    checkPrivate: () => true,
+  });
+  expect(collected.model).toBeUndefined();
+  const report = runChecks(collected);
+  const checks = report.checks.filter((item) => item.name.startsWith("model:"));
+  expect(checks.map((item) => item.name)).toEqual(["model:demo/gpt-5.5"]);
+  expect(checks[0]?.detail).toContain("efforts");
   expect(exitCode(report)).toBe(1);
 });
 

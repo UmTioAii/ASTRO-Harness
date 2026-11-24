@@ -22,6 +22,9 @@ export interface OverrideNote {
 /** Fields an override can make malformed; named in the error for the failed resolution. */
 export type OverrideField = "context" | "maxOutput" | "efforts";
 
+/** Layer that supplied the malformed fact, so the error does not blame the wrong file. */
+export type FactSource = "catalog" | "override";
+
 /** Classified rejection of facts an override made impossible (fail closed at resolution). */
 export class ModelOverrideError extends Error {
   readonly code = "config_invalid_model_facts";
@@ -30,15 +33,18 @@ export class ModelOverrideError extends Error {
     readonly ref: ModelId,
     readonly field: OverrideField,
     readonly reason: string,
+    /** Defaults to `override`: callers check the provider declaration first. */
+    readonly source: FactSource = "override",
   ) {
-    super(`provider override invalid: "${ref}.${field}" ${reason}`);
+    const layer = source === "catalog" ? "catalog fact" : "provider override";
+    super(`${layer} invalid: "${ref}.${field}" ${reason}`);
     this.name = "ModelOverrideError";
   }
 }
 
-function positive(ref: ModelId, field: OverrideField, value: number): void {
+function positive(ref: ModelId, field: OverrideField, value: number, source: FactSource): void {
   if (!Number.isInteger(value) || value <= 0) {
-    throw new ModelOverrideError(ref, field, `must be a positive integer (got ${value})`);
+    throw new ModelOverrideError(ref, field, `must be a positive integer (got ${value})`, source);
   }
 }
 
@@ -46,19 +52,35 @@ function positive(ref: ModelId, field: OverrideField, value: number): void {
  * Validates the merged facts (catalog + override) before they reach a card.
  * A narrowed context may clamp an inherited output cap (documented gateway
  * case); a cap the override declares above the context is a malformed offer.
+ * The error names the layer at fault: a fact the override did not declare is
+ * a catalog defect (#638).
  */
 export function validateFacts(
   ref: ModelId,
   facts: ModelFacts,
   overrides: Partial<ModelFacts>,
 ): void {
-  positive(ref, "context", facts.context);
-  positive(ref, "maxOutput", facts.maxOutput);
+  const declared = (field: keyof ModelFacts): FactSource =>
+    overrides[field] === undefined ? "catalog" : "override";
+  positive(ref, "context", facts.context, declared("context"));
+  positive(ref, "maxOutput", facts.maxOutput, declared("maxOutput"));
   if (overrides.maxOutput !== undefined && overrides.maxOutput > facts.context) {
-    throw new ModelOverrideError(ref, "maxOutput", `cannot exceed context ${facts.context}`);
+    throw new ModelOverrideError(ref, "maxOutput", `cannot exceed context ${facts.context}`, "override");
+  }
+  // Either half of the pair can be the override; the layer that touched it is at fault.
+  const reasoningSource = declared("reasoning") === "override" || declared("efforts") === "override"
+    ? "override"
+    : "catalog";
+  if (!facts.reasoning && facts.efforts.length > 0) {
+    throw new ModelOverrideError(
+      ref,
+      "efforts",
+      `reasoning false requires an empty effort list (got ${list(facts.efforts)})`,
+      reasoningSource,
+    );
   }
   if (facts.reasoning && facts.efforts.length === 0) {
-    throw new ModelOverrideError(ref, "efforts", "reasoning requires at least one effort level");
+    throw new ModelOverrideError(ref, "efforts", "reasoning requires at least one effort level", reasoningSource);
   }
 }
 

@@ -39,7 +39,7 @@ Precedence: provider override > catalog fact > code default. Editing a fact in `
 
 ## Overrides in `doctor` and `/usage` (#625)
 
-`effectiveCard` validates the merged facts at resolution: `context` and `maxOutput` are positive integers, a declared `maxOutput` cannot exceed the context, and `reasoning: true` requires at least one effort. A violation throws `ModelOverrideError` naming `ref.field`; `PROVIDER_CATALOG` drops that offer's card and records the error instead of crashing startup, and `astro doctor` reports it as a `fail`.
+`effectiveCard` validates the merged facts at resolution: `context` and `maxOutput` are positive integers, a declared `maxOutput` cannot exceed the context, `reasoning: true` requires at least one effort and `reasoning: false` requires an empty list. A violation throws `ModelOverrideError` naming `ref.field` and whether the catalog fact or the provider override is at fault; `PROVIDER_CATALOG` drops that offer's card and records the error instead of crashing startup, and `astro doctor` reports one `fail` per recorded error, including an offer that is not the active model.
 
 When an override changes a fact, `astro doctor` and `/usage` show the effective value next to the catalog value for the active model, for example `context 64000 (catalog 400000)`. Without an override both outputs are unchanged. `price`, `free` and `status` stay offer-owned, so they are not overridable facts; `price: null` on a paid offer stays `n/d`, never zero.
 
