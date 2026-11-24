@@ -118,7 +118,7 @@ describe("ponte de aprovação da TUI (T2, #63)", () => {
     expect(await moveDecision).toBe(false); // 'n' continua negando
   });
 
-  test("cada aprovação carrega o hint das opções no composer (#635)", async () => {
+  test("each approval carries the choices hint for the composer (#635)", async () => {
     const bridge = createApprovalBridge();
     const tool = bridge.approveTool({ name: "run_command", action: "shell", mode: "ask" });
     expect(bridge.current()?.hint).toContain("s once");

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   displayWidth,
   renderTimeline,
+  sanitizeBlockText,
   toolLabel,
   type TimelineState,
   type TimelineTurn,
@@ -128,5 +129,49 @@ describe("timeline (#595)", () => {
     expect(lines).toContain("    return 1;");
     expect(lines).toContain("      indented 2");
     expect(lines.join("\n")).not.toContain("\u0007");
+  });
+
+  test("tab-indented blocks keep their indentation (#635)", () => {
+    const tabbed: TimelineView = {
+      state: { kind: "done" },
+      status,
+      expanded: { tools: true },
+      results: { "call-1": "target:\n\tbun test" },
+      turn: {
+        ...turn,
+        status: "done",
+        entries: [
+          { kind: "answer", markdown: "```make\nall:\n\tbun test\n```" },
+          { kind: "tool", callId: "call-1", name: "read_file", arguments: '{"path":"Makefile"}', status: "ok" },
+        ],
+      },
+    };
+    const lines = renderTimeline(tabbed, 80);
+    // Fenced answer: the tab becomes four spaces; tool body: the two-space pad plus the tab.
+    expect(lines).toContain("    bun test");
+    expect(lines).toContain("      bun test");
+    expect(lines.join("\n")).not.toContain("\t");
+  });
+
+  test("sanitizeBlockText strips ANSI/OSC and never eats the line after an unterminated OSC (#635, I-03)", () => {
+    const osc52 = "c2VjcmV0LWNsaXBib2FyZA==";
+    const input = [
+      "first",
+      `\x1b]52;c;${osc52}\x07after`,
+      "before",
+      "\x1b]0;unterminated",
+      "last line",
+      "\x07",
+      "esc \x1b[31mred\x1b[0m rlo \u202eevil",
+    ].join("\n");
+    const out = sanitizeBlockText(input);
+    expect(out).not.toContain("\x1b");
+    expect(out).not.toContain("\x07");
+    expect(out).not.toContain("\u202e");
+    expect(out).not.toContain(osc52);
+    expect(out).toContain("after");
+    expect(out).toContain("last line");
+    expect(out).toContain("red");
+    expect(out).toContain("evil");
   });
 });
