@@ -56,6 +56,7 @@ import { createAgentMessageTool } from "../tools/agent-message";
 import { createListModelCandidatesTool } from "../tools/list-model-candidates";
 import { createTaskTool } from "../tools/task";
 import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-search";
+import { createSearchAndReadTool } from "../tools/web-search-read";
 import { createWebFetchTool } from "../tools/web-fetch";
 import { TodoPlanStore, createTodoWriteTool } from "../tools/todo-write";
 import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, SpawnRegistry } from "../spawn";
@@ -1028,11 +1029,10 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   // web_search (#57): só existe quando `webSearch` está configurado; a chave
   // vem de variável de ambiente nomeada e nunca entra no manifesto.
   if (config.webSearch !== undefined) {
-    toolsByName.set("web_search", createWebSearchTool({
-      config: config.webSearch,
-      audit,
-      env,
-    }));
+    const webSearchDeps = { config: config.webSearch, audit, env };
+    toolsByName.set("web_search", createWebSearchTool(webSearchDeps));
+    // search_and_read (#604): same chain, cache and citations; reads the top results.
+    toolsByName.set("search_and_read", createSearchAndReadTool(webSearchDeps));
   }
   // web_fetch (#57): sem config; allowlist e permissão continuam valendo (I-01).
   toolsByName.set("web_fetch", createWebFetchTool({ audit }));
