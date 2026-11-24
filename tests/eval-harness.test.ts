@@ -475,6 +475,41 @@ describe("eval harness (F5-2)", () => {
     )).rejects.toThrow(/não-loopback em webSearch\.fallback\[0\]\.baseUrl: https:\/\/www\.googleapis\.com/);
   });
 
+  test("runCase não ecoa credencial embutida na URL da cadeia webSearch", async () => {
+    // Synthetic credential built at runtime (no secret literal in the diff).
+    const LEAK = ["s3", "cret", "value"].join("");
+    const root = mkdtempSync(join(tmpdir(), "astro-websearch-fallback-secret-"));
+    const caseDir = writeScenarioCase(root, "01-web-fallback-secret", {
+      schema: 1,
+      kind: "app",
+      env: { EVAL_WEB_KEY: "eval-web-secret-123" },
+      config: {
+        agent: { model: "mock/mock-1", maxSteps: 6, tools: ["web_search"] },
+        webSearch: {
+          provider: "exa",
+          apiKeyEnv: "EVAL_WEB_KEY",
+          baseUrl: "http://127.0.0.1:9",
+          fallback: [{
+            provider: "brave",
+            apiKeyEnv: "EVAL_WEB_KEY",
+            baseUrl: `https://ingest:${LEAK}@search.example.test`,
+          }],
+        },
+      },
+      turns: [{ content: "ok" }],
+      expect: { final: "ok" },
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "astro-web-fallback-secret-cwd-"));
+    const error = await runScenario(
+      JSON.parse(readFileSync(join(caseDir, "scenario.json"), "utf8")) as ScenarioSpec,
+      { cwd, caseDir, task: "tarefa" },
+    ).then(() => undefined, (caught: unknown) => caught);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("webSearch.fallback[0].baseUrl");
+    expect(message).toContain("https://search.example.test");
+    expect(message).not.toContain(LEAK);
+  });
+
   test("runCase aceita uma cadeia de webSearch com baseUrl loopback por entrada", async () => {
     const root = mkdtempSync(join(tmpdir(), "astro-websearch-chain-"));
     const caseDir = writeScenarioCase(root, "01-web-chain", {
