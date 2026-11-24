@@ -32,6 +32,8 @@ import { budgetStatus, effectiveBudget, raiseDeniedLabel, restrictBudget, Budget
 import { MaxRoundsError, runSession, runMultiAgentSession, type EffectiveIdentity, type IdentityResolver, type MultiAgentSessionOptions } from "./session";
 import { assertResumeIdentity, planResume, ReplayIncompleteError } from "../resume";
 import { accountHasCapacity, activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks } from "../agent-lock";
+import { NoProgressError } from "../loop-guard";
+import { PermissionPendingError } from "../permissions";
 import type { CallSelection } from "../call-profile";
 import type { TurnObserver } from "../chat/turn-events";
 import { markProviderFailure, markProviderSuccess } from "../providers/health-state";
@@ -50,7 +52,7 @@ import { writeFileTool } from "../tools/write-file";
 import { createMemoryWriteTool } from "../tools/memory-write";
 import { loadMemory, memoryPrompt } from "../memory";
 import { handoffTool } from "../tools/handoff";
-import { buildChildHandoffArtifact, type ChildBrief } from "../handoff/children";
+import { buildChildHandoffArtifact, ChildResumeError, ChildSessionRegistry, resolveChildResume, type ChildBrief, type ChildSessionHandle } from "../handoff/children";
 import { AgentMessageBus } from "../handoff/bus";
 import { createAgentMessageTool } from "../tools/agent-message";
 import { createListModelCandidatesTool } from "../tools/list-model-candidates";
@@ -1058,6 +1060,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
   let childTools: readonly Tool[] = [];
   let taskPermissionMode: PermissionMode = "ask";
   let childBus: AgentMessageBus | undefined;
+  // #602: live child handles for this run only; the resume door reads them.
+  const childResumes = new ChildSessionRegistry();
   // S-09: candidatos dependem do config/ledger/registry deste run.
   toolsByName.set("list_model_candidates", createListModelCandidatesTool(() => ({
     config,
@@ -1144,7 +1148,17 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       const childProvider = sameAccount
         ? providerFor(targetModel, target.profile, target.modelRouting)
         : providerForChild(targetModel, target.profile, target.modelRouting, childRun, agent);
-      const result = await runSession({
+      /** #602: the brief never carries the free prompt or the parent transcript (I-03). */
+      const childBrief = (over: Partial<ChildBrief> = {}): ChildBrief => ({
+        objective: `child ${agent} · task #${shortTaskHash(prompt)}`,
+        outputFormat: "final text summary",
+        constraints: [...allow],
+        whatWasTried: [],
+        boundaries: ["scope: parent allowlist", "no parent transcript", "no grandchild"],
+        ...over,
+      });
+      // The child's own session wiring; a resume reopens exactly these options.
+      const childOptions = {
         run: childRun,
         agent,
         ...(targetIdentity.credentialRef === undefined ? {} : { credentialRef: targetIdentity.credentialRef }),
@@ -1178,27 +1192,33 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         ...(opts.onNoProgress === undefined ? {} : { onNoProgress: opts.onNoProgress }),
         ...(config.effort === undefined ? {} : { effort: config.effort }),
         ...(opts.allowCritical === undefined && opts.allowSensitive === undefined ? {} : { allowCritical: opts.allowCritical, allowSensitive: opts.allowSensitive }),
-        ...(signal === undefined ? {} : { signal }),
         ...(quotaLimits === undefined ? {} : { quotaLimits }),
         ...(budget === undefined ? {} : { budget }),
         ...(budget === undefined ? {} : { budgetReserve: (m: ModelEntry, profile?: string) => reserveForCall(config, registry, m, profile) }),
         ...(resolveIdentity === undefined ? {} : { resolveIdentity }),
         ...(target.profile === undefined ? {} : { agentProfile: target.profile }),
-      }, prompt).catch((error) => {
+      };
+      const executeChild = (childPrompt: string, history?: readonly ChatMessage[], childSignal: AbortSignal | undefined = signal) =>
+        runSession({
+          ...childOptions,
+          ...(childSignal === undefined ? {} : { signal: childSignal }),
+          // L2 reopens the child session in memory; it is never persisted.
+          ...(history === undefined ? {} : { history: [...history] }),
+        }, childPrompt);
+      /** The only handle `task.resume` can reopen; it keeps the child's own scope (I-01/I-02). */
+      const handle: ChildSessionHandle = {
+        session: childRun, parentRun: run, parentAgent: fromAgent, childAgent: agent,
+        brief: childBrief(),
+        run: (childPrompt, options) => executeChild(childPrompt, options?.history, options?.signal ?? signal),
+      };
+      childResumes.register(handle);
+      const result = await executeChild(prompt).catch((error) => {
         // ADR-0036: only an exceptional child writes an artifact, at the
         // compact level, never the parent transcript.
         const reason = error instanceof Error ? error.name : "child_failed";
         const used = ledger.readAll().filter((entry) => entry.run === redactSecrets(childRun));
         const bounds = ledger.seqBoundsOfRun(childRun);
-        const brief: ChildBrief = {
-          // The free prompt never enters the artifact (I-03, D-11/#551): the
-          // objective is a stable label carrying only the task hash.
-          objective: `child ${agent} · task #${shortTaskHash(prompt)}`,
-          outputFormat: "final text summary",
-          constraints: [...allow],
-          whatWasTried: [`child steps: ${used.length}`, `error: ${reason}`],
-          boundaries: ["scope: parent allowlist", "no parent transcript", "no grandchild"],
-        };
+        const brief = childBrief({ whatWasTried: [`child steps: ${used.length}`, `error: ${reason}`] });
         try {
           const artifact = buildChildHandoffArtifact({
             run: childRun,
@@ -1215,12 +1235,47 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
           });
           const entry = ledger.recordHandoff("handoff.created", childRun, artifact, { agent: fromAgent });
           audit.append({ run: childRun, agent: fromAgent, tipo: "handoff.created", payload: { handoff_id: entry.handoff_id, artifact: entry.artifact } });
+          // L3 fallback: scope, brief and journal stay; the live session is gone.
+          handle.brief = brief;
+          handle.artifact = entry.artifact;
+          handle.journal = { steps: used.length, tokens: used.reduce((sum, entry) => sum + entry.tokensIn + entry.tokensOut, 0) };
         } catch {
           // Best effort: a ledger failure never masks the child's real error.
         }
         throw error;
       });
-      return result.final;
+      handle.history = [...result.messages, { role: "assistant", content: result.final }];
+      return { output: result.final, sessionId: childRun };
+    },
+    resume: async ({ sessionId, instruction, level, fromAgent, run: callerRun, signal }) => {
+      let handle: ChildSessionHandle | undefined;
+      try {
+        const resolved = resolveChildResume(childResumes, {
+          sessionId, instruction,
+          ...(level === undefined ? {} : { requested: level }),
+          caller: { run: callerRun, agent: fromAgent },
+        });
+        handle = resolved.handle;
+        const resumed = await handle.run(resolved.prompt, {
+          ...(resolved.history === undefined ? {} : { history: resolved.history }),
+          ...(signal === undefined ? {} : { signal }),
+        });
+        // L2 keeps the reopened session in memory; nothing is persisted.
+        handle.history = [...resumed.messages, { role: "assistant", content: resumed.final }];
+        return {
+          status: "ok", output: resumed.final, level: resolved.plan.level,
+          source: resolved.plan.source, restored: resolved.plan.restored,
+        };
+      } catch (error) {
+        if (error instanceof PermissionPendingError || error instanceof NoProgressError) throw error;
+        if (error instanceof ChildResumeError) return { status: "error", error: error.code, message: error.message };
+        // The live session died on the resume: the next attempt rebuilds (L3).
+        if (handle !== undefined) handle.history = undefined;
+        return {
+          status: "error", error: "resume_failed",
+          message: redactSecrets(error instanceof Error ? error.message : String(error)),
+        };
+      }
     },
   }));
   for (const tool of loaded.tools) {

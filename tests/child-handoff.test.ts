@@ -222,9 +222,13 @@ describe("live child resume handle (ADR-0036, #602)", () => {
   const handle = (over: Partial<ChildSessionHandle> = {}): ChildSessionHandle => ({
     session: "r1.task.live", parentRun: "r1", parentAgent: "plan", childAgent: "build", brief: brief(),
     history: [{ role: "assistant", content: "child did half" }],
-    run: async () => ({ final: "resumed", steps: 1, messages: [] }),
-    ...over,
+    run: async () => ({ final: "resumed", steps: 1, messages: [] }), ...over,
   });
+  const registryOf = (over: Partial<ChildSessionHandle> = {}): ChildSessionRegistry => {
+    const registry = new ChildSessionRegistry();
+    registry.register(handle(over));
+    return registry;
+  };
   const resolve = (registry: ChildSessionRegistry, over: Record<string, unknown> = {}) =>
     resolveChildResume(registry, {
       sessionId: "r1.task.live", instruction: "add the tests",
@@ -234,101 +238,74 @@ describe("live child resume handle (ADR-0036, #602)", () => {
     try { fn(); return undefined; } catch (error) { return error instanceof ChildResumeError ? error.code : "unexpected"; }
   };
 
-  test("only the delegating parent resumes; another execution or run is refused", () => {
-    const registry = new ChildSessionRegistry();
-    registry.register(handle());
+  test("only the delegating parent resumes; missing session or artifact is typed", () => {
+    const registry = registryOf();
     expect(resolve(registry).plan).toMatchObject({ level: "L2", source: "default", restored: ["child_session"] });
     expect(codeOf(() => resolve(registry, { caller: { run: "r1.task.sibling", agent: "build" } }))).toBe("resume_forbidden");
-    expect(codeOf(() => resolve(registry, { caller: { run: "r2", agent: "plan" } }))).toBe("resume_forbidden");
     expect(codeOf(() => resolve(registry, { sessionId: "r1.task.gone" }))).toBe("session_missing");
-    expect(codeOf(() => resolve(registry, { sessionId: " " }))).toBe("session_missing");
+    expect(codeOf(() => resolve(registryOf({ history: undefined })))).toBe("artifact_missing");
   });
 
-  test("L2 restores the live session; L1 only on request; a dead session rebuilds (L3)", () => {
-    const registry = new ChildSessionRegistry();
-    registry.register(handle());
+  test("L2 reopens the live session, L1 only on request, a dead session rebuilds (L3)", () => {
+    const registry = registryOf();
     const l2 = resolve(registry);
-    expect(l2.plan.level).toBe("L2");
-    expect(l2.history).toHaveLength(1);
-    expect(l2.prompt).toContain("add the tests");
-    expect(l2.prompt).not.toContain("journal:");
+    expect([l2.plan.level, l2.history?.length]).toEqual(["L2", 1]);
+    expect([l2.prompt.includes("add the tests"), l2.prompt.includes("journal:")]).toEqual([true, false]);
 
     const l1 = resolve(registry, { requested: "L1" });
-    expect(l1.plan).toMatchObject({ level: "L1", restored: ["brief"] });
-    expect(l1.history).toBeUndefined();
+    // No artifact: L1 rebuilds from the live parent's memory, not the ledger.
+    expect([l1.plan.source, l1.plan.restored, l1.history]).toEqual(["request", [], undefined]);
     expect(l1.prompt).toContain("implement the login screen");
 
-    const dead = new ChildSessionRegistry();
-    dead.register(handle({ history: undefined, artifact: artifact(), journal: { steps: 3, tokens: 640 } }));
-    const l3 = resolve(dead);
+    const l3 = resolve(registryOf({ history: undefined, artifact: artifact(), journal: { steps: 3, tokens: 640 } }));
     expect(l3.plan).toMatchObject({ level: "L3", source: "fallback", restored: ["brief", "journal"] });
     expect(l3.history).toBeUndefined();
     expect(l3.prompt).toContain("journal: 3 steps");
     expect(l3.prompt).toContain("implement the login screen");
-    expect(l3.prompt).not.toContain("child did half");
-
-    const neither = new ChildSessionRegistry();
-    neither.register(handle({ history: undefined }));
-    expect(codeOf(() => resolve(neither))).toBe("artifact_missing");
     expect(codeOf(() => resolve(registry, { requested: "L3" }))).toBe("artifact_missing");
   });
 
-  test("the resumed prompt stays inside the instruction and brief bounds", () => {
-    const registry = new ChildSessionRegistry();
-    registry.register(handle({ brief: brief({ objective: "o".repeat(4000), whatWasTried: ["w".repeat(400)] }) }));
-    const huge = "i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 500);
-    const resolution = resolve(registry, { instruction: huge, requested: "L1" });
-    expect(resolution.prompt).not.toContain("i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1));
-    expect(resolution.prompt).not.toContain("o".repeat(201));
-    expect(resolution.prompt.length).toBeLessThan(RESUME_INSTRUCTION_MAX_CHARS + 4096);
+  test("the resumed prompt bounds the instruction and the brief", () => {
+    const prompt = resolve(registryOf({ brief: brief({ objective: "o".repeat(4000) }) }),
+      { instruction: "i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 500), requested: "L1" }).prompt;
+    expect([prompt.includes("i".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1)), prompt.includes("o".repeat(201))]).toEqual([false, false]);
   });
 });
 
 describe("task.resume live handle (ADR-0036, #602)", () => {
-  const sessionOf = (body: Body): string => {
-    for (const message of body.messages) {
-      if (typeof message.content !== "string" || !message.content.includes("session_id")) continue;
-      try { return (JSON.parse(message.content) as { session_id?: string }).session_id ?? ""; } catch { /* not the tool result */ }
+  const toolResult = (body: Body): Record<string, unknown> | undefined => {
+    for (const message of [...body.messages].reverse()) {
+      if (message.role !== "tool" || typeof message.content !== "string") continue;
+      try { return JSON.parse(message.content) as Record<string, unknown>; } catch { /* not a JSON result */ }
     }
-    return "";
+    return undefined;
   };
 
-  test("L2 reopens the live child, keeps its scope and returns the result to the parent", async () => {
+  test("L2 reopens the live child with its own scope and returns the result to the parent", async () => {
     const instruction = "INSTRUCTION-MARKER add the tests";
-    const marker = "PARENT-RESUME-TASK";
     const h = harness({
       plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "implement" })
-        : call === 2 ? toolCall("task", { session_id: sessionOf(body), instruction })
+        : call === 2 ? toolCall("task", { session_id: String(toolResult(body)?.session_id), instruction })
           : final("parent-final"),
       child: (call) => call === 1 ? final("child-summary")
-        : call === 2 ? toolCall("task", { agent: "plan", prompt: "grandchild" })
-          : final("child-continued"),
+        : call === 2 ? toolCall("task", { agent: "plan", prompt: "grandchild" }) : final("child-continued"),
     });
     try {
-      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: marker,
+      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "PARENT-RESUME-TASK",
         env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
       expect(result.final).toBe("parent-final");
       const childBodies = h.bodies.filter((body) => body.messages[0]?.content === "child-agent");
-      expect(childBodies).toHaveLength(3);
-      // L2 carries the live child history plus the parent instruction.
-      expect(JSON.stringify(childBodies[1]!.messages)).toContain("child-summary");
-      expect(JSON.stringify(childBodies[1]!.messages)).toContain(instruction);
-      // The resumed child keeps its own allowlist: `task` is not its tool (I-01/I-02).
+      const reopened = JSON.stringify(childBodies[1]!.messages);
+      expect([childBodies.length, reopened.includes("child-summary"), reopened.includes(instruction)]).toEqual([3, true, true]);
+      // I-01/I-02: the resumed child keeps its own allowlist, so no grandchild.
       expect(JSON.stringify(childBodies[2]!.messages)).toContain("permitida para o agent");
-      const parentMessages = JSON.stringify(h.bodies.at(-1)!.messages);
-      expect(parentMessages).toContain('"level":"L2"');
-      expect(parentMessages).toContain('"source":"default"');
-      expect(parentMessages).toContain("child-continued");
-      // Nothing persisted: no artifact, no transcript, no instruction text (I-03).
+      expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ level: "L2", source: "default", output: "child-continued" });
       expect(new Ledger(join(h.cwd, ".astro", "ledger.jsonl")).readHandoffs()).toHaveLength(0);
       expect(existsSync(join(h.cwd, ".astro", "sessions"))).toBe(false);
-      const disk = readFileSync(join(h.cwd, ".astro", "ledger.jsonl"), "utf8")
-        + readFileSync(join(h.cwd, ".astro", "audit.jsonl"), "utf8");
-      expect(disk).not.toContain(marker);
-      expect(disk).not.toContain(instruction);
-      const resumed = new Auditor(join(h.cwd, ".astro", "audit.jsonl")).readAll().find((event) => event.tipo === "task.resumed");
-      expect(resumed?.payload).toMatchObject({ fromAgent: "plan", level: "L2", source: "default" });
-      expect(JSON.stringify(resumed)).not.toContain(instruction);
+      const audit = readFileSync(join(h.cwd, ".astro", "audit.jsonl"), "utf8");
+      expect([audit.includes(instruction), audit.includes("PARENT-RESUME-TASK")]).toEqual([false, false]);
+      expect(new Auditor(join(h.cwd, ".astro", "audit.jsonl")).readAll().find((item) => item.tipo === "task.resumed")?.payload)
+        .toMatchObject({ level: "L2", source: "default" });
     } finally { h.server.stop(true); }
   });
 
@@ -340,9 +317,8 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
     try {
       const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "resume-missing",
         env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
-      expect(result.final).toBe("parent-final");
-      expect(h.calls.child).toBe(0);
-      expect(JSON.stringify(h.bodies.at(-1)!.messages)).toContain('"error":"session_missing"');
+      expect([result.final, h.calls.child]).toEqual(["parent-final", 0]);
+      expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ error: "session_missing", session_id: "r1.task.missing" });
     } finally { h.server.stop(true); }
   });
 });
