@@ -10,6 +10,7 @@ import {
 } from "../src/handoff/bus";
 import { actionClassOf, permissionDecision } from "../src/permissions";
 import { createAgentMessageTool } from "../src/tools/agent-message";
+import { ToolExecutor } from "../src/tools/executor";
 import type { ToolContext } from "../src/tools/types";
 import { testEnv } from "./setup";
 
@@ -105,6 +106,13 @@ test("agent_message sends and drains, maps refusals, and refuses without a bus (
   expect(JSON.parse(inbox.output).messages.map((message: { body: string }) => message.body)).toEqual(["hello"]);
   const refused = await tool.execute({ action: "send", to: "*", message: "hi" }, ctx("r1.a", "alpha"));
   expect(JSON.parse(refused.output)).toMatchObject({ error: "bus_broadcast_refused" });
+});
+test("a read-only child is denied agent_message even when allowlisted", async () => {
+  const audit = new Auditor(join(mkdtempSync(join(tmpdir(), "astro-bus-perm-")), "audit.jsonl"));
+  const executor = new ToolExecutor({ tools: [createAgentMessageTool({ bus: () => busOf().bus })], allow: ["agent_message"], audit, permissionMode: "bypass", permission: "read-only" });
+  const result = await executor.run({ cwd: ".", run: "r1.a", agent: "alpha" }, { id: "m1", name: "agent_message", arguments: '{"action":"inbox"}' });
+  expect(result).toMatchObject({ isError: true, failure: "denied" });
+  expect(audit.readAll().find((e) => e.tipo === "tool.denied")?.payload).toMatchObject({ name: "agent_message", required: "write", permission: "read-only" });
 });
 test("a child-to-child message reaches the sibling and is copied to the parent", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "astro-agent-bus-"));
