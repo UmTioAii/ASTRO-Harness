@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatSession } from "../src/chat/repl";
 import type { TurnEvent } from "../src/chat/turn-events";
+import type { ChatMessage } from "../src/providers/types";
+import type { Entry } from "../src/tui/commands";
+import type { PermissionMode } from "../src/permissions";
 import { TuiApp } from "../src/tui/app";
 import { renderTimeline, renderTimelineZones } from "../src/tui/timeline";
 import { TimelineTurnStore } from "../src/tui/timeline-store";
@@ -20,6 +23,24 @@ const end = (callId: string, isError: boolean, durationMs = 120): TurnEvent => (
   kind: "tool.end", turnId: "t", callId, isError, durationMs, resultKey: callId, at,
 });
 const turnEnd: TurnEvent = { kind: "turn.end", turnId: "t", status: "done", usage: { inputTokens: 1, outputTokens: 1 }, at };
+
+function plainSession(permissionMode: PermissionMode = "ask"): ChatSession {
+  return {
+    model: "p/m1",
+    send: async () => ({
+      final: "eco:ok", model: "p/m1", steps: 1, tokensIn: 0, tokensOut: 0, costUsd: 0.001,
+      totalTokensIn: 0, totalTokensOut: 0, totalCostUsd: 0.001,
+      contextTokens: 0, contextLimit: 100, contextRatio: 0, warning: false, trimmed: false,
+    }),
+    snapshot: () => ({
+      id: "s1", startedAt: at, model: "p/m1", messages: [], turns: 0,
+      tokensIn: 0, tokensOut: 0, costUsd: 0.001,
+    }),
+    listModels: () => ["p/m1"],
+    permissionMode: () => permissionMode,
+    providerName: () => "p",
+  } as unknown as ChatSession;
+}
 
 test("tool entries move running to ok/failed in place and turn.end fails the rest", () => {
   const store = new TimelineTurnStore("t", "why did the ledger grow?");
@@ -88,9 +109,9 @@ test("TimelineZones renders the renderer lines without reformatting them", () =>
   };
   const instance = render(<TimelineZones view={view} width={80} />);
   try {
-    const expected = renderTimeline(view, 80).join("\n").replace(/ +$/gm, "").replace(/\n+$/, "");
-    const actual = (instance.lastFrame() ?? "").split("\n").map((line) => line.replace(/ +$/g, "")).join("\n").replace(/\n+$/, "");
-    expect(actual).toBe(expected);
+    const expected = renderTimeline(view, 80).join("\n");
+    const actual = instance.lastFrame() ?? "";
+    expect(actual.replace(/\n+$/, "")).toBe(expected.replace(/\n+$/, ""));
   } finally {
     instance.unmount();
   }
@@ -147,3 +168,99 @@ test("live tool transitions come from tool.start/tool.end and redact arguments (
     instance.unmount();
   }
 }, 10_000);
+
+test("footer at 80 columns keeps the model only in the header and follows the documented order (#635)", async () => {
+  const instance = render(<TuiApp session={plainSession()} cwd="/tmp/astro" branch="main" />);
+  try {
+    Object.defineProperty(instance.stdout, "columns", { get: () => 80, configurable: true });
+    instance.stdout.emit("resize");
+    await waitFor(() => (instance.lastFrame() ?? "").includes("enter envia"));
+    const frame = instance.lastFrame() ?? "";
+    const footer = frame.trimEnd().split("\n").at(-1) ?? "";
+    expect(frame.split("p/m1")).toHaveLength(2);
+    expect(footer).toBe("/tmp/astro (main) · US$ 0.001000 · modo: ask");
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("footer bypass at 80 columns reds only the mode (#635)", async () => {
+  const instance = render(<TuiApp session={plainSession("bypass")} cwd="/tmp/astro" />);
+  try {
+    Object.defineProperty(instance.stdout, "columns", { get: () => 80, configurable: true });
+    instance.stdout.emit("resize");
+    await waitFor(() => (instance.lastFrame() ?? "").includes("modo: bypass"));
+    const frame = instance.lastFrame() ?? "";
+    const footer = frame.trimEnd().split("\n").at(-1) ?? "";
+    expect(footer).toBe("/tmp/astro · US$ 0.001000 · modo: bypass");
+    expect(frame.split("p/m1")).toHaveLength(2);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("a failed turn keeps the body of a tool that already succeeded (#635)", async () => {
+  const messages: ChatMessage[] = [];
+  let committed: Entry | undefined;
+  const session = {
+    model: "p/m1",
+    async send(
+      _prompt: string,
+      _signal?: AbortSignal,
+      _onToken?: (text: string) => void,
+      _attachments?: unknown,
+      turn?: { observer?: (event: TurnEvent) => void },
+    ) {
+      turn?.observer?.(start("c1", "read_file", { path: "src/a.ts" }));
+      turn?.observer?.(end("c1", false));
+      messages.push({ role: "tool", content: "file body", toolCallId: "c1" });
+      turn?.observer?.(start("c2", "run_command", { command: "bun test" }));
+      throw new Error("boom");
+    },
+    snapshot: () => ({
+      id: "s1", startedAt: at, model: "p/m1", messages, turns: 0,
+      tokensIn: 0, tokensOut: 0, costUsd: 0.001,
+    }),
+    listModels: () => ["p/m1"],
+    permissionMode: () => "ask" as const,
+    providerName: () => "p",
+  } as unknown as ChatSession;
+  const cwd = mkdtempSync(join(tmpdir(), "astro-timeline-failed-"));
+  const instance = render(<TuiApp session={session} cwd={cwd} onTimelineEntry={(entry) => { committed = entry; }} />);
+  try {
+    instance.stdin.write("inspect");
+    instance.stdin.write("\r");
+    await waitFor(() => (instance.lastFrame() ?? "").includes("erro: boom"));
+    expect(committed?.results?.["c1"]).toBe("file body");
+    expect(instance.lastFrame()).toContain("✓ read_file src/a.ts");
+  } finally {
+    instance.unmount();
+  }
+}, 10_000);
+
+test("a callId naming an Object prototype member cannot crash expansion (#653)", () => {
+  const view = {
+    state: { kind: "done" as const },
+    status,
+    expanded: { tools: true },
+    results: {},
+    turn: {
+      id: "t", prompt: "inspect", status: "done" as const,
+      entries: [{ kind: "tool" as const, callId: "toString", name: "read_file", arguments: '{"path":"a.ts"}', status: "ok" as const }],
+    },
+  };
+  expect(() => renderTimeline(view, 120)).not.toThrow();
+  expect(renderTimeline(view, 120).join("\n")).toContain("read_file a.ts");
+});
+
+test("a repeated tool.start upserts the entry for the same callId (#653, ADR-0035)", () => {
+  const store = new TimelineTurnStore("t", "inspect");
+  store.apply(start("c1", "read_file", { path: "a.ts" }));
+  store.apply(start("c1", "read_file", { path: "b.ts" }));
+  expect(store.turn.entries).toHaveLength(1);
+  store.apply(end("c1", false));
+  expect(store.turn.entries).toHaveLength(1);
+  expect(store.turn.entries[0]).toMatchObject({ status: "ok" });
+  store.apply({ ...turnEnd, status: "cancelled" });
+  expect(store.turn.entries[0]).toMatchObject({ status: "ok" });
+});
