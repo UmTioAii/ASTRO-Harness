@@ -18,10 +18,10 @@ The TUIX spec defines a four-zone continuous-flow screen and S5a (#600) already 
 | Labels | Derived at render time from name and arguments (`read_file src/a.ts`, `command: bun test`, `edit src/a.ts (+2 −1)`); an unknown tool falls back to its name. Labels are not stored. |
 | Counters | No rendered state contains a step, round or tool counter. Durations (`420ms`, `4s`) and a cost, shown only when the price is known, are allowed; durations are hidden below 80 columns. |
 | Redaction | Every dynamic string crosses `sanitizePromptText` before width measurement (I-03). Block content (answers, expanded output, reasoning) has ANSI removed first and is sanitized per line, keeping indentation; one-line fields collapse whitespace. |
-| Purity | `renderTimeline(view, width) => string[]` has no Ink import, no TTY and no I/O; time and cost arrive as data. Ink zones only join the lines. |
+| Purity | `renderTimeline(view, width) => string[]` and `renderTimelineZones` for the four zones have no Ink import, no TTY and no I/O; time and cost arrive as data. Ink zones only join the lines. |
 | Width | 120+: 100-column cap with a 2-column margin; 80–119: full width; 60–79: 2-column indent, no durations, last model segment; below 60: no indent and the `ASTRO` wordmark. No line exceeds the supplied width, measured in display columns. |
 | Expansion | Collapsed by default. `ctrl+o` reveals tool bodies by `callId`; `ctrl+t` reveals reasoning. A provider without reasoning emits no line, never a placeholder. |
-| States | `empty`, `thinking`, `streaming`, `approval`, `error`, `done` own zones 2–3; zone 4 (`model · mode · cost`) is always last. Approval replaces the composer line while the timeline stays above it. |
+| States | `empty`, `thinking`, `streaming`, `approval`, `error`, `done` own zones 2–3; zone 4 (`model · mode · cost`) is always last; until the Ink header is removed, the footer keeps `place · tokens · cost · budget · mode` and omits the model. Approval replaces the composer line while the timeline stays above it. |
 | Reuse | `markdown.tsx`, `diff-viewer.tsx` and the keybinding contracts keep theirs; the pure renderer emits plain text and Ink applies styling. `banner.tsx` is removed by the Ink slice, not here. |
 
 ## Consequences

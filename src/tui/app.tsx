@@ -1,5 +1,5 @@
 /** TUI (T2): conversa, entrada e status bar. Consome apenas a ChatSession. */
-import { Box, Static, Text, useInput } from "ink";
+import { Box, Static, Text, useInput, useWindowSize } from "ink";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { parseCommand, type ReplCommand } from "../chat/commands";
 import { statusLine, type ChatSession } from "../chat/repl";
@@ -41,6 +41,9 @@ import type { ProfileManager } from "../providers/profile-manager";
 import { budgetSegment, quotaSegment } from "../chat/usage";
 import { createThrottledSink, STREAM_THROTTLE_MS } from "./stream";
 import { HISTORY_LIMIT, visibleWindow } from "./history";
+import { renderTimelineZones, type TimelineTurnStatus } from "./timeline";
+import { TimelineTurnStore } from "./timeline-store";
+import { TimelineZone } from "./timeline-zones";
 
 export interface TuiAppProps {
   session: ChatSession;
@@ -57,6 +60,8 @@ export interface TuiAppProps {
   streamThrottleMs?: number;
   /** Entradas do histórico visíveis no <Static> (#64); default HISTORY_LIMIT. */
   historyLimit?: number;
+  /** Observer for a completed turn before it enters history (#635). */
+  onTimelineEntry?: (entry: Entry) => void;
   /** Salva uma chave digitada no cofre (#350); ausente desabilita o caminho de segredo. */
   saveSecret?: (providerId: string, secret: string) => string;
   /** Desfaz uma credencial criada quando o perfil não pôde ser salvo (#350). */
@@ -86,6 +91,17 @@ function messageOf(error: unknown): string {
 }
 
 function EntryLine({ entry, colors }: { entry: Entry; colors: ThemeColors }): ReactElement {
+  const { columns } = useWindowSize();
+  const width = columns !== undefined && columns > 0 ? columns : 80;
+  if (entry.kind === "timeline" && entry.timeline !== undefined) {
+    const view = {
+      state: { kind: "done" as const },
+      status: { model: "", mode: "" },
+      turn: entry.timeline,
+      ...(entry.results === undefined ? {} : { results: entry.results }),
+    };
+    return <TimelineZone view={view} width={width} zone="timeline" />;
+  }
   if (entry.kind === "user") return <Text color={colors.accent}>{"> "}{entry.text}</Text>;
   if (entry.kind === "assistant") return <Markdown text={entry.text} />;
   if (entry.kind === "error") return <Text color={colors.error}>{entry.text}</Text>;
@@ -129,7 +145,9 @@ export function activateProvider(
   persistLastModel(cwd, session.snapshot().model, onWarning);
 }
 
-export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, manager, onExit, toastTtlMs = TOAST_TTL_MS, streamThrottleMs = STREAM_THROTTLE_MS, historyLimit = HISTORY_LIMIT, saveSecret, discardSecret }: TuiAppProps): ReactElement {
+export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, manager, onExit, toastTtlMs = TOAST_TTL_MS, streamThrottleMs = STREAM_THROTTLE_MS, historyLimit = HISTORY_LIMIT, saveSecret, discardSecret, onTimelineEntry }: TuiAppProps): ReactElement {
+  const { columns } = useWindowSize();
+  const width = columns !== undefined && columns > 0 ? columns : 80;
   const [entries, setEntries] = useState<Entry[]>([{ kind: "info", text: WELCOME }]);
   /** Estado da sessão aparece uma vez por sessão (#480): só entradas marcadas. */
   const appendEntries = (added: Entry[]): void => {
@@ -166,6 +184,10 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const leader = useRef(false);
   const busyRef = useRef(false);
   const turn = useRef<AbortController | undefined>(undefined);
+  /** Current turn's live timeline (#635); history entries keep completed turns. */
+  const liveTimeline = useRef<TimelineTurnStore | undefined>(undefined);
+  const [, setTimelineTick] = useState(0);
+  const refreshTimeline = (): void => setTimelineTick((tick) => tick + 1);
   const exitRequested = useRef(false);
   const [status, setStatus] = useState<Status>(() => statusOf(session.snapshot()));
   const [health, setHealth] = useState<{ provider: string; state: "ok" | "down" } | undefined>(undefined);
@@ -509,7 +531,10 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       if (outcome.exit) finish();
       return;
     }
-    setEntries((current) => [...current, { kind: "user", text }]);
+    const messagesBefore = session.snapshot().messages.length;
+    const timeline = new TimelineTurnStore(`turn-${Date.now()}`, text);
+    liveTimeline.current = timeline;
+    refreshTimeline();
     busyRef.current = true;
     const controller = new AbortController();
     turn.current = controller;
@@ -521,10 +546,22 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       schedule: (cb, ms) => { setTimeout(cb, ms); },
       emit: (text) => setPartial((current) => (current ?? "") + text),
     });
+    /** Commits the live turn to history with every tool body available at that point. */
+    const commitTimeline = (status: TimelineTurnStatus): Entry => {
+      timeline.setResultsFromMessages(session.snapshot().messages.slice(messagesBefore));
+      timeline.complete(status);
+      liveTimeline.current = undefined;
+      refreshTimeline();
+      const entry: Entry = { kind: "timeline", text: "", timeline: timeline.turn, results: timeline.results };
+      onTimelineEntry?.(entry);
+      return entry;
+    };
     try {
       const prompt = materializePrompt(command.text, pendingAttachments.current);
       const attachments = pendingAttachments.current;
       const turnOptions: SendTurnOptions = {
+        // Live timeline (#635): the observer only updates rendered state.
+        observer: (event) => { if (timeline.apply(event)) refreshTimeline(); },
         ...(attachments.length === 0 ? {} : { attachments, approveAttachment }),
       };
       const result = await session.send(
@@ -546,16 +583,25 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         if (contextInlineRef.current) logLine(laneLine("aviso", contextNote));
         else contextInlineRef.current = true;
       }
+      const timelineEntry = commitTimeline("done");
       appendEntries([
+        timelineEntry,
         { kind: "assistant", text: result.final },
         // Aviso que muda a resposta fica inline uma vez; repetição é estado (#480).
         ...(contextNote === undefined ? [] : [{ kind: "info" as const, state: true, text: contextNote }]),
         ...(result.trimmed ? [{ kind: "info" as const, state: true, text: "turno antigo descartado" }] : []),
       ]);
     } catch (error) {
-      appendEntries([{ kind: "error", text: errorLine(error, messageOf(error)) }]);
+      const timelineEntry = commitTimeline(timeline.status === "running" ? "failed" : timeline.status);
+      appendEntries([
+        timelineEntry,
+        { kind: "error", text: errorLine(error, messageOf(error)) },
+      ]);
       if (isFatalSessionError(error)) exitRequested.current = true;
     } finally {
+      if (liveTimeline.current === timeline) {
+        appendEntries([commitTimeline(timeline.status === "running" ? "failed" : timeline.status)]);
+      }
       sink.flush(); // invalida timer pendente: nenhum delta emite depois do turno
       setPartial(undefined);
       const saved = persist(true);
@@ -979,13 +1025,21 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const inputLines = input.split("\n");
   // Modo de permissão sempre visível (#270); bypass em cor de alerta
   const mode = session.permissionMode?.() ?? DEFAULT_PERMISSION_MODE;
+  // Four TUIX zones (#635): the components only render `renderTimelineZones` lines.
+  const timelineStatus = { model: status.model, mode, costUsd: status.costUsd };
+  const liveView = liveTimeline.current?.view({ kind: "done" }, timelineStatus);
+  const composerMark = renderTimelineZones({ state: { kind: "done" }, status: timelineStatus }, width).composer[0] ?? "❯";
   return (
     <Box flexDirection="column">
       <Header colors={colors} provider={providerId} model={status.model} health={healthState} />
+      {liveTimeline.current === undefined && entries.every((entry) => entry.kind === "info")
+        ? <TimelineZone view={{ state: { kind: "empty" }, status: timelineStatus }} width={width} zone="identity" />
+        : null}
       {hiddenEntries > 0 ? <Text dimColor>{`… ${hiddenEntries} mensagens anteriores`}</Text> : null}
       <Static items={entries}>
         {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} />}
       </Static>
+      {liveView === undefined ? null : <TimelineZone view={liveView} width={width} zone="timeline" />}
       {busy ? (
         // Bloco thinking (#560): rótulo com passo + stream parcial, recolhível com ctrl+t
         <Box flexDirection="column" borderStyle="round" borderColor={colors.warning} paddingX={1}>
@@ -1012,7 +1066,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       <Box marginTop={1} borderStyle="round" borderColor={mode === "bypass" ? colors.error : colors.accent} paddingX={1} flexDirection="column">
         {inputLines.map((line, index) => (
           <Box key={index}>
-            <Text color={colors.accent}>{index === 0 ? "> " : "  "}</Text>
+            <Text color={colors.accent}>{index === 0 ? `${composerMark} ` : "  "}</Text>
             <Text>{line}</Text>
             {index === inputLines.length - 1 ? <Text inverse> </Text> : null}
           </Box>

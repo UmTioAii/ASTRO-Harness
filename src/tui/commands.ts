@@ -19,7 +19,9 @@ import {
   parseConfigEditValue,
 } from "../core/config-edit";
 
-export type EntryKind = "user" | "assistant" | "info" | "error" | "shell";
+import type { TimelineTurn } from "./timeline";
+
+export type EntryKind = "user" | "assistant" | "info" | "error" | "shell" | "timeline";
 
 export interface Entry {
   kind: EntryKind;
@@ -28,6 +30,9 @@ export interface Entry {
   state?: boolean;
   /** Bloco shell (#560): comando executado e metadados do cabeçalho (cwd/exit). */
   shell?: { command: string; cwd: string; exitLabel: string; isError: boolean };
+  /** Turn timeline (#635): rendered by the pure renderer, bodies keyed by `callId`. */
+  timeline?: TimelineTurn;
+  results?: Readonly<Record<string, string>>;
 }
 
 export interface CommandState {
