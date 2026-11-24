@@ -282,6 +282,19 @@ describe("live child resume handle (ADR-0036, #602)", () => {
     expect(resolve(registry, { sessionId: `r1.task.${CHILD_SESSION_HANDLES_MAX}` }).plan.level).toBe("L2");
   });
 
+  test("without a live handle, only the delegating parent rebuilds from the ledger artifact", () => {
+    const ledgerArtifact = artifact();
+    const rebuilt = resolveChildResume(new ChildSessionRegistry(), {
+      sessionId: ledgerArtifact.run, instruction: "recover",
+      caller: { run: "r1", agent: ledgerArtifact.from }, artifact: ledgerArtifact,
+    });
+    expect([rebuilt.handle, rebuilt.agent, rebuilt.plan.level, rebuilt.plan.source]).toEqual([undefined, ledgerArtifact.to, "L3", "fallback"]);
+    expect(rebuilt.prompt).toContain("recover");
+    expect(codeOf(() => resolveChildResume(new ChildSessionRegistry(), {
+      sessionId: ledgerArtifact.run, instruction: "x", caller: { run: "r1", agent: "other" }, artifact: ledgerArtifact,
+    }))).toBe("resume_forbidden");
+  });
+
   test("createTaskTool refuses a resume from an agent that did not delegate", async () => {
     const registry = registryOf();
     const resume: TaskResumer = async (input) => {
@@ -291,7 +304,7 @@ describe("live child resume handle (ADR-0036, #602)", () => {
           ...(input.level === undefined ? {} : { requested: input.level }),
           caller: { run: input.run, agent: input.fromAgent },
         });
-        return { status: "ok", output: resolved.prompt, level: resolved.plan.level, source: resolved.plan.source,
+        return { status: "ok", output: resolved.prompt, sessionId: input.sessionId, level: resolved.plan.level, source: resolved.plan.source,
           restored: resolved.plan.restored, truncated: resolved.truncated };
       } catch (error) {
         if (error instanceof ChildResumeError) return { status: "error", error: error.code, message: error.message };
@@ -401,24 +414,34 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
       plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "implement" })
         : call === 2 ? toolCall("task", { session_id: String(toolResult(body)?.session_id), instruction: "recover" })
           : final("parent-final"),
-      child: (call) => call === 1 ? new Response("bad request", { status: 400 }) : final("child-recovered"),
+      child: (call) => call === 1 ? new Response("bad request", { status: 400 })
+        : call === 2 ? toolCall("task", { agent: "plan", prompt: "grandchild" })
+          : final("child-recovered"),
     });
     try {
       const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "recover-child",
         env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
       expect(result.final).toBe("parent-final");
-      // The failed delegation result carries the child id and its artifact id.
+      // The failed result names the child run, survives the session sanitizer
+      // and carries no artifact hash (a 64-hex id would be redacted).
       const failure = toolResult(h.bodies.find((body) => body.messages[0]?.content === "plan-agent"
         && body.messages.some((message) => message.role === "tool"))!);
-      expect(failure).toMatchObject({ error: "child_failed", session_id: expect.stringContaining(".task.") });
-      expect(typeof failure?.handoff_id).toBe("string");
+      // Bun's toMatchObject may replace a matched property with its matcher, so
+      // capture the id and assert it as a value before comparing with the ledger.
+      const sessionId = failure?.session_id;
+      expect(failure?.error).toBe("child_failed");
+      expect(String(sessionId)).toContain(".task.");
+      expect(failure).not.toHaveProperty("handoff_id");
       const created = new Ledger(join(h.cwd, ".astro", "ledger.jsonl")).readHandoffs()
         .filter((entry) => entry.kind === "handoff.created");
       expect(created).toHaveLength(1);
-      // The default resume of a dead session with an artifact is the L3 fallback.
-      const resumed = h.bodies.filter((body) => body.messages[0]?.content === "child-agent")[1]!;
-      const prompt = JSON.stringify(resumed.messages);
+      expect(sessionId).toBe(created[0]!.artifact.run);
+      // The default resume of a dead session with an artifact is the L3 fallback,
+      // and the rebuilt child keeps its own allowlist (no grandchild, I-01/I-02).
+      const childBodies = h.bodies.filter((body) => body.messages[0]?.content === "child-agent");
+      const prompt = JSON.stringify(childBodies[1]!.messages);
       expect([prompt.includes("recover"), prompt.includes("child build"), prompt.includes("implement")]).toEqual([true, true, false]);
+      expect(JSON.stringify(childBodies[2]!.messages)).toContain("permitida para o agent");
       expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ level: "L3", source: "fallback", output: "child-recovered" });
     } finally { h.server.stop(true); }
   });
