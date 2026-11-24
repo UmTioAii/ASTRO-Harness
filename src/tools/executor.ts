@@ -33,7 +33,7 @@ import { validateManifest } from "../sdk/tool";
 import { join, relative } from "node:path";
 import type { ToolCall, ToolDef } from "../providers/types";
 import { failureCodeOf, isToolFailure } from "./contract";
-import { type Tool, type ToolContext, type ToolFailure, type ToolLifecycleEvent, type ToolResult } from "./types";
+import { type Tool, type ToolContext, type ToolDecisionAudit, type ToolFailure, type ToolLifecycleEvent, type ToolPermissionHint, type ToolResult } from "./types";
 
 const TIMEOUT = Symbol("timeout");
 const ABORTED = Symbol("aborted");
@@ -98,6 +98,18 @@ function editDiffAnnex(call: ToolCall, input: unknown): { path: string; content:
 }
 
 /** Executa tools com allowlist, teto de escopo (ceiling), timeout e auditoria; erros voltam como resultado de tool. */
+/**
+ * Origin of the gate decision (#599): in `bypass` an `ask` hint is discarded, so
+ * the mode decided — not the rule. No hint means the matrix decided.
+ */
+function hintDecisionOrigin(
+  hint: { decision: "allow" | "ask" | "deny"; origin?: ToolPermissionHint["origin"] } | undefined,
+  mode: PermissionMode,
+): ToolDecisionAudit["origin"] {
+  if (hint === undefined) return "mode";
+  return hint.decision === "ask" && mode === "bypass" ? "mode" : hint.origin ?? "mode";
+}
+
 export class ToolExecutor {
   private readonly tools: readonly Tool[];
   private readonly byName: Map<string, Tool>;
@@ -479,6 +491,33 @@ export class ToolExecutor {
     let effective: PermissionDecision = decision;
     let rejectReason: string | undefined;
     let grant: "once" | "always" | undefined;
+    let degraded = false;
+    /**
+     * Shell decision audit (#599): the tool owns the payload (a command hash,
+     * never the command), the executor stamps the tool, stage and mode.
+     */
+    const decisionAudit = (
+      effect: "allow" | "ask" | "deny",
+      origin: ToolDecisionAudit["origin"],
+      extra: { grant?: "once" | "always"; degraded?: boolean; reason?: string } = {},
+    ): void => {
+      const record = tool.decisionAudit?.(input, ctx, {
+        decision: effect,
+        ...(origin === undefined ? {} : { origin }),
+        ...(extra.grant === undefined ? {} : { grant: extra.grant }),
+        ...(extra.degraded === true ? { degraded: true } : {}),
+        ...(extra.reason === undefined ? {} : { reason: extra.reason }),
+      });
+      if (record === undefined) return;
+      this.auditRef.append({
+        run: ctx.run,
+        agent: ctx.agent,
+        tipo: record.tipo,
+        payload: { tool: call.name, stage: "gate", permissionMode: this.mode, ...record.payload },
+      });
+    };
+    const gateOrigin = hintDecisionOrigin(hint, this.mode);
+    decisionAudit(decision, gateOrigin, decision === "deny" && hint?.code !== undefined ? { reason: hint.code } : {});
     const grantKey = PermissionGrants.key(action, call.name);
     if (decision === "ask" && this.permissionGrants.has(grantKey) && !requiresPerCallApproval(action)) {
       // Grant de sessão ainda vale (PERM-05, #266): allow sem perguntar de novo.
@@ -506,6 +545,7 @@ export class ToolExecutor {
         });
         // Espera sem resposta morre no teto (#526): recusa como deny, audita e o run segue.
         if (outcome === TIMEOUT) {
+          decisionAudit("deny", "approval", { reason: "timeout" });
           this.auditRef.append({
             run: ctx.run,
             agent: ctx.agent,
@@ -550,6 +590,7 @@ export class ToolExecutor {
                 });
               } else {
                 grant = "once";
+                degraded = true;
                 const reason = saved?.ok === false ? saved.reason : "unsupported (the tool cannot save approvals)";
                 gate.notice = `note: "always" was not saved (${reason}); this command was approved once`;
                 this.auditRef.append({
@@ -588,6 +629,13 @@ export class ToolExecutor {
     }
     // `allow` automático só é auditado em bypass (#268): nele toda decisão fica rastreável.
     // A rule allow also carries its origin (#599 review): the source is auditable.
+    if (effective !== decision) {
+      decisionAudit(effective, "approval", {
+        ...(grant === undefined ? {} : { grant }),
+        ...(degraded ? { degraded: true } : {}),
+        ...(rejectReason === undefined ? {} : { reason: rejectReason }),
+      });
+    }
     if (decision !== "allow" || this.mode === "bypass" || hint?.origin !== undefined) {
       this.auditRef.append({
         run: ctx.run,
@@ -596,7 +644,7 @@ export class ToolExecutor {
         payload: {
           name: call.name, action, mode: this.mode, decision: effective,
           ...(grant === undefined ? {} : { grant }),
-          ...(hint?.origin === undefined ? {} : { origin: hint.origin }),
+          ...(hint === undefined ? {} : { origin: gateOrigin }),
           ...(rejectReason !== undefined
             ? { reason: rejectReason }
             : hint?.code === undefined ? {} : { reason: hint.code }),
