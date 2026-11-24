@@ -142,10 +142,14 @@ describe("search_and_read reads the top results (#604)", () => {
     expect(result.output.length).toBeLessThanOrEqual(outputCeilingChars(tool.manifest.output, tight)!);
     const body = parse(result.output);
     expect(body.results.map((item) => item.id)).toEqual([1, 2]);
-    expect(body.results.every((item) => typeof item.content === "string")).toBe(true);
+    expect(body.results.every((item) => typeof item.content === "string" && item.content.length > 0)).toBe(true);
     expect(body.truncated).toBe(true); expect(body.notice).toContain("[output truncated:");
-    expect(result.truncation).toMatchObject({ unit: "pages" });
+    expect(body.notice).toContain("characters omitted"); expect(body.notice).not.toContain("pages omitted");
+    expect(result.truncation).toMatchObject({ unit: "characters" });
     expect(result.truncation?.removed ?? 0).toBeGreaterThan(0);
+    // total counts the text the read step actually fetched (bounded by the
+    // budget), so it is characters, not a claim about the whole page.
+    expect(result.truncation?.total ?? 0).toBeGreaterThan(result.truncation?.removed ?? 0);
     // The page read is capped by the budget, not by web_fetch's 50k default.
     const fetched = audit.readAll().filter((item) => item.tipo === "web.fetch");
     expect(fetched.every((item) => Number(item.payload?.contentLength) < 5000)).toBe(true);
