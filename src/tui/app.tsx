@@ -1105,7 +1105,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
             <>
               {/* The question wraps in Ink; clipping it could hide the dangerous tail of a command (#635). */}
               <Text color={colors.warning}>
-                {sanitizePromptText(question.text)}
+                {sanitizePromptText(question.text.replace(/\r?\n/g, " "))}
                 {question.diff === undefined ? null : " · tab ver diff"}
               </Text>
               {input === ""
