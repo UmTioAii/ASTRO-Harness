@@ -630,6 +630,8 @@ export async function runSession(
       });
       turnUsage.inputTokens += response.usage.inputTokens;
       turnUsage.outputTokens += response.usage.outputTokens;
+      // Runtime-only reasoning (#600): observed here, never stored on a message.
+      if (response.reasoning !== undefined) turnEvents.reasoning(response.reasoning);
 
       const identity = effectiveIdentityFor(
         opts.resolveIdentity, response, opts.model, opts.credentialRef, opts.quotaDomain,
@@ -1488,6 +1490,8 @@ export async function runMultiAgentSession(
       });
       turnUsage.inputTokens += response.usage.inputTokens;
       turnUsage.outputTokens += response.usage.outputTokens;
+      // Runtime-only reasoning (#600): observed here, never stored on a message.
+      if (response.reasoning !== undefined) turnEvents.reasoning(response.reasoning);
 
       const identity = effectiveIdentityFor(
         opts.resolveIdentity, response, currentModel, opts.credentialRef, opts.quotaDomain,

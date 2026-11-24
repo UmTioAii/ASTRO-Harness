@@ -14,7 +14,7 @@ import { attachmentSizeLabel, materializePrompt } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
 import { dedupeKey, type LoadedAttachment } from "../attachments/model";
 import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
-import { redactSecrets, sanitizePromptText } from "../sanitize-external";
+import { redactSecrets, sanitizeBlockText, sanitizePromptText } from "../sanitize-external";
 import { runCommand, type CommandState, type Entry } from "./commands";
 import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
@@ -41,7 +41,7 @@ import type { ProfileManager } from "../providers/profile-manager";
 import { budgetSegment, quotaSegment } from "../chat/usage";
 import { createThrottledSink, STREAM_THROTTLE_MS } from "./stream";
 import { HISTORY_LIMIT, visibleWindow } from "./history";
-import { renderTimelineZones, sanitizeBlockText, type TimelineTurnStatus, type TimelineView } from "./timeline";
+import { renderTimelineZones, type TimelineTurnStatus, type TimelineView } from "./timeline";
 import { TimelineTurnStore } from "./timeline-store";
 import { TimelineZone } from "./timeline-zones";
 
@@ -184,6 +184,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const [thinkingCollapsed, setThinkingCollapsed] = useState(false);
   /** Tool output is collapsed by default (ADR-0035); ctrl+o reveals it. */
   const [toolsExpanded, setToolsExpanded] = useState(false);
+  /** Reasoning is collapsed by default (ADR-0035); ctrl+t reveals it when emitted. */
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const [initialConfig] = useState(() => loadTuiConfig(cwd));
   const [theme, setTheme] = useState<Theme>(initialConfig.theme);
   const colors = getThemeColors(theme);
@@ -703,8 +705,9 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       return;
     }
     if (ctrl && value === "t") {
-      // ctrl+t recolhe/mostra o bloco de thinking (#560); reasoning ainda não tem evento (#635)
+      // ctrl+t collapses the thinking block and reveals the reasoning timeline (#600).
       setThinkingCollapsed((current) => !current);
+      setReasoningExpanded((current) => !current);
       return;
     }
     if (!streaming && leader.current) {
@@ -1055,8 +1058,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const mode = session.permissionMode?.() ?? DEFAULT_PERMISSION_MODE;
   // Four TUIX zones (#635): the components only render `renderTimelineZones` lines.
   const timelineStatus = { model: status.model, mode, costUsd: status.costUsd };
-  const toolsView = { tools: toolsExpanded };
-  const liveView = liveTimeline.current?.view({ kind: "done" }, timelineStatus, toolsView);
+  const timelineExpanded = { tools: toolsExpanded, reasoning: reasoningExpanded };
+  const liveView = liveTimeline.current?.view({ kind: "done" }, timelineStatus, timelineExpanded);
   const composerMark = renderTimelineZones({ state: { kind: "done" }, status: timelineStatus }, width).composer[0] ?? "❯";
   return (
     <Box flexDirection="column">
@@ -1066,7 +1069,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         : null}
       {hiddenEntries > 0 ? <Text dimColor>{`… ${hiddenEntries} mensagens anteriores`}</Text> : null}
       <Static items={entries}>
-        {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} expanded={toolsView} />}
+        {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} expanded={timelineExpanded} />}
       </Static>
       {liveView === undefined ? null : <TimelineZone view={liveView} width={width} zone="timeline" />}
       {busy ? (

@@ -62,7 +62,7 @@ S5a owns the observer contract for `round.start`, `tool.start`, `tool.end` and `
 plus the runtime-only reasoning channel. The TUIX consumes both; `roundIndex` only orders
 events and is never rendered.
 
-- Provider emits reasoning → `▸ reasoning · 4s`, collapsed by default, `ctrl+t` expands.
+- Provider emits reasoning → `▸ reasoning`, collapsed by default, `ctrl+t` expands.
 - Provider does not emit it → the line does not exist. No placeholder, no fake timer.
 
 ## 6. States

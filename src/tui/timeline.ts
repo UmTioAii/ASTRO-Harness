@@ -3,13 +3,13 @@
  * No Ink import, no TTY, no I/O; the Ink zones only compose these strings.
  * Contract: docs/adr/0035-tui-timeline.md.
  */
-import { redactSecrets, sanitizePromptText } from "../sanitize-external";
+import { sanitizeBlockLine, sanitizeBlockText, sanitizePromptText, stripAnsi } from "../sanitize-external";
 
 export type TimelineToolStatus = "running" | "ok" | "failed";
 export type TimelineTurnStatus = "running" | "done" | "failed" | "cancelled";
 
 export type TimelineEntry =
-  | { kind: "reasoning"; text: string; durationMs: number }
+  | { kind: "reasoning"; text: string; durationMs?: number }
   | { kind: "tool"; callId: string; name: string; arguments: string; status: TimelineToolStatus; durationMs?: number }
   | { kind: "answer"; markdown: string }
   | { kind: "error"; message: string; hint?: string }
@@ -82,25 +82,11 @@ export function clipLine(text: string, max: number): string {
   return `${out}…`;
 }
 
-/** OSC/CSI: the OSC arm never crosses a newline, so an unterminated `ESC]` cannot eat the next lines. */
-const ANSI = /\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-/** Tabs are indentation in Makefiles and diffs; four spaces keep it visible after the control scrub. */
-const TAB = "    ";
-
 /** One-line field: invisible marks and secrets removed (I-03), whitespace collapsed. */
 function inline(text: string): string {
   return sanitizePromptText(text).replace(/\s+/g, " ").trim();
 }
 
-/** One block line: ANSI removed, tabs expanded, then controls and secrets redacted (I-03); indentation kept. */
-function blockLine(text: string): string {
-  return sanitizePromptText(text.replace(ANSI, "").replace(/\t/g, TAB)).trimEnd();
-}
-
-/** Whole block: ANSI removed first, then each line sanitized so line breaks and indentation survive (I-03). */
-export function sanitizeBlockText(text: string): string {
-  return redactSecrets(text.replace(ANSI, "")).split(/\r?\n/).map(blockLine).join("\n");
-}
 export function formatDuration(ms: number): string {
   const seconds = ms / 1000;
   return ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}s`;
@@ -129,7 +115,7 @@ export function toolLabel(name: string, argumentsJson: string): string {
 function answerLines(markdown: string): string[] {
   const out: string[] = [];
   let fence = false;
-  for (const raw of markdown.replace(ANSI, "").split(/\r?\n/)) {
+  for (const raw of stripAnsi(markdown).split(/\r?\n/)) {
     if (/^\s*(`{3,}|~{3,})/.test(raw)) {
       fence = !fence;
       continue;
@@ -153,7 +139,7 @@ export function renderTimeline(view: TimelineView, width: number): string[] {
   };
   /** Sanitizes per line, then indents, so block indentation and relative indent survive. */
   const addBlock = (text: string, pad = ""): void => {
-    lines.push(`${layout.indent}${pad}${clipLine(blockLine(text), layout.contentWidth - pad.length)}`);
+    lines.push(`${layout.indent}${pad}${clipLine(sanitizeBlockLine(text), layout.contentWidth - pad.length)}`);
   };
   const time = (ms: number | undefined): string =>
     layout.durations && ms !== undefined ? ` · ${formatDuration(ms)}` : "";
@@ -161,7 +147,8 @@ export function renderTimeline(view: TimelineView, width: number): string[] {
     switch (item.kind) {
       case "reasoning":
         add(`▸ reasoning${time(item.durationMs)}`);
-        if (view.expanded?.reasoning === true) for (const line of item.text.replace(/\r/g, "").split("\n")) addBlock(line, "  ");
+        // Whole-block redaction before splitting: a multi-line secret dies here (I-03).
+        if (view.expanded?.reasoning === true) for (const line of sanitizeBlockText(item.text).split("\n")) addBlock(line, "  ");
         return;
       case "tool": {
         add(`${GLYPH[item.status]} ${toolLabel(item.name, item.arguments)}${time(item.durationMs)}`);

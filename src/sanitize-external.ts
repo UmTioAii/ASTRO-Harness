@@ -159,3 +159,27 @@ const PROMPT_INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/gu;
 export function sanitizePromptText(text: string): string {
   return redactSecrets(text.replace(PROMPT_INVISIBLE, "")).replace(PROMPT_INVISIBLE, "");
 }
+
+/** OSC/CSI: the OSC arm never crosses a newline, so an unterminated `ESC]` cannot eat the next lines. */
+const ANSI = /\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+/** Tabs are indentation in Makefiles and diffs; four spaces keep it visible after the control scrub. */
+const TAB = "    ";
+
+/** Drops terminal sequences before anything measures or redacts the text. */
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI, "");
+}
+
+/** One block line: ANSI removed, tabs expanded, then controls and secrets redacted (I-03); indentation kept. */
+export function sanitizeBlockLine(text: string): string {
+  return sanitizePromptText(stripAnsi(text).replace(/\t/g, TAB)).trimEnd();
+}
+
+/**
+ * Whole block: ANSI removed first, then the whole text is redacted, then each
+ * line is sanitized so line breaks and indentation survive (I-03). A secret
+ * whose pattern spans lines only dies on the whole-text pass.
+ */
+export function sanitizeBlockText(text: string): string {
+  return redactSecrets(stripAnsi(text)).split(/\r?\n/).map(sanitizeBlockLine).join("\n");
+}

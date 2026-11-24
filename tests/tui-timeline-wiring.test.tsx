@@ -23,6 +23,10 @@ const end = (callId: string, isError: boolean, durationMs = 120): TurnEvent => (
   kind: "tool.end", turnId: "t", callId, isError, durationMs, resultKey: callId, at,
 });
 const turnEnd: TurnEvent = { kind: "turn.end", turnId: "t", status: "done", usage: { inputTokens: 1, outputTokens: 1 }, at };
+// Built at runtime so the gate never sees a PEM literal in the diff.
+const PEM_BEGIN = ["-----BEGIN ", "RSA PRIVATE KEY", "-----"].join("");
+const PEM_END = ["-----END ", "RSA PRIVATE KEY", "-----"].join("");
+const PEM_BODY = ["MIIEowIBAAKCAQEA", "fakebody"].join("");
 
 function resultOf(final: string) {
   return {
@@ -97,6 +101,65 @@ test("the four zones reconstruct renderTimeline and keep the status footer last"
   expect((instance.lastFrame() ?? "").replace(/\n+$/, "")).toBe(renderTimelineZones(view, 80).timeline.join("\n").replace(/\n+$/, ""));
   instance.unmount();
 });
+
+test("a reasoning event stays collapsed by default and renders a sanitized block when expanded (#600, I-03)", () => {
+  const secret = "sk-abcdefghijklmnop123456";
+  const store = new TimelineTurnStore("t", "inspect");
+  expect(store.apply({ kind: "reasoning", turnId: "t", text: `plano ${secret}\n  segunda linha`, at })).toBe(true);
+  const collapsed = renderTimeline(store.view({ kind: "done" }, status), 120).join("\n");
+  expect(collapsed).toContain("▸ reasoning");
+  expect(collapsed).not.toContain("plano");
+  const expanded = renderTimeline(store.view({ kind: "done" }, status, { reasoning: true }), 120).join("\n");
+  expect(expanded).toContain("plano [REDACTED]");
+  expect(expanded).toContain("    segunda linha");
+  expect(expanded).not.toContain(secret);
+});
+
+test("an expanded reasoning block redacts a whole multi-line PEM at render time (#660, I-03)", () => {
+  const store = new TimelineTurnStore("t", "inspect");
+  store.apply({ kind: "reasoning", turnId: "t", text: `plano\n${PEM_BEGIN}\n${PEM_BODY}\n${PEM_END}`, at });
+  const frame = renderTimeline(store.view({ kind: "done" }, status, { reasoning: true }), 120).join("\n");
+  expect(frame).not.toContain(PEM_BODY);
+  expect(frame).toContain("[REDACTED]");
+});
+
+test("live reasoning from the turn stream is revealed by ctrl+t and keeps its redaction (#600, I-03)", async () => {
+  const secret = "sk-abcdefghijklmnop123456";
+  const gate = new TurnGate();
+  const session = fakeSession({
+    send: async (
+      _prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, _attachments?: unknown,
+      turn?: { observer?: (event: TurnEvent) => void },
+    ) => {
+      turn?.observer?.({ kind: "reasoning", turnId: "t", text: `analisando ${secret}\n  segunda linha`, at });
+      await gate.enter();
+      turn?.observer?.(turnEnd);
+      return resultOf("done:inspect");
+    },
+  });
+  const instance = render(<TuiApp session={session} cwd={mkdtempSync(join(tmpdir(), "astro-tui-reasoning-"))} />);
+  try {
+    instance.stdin.write("inspect");
+    instance.stdin.write("\r");
+    await waitFor(
+      () => gate.parked === 1 && (instance.lastFrame() ?? "").includes("▸ reasoning"),
+      "reasoning line in the live timeline",
+    );
+    expect(instance.lastFrame()).not.toContain("analisando");
+
+    instance.stdin.write("\u0014"); // ctrl+t reveals reasoning
+    await waitFor(() => (instance.lastFrame() ?? "").includes("analisando"), "expanded reasoning body");
+    expect(instance.lastFrame()).toContain("[REDACTED]");
+    expect(instance.lastFrame()).not.toContain(secret);
+
+    gate.release();
+    await waitFor(() => (instance.lastFrame() ?? "").includes("done:inspect"), "turn answered");
+    // The committed history entry keeps the same expansion state.
+    expect(instance.lastFrame()).toContain("analisando");
+  } finally {
+    instance.unmount();
+  }
+}, 15_000);
 
 test("live tool transitions come from tool.start/tool.end and redact arguments (#635, I-03)", async () => {
   let release: () => void = () => {};

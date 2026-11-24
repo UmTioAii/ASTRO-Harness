@@ -1,5 +1,5 @@
 /** Live turn events (#600): a causal, sanitized stream; the observer never changes the outcome. */
-import { sanitizePromptText } from "../sanitize-external";
+import { sanitizeBlockText, sanitizePromptText } from "../sanitize-external";
 
 export interface TurnUsage {
   inputTokens: number;
@@ -10,6 +10,7 @@ export type TurnStatus = "done" | "failed" | "cancelled";
 
 export type TurnEvent =
   | { kind: "round.start"; turnId: string; roundIndex: number; at: string }
+  | { kind: "reasoning"; turnId: string; text: string; at: string }
   | { kind: "tool.start"; turnId: string; callId: string; name: string; arguments: string; at: string }
   | { kind: "tool.end"; turnId: string; callId: string; isError: boolean; durationMs: number; resultKey: string; at: string }
   | { kind: "turn.end"; turnId: string; status: TurnStatus; usage: TurnUsage; at: string };
@@ -19,11 +20,29 @@ export type TurnObserver = (event: TurnEvent) => void | Promise<void>;
 /** Cap of `tool.start.arguments`: an event is a signal, not a transport. */
 export const MAX_TURN_ARGUMENT_CHARS = 2048;
 
+/**
+ * Cap of a reasoning block: a chain of thought is rendered, not shipped, so a
+ * multi-megabyte block is cut with a marker instead of being retained whole.
+ */
+export const MAX_REASONING_CHARS = 16_000;
+
 /** Sanitiza e limita os argumentos antes de qualquer observador (I-03). */
 export function sanitizeTurnArguments(argumentsJson: string): string {
   const chars = Array.from(sanitizePromptText(argumentsJson));
   if (chars.length <= MAX_TURN_ARGUMENT_CHARS) return chars.join("");
   return `${chars.slice(0, MAX_TURN_ARGUMENT_CHARS - 1).join("")}…`;
+}
+
+/**
+ * Reasoning is a block: the shared block pipeline redacts the whole text first
+ * (a PEM spans lines), then sanitizes each line so the renderer keeps its
+ * breaks and indentation (I-03). Oversized blocks are cut with a marker.
+ */
+export function sanitizeReasoningText(text: string): string {
+  const clean = sanitizeBlockText(text);
+  const chars = Array.from(clean);
+  if (chars.length <= MAX_REASONING_CHARS) return clean;
+  return `${chars.slice(0, MAX_REASONING_CHARS - 1).join("")}…`;
 }
 
 /** Consome a rejeição de um observador async: o turno nunca depende dele (I-19). */
@@ -61,6 +80,14 @@ export class TurnEventStream {
   roundStart(roundIndex: number): void {
     if (this.#closed || this.#observer === undefined) return;
     this.#deliver({ kind: "round.start", turnId: this.#turnId, roundIndex, at: this.#at() });
+  }
+
+  /** One sanitized block per provider completion; an absent or empty text emits nothing. */
+  reasoning(text: string): void {
+    if (this.#closed || this.#observer === undefined) return;
+    const clean = sanitizeReasoningText(text);
+    if (clean.trim() === "") return;
+    this.#deliver({ kind: "reasoning", turnId: this.#turnId, text: clean, at: this.#at() });
   }
 
   toolStart(callId: string, name: string, argumentsJson: string): void {

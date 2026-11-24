@@ -79,6 +79,12 @@ export interface CompletionResponse {
   fallbacks?: FallbackRecord[];
   /** Perfil aplicado à chamada (E7): lvl/effort/thinking e proibidos removidos. */
   call?: AppliedCallProfile;
+  /**
+   * Runtime-only reasoning (#600): assembled from `reasoning_content` when the
+   * model card declares reasoning. Never persisted, replayed or sent back (I-03);
+   * absent when the provider has no reasoning channel.
+   */
+  reasoning?: string;
 }
 
 /** Contrato de um provider de chat completion. */

@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   displayWidth,
   renderTimeline,
-  sanitizeBlockText,
   toolLabel,
   type TimelineState,
   type TimelineTurn,
   type TimelineView,
 } from "../src/tui/timeline";
+import { sanitizeBlockText } from "../src/sanitize-external";
 
 const status = { model: "anthropic/claude-sonnet-4", mode: "ask", costUsd: 0.0021 };
 const turn: TimelineTurn = {

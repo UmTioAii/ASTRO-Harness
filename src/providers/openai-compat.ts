@@ -34,6 +34,8 @@ interface OpenAICompatProviderOptions {
   providerName?: string;
   /** Call profile do modelo (E1-E8). */
   call?: CallConfig;
+  /** Model card declares a reasoning channel (#600); absent = never expose reasoning_content. */
+  reasoning?: boolean;
   /** Injeção de timer para testes; ausente = `setTimeout` real. */
   sleepFn?: (ms: number) => Promise<void>;
 }
@@ -145,7 +147,7 @@ function parseToolCalls(raw: unknown): ToolCall[] {
   return toolCalls;
 }
 
-function parseCompletion(text: string): CompletionResponse {
+function parseCompletion(text: string, reasoningDeclared: boolean): CompletionResponse {
   let payload: unknown;
   try {
     payload = JSON.parse(text) as unknown;
@@ -164,6 +166,9 @@ function parseCompletion(text: string): CompletionResponse {
 
   const message = first.message;
   const usage = isRecord(payload.usage) ? payload.usage : {};
+  // Runtime-only (#600): read only when the card declares a reasoning channel.
+  const reasoning = reasoningDeclared && typeof message.reasoning_content === "string"
+    && message.reasoning_content !== "" ? message.reasoning_content : undefined;
 
   return {
     content: typeof message.content === "string" ? message.content : "",
@@ -172,6 +177,7 @@ function parseCompletion(text: string): CompletionResponse {
       inputTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0,
       outputTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : 0,
     },
+    ...(reasoning === undefined ? {} : { reasoning }),
   };
 }
 
@@ -264,6 +270,7 @@ export class OpenAICompatProvider implements Provider {
   private readonly windowMs: number;
   private readonly fetchFn: FetchLike;
   private readonly call: CallConfig | undefined;
+  private readonly reasoningDeclared: boolean;
   private readonly timeoutMs: number;
   private readonly streamTimeoutMs: number | undefined;
   private readonly providerName: string | undefined;
@@ -274,6 +281,7 @@ export class OpenAICompatProvider implements Provider {
     this.apiKey = opts.apiKey ?? "";
     this.fetchFn = opts.fetchFn ?? fetch;
     this.call = opts.call;
+    this.reasoningDeclared = opts.reasoning === true;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
     this.streamTimeoutMs = opts.streamTimeoutMs;
     this.providerName = opts.providerName;
@@ -379,7 +387,7 @@ export class OpenAICompatProvider implements Provider {
         throw this.networkError(error, signal, net, "falha ao ler a resposta do provider", "total", response.status);
       }
 
-      return { ...parseCompletion(text), call };
+      return { ...parseCompletion(text, this.reasoningDeclared), call };
     } finally {
       net.dispose();
     }
@@ -451,6 +459,7 @@ export class OpenAICompatProvider implements Provider {
     const calls = new Map<number, { id: string; name: string; arguments: string }>();
     let buffer = "";
     let content = "";
+    let reasoning = "";
     let frames = 0;
     let anonymousToolCalls = 0;
     let usage = { inputTokens: 0, outputTokens: 0 };
@@ -464,6 +473,7 @@ export class OpenAICompatProvider implements Provider {
           choices?: Array<{
             delta?: {
               content?: string | null;
+              reasoning_content?: string | null;
               tool_calls?: Array<{
                 index?: number;
                 id?: string;
@@ -489,6 +499,8 @@ export class OpenAICompatProvider implements Provider {
           throw new ProviderError(classifyStreamError(payload.error, raw), `stream do provider: ${detail}`);
         }
         const delta = payload.choices?.[0]?.delta;
+        // Reasoning never reaches `onToken`: the answer stream stays the only text sink.
+        if (this.reasoningDeclared && typeof delta?.reasoning_content === "string") reasoning += delta.reasoning_content;
         if (typeof delta?.content === "string" && delta.content !== "") {
           content += delta.content;
           streamStarted.add(req);
@@ -550,6 +562,7 @@ export class OpenAICompatProvider implements Provider {
       content,
       toolCalls: toolCalls.filter((call) => call.name !== ""),
       usage,
+      ...(reasoning === "" ? {} : { reasoning }),
     };
   }
 
