@@ -14,7 +14,7 @@ import { attachmentSizeLabel, materializePrompt } from "../attachments/render";
 import { readClipboardText } from "../attachments/clipboard";
 import { dedupeKey, type LoadedAttachment } from "../attachments/model";
 import { formatApprovalPrompt, type AttachmentApprover } from "../attachments/turn";
-import { redactSecrets } from "../sanitize-external";
+import { redactSecrets, sanitizePromptText } from "../sanitize-external";
 import { runCommand, type CommandState, type Entry } from "./commands";
 import type { ApprovalBridge, ApprovalQuestion } from "./approvals";
 import { DiffViewer } from "./diff-viewer";
@@ -182,8 +182,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const [queued, setQueued] = useState(0);
   /** Bloco thinking recolhido com ctrl+t durante o stream (#560). */
   const [thinkingCollapsed, setThinkingCollapsed] = useState(false);
-  /** Expansion is collapsed by default (ADR-0035): ctrl+o reveals tool bodies, ctrl+t reveals reasoning. */
-  const [expanded, setExpanded] = useState<{ tools: boolean; reasoning: boolean }>({ tools: false, reasoning: false });
+  /** Tool output is collapsed by default (ADR-0035); ctrl+o reveals it. */
+  const [toolsExpanded, setToolsExpanded] = useState(false);
   const [initialConfig] = useState(() => loadTuiConfig(cwd));
   const [theme, setTheme] = useState<Theme>(initialConfig.theme);
   const colors = getThemeColors(theme);
@@ -208,7 +208,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       live.setResultsFromMessages(session.snapshot().messages.slice(liveMessagesFrom.current));
       refreshTimeline();
     }
-    setExpanded((current) => ({ ...current, tools: !current.tools }));
+    setToolsExpanded((current) => !current);
   };
   const exitRequested = useRef(false);
   const [status, setStatus] = useState<Status>(() => statusOf(session.snapshot()));
@@ -703,9 +703,8 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
       return;
     }
     if (ctrl && value === "t") {
-      // ctrl+t expands reasoning and collapses the live thinking block (#560, #635)
+      // ctrl+t recolhe/mostra o bloco de thinking (#560); reasoning ainda não tem evento (#635)
       setThinkingCollapsed((current) => !current);
-      setExpanded((current) => ({ ...current, reasoning: !current.reasoning }));
       return;
     }
     if (!streaming && leader.current) {
@@ -1056,17 +1055,9 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
   const mode = session.permissionMode?.() ?? DEFAULT_PERMISSION_MODE;
   // Four TUIX zones (#635): the components only render `renderTimelineZones` lines.
   const timelineStatus = { model: status.model, mode, costUsd: status.costUsd };
-  const liveView = liveTimeline.current?.view({ kind: "done" }, timelineStatus, expanded);
+  const toolsView = { tools: toolsExpanded };
+  const liveView = liveTimeline.current?.view({ kind: "done" }, timelineStatus, toolsView);
   const composerMark = renderTimelineZones({ state: { kind: "done" }, status: timelineStatus }, width).composer[0] ?? "❯";
-  // Approval owns the composer zone while the timeline stays above it (ADR-0035).
-  const approvalComposer = question === undefined ? undefined : renderTimelineZones({
-    state: {
-      kind: "approval",
-      question: `${question.text}${question.diff === undefined ? "" : " · tab ver diff"}`,
-      answerHint: input === "" ? (question.hint ?? "enter responde · ctrl+c cancela") : `${input}▏`,
-    },
-    status: timelineStatus,
-  }, width).composer;
   return (
     <Box flexDirection="column">
       <Header colors={colors} provider={providerId} model={status.model} health={healthState} />
@@ -1075,7 +1066,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         : null}
       {hiddenEntries > 0 ? <Text dimColor>{`… ${hiddenEntries} mensagens anteriores`}</Text> : null}
       <Static items={entries}>
-        {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} expanded={expanded} />}
+        {(entry, index) => <EntryLine key={index} entry={entry} colors={colors} expanded={toolsView} />}
       </Static>
       {liveView === undefined ? null : <TimelineZone view={liveView} width={width} zone="timeline" />}
       {busy ? (
@@ -1102,7 +1093,7 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
         paddingX={1}
         flexDirection="column"
       >
-        {approvalComposer === undefined
+        {question === undefined
           ? inputLines.map((line, index) => (
               <Box key={index}>
                 <Text color={colors.accent}>{index === 0 ? `${composerMark} ` : "  "}</Text>
@@ -1110,14 +1101,23 @@ export function TuiApp({ session, cwd, branch, sessionApi, approvals, shell, man
                 {index === inputLines.length - 1 ? <Text inverse> </Text> : null}
               </Box>
             ))
-          : approvalComposer.map((line, index) => (
-              <Text
-                key={index}
-                {...(index === 0 ? { color: colors.warning } : { dimColor: input === "" })}
-              >
-                {line}
+          : (
+            <>
+              {/* The question wraps in Ink; clipping it could hide the dangerous tail of a command (#635). */}
+              <Text color={colors.warning}>
+                {sanitizePromptText(question.text)}
+                {question.diff === undefined ? null : " · tab ver diff"}
               </Text>
-            ))}
+              {input === ""
+                ? <Text dimColor>{sanitizePromptText(question.hint ?? "enter responde · ctrl+c cancela")}</Text>
+                : (
+                  <Text>
+                    <Text color={colors.accent}>{"❯ "}</Text>
+                    {sanitizePromptText(input)}▏
+                  </Text>
+                )}
+            </>
+          )}
       </Box>
       {question === undefined ? (
         <Text dimColor>

@@ -94,7 +94,7 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 |---|---|---|
 | usuário | `> texto` | inalterado |
 | shell `!cmd` | caixa com `$ cmd · cwd: … · exit: 0\|erro`, saída no corpo | `exit` é `0`/`erro` porque o contrato `ToolResult` não traz código numérico |
-| thinking | caixa com `pensando…` + stream parcial | ctrl+t recolhe/mostra e alterna a expansão do reasoning; stream sanitizado (I-03); some no fim do turno |
+| thinking | caixa com `pensando…` + stream parcial | ctrl+t recolhe/mostra; reasoning ainda sem evento (#635); stream sanitizado (I-03); some no fim do turno |
 | tool | `▸ read_file src/a.ts` → `✓`/`✗` com duração | ctrl+o expande o corpo redigido, sempre por `callId` (ADR-0035); recolhido fica em uma linha |
 | resposta | Markdown | sanitizada em bloco antes de renderizar (I-03) |
 
@@ -105,8 +105,8 @@ Formato: `erro: <mensagem> · <próximo passo>`, em vermelho, uma vez, na ordem 
 ## Expansão e aprovação (#635)
 
 - Recolhido por padrão: a entrada de tool fica em uma linha; `ctrl+o` acrescenta o corpo abaixo dela, sem reflow do que está acima.
-- `ctrl+t` expande o reasoning só quando o provider emitiu; sem reasoning, nenhuma linha nasce. Corpo expandido passa por `sanitizeBlockText` antes da medição de largura (I-03).
-- A aprovação ocupa a zona do composer (pergunta + resposta digitada) e a timeline continua visível acima; `tab` abre o diff quando existe.
+- `ctrl+t` está ligado só ao bloco thinking; a expansão de reasoning do renderer fica inerte até `TurnEvent` carregar reasoning (registrado em #635). O corpo expandido passa por `sanitizeBlockText` (ANSI, tabs e segredos) antes da medição de largura (I-03); um OSC não terminado não apaga as linhas seguintes.
+- A aprovação ocupa a zona do composer e a pergunta quebra em várias linhas, então o fim de um comando perigoso continua visível em 80 colunas; a resposta digitada e o cursor ficam na linha de baixo, e o hint mantém as opções. `tab` abre o diff quando existe.
 - Cancelar o turno (`ctrl+c`) marca toda entrada `running` como `failed`.
 
 ## /log
