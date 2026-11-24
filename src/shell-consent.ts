@@ -57,7 +57,10 @@ export function shellConsentReport(path: string = statePath()): string {
     const record = loadShellConsent(path);
     status = record === undefined
       ? "shell risk consent: not accepted — the next interactive start asks for Enter"
-      : `shell risk consent: accepted on ${record.acceptedAt} (version ${record.version})`;
+      : record.version === SHELL_CONSENT_VERSION
+        ? `shell risk consent: accepted on ${record.acceptedAt} (version ${record.version})`
+        : `shell risk consent: accepted on ${record.acceptedAt} for version ${record.version}; ` +
+          `version ${SHELL_CONSENT_VERSION} is not accepted — the next interactive start asks again`;
   } catch {
     status = `shell risk consent: unreadable state at ${path} — fix the file or delete the "shell" field`;
   }
