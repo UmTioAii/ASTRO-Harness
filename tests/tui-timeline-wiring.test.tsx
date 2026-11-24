@@ -489,3 +489,57 @@ test("the assistant final answer is sanitized before Markdown renders it (#653, 
     instance.unmount();
   }
 }, 15_000);
+
+test("ctrl+o is append-only in <Static>: expanded history stays, the next live turn follows the flag (#595)", async () => {
+  const gate = new TurnGate();
+  const messages: ChatMessage[] = [];
+  const bodies = ["primeiro corpo", "segundo corpo"];
+  let turnIndex = 0;
+  const session = fakeSession({
+    snapshot: () => ({
+      id: "s1", startedAt: at, model: "p/m1", messages, turns: 0,
+      tokensIn: 0, tokensOut: 0, costUsd: 0.001,
+    }),
+    send: async (
+      _prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, _attachments?: unknown,
+      turn?: { observer?: (event: TurnEvent) => void },
+    ) => {
+      const body = bodies[turnIndex++]!;
+      turn?.observer?.(start("c1", "read_file", { path: "a.ts" }));
+      messages.push({ role: "tool", content: body, toolCallId: "c1" });
+      await gate.enter();
+      turn?.observer?.(end("c1", false));
+      turn?.observer?.(turnEnd);
+      return resultOf(turnIndex === 1 ? "eco:um" : "eco:dois");
+    },
+  });
+  const instance = render(<TuiApp session={session} cwd={mkdtempSync(join(tmpdir(), "astro-tui-static-"))} />);
+  try {
+    instance.stdin.write("um");
+    instance.stdin.write("\r");
+    await waitFor(() => gate.parked === 1 && (instance.lastFrame() ?? "").includes("▸ read_file a.ts"), "first turn running");
+    expect(instance.lastFrame()).not.toContain("primeiro corpo");
+
+    instance.stdin.write("\u000f"); // ctrl+o ON while the turn is live
+    await waitFor(() => (instance.lastFrame() ?? "").includes("primeiro corpo"), "live body expanded");
+    gate.release();
+    await waitFor(() => (instance.lastFrame() ?? "").includes("eco:um"), "first turn committed");
+    // Printed while ON: the scrollback line keeps the body.
+    expect(instance.lastFrame()).toContain("primeiro corpo");
+
+    instance.stdin.write("\u000f"); // ctrl+o OFF
+    instance.stdin.write("dois");
+    instance.stdin.write("\r");
+    await waitFor(() => gate.parked === 1 && (instance.lastFrame() ?? "").includes("▸ read_file a.ts"), "second turn running");
+    // Committed lines were not rewritten, and the new live turn is collapsed.
+    expect(instance.lastFrame()).toContain("primeiro corpo");
+    expect(instance.lastFrame()).not.toContain("segundo corpo");
+
+    gate.release();
+    await waitFor(() => (instance.lastFrame() ?? "").includes("eco:dois"), "second turn committed");
+    // Printed while OFF: the second body is never revealed.
+    expect(instance.lastFrame()).not.toContain("segundo corpo");
+  } finally {
+    instance.unmount();
+  }
+}, 15_000);
