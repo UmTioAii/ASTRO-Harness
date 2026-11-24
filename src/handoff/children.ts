@@ -274,7 +274,9 @@ export function resolveChildResume(
       : "the child session is gone and no artifact can rebuild it");
   }
   const live = plan.level === "L2" && handle.history !== undefined;
-  const brief = plan.brief ?? (live || plan.level === "L1" ? handle.brief : undefined);
+  // L2 restores the session itself: the in-memory brief is only for L1, which
+  // has no session to reopen (ADR-0036). L3 takes its brief from the artifact.
+  const brief = plan.brief ?? (plan.level === "L1" ? handle.brief : undefined);
   const built = buildResumePrompt(plan, request.instruction, {
     ...(brief === undefined ? {} : { brief }),
     ...(handle.journal === undefined ? {} : { journal: handle.journal }),
