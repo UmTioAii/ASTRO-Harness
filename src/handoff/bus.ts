@@ -19,25 +19,12 @@ export class AgentBusError extends Error {
   constructor(code: AgentBusRefusal, message: string) { super(message); this.name = "AgentBusError"; this.code = code; }
 }
 const refuse = (code: AgentBusRefusal, message: string): never => { throw new AgentBusError(code, message); };
-export interface BusAudit {
-  append(event: { run: string; agent?: string; tipo: string; payload?: Record<string, unknown> }): unknown;
-}
-export interface BusParticipant {
-  agent: string;
-  execution: string;
-  depth: number;
-  scope: readonly string[];
-}
+export interface BusAudit { append(event: { run: string; agent?: string; tipo: string; payload?: Record<string, unknown> }): unknown; }
+export interface BusParticipant { agent: string; execution: string; depth: number; scope: readonly string[]; }
 export interface AgentMessage { id: string; from: string; fromExecution: string; to: string; body: string; artifact?: string; bytes: number; at: string; }
 export interface AgentMessageBusOptions {
-  run: string;
-  parentAgent: string;
-  roster: readonly string[];
-  eligible: readonly string[];
-  rootScope: readonly string[];
-  audit: BusAudit;
-  maxMessages?: number;
-  maxBytes?: number;
+  run: string; parentAgent: string; roster: readonly string[]; eligible: readonly string[];
+  rootScope: readonly string[]; audit: BusAudit; maxMessages?: number; maxBytes?: number;
 }
 export interface BusSendInput { to: string; body: string; artifact?: string; }
 const BROADCAST = /^(?:\*|all|everyone|broadcast|@all)$/i;
