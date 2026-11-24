@@ -11,7 +11,7 @@
 
 ## Decisão
 
-**Versão.** `version` é a versão do **schema do documento**, semver `x.y.z`, independente da versão do harness em `package.json`. Ausente = `0.0.0` (legado), aceito; `AstroConfig.version` fica `undefined` (ausência preservada) e `migratedFrom = "0.0.0"`, e o `doctor` sugere declarar. O harness declara `CONFIG_SCHEMA_VERSION` (semver, alvo `2.0.0`) e `CONFIG_KEYS` por major, fonte runtime de "chave conhecida"; o schema aninhado continua em `src/config.ts`.
+**Versão.** `version` é a versão do **schema do documento**, semver `x.y.z`, independente da versão do harness em `package.json`. Ausente = `0.0.0` (legado), aceito; `AstroConfig.version` fica `undefined` (ausência preservada) e `migratedFrom = "0.0.0"`, e o `doctor` sugere declarar. O harness declara `CONFIG_SCHEMA_VERSION` (semver, alvo `2.2.0`) e `CONFIG_KEYS` por major, fonte runtime de "chave conhecida"; o schema aninhado continua em `src/config.ts`.
 
 **Semântica.** major: remove, renomeia, redefine tipo/default, ou endurece validação a ponto de rejeitar config antes aceita; minor: chave ou valor novo opcional, retrocompatível; patch: só mensagem/correção sem mudar o que é aceito. Chave nova entra em `src/config.ts` no mesmo PR do comportamento, com validação, teste e nota do minor.
 
