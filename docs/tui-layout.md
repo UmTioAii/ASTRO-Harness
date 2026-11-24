@@ -55,7 +55,7 @@ Formato: `pasta · in/out tokens · custo · orçamento · modo`
 | modo | Sempre: `ask`, `auto` ou `bypass` |
 
 - `bypass` sai em vermelho e pinta a borda do input de vermelho; é o único modo com cor.
-- Nenhum campo do header reaparece aqui.
+- Nenhum campo do header reaparece aqui; enquanto o header existir (remoção adiada para a próxima slice de #635), identidade e modelo ficam nele e o footer usa a zona 4 do ADR-0035 sem o modelo.
 
 ## Erro
 

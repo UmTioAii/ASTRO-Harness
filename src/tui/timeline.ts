@@ -157,7 +157,7 @@ export function renderTimeline(view: TimelineView, width: number): string[] {
         return;
       case "tool": {
         add(`${GLYPH[item.status]} ${toolLabel(item.name, item.arguments)}${time(item.durationMs)}`);
-        const body = view.results?.[item.callId];
+        const body = view.results !== undefined && Object.hasOwn(view.results, item.callId) ? view.results[item.callId] : undefined;
         if (view.expanded?.tools === true && body !== undefined) {
           for (const line of body.replace(/\r/g, "").split("\n")) addBlock(line, "  ");
         }
