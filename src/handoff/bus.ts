@@ -5,7 +5,6 @@
  */
 import { ARTIFACT_REF_PATTERN } from "../internal-ids";
 import { sanitizePromptText } from "../sanitize-external";
-
 export const MAX_BUS_MESSAGES = 32;
 export const MAX_BUS_BYTES = 8_192;
 export const MAX_MESSAGE_CHARS = 500;
