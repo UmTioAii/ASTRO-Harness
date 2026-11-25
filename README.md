@@ -29,11 +29,11 @@ npm install -g @umtioai/astro-harness@alpha
 astro
 ```
 
-In a terminal, the first `astro` walks three steps, in this order:
+In a terminal, the first `astro` asks these questions, in this order:
 
 1. **Terms.** Five lines, accepted once per version with an empty answer; the acceptance is stored in `$ASTRO_HOME/state.json`. Any other answer, EOF included, declines and exits without writing.
-2. **Profile.** `default` (recommended) or `control`. Default hides counters and advanced knobs; Control exposes limits, budget, quota and detailed cost.
-3. **Provider.** Pick a provider, paste the key and choose a model. The key goes to the local vault at `~/.astro/vault.json` (DPAPI on Windows, file mode `0600` elsewhere) and the configuration stores only `vault:<credentialId>`; the key never reaches the project, the ledger or the audit log.
+2. **Shell-risk consent.** Three lines about running commands on your machine. `Enter` accepts and records the consent in `$ASTRO_HOME/state.json`; **any other answer — `y` included — declines**, and the shell (`run_command`) stays off for that session, with the next interactive start asking again.
+3. **Setup.** The wizard then asks the profile (`default` or `control`) and walks the provider screen (skipped when a complete provider set is already in the environment). The key goes to the local vault at `~/.astro/vault.json` (DPAPI on Windows, file mode `0600` elsewhere) and the configuration stores only `vault:<credentialId>`; the key never reaches the project, the ledger or the audit log.
 
 The wizard asks once per layer (global and project) and never overwrites an existing configuration file. Without a terminal it asks nothing and writes nothing: `astro setup --yes` accepts the profile defaults (it cannot choose a provider it does not have), and `astro setup` reruns the wizard later.
 
@@ -154,7 +154,7 @@ The fixed floor is enforced in every mode, including `bypass`: `.astro/` and con
 | `ASTRO_PROVIDER` | No | Selects the environment set (or a configured provider) by name; unknown is a typed error. |
 | `ASTRO_ALLOW_INSECURE_BASE_URL` | No | `1` confirms an `http://` base URL from the environment (development only). |
 | `ASTRO_PERMISSION_MODE` | No | Permission mode for the invocation; the flag wins over the environment and the configuration. |
-| `ASTRO_HOST_SHELL_CONFIRM_BYPASS` | No | `1` is required for `run_command` under `bypass`, including the `!cmd` channel. |
+| `ASTRO_HOST_SHELL_CONFIRM_BYPASS` | No | `1` is required in `bypass` for `run_command`, `run_tests` and the `!cmd` channel. |
 | `ASTRO_HOME` | No | State directory; default `~/.astro`. |
 | `ASTRO_NO_GLOBAL_CONFIG` | No | Ignore the global configuration layer. |
 | `ASTRO_BUN_PATH` | No | Bun binary to use instead of the bundled one. |
