@@ -9,9 +9,14 @@ import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
 import { validateConfig, type AstroConfig } from "../src/core/config";
 import { Registry } from "../src/core/registry";
+import { runMultiAgentSession, type MultiAgentSessionOptions } from "../src/core/session";
 import { Ledger } from "../src/ledger";
 import { resetCandidateSnapshots } from "../src/model-choice";
+import type { CompletionResponse, Provider } from "../src/providers/types";
 import { rebuildAgentTree } from "../src/resume";
+import { ToolExecutor } from "../src/tools/executor";
+import { handoffTool } from "../src/tools/handoff";
+import type { Tool, ToolClass } from "../src/tools/types";
 import { testEnv } from "./setup";
 
 function config(over: Record<string, unknown> = {}): AstroConfig {
@@ -26,7 +31,7 @@ function config(over: Record<string, unknown> = {}): AstroConfig {
       { provider: "p2", id: "m2", tags: ["review", "tools"], context: 8192, efficiency: 0.4,
         capabilities: { tools: true }, price: { inputPerM: 2, outputPerM: 2, fonte: "t", verificado: false } },
     ],
-    agent: { model: "p1/m1", maxSteps: 5, tools: ["handoff", "read_file"] },
+    agent: { model: "p1/m1", maxSteps: 5, tools: ["handoff", "read_file", "write_file"] },
     ...over,
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   });
@@ -102,7 +107,8 @@ describe("declarative spawn shares the spawn engine (#602)", () => {
     expect(spawns.get("sub-1")?.permission).toBe("read-only");
     const spawned = audit.readAll().find((event) => event.tipo === "agent.spawn");
     expect(spawned?.payload).toMatchObject({
-      source: "rule", rule: "scout", granted: 1, cap: 2, reason: "rule:scout",
+      // `source` stays the concurrency tier; `door` names the creation path.
+      source: "default", door: "rule", rule: "scout", granted: 1, cap: 2, reason: "rule:scout",
     });
     expect(ledger.readAllEntries().some((entry) => entry.kind === "agent" && entry.agent_id === "sub-1")).toBe(true);
   });
@@ -128,7 +134,11 @@ describe("declarative spawn shares the spawn engine (#602)", () => {
 
 describe("a turn fires the declared rule once (#602)", () => {
   /** Runs one turn with the given rules and returns the tree and spawn events. */
-  async function turn(rules: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  async function turn(
+    rules: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+    over: { models?: unknown[]; planner?: Record<string, unknown> } = {},
+  ) {
     const cwd = mkdtempSync(join(tmpdir(), "astro-when-run-"));
     const server = Bun.serve({
       port: 0,
@@ -138,12 +148,13 @@ describe("a turn fires the declared rule once (#602)", () => {
     });
     try {
       const configPath = join(cwd, "astro.config.json");
+      const tools = ["spawn_agent", "handoff", "read_file"];
       writeFileSync(configPath, JSON.stringify({
         providers: { p1: { kind: "openai-compat", baseUrl: `http://127.0.0.1:${server.port}/v1`, credentialRef: "KEY1" } },
-        models: [{ provider: "p1", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } }],
-        agent: { model: "p1/m1", maxSteps: 4, tools: ["spawn_agent", "handoff", "read_file"] },
+        models: over.models ?? [{ provider: "p1", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } }],
+        agent: { model: "p1/m1", maxSteps: 4, tools },
         agents: {
-          planner: { model: "p1/m1", maxSteps: 4, tools: ["spawn_agent", "handoff", "read_file"] },
+          planner: { model: "p1/m1", maxSteps: 4, tools, ...over.planner },
           ...rules,
         },
         ...extra,
@@ -166,7 +177,7 @@ describe("a turn fires the declared rule once (#602)", () => {
     expect(report.final).toBe("done");
     expect(nodes).toEqual(["planner", "sub-1"]);
     expect(spawns).toHaveLength(1);
-    expect(spawns[0]?.payload).toMatchObject({ source: "rule", rule: "reviewer", model: "p1/m1", parent_agent_id: "planner" });
+    expect(spawns[0]?.payload).toMatchObject({ source: "default", door: "rule", rule: "reviewer", model: "p1/m1", parent_agent_id: "planner" });
   });
 
   test("a rule never bypasses the cap and a refused spawn does not fail the turn", async () => {
@@ -177,10 +188,117 @@ describe("a turn fires the declared rule once (#602)", () => {
     expect(report.final).toBe("done");
     expect(nodes).toEqual(["planner"]);
     expect(spawns).toHaveLength(1);
-    expect(spawns[0]?.payload).toMatchObject({ source: "rule", rule: "scout", granted: 0, cap: 1, cut: expect.any(String) });
+    expect(spawns[0]?.payload).toMatchObject({ source: "config", door: "rule", rule: "scout", granted: 0, cap: 1, cut: expect.any(String) });
   });
 
   test("an empty tag list is refused at load, so no turn can spawn on every model", async () => {
     await expect(turn({ scout: { model: "p1/m1", when: { tags: [] } } })).rejects.toThrow(/tags/);
+  });
+
+  test("matching reads the routed strong model and its tags, not the base model", async () => {
+    // The first generation call routes to `strongModel` (model-routing.ts).
+    const routed = {
+      models: [
+        { provider: "p1", id: "m1", tags: ["writing-code", "tools"], context: 8192, capabilities: { tools: true } },
+        { provider: "p1", id: "m2", tags: ["review", "tools"], context: 8192, capabilities: { tools: true } },
+      ],
+      planner: { modelRouting: { strongModel: "p1/m2" } },
+    };
+    const fired = (when: Record<string, unknown>) => turn({ scout: { model: "p1/m1", tools: ["read_file"], when } }, {}, routed);
+
+    const strongModel = await fired({ model: "p1/m2" });
+    expect(strongModel.nodes).toEqual(["planner", "sub-1"]);
+    expect(strongModel.spawns).toHaveLength(1);
+
+    const baseModel = await fired({ model: "p1/m1" });
+    expect(baseModel.spawns).toHaveLength(0);
+
+    const strongTag = await fired({ tags: ["review"] });
+    expect(strongTag.spawns).toHaveLength(1);
+
+    const baseTag = await fired({ tags: ["writing-code"] });
+    expect(baseTag.spawns).toHaveLength(0);
+  });
+});
+
+describe("a declared child's permission reaches the executor (#602)", () => {
+  function fakeTool(name: string, klass: ToolClass, permission: string, onRun?: () => void): Tool {
+    return {
+      manifest: {
+        name, description: name, parameters: {}, risk: "low", permission, class: klass,
+        timeoutMs: 1000, retryable: false, idempotent: true, sideEffects: "none",
+      },
+      execute: async () => {
+        onRun?.();
+        return { output: `${name}:ok` };
+      },
+    };
+  }
+  const resp = (p: Partial<CompletionResponse>): CompletionResponse => ({
+    content: "", toolCalls: [], usage: { inputTokens: 10, outputTokens: 5 }, ...p,
+  });
+
+  test("a declared read-only child is denied a write after handoff", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "astro-when-perm-"));
+    const audit = new Auditor(join(cwd, "audit.jsonl"));
+    const ledger = new Ledger(join(cwd, "ledger.jsonl"));
+    const cfg = config({
+      agents: {
+        planner: { model: "p1/m1", maxSteps: 5, tools: ["handoff", "read_file", "write_file"] },
+        writer: { model: "p1/m1", maxSteps: 5, tools: ["read_file", "write_file"], permission: "read-only" },
+      },
+    });
+    const registry = new Registry(cfg);
+    const spawns = new SpawnRegistry();
+    let writes = 0;
+    const tools = [
+      handoffTool,
+      fakeTool("read_file", "read_common", "read"),
+      fakeTool("write_file", "edit", "write", () => { writes++; }),
+    ];
+    let call = 0;
+    const provider: Provider = {
+      complete: async () => {
+        call++;
+        if (call === 1) {
+          return resp({ toolCalls: [{ id: "h", name: "handoff", arguments: JSON.stringify({
+            to: "sub-1", task: "write", objective: "write", decisions: [], constraints: [], next_steps: [],
+          }) }] });
+        }
+        if (call === 2) return resp({ toolCalls: [{ id: "w", name: "write_file", arguments: "{}" }] });
+        return resp({ content: "fim" });
+      },
+    };
+    const writer = registry.requireAgent("writer");
+    const writerModel = registry.resolveModel(writer);
+    const allow = ["handoff", "read_file", "write_file"];
+    const deps = { config: cfg, registry, ledger, audit, cwd, spawns, enabled: true };
+    const opts: MultiAgentSessionOptions = {
+      run: "r1", credentialRef: "KEY1", quotaDomain: "default", cwd, provider, registry,
+      baseModel: registry.require("p1/m1"),
+      baseExecutor: new ToolExecutor({ tools, allow, audit, permission: "full", permissionMode: "bypass" }),
+      ledger, audit, baseMaxSteps: 5, entryAgent: "planner", maxConcurrent: 2, spawns,
+      declarativeSpawn: () => {
+        spawnDeclaredChild(deps, { run: "r1", agent: "planner", allow, maxSteps: 5 }, {
+          agent: "writer",
+          model: {
+            model: `${writerModel.provider}/${writerModel.id}`,
+            tags: writerModel.tags,
+            efficiency: writerModel.efficiency ?? 0,
+            estimated_cost_max_usd: null,
+          },
+          tools: writer.tools ?? [],
+          maxRounds: 2,
+          instructions: "",
+          ...(writer.permission === undefined ? {} : { permission: writer.permission }),
+        });
+      },
+    };
+    const result = await runMultiAgentSession(opts, "delegue");
+    expect(result.final).toBe("fim");
+    expect(result.agentsUsed).toEqual(["planner", "sub-1"]);
+    expect(writes).toBe(0);
+    const denied = audit.readAll().find((event) => event.tipo === "tool.denied");
+    expect(denied).toMatchObject({ agent: "sub-1", payload: { name: "write_file", permission: "read-only" } });
   });
 });
