@@ -55,4 +55,4 @@ Credential pools and rotation. The source documents rotation in one harness for 
 - The current retry policy against a pass criterion: retry only for `transient_rate_limit`, `outage` or `network_timeout`, never for `auth`, `invalid_request` or `hard_quota` (D-18, `src/providers/policy.ts`), and record the result (PL-4).
 - Whether every `astro doctor` check passes through the redacting wrapper, so a new broken-reference check inherits it (PL-6).
 - Which audit event, if any, a provider or credential removal writes today, and whether it names the removed reference without the secret (PL-5).
-- Whether the ledger records **both** model and route per billable request, and whether that is enough to answer "which model served this turn" without a new store (PL-7).
+- Whether recording the routed purpose is required for "which model served this turn", given that provider, model and fallbacks are already stored (PL-7).
