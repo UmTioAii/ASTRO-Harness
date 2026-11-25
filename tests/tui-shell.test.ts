@@ -413,20 +413,36 @@ describe("!cmd fail-closed reload (#650)", () => {
     expect(second.isError).toBe(true);
   });
 
-  test("a runner disabled at creation still audits the denied attempt", async () => {
+  test("a runner disabled at creation still audits the runtime mode", async () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
     const { cwd, configPath } = config([], "KEY", false, false);
-    const shell = createShellRunner({ configPath, cwd, env: process.env });
+    let mode: "ask" | "bypass" = "ask";
+    const shell = createShellRunner({ configPath, cwd, env: process.env, permissionMode: () => mode });
     expect(shell.enabled).toBe(false);
+    mode = "bypass";
     const result = await shell.run("echo ok");
     expect(result.isError).toBe(true);
     const events = readFileSync(join(cwd, ".astro/audit.jsonl"), "utf8")
       .trim().split("\n").map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
     expect(events).toContainEqual(expect.objectContaining({
       tipo: "host_shell.decision",
-      payload: expect.objectContaining({ effect: "deny", origin: "config", reason: "tool_not_allowed" }),
+      payload: expect.objectContaining({
+        effect: "deny", origin: "config", reason: "tool_not_allowed", permissionMode: "bypass",
+      }),
     }));
+  });
+
+  test("the disabled transport does not name a pattern it cannot persist", async () => {
+    const { cwd, configPath } = config(["run_command"], "KEY", false, true, "ask");
+    let detail: { kind: string; value: string; saves?: string } | undefined;
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: (request) => { detail = request.detail; return false; },
+    });
+    const result = await shell.run("git push origin main");
+    expect(result.isError).toBe(true);
+    expect(detail?.saves).toBeUndefined();
   });
 
   test("a config deny audits the runtime permission mode and its code", async () => {
@@ -476,6 +492,8 @@ describe("!cmd fail-closed reload (#650)", () => {
     expect((await shell.run("echo ok")).isError).toBe(false);
     writeFileSync(configPath, raw);
     expect((await shell.run("echo ok")).isError).toBe(false);
+    writeFileSync(configPath, "{ broken");
+    expect((await shell.run("echo ok")).isError).toBe(true);
     unlinkSync(configPath);
     const denied = await shell.run("echo ok");
     expect(denied.isError).toBe(true);
