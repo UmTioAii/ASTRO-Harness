@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Auditor } from "./audit";
 import { AccountLockedError, acquireAgentLock, releaseAgentLock } from "./agent-lock";
-import { activeByAccount, grantConcurrency, spawnConcurrencyCap } from "./concurrency";
+import { activeByAccount, grantConcurrency, spawnConcurrencyCap, type ConcurrencyGrant } from "./concurrency";
 import { redactSecrets } from "./sanitize-external";
 import type { AstroConfig, BudgetConfig } from "./core/config";
 import { providerAccountRefFor } from "./core/config";
@@ -19,6 +19,7 @@ import {
   resolveModelChoice,
   type CandidateDeps,
   type ModelCandidate,
+  type ModelChoice,
 } from "./model-choice";
 import type { QuotaLimit } from "./quota";
 import type { AgentEntry, Registry } from "./core/registry";
@@ -60,6 +61,16 @@ export class SpawnConcurrencyError extends Error {
   }
 }
 
+/** Refusal from the shared commit path; `code` is the stable tool contract. */
+export class SpawnRefusedError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "SpawnRefusedError";
+    this.code = code;
+  }
+}
+
 /** Subagente nascido em runtime, fixado no spawn (ADR-0007/0008). */
 export interface SpawnedAgent {
   agent_id: string;
@@ -74,6 +85,8 @@ export interface SpawnedAgent {
   instructions: string;
   reason: string;
   createdAt: number;
+  /** Declared by the named agent (#602); absent = inherits the caller's restriction. */
+  permission?: AgentPermission;
 }
 
 /** Estado de spawns do run (v1 serial). */
@@ -190,7 +203,7 @@ function toolError(error: unknown): ToolResult {
       isError: true,
     };
   }
-  if (error instanceof ModelChoiceError || error instanceof AccountLockedError || error instanceof SpawnLimitError || error instanceof SpawnConcurrencyError) {
+  if (error instanceof ModelChoiceError || error instanceof AccountLockedError || error instanceof SpawnLimitError || error instanceof SpawnConcurrencyError || error instanceof SpawnRefusedError) {
     const candidates = error instanceof ModelChoiceError ? error.candidates : undefined;
     return {
       output: JSON.stringify({
@@ -202,6 +215,211 @@ function toolError(error: unknown): ToolResult {
     };
   }
   throw error;
+}
+
+/** Everything the shared commit needs once the model choice is resolved. */
+export interface SpawnCommitRequest {
+  need: string;
+  choice: ModelChoice;
+  tools: readonly string[];
+  maxRounds: number;
+  instructions: string;
+  /** Caller rationale; the model-choice reason is prepended to it. */
+  reason: string;
+  requestedConcurrency?: number;
+  snapshotId?: string;
+  /** Mould permission (#602); absent = the caller's restriction applies. */
+  permission?: AgentPermission;
+  /** `agents.<name>.when` that requested this spawn; absent = model-requested. */
+  rule?: string;
+}
+
+export interface SpawnCommitResult {
+  agentId: string;
+  model: string;
+  profile?: string;
+  grant: ConcurrencyGrant;
+}
+
+/**
+ * Depth, run cap and scope, shared by both doors (#602). Throws before any
+ * model work, so a refused request never consumes a candidate snapshot.
+ */
+function assertSpawnAllowed(
+  deps: SpawnToolDeps,
+  ctx: ToolContext,
+  tools: readonly string[],
+  maxRounds: number,
+): void {
+  // v1 is depth one: a spawned child never spawns a grandchild.
+  if (deps.spawns.get(ctx.agent) !== undefined) {
+    throw new SpawnRefusedError("invalid_request", "subagente não pode spawnar outro subagente em v1");
+  }
+  if (deps.spawns.size >= deps.spawns.limit) throw new SpawnLimitError(deps.spawns.limit);
+  const parentAllow = ctx.allow ?? [];
+  const outside = tools.filter((tool) => !parentAllow.includes(tool));
+  if (outside.length > 0) {
+    throw new SpawnRefusedError("invalid_request", `tools fora do escopo do pai: ${outside.join(", ")}`);
+  }
+  const parentMax = ctx.maxSteps ?? deps.config.agent.maxSteps;
+  if (maxRounds > parentMax) {
+    throw new SpawnRefusedError("invalid_request", `maxRounds ${maxRounds} excede o teto do pai (${parentMax})`);
+  }
+}
+
+/**
+ * The single engine for child creation (#602, ADR-0036 §2): a model-requested
+ * spawn and a declarative rule both land here. Depth, run cap, account cap,
+ * scope, lock, ledger and `agent.spawn` audit are therefore shared; callers
+ * only supply the already-resolved model choice.
+ */
+export function commitSpawn(deps: SpawnToolDeps, ctx: ToolContext, req: SpawnCommitRequest): SpawnCommitResult {
+  assertSpawnAllowed(deps, ctx, req.tools, req.maxRounds);
+  const tools = [...req.tools];
+  if (tools.length > 0) {
+    const entry = deps.registry.get(req.choice.candidate.model);
+    if (!req.choice.candidate.tags.includes("tools") || entry?.capabilities?.tools !== true) {
+      throw new SpawnRefusedError("invalid_model_choice", `modelo "${req.choice.candidate.model}" não declara suporte a tools`);
+    }
+  }
+
+  const slash = req.choice.candidate.model.indexOf("/");
+  const provider = req.choice.candidate.model.slice(0, slash);
+  const modelId = req.choice.candidate.model.slice(slash + 1);
+  const providerConfig = deps.config.providers[provider];
+  if (providerConfig === undefined) {
+    throw new SpawnRefusedError("invalid_model_choice", `provider "${provider}" desconhecido`);
+  }
+
+  const cap = spawnConcurrencyCap(deps.config);
+  const accountRef = providerAccountRefFor(provider, providerConfig);
+  const rawCredential = (providerConfig as { credentialRef?: unknown }).credentialRef;
+  const keyless = providerConfig.kind === "openai-compat" &&
+    (typeof rawCredential !== "string" || rawCredential.length === 0);
+  if ((activeByAccount(deps.ledger).get(accountRef) ?? 0) >= cap.cap) {
+    throw new SpawnConcurrencyError(cap.cap, provider);
+  }
+
+  const grant = grantConcurrency(req.requestedConcurrency, cap);
+  const agentId = deps.spawns.nextId(new Set(Object.keys(deps.config.agents ?? {})));
+  const reason = [req.choice.reason, req.reason].filter((part) => part.length > 0).join(": ").slice(0, 200);
+
+  acquireAgentLock(deps.ledger, deps.audit, {
+    run: ctx.run,
+    agent_id: agentId,
+    session_id: ctx.run,
+    provider,
+    model: modelId,
+    ...(keyless ? {} : { credentialRef: accountRef }),
+    accountRef,
+    ...(req.choice.candidate.profile === undefined ? {} : { profile: req.choice.candidate.profile }),
+    parent_agent_id: ctx.agent,
+    reason,
+    need: req.need,
+    ...(req.snapshotId === undefined ? {} : { snapshot_id: req.snapshotId }),
+    maxConcurrent: cap.cap,
+  });
+
+  try {
+    deps.spawns.add({
+      agent_id: agentId,
+      parent_agent_id: ctx.agent,
+      candidate: req.choice.candidate,
+      tools,
+      maxRounds: req.maxRounds,
+      maxTurns: 1,
+      instructions: req.instructions,
+      reason,
+      createdAt: Date.now(),
+      ...(req.permission === undefined ? {} : { permission: req.permission }),
+    });
+    deps.audit.append({
+      run: ctx.run,
+      agent: ctx.agent,
+      tipo: "agent.spawn",
+      payload: {
+        agent_id: agentId,
+        parent_agent_id: ctx.agent,
+        provider,
+        model: req.choice.candidate.model,
+        ...(req.choice.candidate.profile === undefined ? {} : { profile: req.choice.candidate.profile }),
+        ...(req.snapshotId === undefined ? {} : { snapshot_id: req.snapshotId }),
+        need: req.need,
+        requested: grant.requested,
+        granted: grant.granted,
+        cap: grant.cap,
+        // `source` names the door (tier or rule); `grant_source` keeps ADR-0037.
+        source: req.rule === undefined ? grant.source : "rule",
+        ...(req.rule === undefined ? {} : { rule: req.rule }),
+        grant_source: grant.source,
+        reason,
+        grant_reason: grant.reason,
+        truncated: grant.truncated,
+        ...(grant.truncated ? { cut: grant.reason } : {}),
+        limits: { rounds: req.maxRounds, turns: 1 },
+      },
+    });
+  } catch (error) {
+    deps.spawns.remove(agentId);
+    try {
+      releaseAgentLock(deps.ledger, deps.audit, { run: ctx.run, agent_id: agentId, reason: "spawn_failed" });
+    } catch {
+      // Preserve the original error; the orphan sweep covers the I/O failure.
+    }
+    throw error;
+  }
+
+  return {
+    agentId,
+    model: req.choice.candidate.model,
+    ...(req.choice.candidate.profile === undefined ? {} : { profile: req.choice.candidate.profile }),
+    grant,
+  };
+}
+
+export interface DeclaredSpawnRequest {
+  /** Named agent acting as the mould; it is also the rule name in the audit. */
+  agent: string;
+  /** The declared model; a rule never ranks candidates. */
+  model: ModelCandidate;
+  tools: readonly string[];
+  maxRounds: number;
+  /** The named agent's own prompt, never a harness expansion of the turn text. */
+  instructions: string;
+  /** The named agent's declared permission, carried into the child (D-24). */
+  permission?: AgentPermission;
+}
+
+/**
+ * Declarative door (#602): commits a rule-matched child through `commitSpawn`,
+ * the same engine as `spawn_agent`. The scope is intersected with the parent
+ * before the commit, so a declaration can never widen it, and `task` /
+ * `spawn_agent` are removed so depth stays one.
+ */
+export function spawnDeclaredChild(
+  deps: SpawnToolDeps,
+  parent: { run: string; agent: string; allow: readonly string[]; maxSteps: number },
+  request: DeclaredSpawnRequest,
+): SpawnCommitResult {
+  if (!deps.enabled) {
+    throw new SpawnRefusedError("spawn_unavailable", "spawn_agent só está disponível em run multi-agent");
+  }
+  const allow = new Set(parent.allow);
+  const tools = request.tools.filter((tool) => allow.has(tool) && tool !== "task" && tool !== "spawn_agent");
+  return commitSpawn(
+    deps,
+    { cwd: deps.cwd, run: parent.run, agent: parent.agent, allow: [...allow], maxSteps: parent.maxSteps },
+    {
+      need: "declared",
+      choice: { candidate: request.model, reason: `rule:${request.agent}` },
+      tools,
+      maxRounds: request.maxRounds,
+      instructions: request.instructions,
+      reason: "",
+      ...(request.permission === undefined ? {} : { permission: request.permission }),
+      rule: request.agent,
+    },
+  );
 }
 
 const SPAWN_PARAMETERS = {
@@ -300,15 +518,13 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
           return { output: JSON.stringify({ error: "invalid_request", message: "field 'concurrency' must be an integer >= 1" }), isError: true };
         }
 
-        // v1 é serial: filho não spawna neto (sem canal p2p e sem histórico do pai).
-        if (deps.spawns.get(ctx.agent) !== undefined) {
-          return {
-            output: JSON.stringify({ error: "invalid_request", message: "subagente não pode spawnar outro subagente em v1" }),
-            isError: true,
-          };
-        }
+        const parentAllow = ctx.allow ?? [];
+        const tools = raw.tools === undefined ? [...parentAllow] : raw.tools;
+        const childMax = requestedMaxRounds ?? ctx.maxSteps ?? deps.config.agent.maxSteps;
 
-        if (deps.spawns.size >= deps.spawns.limit) throw new SpawnLimitError(deps.spawns.limit);
+        // Depth, run cap and scope fail before any model work; the shared commit
+        // repeats them so no caller can bypass the engine.
+        assertSpawnAllowed(deps, ctx, tools, childMax);
 
         // ADR-0037: the harness grants at most the per-account cap. A provider
         // whose account is at the cap is not a candidate; all full is a clear cut.
@@ -322,34 +538,9 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
           });
         if (open.length === 0) throw new SpawnConcurrencyError(cap.cap);
 
-        const parentAllow = ctx.allow ?? [];
-        const tools = raw.tools === undefined ? [...parentAllow] : raw.tools;
-        const outside = tools.filter((tool) => !parentAllow.includes(tool));
-        if (outside.length > 0) {
-          return {
-            output: JSON.stringify({
-              error: "invalid_request",
-              message: `tools fora do escopo do pai: ${outside.join(", ")}`,
-            }),
-            isError: true,
-          };
-        }
-
-        const parentMax = ctx.maxSteps ?? deps.config.agent.maxSteps;
-        const childMax = requestedMaxRounds ?? parentMax;
-        if (childMax > parentMax) {
-          return {
-            output: JSON.stringify({
-              error: "invalid_request",
-              message: `maxRounds ${childMax} excede o teto do pai (${parentMax})`,
-            }),
-            isError: true,
-          };
-        }
-
         const cdeps = candidateDeps(deps);
-        let choice;
         let snapshotId = typeof raw.snapshot_id === "string" ? raw.snapshot_id : undefined;
+        let choice;
         if (snapshotId !== undefined) {
           choice = resolveModelChoice(snapshotId, raw.model, cdeps, raw.need);
         } else {
@@ -357,109 +548,23 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
             need: raw.need,
             ...(tools.length > 0 ? { requires: ["tools"] } : {}),
           };
-          const snapshot = listModelCandidates(query, cdeps);
-          snapshotId = snapshot.snapshot_id;
+          snapshotId = listModelCandidates(query, cdeps).snapshot_id;
           choice = resolveModelChoice(snapshotId, raw.model, cdeps, raw.need);
         }
 
-        if (tools.length > 0) {
-          const entry = deps.registry.get(choice.candidate.model);
-          if (!choice.candidate.tags.includes("tools") || entry?.capabilities?.tools !== true) {
-            return {
-              output: JSON.stringify({
-                error: "invalid_model_choice",
-                message: `modelo "${choice.candidate.model}" não declara suporte a tools`,
-              }),
-              isError: true,
-            };
-          }
-        }
-
-        const slash = choice.candidate.model.indexOf("/");
-        const provider = choice.candidate.model.slice(0, slash);
-        const modelId = choice.candidate.model.slice(slash + 1);
-        const providerConfig = deps.config.providers[provider];
-        if (providerConfig === undefined) {
-          return { output: JSON.stringify({ error: "invalid_model_choice", message: `provider "${provider}" desconhecido` }), isError: true };
-        }
-
-        const accountRef = providerAccountRefFor(provider, providerConfig);
-        const rawCredential = (providerConfig as { credentialRef?: unknown }).credentialRef;
-        const keyless = providerConfig.kind === "openai-compat" &&
-          (typeof rawCredential !== "string" || rawCredential.length === 0);
-        if ((activeAccounts.get(accountRef) ?? 0) >= cap.cap) throw new SpawnConcurrencyError(cap.cap, provider);
-        const grant = grantConcurrency(requestedConcurrency, cap);
-        const agentId = deps.spawns.nextId(new Set(Object.keys(deps.config.agents ?? {})));
-        const reason = [choice.reason, typeof raw.reason === "string" ? raw.reason : ""]
-          .filter((part) => part.length > 0)
-          .join(": ")
-          .slice(0, 200);
-        // AGENTS.md já entra pelo system prompt base da sessão (CMP-8); repetir
-        // aqui duplicaria as regras e o custo no filho.
-        const instructions = raw.task;
-
-        acquireAgentLock(deps.ledger, deps.audit, {
-          run: ctx.run,
-          agent_id: agentId,
-          session_id: ctx.run,
-          provider,
-          model: modelId,
-          ...(keyless ? {} : { credentialRef: accountRef }),
-          accountRef,
-          ...(choice.candidate.profile === undefined ? {} : { profile: choice.candidate.profile }),
-          parent_agent_id: ctx.agent,
-          reason,
+        const committed = commitSpawn(deps, ctx, {
           need: raw.need,
-          ...(snapshotId === undefined ? {} : { snapshot_id: snapshotId }),
-          maxConcurrent: cap.cap,
+          choice,
+          tools,
+          maxRounds: childMax,
+          // AGENTS.md já entra pelo system prompt base da sessão (CMP-8).
+          instructions: raw.task,
+          reason: typeof raw.reason === "string" ? raw.reason : "",
+          ...(requestedConcurrency === undefined ? {} : { requestedConcurrency }),
+          ...(snapshotId === undefined ? {} : { snapshotId }),
         });
 
-        try {
-          deps.spawns.add({
-            agent_id: agentId,
-            parent_agent_id: ctx.agent,
-            candidate: choice.candidate,
-            tools: [...tools],
-            maxRounds: childMax,
-            maxTurns: 1,
-            instructions,
-            reason,
-            createdAt: Date.now(),
-          });
-          deps.audit.append({
-            run: ctx.run,
-            agent: ctx.agent,
-            tipo: "agent.spawn",
-            payload: {
-              agent_id: agentId,
-              parent_agent_id: ctx.agent,
-              provider,
-              model: choice.candidate.model,
-              ...(choice.candidate.profile === undefined ? {} : { profile: choice.candidate.profile }),
-              ...(snapshotId === undefined ? {} : { snapshot_id: snapshotId }),
-              need: raw.need,
-              requested: grant.requested,
-              granted: grant.granted,
-              cap: grant.cap,
-              source: grant.source,
-              // Both rationales are explicit: model choice and the harness grant.
-              reason,
-              grant_reason: grant.reason,
-              truncated: grant.truncated,
-              ...(grant.truncated ? { cut: grant.reason } : {}),
-              limits: { rounds: childMax, turns: 1 },
-            },
-          });
-        } catch (error) {
-          deps.spawns.remove(agentId);
-          try {
-            releaseAgentLock(deps.ledger, deps.audit, { run: ctx.run, agent_id: agentId, reason: "spawn_failed" });
-          } catch {
-            // preserva o erro original; a varredura de órfãos cobre a falha de I/O
-          }
-          throw error;
-        }
-
+        const grant = committed.grant;
         const notes: string[] = [];
         if (grant.truncated) notes.push(grant.reason);
         if (raw.maxTurns !== undefined && requestedMaxRounds === undefined) {
@@ -467,9 +572,9 @@ export function createSpawnAgentTool(deps: SpawnToolDeps): Tool {
         }
         return {
           output: JSON.stringify({
-            agent_id: agentId,
-            model: choice.candidate.model,
-            ...(choice.candidate.profile === undefined ? {} : { profile: choice.candidate.profile }),
+            agent_id: committed.agentId,
+            model: committed.model,
+            ...(committed.profile === undefined ? {} : { profile: committed.profile }),
             status: "active",
             limits: { rounds: childMax, turns: 1 },
             concurrency: grant,
