@@ -1253,10 +1253,13 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
       let handle: ChildSessionHandle | undefined;
       try {
         const session = sessionId.trim();
-        // Bound the ledger scan: only a child-run-shaped id can name an artifact,
-        // so a model cannot make every unknown id walk the ledger.
-        const shaped = session.length <= 160 && session.includes(".task.");
-        const artifact = shaped && childResumes.get(session) === undefined
+        // Gate the ledger scan by this run's child prefix: bounded without a
+        // magic length cap, so a long run id still rebuilds.
+        const scoped = session.startsWith(`${callerRun}.task.`);
+        if (!scoped && session.includes(".task.")) {
+          return { status: "error", error: "resume_forbidden", message: "only the agent that delegated this child may resume it" };
+        }
+        const artifact = scoped && childResumes.get(session) === undefined
           ? ledger.readHandoffs().filter((entry) => entry.kind === "handoff.created" && entry.artifact.run === session).at(-1)?.artifact
           : undefined;
         const used = artifact === undefined ? [] : ledger.readAll().filter((entry) => entry.run === redactSecrets(session));
