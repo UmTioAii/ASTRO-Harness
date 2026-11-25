@@ -35,6 +35,12 @@ describe("agents.<name>.when (#602)", () => {
     expect(() => config({ scout: { model: "p1/m1", when: { tags: ["quick"] } } })).toThrow(/tags/);
   });
 
+  test("refuses an empty tag list, which would match every model", () => {
+    expect(() => config({ scout: { model: "p1/m1", when: { tags: [] } } })).toThrow(/tags/);
+    // Declaring another predicate does not make an empty list meaningful.
+    expect(() => config({ scout: { model: "p1/m1", when: { tags: [], provider: "p1" } } })).toThrow(/tags/);
+  });
+
   test("refuses an undeclared or inactive provider/model reference", () => {
     expect(() => config({ scout: { model: "p1/m1", when: { provider: "p9" } } })).toThrow(/provider/);
     expect(() => config({ scout: { model: "p1/m1", when: { model: "p9/m9" } } })).toThrow(/model/);

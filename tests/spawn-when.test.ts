@@ -43,7 +43,7 @@ function setup(cfg: AstroConfig = config()) {
   acquireAgentLock(ledger, audit, {
     run: "r1", agent_id: "planner", session_id: "r1", provider: "p1", credentialRef: "KEY1", accountRef: "KEY1",
   });
-  const parent = { run: "r1", agent: "planner", allow: ["handoff", "read_file"], maxSteps: 3 };
+  const parent = { run: "r1", agent: "planner", allow: ["handoff", "read_file", "spawn_agent", "task"], maxSteps: 3 };
   return { cwd, cfg, ledger, audit, registry, spawns, deps, parent };
 }
 
@@ -66,6 +66,10 @@ describe("declarative matcher (#602)", () => {
     expect(whenMatches({ tags: ["tools"] }, active)).toBe(true);
     expect(whenMatches({ tags: ["tools", "review"] }, active)).toBe(false);
     expect(whenMatches({}, active)).toBe(false);
+    // [].every(...) is vacuously true; an empty predicate set must not match.
+    expect(whenMatches({ tags: [] }, active)).toBe(false);
+    // An empty list is not a predicate, but a sibling predicate still holds.
+    expect(whenMatches({ tags: [], provider: "p1" }, active)).toBe(true);
 
     const cfg = config({
       agents: {
@@ -85,13 +89,14 @@ describe("declarative spawn shares the spawn engine (#602)", () => {
     const result = spawnDeclaredChild(deps, parent, {
       agent: "scout",
       model: candidate(),
-      tools: ["read_file", "run_command"],
+      tools: ["read_file", "run_command", "spawn_agent", "task"],
       maxRounds: 2,
       instructions: "scout prompt",
       permission: "read-only",
     });
 
     expect(result.agentId).toBe("sub-1");
+    // Intersected with the parent and stripped of task/spawn_agent: depth one.
     expect(spawns.get("sub-1")?.tools).toEqual(["read_file"]);
     expect(spawns.get("sub-1")?.instructions).toBe("scout prompt");
     expect(spawns.get("sub-1")?.permission).toBe("read-only");
@@ -166,5 +171,9 @@ describe("a turn fires the declared rule once (#602)", () => {
     expect(nodes).toEqual(["planner"]);
     expect(spawns).toHaveLength(1);
     expect(spawns[0]?.payload).toMatchObject({ source: "rule", rule: "scout", granted: 0, cap: 1, cut: expect.any(String) });
+  });
+
+  test("an empty tag list is refused at load, so no turn can spawn on every model", async () => {
+    await expect(turn({ scout: { model: "p1/m1", when: { tags: [] } } })).rejects.toThrow(/tags/);
   });
 });
