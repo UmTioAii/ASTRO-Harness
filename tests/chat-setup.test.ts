@@ -49,7 +49,7 @@ describe("setup wizard — one layer per run (#611)", () => {
     const home = tempDir("astro-setup-full-home-");
     const configPath = join(cwd, "astro.config.json");
     const secret = "sk-sentinel-do-not-store";
-    const { io } = fakeIO(["", "custom", "Local", "https://local.example/v1", "LOCAL_API_KEY", "m1", "", ""]);
+    const { io } = fakeIO(["", "custom", "Local", "https://local.example/v1", "m1", "LOCAL_API_KEY", "", ""]);
 
     const outcome = await run(configPath, { env: { ASTRO_HOME: home, LOCAL_API_KEY: secret }, allowMissing: true, io });
 
@@ -94,7 +94,7 @@ describe("setup wizard — one layer per run (#611)", () => {
   test("dangling credential ref: refused before saving, no layer written", async () => {
     const cwd = tempDir("astro-setup-dangling-");
     const home = tempDir("astro-setup-dangling-home-");
-    const { io, out } = fakeIO(["", "custom", "Local", "https://local.example/v1", "MISSING_KEY", "m1", "S", "S"]);
+    const { io, out } = fakeIO(["", "custom", "Local", "https://local.example/v1", "m1", "MISSING_KEY", "S", "S"]);
 
     const outcome = await run(join(cwd, "astro.config.json"), { env: { ASTRO_HOME: home }, allowMissing: true, io });
 
@@ -140,7 +140,7 @@ describe("setup wizard — one layer per run (#611)", () => {
     const outcome = await run(switched, {
       env: { ...env, LOCAL_API_KEY: "sk-sentinel-do-not-store" },
       allowMissing: true,
-      io: fakeIO(["y", "", "custom", "Local", "https://local.example/v1", "LOCAL_API_KEY", "m1", "", ""]).io,
+      io: fakeIO(["y", "", "custom", "Local", "https://local.example/v1", "m1", "LOCAL_API_KEY", "", ""]).io,
     });
     expect(outcome.flow).toBe("full");
     expect(JSON.parse(readFileSync(switched, "utf8")).agent.model).toBe("local/m1");
