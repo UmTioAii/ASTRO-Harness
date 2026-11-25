@@ -1,12 +1,11 @@
 /**
  * TUI boot credential recovery (#616): a saved provider whose active credential
  * no longer resolves gets the credential step before the first prompt, keeping
- * the same provider and model. The check is local (no network); every message
- * names the ref, never a value (I-03).
+ * provider and model; messages name the ref, never a value (I-03).
  */
-import { ConfigError, updateConfigProviderCredentialRef, type OpenAICompatProviderConfig, type ProviderConfig } from "../core/config";
+import { ConfigError, type OpenAICompatProviderConfig, type ProviderConfig } from "../core/config";
 import { CredentialMissingError, credentialMissingMessage, resolveCredentialValue, type VaultReader } from "../credential-ref";
-import { loadEffectiveConfig, providerIdentityFor, updateGlobalProviderCredentialRef, type EffectiveConfig } from "../providers/profiles";
+import { loadEffectiveConfig, providerIdentityFor, updateGlobalProviderCredentialRef, updateProjectProviderCredentialRef, type EffectiveConfig } from "../providers/profiles";
 import { isEnvName, isVaultCredentialRef } from "../secrets";
 import { Vault, vaultPath } from "../vault";
 
@@ -23,21 +22,19 @@ export interface MissingActiveCredential {
 export interface ActiveCredentialProbe {
   configPath: string;
   env?: NodeJS.ProcessEnv;
-  /** Same as the TUI boot: an absent project layer is not a credential problem. */
+  /** Absent project layer and `--provider` follow the TUI boot; the vault defaults to the environment. */
   allowMissing?: boolean;
-  /** `--provider`: the probe follows the same override as the session. */
   provider?: string;
-  /** Default: the vault of the environment (ADR-0019). */
   vault?: VaultReader;
-}
-
-function providerOfModel(modelRef: string, providers: Record<string, ProviderConfig>): string | undefined {
-  return Object.keys(providers).sort((a, b) => b.length - a.length).find((name) => modelRef.startsWith(`${name}/`));
 }
 
 /** Only openai-compat resolves a ref here; codex-oauth reads a credentials file. */
 function keyed(config: ProviderConfig | undefined): config is OpenAICompatProviderConfig & { credentialRef: string } {
   return config?.kind === "openai-compat" && config.credentialRef !== undefined;
+}
+
+function providerOfModel(modelRef: string, providers: Record<string, ProviderConfig>): string | undefined {
+  return Object.keys(providers).sort((a, b) => b.length - a.length).find((name) => modelRef.startsWith(`${name}/`));
 }
 
 /** Effective model whose credential does not resolve, or nothing to recover; never throws. */
@@ -75,6 +72,7 @@ export function probeActiveCredential(input: ActiveCredentialProbe): MissingActi
 export type CredentialRecovery =
   | { kind: "not-needed" }
   | { kind: "recovered"; provider: string; model: string }
+  | { kind: "unresolved"; message: string }
   | { kind: "declined"; message: string };
 
 export interface CredentialRecoveryOptions {
@@ -85,9 +83,9 @@ export interface CredentialRecoveryOptions {
 }
 
 /**
- * Offers recovery once and re-probes. A cancelled recovery, or one that left
- * the credential unresolved, is declined: no silent provider/model fallback
- * (I-08); the caller exits with the actionable message.
+ * Offers recovery once and re-probes. A cancel is `declined`; a ref written but
+ * still unresolved says so instead of claiming a cancel, and neither falls back
+ * to another identity (I-08).
  */
 export async function recoverActiveCredential(opts: CredentialRecoveryOptions): Promise<CredentialRecovery> {
   const missing = opts.probe();
@@ -95,7 +93,7 @@ export async function recoverActiveCredential(opts: CredentialRecoveryOptions): 
   opts.notify(missing.message);
   if (!(await opts.recover(missing))) return { kind: "declined", message: missing.message };
   const left = opts.probe();
-  if (left !== undefined) return { kind: "declined", message: left.message };
+  if (left !== undefined) return { kind: "unresolved", message: `referência "${left.credentialRef}" gravada, mas o valor ainda não resolve · ${left.message}` };
   return { kind: "recovered", provider: missing.provider, model: missing.model };
 }
 
@@ -108,14 +106,8 @@ export function writeRecoveredCredentialRef(input: {
   missing: MissingActiveCredential; ref: string; configPath: string; env: NodeJS.ProcessEnv;
 }): void {
   if (!isVaultCredentialRef(input.ref) && !isEnvName(input.ref)) {
-    throw new ConfigError(
-      'credentialRef inválido: use "vault:<credentialId>" ou um nome de variável de ambiente',
-      "config_invalid_schema",
-    );
+    throw new ConfigError('credentialRef inválido: use "vault:<credentialId>" ou um nome de variável de ambiente', "config_invalid_schema");
   }
-  if (input.missing.source === "project") {
-    updateConfigProviderCredentialRef(input.configPath, input.missing.provider, input.ref);
-    return;
-  }
+  if (input.missing.source === "project") return updateProjectProviderCredentialRef(input.configPath, input.env, input.missing.provider, input.ref);
   updateGlobalProviderCredentialRef(input.env, input.missing.provider, input.ref);
 }

@@ -370,6 +370,30 @@ export function updateGlobalProviderCredentialRef(env: NodeJS.ProcessEnv, provid
   writeConfigRaw(raw, path);
 }
 
+/**
+ * Troca só `credentialRef` do provider na camada de projeto (#616). A camada
+ * isolada pode ser parcial (só `providers`); valida a mesma mescla do
+ * carregamento (ADR-0029) e nunca grava um valor (I-03).
+ */
+export function updateProjectProviderCredentialRef(
+  configPath: string, env: NodeJS.ProcessEnv, provider: string, ref: string,
+): void {
+  if (!isVaultCredentialRef(ref) && !isEnvName(ref)) {
+    throw new ConfigError('credentialRef inválido: use "vault:<credentialId>" ou um nome de variável de ambiente', "config_invalid_schema");
+  }
+  const raw = loadConfigRaw(configPath);
+  const entry = (isPlainObject(raw.providers) ? raw.providers : undefined)?.[provider];
+  if (!isPlainObject(entry)) {
+    throw new ConfigError(`provider "${provider}" não está em "${configPath}"`, "config_invalid_schema");
+  }
+  if (entry.kind !== "openai-compat") {
+    throw new ConfigError(`provider "${provider}" usa kind "${String(entry.kind)}" e não lê o cofre`, "config_invalid_schema");
+  }
+  entry.credentialRef = ref;
+  validateProjectLayer(raw, env, configPath); // a camada parcial só é válida mesclada (ADR-0029)
+  writeConfigRaw(raw, configPath);
+}
+
 /** Importa o store legado no `config.json`: `config.json` vence por chave (ADR-0029, #459). */
 function importProfiles(configPath: string, legacy: ProviderStore): void {
   const raw = existsSync(configPath) ? loadConfigRaw(configPath) : {};

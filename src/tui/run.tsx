@@ -287,7 +287,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       }),
       notify: (message) => console.error(`aviso: ${redactSecrets(message)}`),
     });
-    if (credential.kind === "declined") {
+    if (credential.kind === "declined" || credential.kind === "unresolved") {
       console.error(`erro: ${redactSecrets(credential.message)}`);
       return 1;
     }
