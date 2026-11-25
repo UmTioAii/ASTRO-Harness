@@ -204,6 +204,20 @@ function applySimplePreset(root: Record<string, unknown>): Record<string, unknow
   };
 }
 
+/**
+ * Closed matcher for declarative creation (#602, ADR-0036 §2). Every declared
+ * predicate must hold against the turn's active model; there is no free-form
+ * expression and prompt text is never parsed.
+ */
+export interface AgentWhenConfig {
+  /** Model tags the active model must carry (all of them). */
+  tags?: string[];
+  /** Provider of the active model. */
+  provider?: string;
+  /** Composite `provider/id` of the active model. */
+  model?: string;
+}
+
 /** Configuração de agents nomeados (para multi-agent F3+). Campos opcionais herdam do agent principal. */
 export interface NamedAgentConfig {
   model: string;
@@ -216,6 +230,8 @@ export interface NamedAgentConfig {
   permission?: AgentPermission;
   /** Roteamento barato/forte por propósito (#58); ausente = modelo do agente. */
   modelRouting?: ModelRouting;
+  /** Declarative creation rule (#602); absent = only the model can spawn this mould. */
+  when?: AgentWhenConfig;
 }
 
 /** Configuração de tools específicas (por nome da tool). */
@@ -1099,6 +1115,60 @@ function validateModelRouting(
   };
 }
 
+/** Chaves do matcher declarativo (#602); qualquer outra é config inválida. */
+const AGENT_WHEN_KEYS: readonly string[] = ["tags", "provider", "model"];
+
+/**
+ * Validates `agents.<name>.when` (#602): a closed matcher, not code. The rule
+ * is matched against the turn's active model only; it never expands prompt text.
+ */
+function validateAgentWhen(
+  value: unknown,
+  field: string,
+  knownModels: ReadonlySet<string>,
+  allModels: readonly ModelConfig[],
+  providers: ReadonlySet<string>,
+): AgentWhenConfig {
+  const raw = expectObject(value, field);
+  for (const key of Object.keys(raw)) {
+    if (!AGENT_WHEN_KEYS.includes(key)) {
+      fail(`invalid config: "${field}.${key}" is not a matcher key (${AGENT_WHEN_KEYS.join(", ")})`);
+    }
+  }
+  const tags = raw.tags === undefined ? undefined : expectStringArray(raw.tags, `${field}.tags`);
+  if (tags !== undefined && tags.length === 0) {
+    fail(`invalid config: "${field}.tags" needs at least one tag; an empty list matches every model`);
+  }
+  for (const tag of tags ?? []) {
+    if (!isKnownTag(tag)) fail(`invalid config: "${field}.tags" contains "${tag}", which is not a model tag`);
+  }
+  const provider = raw.provider === undefined ? undefined : expectString(raw.provider, `${field}.provider`);
+  if (provider !== undefined && !providers.has(provider)) {
+    fail(`invalid config: "${field}.provider" references "${provider}", which is not declared in "providers"`);
+  }
+  const model = raw.model === undefined ? undefined : expectString(raw.model, `${field}.model`);
+  if (model !== undefined) {
+    if (!knownModels.has(model)) {
+      fail(`invalid config: "${field}.model" references "${model}", which is not declared in "models"`);
+    }
+    const entry = allModels.find((candidate) => `${candidate.provider}/${candidate.id}` === model);
+    if (entry?.status !== undefined && entry.status !== "active") {
+      fail(`invalid config: "${field}.model" references "${model}", which is not active (status: "${entry.status}")`);
+    }
+    if (provider !== undefined && entry !== undefined && entry.provider !== provider) {
+      fail(`invalid config: "${field}.provider" does not match "${field}.model" (${entry.provider})`);
+    }
+  }
+  if (tags === undefined && provider === undefined && model === undefined) {
+    fail(`invalid config: "${field}" needs tags, provider or model; an empty matcher would fire on every turn`);
+  }
+  return {
+    ...(tags === undefined ? {} : { tags }),
+    ...(provider === undefined ? {} : { provider }),
+    ...(model === undefined ? {} : { model }),
+  };
+}
+
 /** Valida um agent nomeado (em `agents`). Usa defaults do agent principal se omitido. */
 function validateNamedAgent(
   name: string,
@@ -1107,6 +1177,7 @@ function validateNamedAgent(
   knownTools: Set<string>,
   knownModels: Set<string>,
   allModels: ModelConfig[],
+  providers: ReadonlySet<string>,
   modelPool?: Record<string, ProfileConfig>,
 ): NamedAgentConfig {
   const field = `agents.${name}`;
@@ -1115,6 +1186,7 @@ function validateNamedAgent(
   const systemPrompt = raw.systemPrompt === undefined ? undefined : expectString(raw.systemPrompt, `${field}.systemPrompt`);
   const maxSteps = validateStepsCeiling(raw.maxSteps === undefined ? baseAgent.maxSteps : expectPositiveInteger(raw.maxSteps, `${field}.maxSteps`), `${field}.maxSteps`);
   const permission = raw.permission === undefined ? undefined : expectAgentPermission(raw.permission, `${field}.permission`);
+  const when = raw.when === undefined ? undefined : validateAgentWhen(raw.when, `${field}.when`, knownModels, allModels, providers);
   let tools = baseAgent.tools;
   if (raw.tools !== undefined) {
     tools = expectStringArray(raw.tools, `${field}.tools`);
@@ -1135,6 +1207,7 @@ function validateNamedAgent(
       model, maxSteps, tools, profile,
       ...(permission === undefined ? {} : { permission }),
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
+      ...(when === undefined ? {} : { when }),
     };
   }
 
@@ -1156,6 +1229,7 @@ function validateNamedAgent(
     ...(permission === undefined ? {} : { permission }),
     ...(modelRouting === undefined ? {} : { modelRouting }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
+    ...(when === undefined ? {} : { when }),
   };
 }
 
@@ -1956,7 +2030,7 @@ const PROVIDER_COMMON_KEYS: readonly string[] = [
 const OPENAI_PROVIDER_KEYS: readonly string[] = [...PROVIDER_COMMON_KEYS, "baseUrl", "credentialRef"];
 const CODEX_PROVIDER_KEYS: readonly string[] = [...PROVIDER_COMMON_KEYS, "credentialsPath", "baseUrl"];
 const NAMED_AGENT_KEYS: readonly string[] = [
-  "model", "maxSteps", "tools", "systemPrompt", "profile", "permission", "modelRouting",
+  "model", "maxSteps", "tools", "systemPrompt", "profile", "permission", "modelRouting", "when",
 ];
 
 /** Forma do documento no major 1: só as seções de forma fixa são inspecionadas. */
@@ -1993,7 +2067,10 @@ const CONFIG_SHAPE: ConfigShape = {
     modelPool: { values: { keys: ["model", "capabilities", "fallback"] } },
     agent: { keys: ["model", "maxSteps", "tools", "systemPrompt", "entryAgent", "profile"] },
     agents: {
-      values: { keys: NAMED_AGENT_KEYS, children: { modelRouting: { keys: ["cheapModel", "strongModel"] } } },
+      values: {
+        keys: NAMED_AGENT_KEYS,
+        children: { modelRouting: { keys: ["cheapModel", "strongModel"] }, when: { keys: AGENT_WHEN_KEYS } },
+      },
     },
     tools: { keys: ["run_command"], children: { run_command: { keys: ["sandbox"] } } },
     shell: { keys: ["default", "mode", "rules", "approvals", "externalDirectory"], children: { rules: { items: { keys: ["match", "effect"] } }, approvals: { items: { keys: ["match", "effect"] } } } },
@@ -2515,6 +2592,7 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
 
   // Validar agents nomeados (F3-1). `maxActive` é reservado (A2): não é agente.
   const agents: Record<string, NamedAgentConfig> = Object.create(null);
+  const providerNames = new Set(Object.keys(providers));
   let maxActive: number | undefined;
   if (root.agents !== undefined) {
     const agentsRaw = expectObject(root.agents, "agents");
@@ -2525,7 +2603,7 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
         continue;
       }
       expectCheckpointName(name, `agents.${name}`);
-      agents[name] = validateNamedAgent(name, agentRaw, agent, knownTools, seenModels, models, modelPool);
+      agents[name] = validateNamedAgent(name, agentRaw, agent, knownTools, seenModels, models, providerNames, modelPool);
     }
   }
 

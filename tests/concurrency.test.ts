@@ -81,6 +81,7 @@ describe("bounded spawn (ADR-0037)", () => {
       granted: 1,
       cap: 3,
       source: "config",
+      door: "model",
       reason: "default_rank",
       grant_reason: "within config cap",
     });

@@ -31,7 +31,7 @@ import type { AuditEvent } from "../audit";
 import { budgetStatus, effectiveBudget, raiseDeniedLabel, restrictBudget, BudgetExceededError, type BudgetDecider, type BudgetStatus } from "../budget";
 import { MaxRoundsError, runSession, runMultiAgentSession, type EffectiveIdentity, type IdentityResolver, type MultiAgentSessionOptions } from "./session";
 import { assertResumeIdentity, planResume, ReplayIncompleteError } from "../resume";
-import { accountHasCapacity, activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks } from "../agent-lock";
+import { accountHasCapacity, activeLocks, moveAgentLock, recoverCrashedAgents, recoverDeadAgentLocks, AccountLockedError } from "../agent-lock";
 import { NoProgressError } from "../loop-guard";
 import { PermissionPendingError } from "../permissions";
 import type { CallSelection } from "../call-profile";
@@ -61,7 +61,9 @@ import { createWebSearchTool, webSearchSecretEnvNames } from "../tools/web-searc
 import { createSearchAndReadTool } from "../tools/web-search-read";
 import { createWebFetchTool } from "../tools/web-fetch";
 import { TodoPlanStore, createTodoWriteTool } from "../tools/todo-write";
-import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, SpawnRegistry } from "../spawn";
+import { createSpawnAgentTool, readAgentsMd, spawnLimitFromConfig, spawnDeclaredChild, SpawnConcurrencyError, SpawnLimitError, SpawnRefusedError, SpawnRegistry, type SpawnToolDeps } from "../spawn";
+import { matchDeclaredAgent } from "../agent-rules";
+import type { ModelCandidate } from "../model-choice";
 import { spawnConcurrencyCap, activeByAccount } from "../concurrency";
 import { grepTool } from "../tools/grep";
 import { globTool } from "../tools/glob";
@@ -1070,7 +1072,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     ...(quotaLimits === undefined ? {} : { quotaLimits }),
     ...(budget === undefined ? {} : { budget: effectiveBudget(budget, ledger, run) }),
   })));
-  toolsByName.set("spawn_agent", createSpawnAgentTool({
+  /** Same dependencies feed the tool door and the declarative door (#602). */
+  const spawnDeps: SpawnToolDeps = {
     config,
     registry,
     ledger,
@@ -1080,7 +1083,8 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     enabled: multiAgentRun,
     ...(quotaLimits === undefined ? {} : { quotaLimits }),
     ...(budget === undefined ? {} : { budget: () => effectiveBudget(budget, ledger, run) }),
-  }));
+  };
+  toolsByName.set("spawn_agent", createSpawnAgentTool(spawnDeps));
   // #602: the only door to the opt-in child-to-child bus; deny by default (I-01).
   toolsByName.set("agent_message", createAgentMessageTool({ bus: () => childBus }));
   // C4 (#58): delegação síncrona e isolada; o filho não herda mensagens do pai.
@@ -1389,6 +1393,69 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
     // override de modelo são single-agent)
     if (multiAgentRun) {
       const entryAgent = resumed?.agent.agent_id ?? config.agent.entryAgent ?? "planner";
+      const entryAgentEntry = registry.getAgent(entryAgent);
+      // #602: at most one declared rule per turn, fired once after the entry
+      // agent holds its slot, through the same engine as `spawn_agent`.
+      let declarativeFired = false;
+      const declarativeSpawn = (): void => {
+        if (declarativeFired) return;
+        declarativeFired = true;
+        if (entryAgentEntry === undefined) return;
+        // The first generation call uses `strongModel` when routing is declared
+        // (model-routing.ts); matching must see that model, not the base one.
+        const routedKey = entryAgentEntry.modelRouting?.strongModel;
+        const entryModel = routedKey === undefined
+          ? registry.resolveModel(entryAgentEntry)
+          : registry.require(routedKey);
+        const matched = matchDeclaredAgent(config.agents, {
+          provider: entryModel.provider,
+          model: `${entryModel.provider}/${entryModel.id}`,
+          tags: entryModel.tags,
+        });
+        if (matched === undefined) return;
+        const targetModel = registry.resolveModel(matched.agent);
+        const candidate: ModelCandidate = {
+          model: `${targetModel.provider}/${targetModel.id}`,
+          ...(matched.agent.profile === undefined ? {} : { profile: matched.agent.profile }),
+          tags: targetModel.tags,
+          efficiency: targetModel.efficiency ?? 0,
+          estimated_cost_max_usd: null,
+        };
+        const parentCeiling = entryAgentEntry.maxSteps ?? sessionMaxRounds;
+        const rounds = Math.min(matched.agent.maxSteps ?? config.agent.maxSteps, parentCeiling);
+        try {
+          spawnDeclaredChild(spawnDeps, {
+            run,
+            agent: entryAgent,
+            allow: entryAgentEntry.tools ?? config.agent.tools,
+            maxSteps: parentCeiling,
+          }, {
+            agent: matched.name,
+            model: candidate,
+            tools: matched.agent.tools ?? config.agent.tools,
+            maxRounds: rounds,
+            instructions: matched.agent.systemPrompt ?? "",
+            ...(matched.agent.permission === undefined ? {} : { permission: matched.agent.permission }),
+          });
+        } catch (error) {
+          if (!(error instanceof SpawnLimitError || error instanceof SpawnConcurrencyError || error instanceof SpawnRefusedError || error instanceof AccountLockedError)) throw error;
+          // A rule that cannot be granted is skipped, never a failed turn; the
+          // cut is audited with the same event name and no child is created.
+          const cap = spawnConcurrencyCap(config);
+          audit.append({
+            run, agent: entryAgent, tipo: "agent.spawn",
+            payload: {
+              parent_agent_id: entryAgent,
+              model: candidate.model,
+              ...(candidate.profile === undefined ? {} : { profile: candidate.profile }),
+              need: "declared", requested: 1, granted: 0, cap: cap.cap,
+              source: cap.source, door: "rule", rule: matched.name,
+              reason: `rule:${matched.name}`, truncated: true, cut: redactSecrets(error.message),
+              limits: { rounds, turns: 1 },
+            },
+          });
+        }
+      };
       const multiOpts: MultiAgentSessionOptions = {
         run,
         credentialRef,
@@ -1409,6 +1476,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         baseSystemPrompt: systemPromptBase,
         ...(memorySection === undefined ? {} : { memorySection }),
         entryAgent,
+        declarativeSpawn,
         taskHash: shortTaskHash(opts.task),
         ...(config.run?.checkpointAt === undefined
           ? {}

@@ -28,7 +28,7 @@ import { CompactionPausedError } from "../compaction/breaker";
 import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "../compaction/engine";
 import { completeWithCompaction } from "../compaction/runtime";
 import { effectiveOutputCap, type OutputLimitConfig } from "../output-limit";
-import type { SpawnRegistry } from "../spawn";
+import { spawnedPermission, type SpawnRegistry } from "../spawn";
 import { mostRestrictive } from "../permissions";
 import { join } from "node:path";
 import { BackgroundCompactor } from "../compaction/background";
@@ -1000,6 +1000,11 @@ export interface MultiAgentSessionOptions {
   /** Seção `## Memory` já montada; acompanha o override de cada agent (review #579). */
   memorySection?: string;
   entryAgent: string;
+  /**
+   * Declarative creation hook (#602): fired once, after the entry agent holds
+   * its account slot, so a rule can never take the parent's own execution.
+   */
+  declarativeSpawn?: () => void;
   /** Tracing OTLP (F6-2); ausente = sem spans. */
   tracer?: TracerLike;
   /** Recebe deltas de texto quando o provider suporta streaming (T3). */
@@ -1171,7 +1176,9 @@ export async function runMultiAgentSession(
     return spawned === undefined ? undefined : opts.spawns!.toAgentEntry(
       spawned,
       opts.baseSystemPrompt,
-      mostRestrictive(currentAgent.permission ?? "full", opts.baseExecutor.permission),
+      // #602: a declared mould keeps its own restriction; a model-spawned child
+      // has none and inherits the caller's, as before.
+      spawnedPermission(spawned, currentAgent.permission, opts.baseExecutor.permission),
     );
   };
   const knownFor = (name: string): string[] | undefined => {
@@ -1366,6 +1373,9 @@ export async function runMultiAgentSession(
       ensureAgentCreated(opts.ledger, opts.audit, opts.run, currentAgentName, currentModel.id, identityOf(currentModel), currentAgent.profile, pending.artifact.from, opts.maxConcurrent);
     }
     ensureAgentCreated(opts.ledger, opts.audit, opts.run, currentAgentName, currentModel.id, identityOf(currentModel), currentAgent.profile, undefined, opts.maxConcurrent);
+    // #602: a declared rule fires after the entry agent's slot exists, so the
+    // account count already includes the parent and the cap cannot be bypassed.
+    opts.declarativeSpawn?.();
     agentsUsed.push(currentAgentName);
 
     let effectiveBaseMaxSteps = opts.baseMaxSteps;
