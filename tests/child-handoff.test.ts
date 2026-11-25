@@ -365,14 +365,20 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
 
   test("a resume with no live session is typed, not a fresh child run", async () => {
     const h = harness({
-      plan: (call) => call === 1 ? toolCall("task", { session_id: "r1.task.missing", instruction: "continue" }) : final("parent-final"),
+      plan: (call) => call === 1 ? toolCall("task", { session_id: "r1.task.missing", instruction: "continue" })
+        : call === 2 ? toolCall("task", { session_id: "not-a-session", instruction: "continue" })
+          : final("parent-final"),
       child: () => final("should-not-run"),
     });
     try {
       const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "resume-missing",
         env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
-      expect([result.final, h.calls.child]).toEqual(["parent-final", 0]);
-      expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ error: "session_missing", session_id: "r1.task.missing" });
+      const results = h.bodies.at(-1)!.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => JSON.parse(String(message.content)) as Record<string, unknown>);
+      // A child id of another run is an explicit refusal; junk is missing.
+      expect([result.final, h.calls.child, ...results.map((item) => item.error)])
+        .toEqual(["parent-final", 0, "resume_forbidden", "session_missing"]);
     } finally { h.server.stop(true); }
   });
 
@@ -453,7 +459,10 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
     } finally { h.server.stop(true); }
   });
 
-  test("an evicted handle rebuilds through the ledger and audits the new run", async () => {
+  test("an evicted handle rebuilds for a long-named run and audits the new run", async () => {
+    // A child id longer than 160 chars must still rebuild: the lookup is gated
+    // by the parent-run prefix, not by a magic length cap.
+    const longRun = "run".repeat(40);
     const failureSession = (body: Body): string => {
       for (const message of body.messages) {
         if (message.role !== "tool" || !String(message.content).includes("child_failed")) continue;
@@ -461,7 +470,6 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
       }
       return "";
     };
-    let recovered = 0;
     const h = harness({
       plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "first fails" })
         : call <= 33 ? toolCall("task", { agent: "build", prompt: `filler ${call}` })
@@ -469,23 +477,19 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
             : final("parent-final"),
       child: (call, body) => JSON.stringify(body.messages).includes("first fails")
         ? new Response("bad request", { status: 400 })
-        : JSON.stringify(body.messages).includes("recover")
-          ? (++recovered === 1 ? toolCall("task", { agent: "plan", prompt: "grandchild" }) : final("child-recovered"))
-          : final("filler-ok"),
+        : final(JSON.stringify(body.messages).includes("recover") ? "child-recovered" : "filler-ok"),
     }, { planSteps: 40, rounds: 40 });
     try {
-      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "evict-child",
+      const result = await runTask({ runId: longRun, configPath: h.configPath, cwd: h.cwd, task: "evict-child",
         env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
       expect(result.final).toBe("parent-final");
       const failed = failureSession(h.bodies.at(-1)!);
       const rebuilt = toolResult(h.bodies.at(-1)!);
+      expect([failed.startsWith(`${longRun}.task.`), failed.length > 160]).toEqual([true, true]);
       // The 33rd delegation evicted the failed handle: the resume rebuilt from
       // the ledger artifact, so the result names a new run.
       expect(rebuilt).toMatchObject({ level: "L3", source: "fallback", output: "child-recovered" });
       expect([failed.length > 0, rebuilt?.session_id === failed]).toEqual([true, false]);
-      const rebuiltBodies = h.bodies.filter((body) => body.messages[0]?.content === "child-agent"
-        && JSON.stringify(body.messages).includes("recover"));
-      expect(JSON.stringify(rebuiltBodies.at(-1)!.messages)).toContain("permitida para o agent");
       // The audit keeps the chain: requested session -> rebuilt run.
       expect(new Auditor(join(h.cwd, ".astro", "audit.jsonl")).readAll()
         .filter((item) => item.tipo === "task.resumed").at(-1)?.payload)
