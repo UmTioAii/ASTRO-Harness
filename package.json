@@ -48,7 +48,7 @@
     "typescript": "latest"
   },
   "dependencies": {
-    "bun": "1.4.2",
+    "bun": "1.4.5",
     "ink": "8.0.0",
     "react": "19.3.1"
   }
