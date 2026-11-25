@@ -159,7 +159,7 @@ describe("run_command on the host by default, approved per command (#474, #599)"
     expect(result.isError).toBeFalsy();
     expect(result.output).toContain("astro-host-default");
     expect(requests).toHaveLength(1);
-    expect((requests[0] as { detail?: { kind: string; value: string; saves?: string } }).detail).toEqual({
+    expect((requests[0] as { detail?: { kind: string; value: string } }).detail).toEqual({
       kind: "command", value: "echo astro-host-default",
     });
     // The host path never probes or calls Docker.

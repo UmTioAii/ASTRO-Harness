@@ -184,7 +184,7 @@ describe("prompt de tool com o argumento material (#536)", () => {
     expect(prompt).not.toContain('[S] aprovar toda chamada "npm test"');
   });
 
-      test("the prompt names the prefix rule always will save (#650)", () => {
+  test("the prompt names the prefix rule always will save (#650)", () => {
     const prompt = toolPrompt({
       name: "run_command", action: "shell", mode: "ask", perCall: true,
       detail: { kind: "command", value: "git push origin main", saves: "git push *" },

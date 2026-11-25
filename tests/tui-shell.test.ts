@@ -332,35 +332,7 @@ describe("!cmd reload covers agent.tools (#650)", () => {
 });
 
 describe("!cmd approval names the prefix always will save (#650)", () => {
-  test("a single uncovered subcommand shows its saved pattern in the prompt", async () => {
-    mock.restore();
-    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
-    const { cwd, configPath } = config(["run_command"], "KEY", false, true, "ask");
-    let detail: { kind: string; value: string; saves?: string } | undefined;
-    const shell = createShellRunner({
-      configPath, cwd, env: process.env,
-      approveTool: (request) => { detail = request.detail; return false; },
-    });
-    const result = await shell.run("git push origin main");
-    expect(result.isError).toBe(true);
-    expect(detail?.value).toBe("git push origin main");
-    expect(detail?.saves).toBe("git push *");
-  });
-
-  test("no pattern is named when always cannot save the decision", async () => {
-    mock.restore();
-    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
-    const { cwd, configPath } = config(["run_command"], "KEY", false, true, "ask");
-    let detail: { kind: string; value: string; saves?: string } | undefined;
-    const shell = createShellRunner({
-      configPath, cwd, env: process.env,
-      approveTool: (request) => { detail = request.detail; return false; },
-    });
-    await shell.run("git push origin main && echo ok");
-    expect(detail?.saves).toBeUndefined();
-  });
-
-  test("a pattern containing a secret is never named", async () => {
+  async function promptOnHost(command: string) {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
     const { cwd, configPath } = config(["run_command"], "KEY", false, false, "ask");
@@ -369,8 +341,24 @@ describe("!cmd approval names the prefix always will save (#650)", () => {
       configPath, cwd, env: process.env,
       approveTool: (request) => { detail = request.detail; return false; },
     });
+    const result = await shell.run(command);
+    return { detail, result };
+  }
+  test("a single uncovered subcommand shows its saved pattern in the prompt", async () => {
+    const { detail, result } = await promptOnHost("git push origin main");
+    expect(result.isError).toBe(true);
+    expect(detail?.value).toBe("git push origin main");
+    expect(detail?.saves).toBe("git push *");
+  });
+
+  test("no pattern is named when always cannot save the decision", async () => {
+    const { detail } = await promptOnHost("git push origin main && echo ok");
+    expect(detail?.saves).toBeUndefined();
+  });
+
+  test("a pattern containing a secret is never named", async () => {
     const secret = ["s", "k", "-"].join("") + "live-abcdefghijklmnop";
-    await shell.run(`API_KEY=${secret} curl example.com`);
+    const { detail } = await promptOnHost(`${secret} echo ok`);
     expect(detail?.saves).toBeUndefined();
     expect(JSON.stringify(detail)).not.toContain(secret);
   });
@@ -394,7 +382,10 @@ describe("!cmd fail-closed reload (#650)", () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
     const { cwd, configPath } = config(["run_command"], "KEY", false, false);
-    const shell = createShellRunner({ configPath, cwd, env: process.env, allowMissingConfig: true });
+    const shell = createShellRunner({
+      configPath, cwd, allowMissingConfig: true,
+      env: { ...process.env, ASTRO_NO_GLOBAL_CONFIG: "1", OPENAI_API_KEY: "env-key", OPENAI_MODEL: "gpt-5" },
+    });
     unlinkSync(configPath);
     const result = await shell.run("echo ok");
     expect(result.isError).toBe(true);
