@@ -184,13 +184,21 @@ describe("prompt de tool com o argumento material (#536)", () => {
     expect(prompt).not.toContain('[S] aprovar toda chamada "npm test"');
   });
 
-  test("the prompt names the prefix rule always will save (#650)", () => {
+      test("the prompt names the prefix rule always will save (#650)", () => {
     const prompt = toolPrompt({
-      name: "run_command", action: "shell", mode: "ask",
+      name: "run_command", action: "shell", mode: "ask", perCall: true,
       detail: { kind: "command", value: "git push origin main", saves: "git push *" },
     });
     expect(prompt).toContain("git push origin main");
     expect(prompt).toContain("always saves `git push *`");
+  });
+
+  test("without per-call approval the prompt does not name a pattern (#650)", () => {
+    const prompt = toolPrompt({
+      name: "run_command", action: "shell", mode: "ask",
+      detail: { kind: "command", value: "git push origin main", saves: "git push *" },
+    });
+    expect(prompt).not.toContain("always saves");
   });
 
   test("detalhe longo já chega truncado pelo gate, mas o prompt não quebra a linha", () => {

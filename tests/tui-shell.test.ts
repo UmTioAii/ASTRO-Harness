@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
@@ -286,7 +286,7 @@ describe("!cmd reload fails closed when the config cannot be re-read (#650)", ()
       .trim().split("\n").map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
     expect(events).toContainEqual(expect.objectContaining({
       tipo: "host_shell.decision",
-      payload: expect.objectContaining({ effect: "deny", origin: "config", reason: "config_unreadable" }),
+      payload: expect.objectContaining({ effect: "deny", origin: "config", reason: expect.stringContaining("config_unreadable") }),
     }));
   });
 
@@ -358,5 +358,83 @@ describe("!cmd approval names the prefix always will save (#650)", () => {
     });
     await shell.run("git push origin main && echo ok");
     expect(detail?.saves).toBeUndefined();
+  });
+
+  test("a pattern containing a secret is never named", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false, "ask");
+    let detail: { kind: string; value: string; saves?: string } | undefined;
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: (request) => { detail = request.detail; return false; },
+    });
+    const secret = ["s", "k", "-"].join("") + "live-abcdefghijklmnop";
+    await shell.run(`API_KEY=${secret} curl example.com`);
+    expect(detail?.saves).toBeUndefined();
+    expect(JSON.stringify(detail)).not.toContain(secret);
+  });
+
+  test("the Docker transport does not name a pattern it cannot persist", async () => {
+    const { cwd, configPath } = config(["run_command"], "KEY", true, true, "ask");
+    let detail: { kind: string; value: string; saves?: string } | undefined;
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: (request) => { detail = request.detail; return false; },
+    });
+    const result = await shell.run("git push origin main");
+    expect(result.isError).toBe(true);
+    expect(detail?.value).toContain("git push origin main");
+    expect(detail?.saves).toBeUndefined();
+  });
+});
+
+describe("!cmd fail-closed reload (#650)", () => {
+  test("a project config deleted mid-session denies instead of loading defaults", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const shell = createShellRunner({ configPath, cwd, env: process.env, allowMissingConfig: true });
+    unlinkSync(configPath);
+    const result = await shell.run("echo ok");
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("config_unreadable");
+    expect(result.output).not.toContain("ran");
+  });
+
+  test("a mode change is honored on the next run, not the creation snapshot", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const writeMode = (mode: string): void => writeFileSync(configPath, JSON.stringify({
+      ...JSON.parse(readFileSync(configPath, "utf8")),
+      permissions: { mode },
+    }));
+    writeMode("bypass");
+    const shell = createShellRunner({
+      configPath, cwd,
+      env: { ...process.env, ASTRO_HOST_SHELL_CONFIRM_BYPASS: "1" },
+    });
+    const first = await shell.run("echo ok");
+    expect(first.isError).toBe(false);
+    writeMode("ask");
+    const second = await shell.run("echo ok");
+    expect(second.isError).toBe(true);
+  });
+
+  test("a runner disabled at creation still audits the denied attempt", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config([], "KEY", false, false);
+    const shell = createShellRunner({ configPath, cwd, env: process.env });
+    expect(shell.enabled).toBe(false);
+    const result = await shell.run("echo ok");
+    expect(result.isError).toBe(true);
+    const events = readFileSync(join(cwd, ".astro/audit.jsonl"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
+    expect(events).toContainEqual(expect.objectContaining({
+      tipo: "host_shell.decision",
+      payload: expect.objectContaining({ effect: "deny", origin: "config", reason: "tool_not_allowed" }),
+    }));
   });
 });
