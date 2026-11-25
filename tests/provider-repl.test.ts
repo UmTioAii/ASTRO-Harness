@@ -53,7 +53,7 @@ test("/provider add grava, ativa e aparece na lista", async () => {
   const cfg = projectConfig(cwd);
   const add = await chat(
     cwd, cfg, home,
-    "/provider add\ncustom\nLocal\nhttp://localhost:11434/v1\n\nllama3.1\nS\nS\n/exit\n",
+    "/provider add\ncustom\nLocal\nhttp://localhost:11434/v1\nllama3.1\n\nS\nS\n/exit\n",
   );
   expect(add.exit).toBe(0);
   expect(add.stdout).toContain("salvo: local");
@@ -73,7 +73,7 @@ test("/provider remove de perfil global remove do config.json e não escreve o l
   const cwd = mkdtempSync(join(tmpdir(), "astro-provider-rm-"));
   const home = mkdtempSync(join(tmpdir(), "astro-provider-rm-home-"));
   const cfg = projectConfig(cwd);
-  await chat(cwd, cfg, home, "/provider add\ncustom\nLocal\nhttp://localhost:1/v1\n\nm1\nS\nn\n/exit\n");
+  await chat(cwd, cfg, home, "/provider add\ncustom\nLocal\nhttp://localhost:1/v1\nm1\n\nS\nn\n/exit\n");
   expect(existsSync(join(home, "config.json"))).toBe(true);
   const removed = await chat(cwd, cfg, home, "/provider remove local\n/exit\n");
   expect(removed.exit).toBe(0);
@@ -105,7 +105,7 @@ test("ativar um add em projeto com agent.profile avisa e não derruba o REPL", a
   }));
   const result = await chat(
     cwd, cfg, home,
-    "/provider add\ncustom\nLocal\nhttp://localhost:1/v1\n\nm1\nS\nS\n/exit\n",
+    "/provider add\ncustom\nLocal\nhttp://localhost:1/v1\nm1\n\nS\nS\n/exit\n",
   );
   expect(result.exit).toBe(0);
   expect(result.stdout).toContain("salvo: local");
@@ -119,7 +119,7 @@ test("add sem ativar não troca o modelo da sessão", async () => {
   const cfg = projectConfig(cwd);
   const result = await chat(
     cwd, cfg, home,
-    "/model q/m2\n/provider add\ncustom\nLocal\nhttp://localhost:1/v1\n\nm1\nS\nn\n/details\n/exit\n",
+    "/model q/m2\n/provider add\ncustom\nLocal\nhttp://localhost:1/v1\nm1\n\nS\nn\n/details\n/exit\n",
   );
   expect(result.exit).toBe(0);
   expect(result.stdout).toContain("modelo q/m2");
@@ -141,7 +141,7 @@ test("/provider add é recusado com --no-global-config e não grava arquivo", as
 
   const result = await chat(
     cwd, cfg, home,
-    "/provider add\ncustom\nLocal\nhttp://localhost:1/v1\n\nm1\nS\nn\n/exit\n",
+    "/provider add\ncustom\nLocal\nhttp://localhost:1/v1\nm1\n\nS\nn\n/exit\n",
     { ASTRO_NO_GLOBAL_CONFIG: "1" },
   );
 
