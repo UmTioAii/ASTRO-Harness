@@ -442,6 +442,7 @@ describe("!cmd fail-closed reload (#650)", () => {
     });
     const result = await shell.run("git push origin main");
     expect(result.isError).toBe(true);
+    expect(detail?.value).toBe("git push origin main");
     expect(detail?.saves).toBeUndefined();
   });
 
@@ -476,7 +477,6 @@ describe("!cmd fail-closed reload (#650)", () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
     const { cwd, configPath } = config(["run_command"], "KEY", false, false);
-    const raw = readFileSync(configPath, "utf8");
     unlinkSync(configPath);
     const home = mkdtempSync(join(tmpdir(), "astro-shell-home-"));
     writeFileSync(join(home, "config.json"), JSON.stringify({
@@ -489,8 +489,6 @@ describe("!cmd fail-closed reload (#650)", () => {
       approveTool: () => true,
     });
     expect((await shell.run("echo ok")).isError).toBe(false);
-    expect((await shell.run("echo ok")).isError).toBe(false);
-    writeFileSync(configPath, raw);
     expect((await shell.run("echo ok")).isError).toBe(false);
     writeFileSync(configPath, "{ broken");
     expect((await shell.run("echo ok")).isError).toBe(true);

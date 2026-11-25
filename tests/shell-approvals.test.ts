@@ -6,6 +6,7 @@ import { Auditor } from "../src/audit";
 import { chatApprovers, toolChoice, toolPrompt } from "../src/chat/approvers";
 import { validateConfig } from "../src/core/config";
 import { ToolExecutor } from "../src/tools/executor";
+import { configureRunCommand, runCommandTool } from "../src/tools/run-command";
 import { approvalPattern } from "../src/tools/shell-policy";
 import type { Tool, ToolContext } from "../src/tools/types";
 import { installNoDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
@@ -248,4 +249,13 @@ describe("shell.approvals config (#599)", () => {
     };
     expect(validateConfig(raw).shell?.approvals).toEqual([{ match: "echo *", effect: "allow" }]);
   });
+});
+
+test("always degrades instead of saving outside the host transport (#650)", async () => {
+  const mod = await isolatedRunCommand("always-disabled");
+  const dir = dirOf();
+  const configPath = join(dir, "astro.config.json");
+  mod.configureRunCommand({ mode: "disabled", configPath });
+  const saved = mod.runCommandTool.rememberApproval!({ command: "git push origin main" }, ctxOf(dir));
+  expect(saved).toMatchObject({ ok: false, reason: expect.stringContaining("transport") });
 });
