@@ -486,6 +486,26 @@ describe("!cmd fail-closed reload (#650)", () => {
     expect(mock.hostEnvs.at(-1)?.ACME_VAULT_REF).toBeUndefined();
   });
 
+  test("a reload denied by the allowlist still learns secret names (#650)", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "OTHER_REF", false, false);
+    const raw = readFileSync(configPath, "utf8");
+    const shell = createShellRunner({
+      configPath, cwd,
+      env: { ...process.env, ACME_VAULT_REF: "s3cr3t-value" },
+      approveTool: () => true,
+    });
+    expect((await shell.run("echo ok")).isError).toBe(false);
+    const deniedConfig = JSON.parse(raw.replace('"OTHER_REF"', '"ACME_VAULT_REF"')) as { agent: { tools: string[] } };
+    deniedConfig.agent.tools = [];
+    writeFileSync(configPath, JSON.stringify(deniedConfig));
+    expect((await shell.run("echo ok")).isError).toBe(true);
+    writeFileSync(configPath, raw);
+    expect((await shell.run("echo ok")).isError).toBe(false);
+    expect(mock.hostEnvs.at(-1)?.ACME_VAULT_REF).toBeUndefined();
+  });
+
   test("a config deny audits the runtime permission mode and its code", async () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
