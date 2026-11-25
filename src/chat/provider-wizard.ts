@@ -1,11 +1,14 @@
-/** Wizard linear de `/provider add|edit`: prompts no REPL, sem tocar segredo. */
+/** Shared provider wizard (#629): one flow for the REPL and the TUI and one vault write path. */
 import { PROVIDER_CATALOG, type CatalogEntry } from "../providers/catalog";
 import type { ProfileDraft, ProfileManager, ProfileView } from "../providers/profile-manager";
 import type { ProfileModel, ProviderProfile } from "../providers/profiles";
+import { isEnvName, isVaultCredentialRef, looksLikeSecret } from "../secrets";
 
 export interface WizardIO {
-  read(prompt: string): Promise<string | null>;
+  read(prompt: string, opts?: { secret?: boolean }): Promise<string | null>;
   write(text: string): void;
+  /** TUI renders an arrow selector; without it the answer is typed as text. */
+  select?(label: string, options: readonly string[], initial?: number): Promise<number | null>;
 }
 
 export interface WizardOptions {
@@ -16,6 +19,14 @@ export interface WizardOptions {
   onUse?: (id: string) => void;
   /** Last check before saving; a returned message aborts without writing. */
   validate?: (draft: ProfileDraft) => string | undefined;
+  /**
+   * #629: the single vault write path. The TUI passes `createSecretHandlers`;
+   * without it a pasted secret is refused and only an env name is accepted.
+   */
+  saveSecret?: (providerId: string, secret: string) => string;
+  discardSecret?: (ref: string) => void;
+  /** `ask` (REPL default) or `never` (the TUI activates after the wizard returns). */
+  activate?: "ask" | "never";
 }
 
 const DEFAULT_CONTEXT = 128_000;
@@ -35,6 +46,23 @@ async function ask(io: WizardIO, label: string, fallback: string): Promise<strin
   return trimmed === "" ? fallback : trimmed;
 }
 
+async function choose(io: WizardIO, label: string, options: readonly string[], initial = 0): Promise<number | undefined> {
+  if (io.select !== undefined) {
+    const index = await io.select(label, options, initial);
+    return index === null ? undefined : index;
+  }
+  const answer = await io.read(`${label} [${options.join("/")}]: `);
+  if (answer === null) return undefined;
+  const value = answer.trim();
+  if (value === "") return initial;
+  const index = options.indexOf(value);
+  if (index < 0) {
+    io.write(`unknown option: "${value}"`);
+    return undefined;
+  }
+  return index;
+}
+
 function modelsFrom(ids: string, known: readonly ProfileModel[]): ProfileModel[] {
   return ids
     .split(/[;,]/)
@@ -52,6 +80,59 @@ function catalogFor(key: string): CatalogEntry | undefined {
   return PROVIDER_CATALOG.find((entry) => entry.key === key);
 }
 
+export interface SaveProviderOptions {
+  manager: ProfileManager;
+  mode: "add" | "edit";
+  profile?: ProviderProfile;
+  draft: ProfileDraft;
+  /** Pending pasted key; the only path that writes the vault. */
+  secret?: string;
+  saveSecret?: (providerId: string, secret: string) => string;
+  discardSecret?: (ref: string) => void;
+}
+
+export interface SaveProviderResult {
+  saved?: ProfileView;
+  error?: string;
+}
+
+/**
+ * Single provider persistence path (#629): the profile first, then the vault ref,
+ * with rollback when a later step fails. A vault failure on edit keeps the old ref;
+ * a profile failure after the vault write discards the new credential.
+ */
+export function saveProviderProfile(opts: SaveProviderOptions): SaveProviderResult {
+  if (opts.secret !== undefined && opts.saveSecret === undefined) {
+    return { error: "cofre de credenciais indisponível nesta tela; use uma variável de ambiente" };
+  }
+  let saved: ProfileView | undefined;
+  let addedId: string | undefined;
+  let createdRef: string | undefined;
+  try {
+    if (opts.secret !== undefined && opts.profile !== undefined) {
+      // Edit: the vault write happens before the profile; a failure keeps the old ref.
+      createdRef = opts.saveSecret!(opts.profile.id, opts.secret);
+      saved = opts.manager.edit(opts.profile.id, { ...opts.draft, credentialRef: createdRef });
+    } else if (opts.profile === undefined) {
+      saved = opts.manager.add(opts.draft);
+      addedId = saved.id;
+      if (opts.secret !== undefined) {
+        createdRef = opts.saveSecret!(saved.id, opts.secret);
+        saved = opts.manager.edit(saved.id, { ...opts.draft, credentialRef: createdRef });
+      }
+    } else {
+      saved = opts.manager.edit(opts.profile.id, opts.draft);
+    }
+  } catch (error) {
+    if (createdRef !== undefined) opts.discardSecret?.(createdRef);
+    if (addedId !== undefined) {
+      try { opts.manager.remove(addedId); } catch { /* preserva o erro original */ }
+    }
+    return { error: messageOf(error) };
+  }
+  return { saved };
+}
+
 export async function runProviderWizard(
   io: WizardIO,
   manager: ProfileManager,
@@ -61,19 +142,16 @@ export async function runProviderWizard(
   let entry: CatalogEntry | undefined;
 
   if (opts.mode === "add") {
-    const keys = PROVIDER_CATALOG.map((item) => item.key).join("/");
-    const choice = await ask(io, `catálogo [${keys}/custom]`, "custom");
-    if (choice === undefined) return undefined;
-    if (choice !== "custom") {
-      entry = catalogFor(choice);
-      if (entry === undefined) {
-        io.write(`catálogo desconhecido: "${choice}"`);
-        return undefined;
-      }
+    const options = ["custom", ...PROVIDER_CATALOG.map((item) => item.key)];
+    const index = await choose(io, "De onde partir?", options, 0);
+    if (index === undefined) return undefined;
+    if (index > 0) {
+      entry = catalogFor(options[index]!);
+      if (entry === undefined) return undefined;
     }
   }
 
-  const name = await ask(io, "nome", current?.name ?? opts.initialName ?? entry?.name ?? "");
+  const name = await ask(io, "Nome", current?.name ?? opts.initialName ?? entry?.name ?? "");
   if (name === undefined || name === "") {
     io.write("cancelado");
     return undefined;
@@ -82,50 +160,61 @@ export async function runProviderWizard(
   const knownModels = [...(current?.models ?? []), ...(entry?.models ?? [])];
 
   let baseUrl: string | undefined;
-  let credentialRef: string | undefined;
   let credentialsPath: string | undefined;
 
   if (kind === "codex-oauth") {
     credentialsPath = await ask(
       io,
-      "credenciais (arquivo)",
+      "Credenciais (arquivo)",
       current?.credentialsPath ?? entry?.credentialsPath ?? "~/.codex/auth.json",
     );
     if (credentialsPath === undefined) return undefined;
   } else {
-    baseUrl = await ask(io, "base url", current?.baseUrl ?? entry?.baseUrl ?? "");
-    if (baseUrl === undefined) return undefined;
-    if (baseUrl === "") {
-      io.write("base url é obrigatória");
-      return undefined;
-    }
     for (;;) {
-      credentialRef = await ask(
-        io,
-        "key variable NAME (blank = no key; the key itself belongs in the vault)",
-        current?.credentialRef ?? entry?.credentialRef ?? "",
-      );
-      if (credentialRef === undefined) return undefined;
-      if (credentialRef === "") {
-        credentialRef = undefined;
-        break;
-      }
-      if (ENV_NAME.test(credentialRef)) break;
-      // Never echo the answer: a pasted key must not reach a log, audit or prompt (I-03).
-      io.write("invalid key variable: enter an environment variable NAME (e.g. OPENAI_API_KEY), not the key");
+      baseUrl = await ask(io, "Base URL", current?.baseUrl ?? entry?.baseUrl ?? "");
+      if (baseUrl === undefined) return undefined;
+      if (baseUrl !== "") break;
+      io.write("base url é obrigatória");
     }
   }
 
-  const modelsAnswer = await ask(
-    io,
-    "modelos (separe com ;)",
-    (current?.models ?? entry?.models ?? []).map((model) => model.id).join(";"),
-  );
-  if (modelsAnswer === undefined) return undefined;
-  const models = modelsFrom(modelsAnswer, knownModels);
-  if (models.length === 0) {
+  let models: ProfileModel[] = [];
+  for (;;) {
+    const modelsAnswer = await ask(
+      io,
+      "Modelos (separe com ;)",
+      (current?.models ?? entry?.models ?? []).map((model) => model.id).join(";"),
+    );
+    if (modelsAnswer === undefined) return undefined;
+    models = modelsFrom(modelsAnswer, knownModels);
+    if (models.length > 0) break;
     io.write("informe ao menos um modelo");
-    return undefined;
+  }
+
+  let credentialRef = current?.credentialRef;
+  let secret: string | undefined;
+  if (kind !== "codex-oauth") {
+    for (;;) {
+      const suffix = credentialRef === undefined ? "" : ` [${credentialRef}]`;
+      const answer = await io.read(`Variável da chave (vazio = sem chave)${suffix}: `, { secret: true });
+      if (answer === null) return undefined;
+      const value = answer.trim();
+      if (value === "") break;
+      if (looksLikeSecret(value)) {
+        if (opts.saveSecret === undefined) {
+          io.write("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
+          continue;
+        }
+        secret = value;
+        credentialRef = undefined;
+        break;
+      }
+      if (isEnvName(value) || isVaultCredentialRef(value)) {
+        credentialRef = value;
+        break;
+      }
+      io.write("use o nome da variável (ex.: OPENAI_API_KEY) ou cole a chave completa");
+    }
   }
 
   const quotaDomain = current?.quotaDomain ?? entry?.quotaDomain ?? entry?.key;
@@ -148,34 +237,39 @@ export async function runProviderWizard(
 
   io.write([
     `${opts.mode === "edit" ? "editar" : "novo"} provider: ${draft.name}`,
-    `  kind:    ${draft.kind}`,
+    `  nome:    ${draft.name}`,
     ...(draft.baseUrl === undefined ? [] : [`  baseUrl: ${draft.baseUrl}`]),
     ...(draft.credentialsPath === undefined ? [] : [`  arquivo: ${draft.credentialsPath}`]),
     `  modelos: ${draft.models.map((model) => model.id).join(", ")}`,
-    ...(draft.credentialRef === undefined ? [] : [`  chave:   ${draft.credentialRef}`]),
+    `  chave:   ${secret !== undefined ? "vault:<novo>" : draft.credentialRef ?? "-"}`,
   ].join("\n"));
-  const confirm = await ask(io, "salvar? [S/n]", "S");
+  const confirm = await ask(io, "Confirmar", "S");
   if (confirm === undefined || confirm.toLowerCase().startsWith("n")) {
     io.write("cancelado");
     return undefined;
   }
 
-  let saved: ProfileView;
-  try {
-    saved = opts.mode === "edit"
-      ? manager.edit(current?.id ?? draft.name, draft)
-      : manager.add(draft);
-  } catch (error) {
-    io.write(`erro: ${messageOf(error)}`);
+  const result = saveProviderProfile({
+    manager,
+    mode: opts.mode,
+    ...(current === undefined ? {} : { profile: current }),
+    draft,
+    ...(secret === undefined ? {} : { secret }),
+    ...(opts.saveSecret === undefined ? {} : { saveSecret: opts.saveSecret }),
+    ...(opts.discardSecret === undefined ? {} : { discardSecret: opts.discardSecret }),
+  });
+  if (result.saved === undefined) {
+    io.write(`erro: ${result.error ?? "falha ao salvar"}`);
     return undefined;
   }
+  const saved = result.saved;
 
   if (draft.credentialRef !== undefined && !manager.credentialPresent(draft.credentialRef)) {
     io.write(`! ${draft.credentialRef} não encontrada no ambiente; exporte antes de usar`);
   }
 
-  if (opts.mode === "add") {
-    const activate = await ask(io, "ativar agora? [S/n]", "S");
+  if (opts.mode === "add" && opts.activate !== "never") {
+    const activate = await ask(io, "ativar agora?", "S");
     if (activate !== undefined && !activate.toLowerCase().startsWith("n")) {
       try {
         manager.use(saved.id);
