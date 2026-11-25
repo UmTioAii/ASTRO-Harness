@@ -90,6 +90,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
   // Fail-closed igual ao caminho do app (I-11): host é o default (#599) com
   // aprovação por comando; `sandbox: true`/`"docker"` exige o container.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
+  let liveTransport: string = runCommandMode;
+  let liveMode: PermissionMode = creationMode;
   if (!config.agent.tools.includes("run_command")) {
     return {
       enabled: false,
@@ -149,20 +151,16 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
           allowMissing: opts.allowMissingConfig === true && !configSeen,
           ...(opts.env === undefined ? {} : { env: opts.env }),
         }).config;
-        configSeen = true;
+        if (existsSync(opts.configPath)) configSeen = true;
       } catch (error) {
         const code = error instanceof ConfigError && error.code !== undefined
           ? error.code
           : !existsSync(opts.configPath) ? "config_not_found" : "config_read_failed";
-        const runtimeMode = resolvePermissionMode(
-          opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
-          config.permissions.mode,
-        );
         return denyForConfig(
           "config_unreadable",
           `config_unreadable (${code}): the shell refuses to run without re-reading the config; restore the file and retry`,
-          runCommandMode,
-          runtimeMode,
+          liveTransport,
+          liveMode,
           code,
         );
       }
@@ -171,6 +169,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         current.permissions.mode,
       );
       const effectiveRunCommandMode = resolveRunCommandMode(current.tools?.run_command?.sandbox);
+      liveTransport = effectiveRunCommandMode;
+      liveMode = currentMode;
       if (!current.agent.tools.includes("run_command")) {
         return denyForConfig(
           "tool_not_allowed",
