@@ -25,9 +25,10 @@ and only active path, with `off` disabling it; the Docker code stays in
   command and every subcommand is evaluated; the prompt names the triggering part and an
   unparsable command is refused before execution.
 - `once` approves one call; `always` writes a prefix rule in `shell.approvals` in the
-  project layer (a configured `deny` still wins); `reject` revokes the session grants
-  and denies the current call — there is no pending queue. `external_directory`
-  outranks a rule `allow` when the cwd or an inferred target leaves the project.
+  project layer (a configured `deny` still wins) only on the host, never on Docker;
+  `reject` revokes the session grants and denies the current call — no pending queue.
+  `external_directory` outranks a rule `allow`. A `!cmd` re-reads the config per run:
+  a failed read denies (`config_unreadable`) and a removed `run_command` disables it.
 - `bypass` still needs `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1`: every host command,
   including the human `!cmd` channel, is refused without it.
 - Shell-risk consent is captured once at the interactive gate, next to the terms, and
@@ -39,9 +40,8 @@ and only active path, with `off` disabling it; the Docker code stays in
   `stage` (`gate`/`execution`), `tool`, `transport` and `permissionMode`; an execution
   `allow` carries the selected `shell`, and `tests.result` carries the same hash instead
   of the argv. The raw command and the output never enter audit or ledger (D-11, I-03).
-- The hash is 16 hex of an unsalted SHA-256: it correlates records of one command, but a
-  short command is recoverable by enumeration; without a pepper (not in alpha.5), the
-  audit is command-equivalent metadata.
+- The hash is 16 hex of an unsalted SHA-256 (no pepper in alpha.5): it correlates one
+  command, but a short command is recoverable by enumeration (D-11).
 
 ## Consequences
 

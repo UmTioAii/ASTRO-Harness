@@ -12,7 +12,7 @@
  */
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { sanitizePromptText } from "./sanitize-external";
+import { redactSecrets, sanitizePromptText } from "./sanitize-external";
 import { ToolError, isToolClass, type SideEffects, type Tool, type ToolClass, type ToolManifest } from "./tools/types";
 
 export type PermissionMode = "bypass" | "allow-edits" | "ask";
@@ -285,7 +285,12 @@ export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined
 export function normalizeApprovalDetail(detail: ApprovalDetail): ApprovalDetail | undefined {
   const value = detailValue(detail.value);
   if (value === undefined) return undefined;
-  const saves = detail.saves === undefined ? undefined : detailValue(detail.saves);
+  // Defence in depth (#650): a supplied `saves` must pass the redactor too. A
+  // pattern that changes is dropped; the prompt never shows a secret.
+  const safeSaves = detail.saves !== undefined && redactSecrets(detail.saves) === detail.saves
+    ? detail.saves
+    : undefined;
+  const saves = safeSaves === undefined ? undefined : detailValue(safeSaves);
   return {
     kind: detail.kind,
     value: elideDetailValue(value, APPROVAL_DETAIL_MAX_CHARS),

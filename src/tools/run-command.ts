@@ -9,7 +9,7 @@ import { isSecretEnvName } from "../secrets";
 import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
 import { realpathPreservingDots, isWithin } from "./paths";
 import { evaluateShellPolicy, approvalPattern, shellCommandHash, EXTERNAL_DIRECTORY, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
-import { persistShellApproval } from "./shell-approvals";
+import { approvalSaveProblem, persistShellApproval } from "./shell-approvals";
 import { ToolError, type ApprovalSave, type AuditLike, type Tool, type ToolContext, type ToolDecisionAudit, type ToolPermissionHint, type ToolResult } from "./types";
 
 /** Teto da saída devolvida ao modelo (run_command e run_tests). */
@@ -796,10 +796,19 @@ function runCommandDetail(input: unknown, ctx?: ToolContext): ApprovalDetail | u
   if (command === undefined) return undefined;
   const policy = ctx === undefined ? undefined : shellPolicyFor(command, ctx.cwd);
   const part = policy?.trigger;
-  // #650: name the prefix `always` persists, so approving does not hide a wider rule.
-  const saves = policy !== undefined && policy.origin !== "unparsable" && policy.origin !== "external_directory"
+  // #650: name the prefix `always` persists, but only when it actually can:
+  // Docker never saves (no per-call approval), and the same checks as
+  // `persistShellApproval` (wildcard, secret, length, file, cap) must pass.
+  const candidate = commandMode !== "docker" && policy !== undefined
+    && policy.origin !== "unparsable" && policy.origin !== "external_directory"
     && policy.uncovered?.length === 1
     ? approvalPattern(policy.uncovered[0]!)
+    : undefined;
+  const configPath = ctx === undefined || projectConfigPath === undefined
+    ? undefined
+    : resolve(ctx.cwd, projectConfigPath);
+  const saves = candidate !== undefined && approvalSaveProblem(candidate, configPath) === undefined
+    ? candidate
     : undefined;
   const value = part !== undefined && part !== command.trim() ? `${command} (part: ${part})` : command;
   return { kind: "command", value: redactSecrets(value), ...(saves === undefined ? {} : { saves }) };
