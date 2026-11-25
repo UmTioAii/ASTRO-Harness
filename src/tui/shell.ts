@@ -75,7 +75,8 @@ function secretEnvNamesFor(config: ReturnType<typeof loadEffectiveConfig>["confi
  * desabilitado (I-01); sandbox e timeout vêm da config e da manifest.
  */
 export function createShellRunner(opts: ShellOptions): ShellRunner {
-  const existedAtCreation = existsSync(opts.configPath);
+  // A layer seen once cannot fall back to defaults if deleted later (#650).
+  let configSeen = existsSync(opts.configPath);
   const config = loadEffectiveConfig(opts.configPath, {
     allowMissing: opts.allowMissingConfig === true,
     ...(opts.env === undefined ? {} : { env: opts.env }),
@@ -144,19 +145,22 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       let current: typeof config;
       try {
         current = loadEffectiveConfig(opts.configPath, {
-          // A file that existed at creation cannot silently fall back to defaults
-          // when deleted mid-session (#650); one that never existed may still be
-          // created later and is picked up here.
-          allowMissing: opts.allowMissingConfig === true && !existedAtCreation,
+          // A seen config cannot silently fall back to defaults when deleted (#650).
+          allowMissing: opts.allowMissingConfig === true && !configSeen,
           ...(opts.env === undefined ? {} : { env: opts.env }),
         }).config;
+        configSeen = true;
       } catch (error) {
         const code = error instanceof ConfigError && error.code !== undefined ? error.code : "config_read_failed";
+        const runtimeMode = resolvePermissionMode(
+          opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
+          config.permissions.mode,
+        );
         return denyForConfig(
           `config_unreadable:${code}`,
           `config_unreadable (${code}): the shell refuses to run without re-reading the config; restore the file and retry`,
           runCommandMode,
-          creationMode,
+          runtimeMode,
         );
       }
       const currentMode = resolvePermissionMode(
