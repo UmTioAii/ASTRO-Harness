@@ -14,14 +14,14 @@ One-line summary: what ASTRO should adopt, and explicitly not adopt, from how tw
 
 | # | Item | Why it improves ASTRO | Slice |
 |---|---|---|---|
-| A1 | **Config application boundary** — a change applies at a defined point (next model call, next step or next turn) and never rewrites an attempt already resolving or streaming | Neither harness states this for the whole run; today ASTRO is silent about it, so behaviour is accidental | ADR + test |
-| A2 | **Typed broken-reference error** — an explicit `provider/model` that no longer resolves fails before the request with an actionable message (restore, switch, or run an explicit migration) | The comparable code fails with a generic "model unavailable" after the fact, or falls back silently; a silent fallback changes cost, destination and billed account | Small: typed error + tests |
-| A3 | **Atomic endpoint + credential snapshot per attempt** — provider, model, endpoint and credential version are captured together | Prevents "new endpoint with old secret" and "old endpoint with new secret", a failure mode the review considers plausible | Medium: snapshot object + tests |
-| A4 | **Retry boundaries** — retry stays reactive (`retry-after`); abort, bad request and permission failures never retry, and authentication gets an explicit policy rather than an implicit one **(verify)** | Keeps ASTRO's retry policy explicit instead of drifting into "retry on any error" | Small: policy test |
-| A5 | **Destructive-operation confirmation and audit** — removing a provider or credential is confirmed, audited, and reports references that would break **(verify)** | One harness confirms only in its TUI, another only in its CLI, and config edits are unguarded; ASTRO has an audit substrate to hang this on | Small: confirm + event |
-| A6 | **Doctor: broken references** — `astro doctor` names stale provider/model references (redacted) next to today's checks **(verify)** | One source has a redacted doctor but not this check; ASTRO already redacts the checks it has | Small: one check + test |
-| A7 | **Served model per turn** — the ledger already records model and route per billable request; expose it interactively **(verify)** | Both sources track it; only one persists it with the message | Small: view |
-| A8 | **Export policy** — credentials are never exported through a common API or diagnostics; any export is an explicit, separate operation | One source exposes raw values through a credential endpoint and an auth export; ASTRO's I-03 forbids that by construction | ADR line |
+| PL-1 | **Config application boundary** — a change applies at a defined point (next model call, next step or next turn) and never rewrites an attempt already resolving or streaming | Neither harness states this for the whole run; today ASTRO is silent about it, so behaviour is accidental | ADR + test |
+| PL-2 | **Typed broken-reference error** — an explicit `provider/model` that no longer resolves fails before the request with an actionable message (restore, switch, or run an explicit migration) | The comparable code fails with a generic "model unavailable" after the fact, or falls back silently; a silent fallback changes cost, destination and billed account | Small: typed error + tests |
+| PL-3 | **Atomic endpoint + credential snapshot per attempt** — provider, model, endpoint and credential version are captured together | Prevents "new endpoint with old secret" and "old endpoint with new secret", a failure mode the review considers plausible | Medium: snapshot object + tests |
+| PL-4 | **Retry boundaries** — retry stays reactive (`retry-after`); abort, bad request and permission failures never retry, and authentication gets an explicit policy rather than an implicit one **(verify)** | Keeps ASTRO's retry policy explicit instead of drifting into "retry on any error" | Small: policy test |
+| PL-5 | **Destructive-operation confirmation and audit** — removing a provider or credential is confirmed, audited, and reports references that would break **(verify)** | One harness confirms only in its TUI, another only in its CLI, and config edits are unguarded; ASTRO has an audit substrate to hang this on | Small: confirm + event |
+| PL-6 | **Doctor: broken references** — `astro doctor` names stale provider/model references (redacted) next to today's checks **(verify)** | One source has a redacted doctor but not this check; ASTRO already redacts the checks it has | Small: one check + test |
+| PL-7 | **Served model per turn** — the ledger records provider, model, credential reference, profile and fallbacks per billable request, but not the routed purpose; expose the served model interactively and decide whether the route must be recorded too | Both sources track the served model; only one persists it with the message | Small: view + one ledger field |
+| PL-8 | **Export policy** — credentials are never exported through a common API or diagnostics; any export is an explicit, separate operation | One source exposes raw values through a credential endpoint and an auth export; ASTRO's I-03 forbids that by construction | ADR line |
 
 ## Rejected on purpose
 
@@ -52,7 +52,7 @@ Credential pools and rotation. The source documents rotation in one harness for 
 
 - How a removed provider or a stale explicit model reference actually behaves today (typed error vs generic, and whether any path falls back).
 - Whether any reload path can apply a partially written config (ASTRO validates strictly; confirm the reload path, not just the loader).
-- The current retry policy, including whether an authentication failure can trigger a retry at all (A4).
-- Whether every `astro doctor` check passes through the redacting wrapper, so a new broken-reference check inherits it (A6).
-- Which audit event, if any, a provider or credential removal writes today, and whether it names the removed reference without the secret (A5).
-- Whether the ledger records **both** model and route per billable request, and whether that is enough to answer "which model served this turn" without a new store (A7).
+- The current retry policy against a pass criterion: retry only for `transient_rate_limit`, `outage` or `network_timeout`, never for `auth`, `invalid_request` or `hard_quota` (D-18, `src/providers/policy.ts`), and record the result (PL-4).
+- Whether every `astro doctor` check passes through the redacting wrapper, so a new broken-reference check inherits it (PL-6).
+- Which audit event, if any, a provider or credential removal writes today, and whether it names the removed reference without the secret (PL-5).
+- Whether the ledger records **both** model and route per billable request, and whether that is enough to answer "which model served this turn" without a new store (PL-7).
