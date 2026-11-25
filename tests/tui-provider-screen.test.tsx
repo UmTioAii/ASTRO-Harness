@@ -676,6 +676,49 @@ test("falha do cofre em edição preserva a credencial antiga (#351)", async () 
   }
 });
 
+test("editar com chave colada grava no cofre pelo caminho compartilhado (#629)", async () => {
+  const m = manager();
+  const added = m.add({
+    name: "Casa", kind: "openai-compat", baseUrl: "https://casa.example/v1", credentialRef: "KEY",
+    models: [{ id: "m1", tags: ["writing-code"], context: 8192 }],
+  });
+  let savedProvider = "";
+  let savedSecret = "";
+  const instance = render(
+    <ProviderScreen
+      manager={m}
+      colors={colors}
+      initial={{ mode: "edit", target: added.id }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+      onSaveSecret={(providerId, secret) => {
+        savedProvider = providerId;
+        savedSecret = secret;
+        return "vault:cred-87654321";
+      }}
+    />,
+  );
+  try {
+    await waitFor(() => frame(instance).includes("Editar casa"));
+    for (const label of ["Base URL", "Modelos", "Variável da chave"]) {
+      instance.stdin.write("\r");
+      await waitFor(() => frame(instance).includes(label));
+    }
+    instance.stdin.write(fakeSecret);
+    await waitFor(() => frame(instance).includes("*".repeat(fakeSecret.length)));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Confirmar"));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("salvo: casa"));
+    expect(savedProvider).toBe("casa");
+    expect(savedSecret).toBe(fakeSecret);
+    expect(m.list().find((item) => item.id === "casa")?.credentialRef).toBe("vault:cred-87654321");
+    expect(frame(instance)).not.toContain(fakeSecret);
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("ref de cofre inválida desfaz o perfil e descarta a credencial criada (#351)", async () => {
   const m = manager();
   let discarded = "";
