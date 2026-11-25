@@ -69,7 +69,7 @@ In `astro.config.json`, `credentialRef` is either the name of an environment var
 
 ## Configuration
 
-ASTRO reads `astro.config.json` from the directory where you run it. A global layer at `$ASTRO_HOME/config.json` may exist; project values win, and `--no-global-config` ignores the global layer for that invocation. Flags such as `--permission-mode` and `--provider` win over both. The schema target is `2.2.0`; `astro config migrate` is the only writer that upgrades a file.
+ASTRO reads `astro.config.json` from the directory where you run it. A global layer at `$ASTRO_HOME/config.json` may exist; project values win, and `--no-global-config` ignores the global layer for that invocation. Flags such as `--permission-mode` and `--provider` win over both. The schema target is `2.2.0`; `astro config migrate` is the only command that migrates the document, and `/config run.maxTurns` writes the version as part of its opt-in.
 
 ```json
 {
@@ -102,7 +102,7 @@ Everything else has a safe default:
 | `permissions.mode` | `ask` | Whether a tool call asks, is allowed, or is denied before running. |
 | `shell.mode` | `host` | `host` runs shell commands on the host with per-command approval; `off` disables the tool. |
 
-**Turns and rounds answer different questions.** A turn is policy and appears in Control; a round is a loop valve that fires only when one turn does not converge. `unlimited` removes only that ceiling, never budget, approval or security controls. A schema 1.x file that declares `run.maxTurns` is refused until `/config run.maxTurns` opts into the new meaning; nothing is reinterpreted silently (ADR-0033).
+**Turns and rounds answer different questions.** A turn is policy and appears in Control; a round is a loop valve that fires only when one turn does not converge. `unlimited` removes only that ceiling, never budget, approval or security controls. A schema 1.x file that declares `run.maxTurns` does not load: the error asks you to confirm the new meaning and set the version explicitly (`config_migration_required`), and `astro config migrate` refuses that document by design, so it is never reinterpreted silently (ADR-0033). `/config run.maxTurns` writes the version as part of the opt-in, on a document that already loads.
 
 Budget, quota and loop guards are optional and independent:
 
@@ -214,7 +214,7 @@ These guarantees are enforced in code and covered by tests:
 | Tools outside the agent allowlist never run, and denials are audited. | I-01 |
 | File paths stay inside the working directory; symlinks and junctions are resolved. | I-11 |
 | `.astro/` and `protectedPaths` cannot be written by tools, in any permission mode. | I-11 |
-| The shell runs on the host with per-command approval, a hard block at dispatch and hashed audit; Docker is opt-in. | I-03, I-11, I-19 |
+| The shell runs on the host with per-command approval, a hard block at dispatch and hashed audit; Docker is opt-in. | I-03, I-11 |
 | Prompts are never persisted; `run.started` stores only a task hash. | D-11 |
 | In the Control profile, quotas and budgets block before spending, and the hard ceiling is physical. | I-17, #617 |
 | Provider, model or credential changes require approval, including in `bypass`. | I-08 |
@@ -252,7 +252,7 @@ Before a pull request, `bun test` and `bun run typecheck` must pass. CI adds cov
 
 ## Contributing
 
-Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first; in short: one issue per change, one branch per item, a test-first pull request with two independent reviews, and a squash merge. All repository artifacts are written in English.
+Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first; in short: one issue per change, one branch per item, a test-first pull request with two independent reviews, and a squash merge. New artifacts are written in English; the remaining Portuguese docs and CLI strings are being translated in P7 ([#606](https://github.com/UmTioAii/ASTRO-Harness/issues/606)).
 
 ## License
 
