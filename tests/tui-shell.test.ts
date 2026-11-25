@@ -429,10 +429,11 @@ describe("!cmd fail-closed reload (#650)", () => {
     }));
   });
 
-  test("a never-seen project config keeps running on defaults", async () => {
+  test("a never-seen config runs on defaults and a seen one denies after deletion", async () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
     const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const raw = readFileSync(configPath, "utf8");
     unlinkSync(configPath);
     const home = mkdtempSync(join(tmpdir(), "astro-shell-home-"));
     writeFileSync(join(home, "config.json"), JSON.stringify({
@@ -446,5 +447,11 @@ describe("!cmd fail-closed reload (#650)", () => {
     });
     expect((await shell.run("echo ok")).isError).toBe(false);
     expect((await shell.run("echo ok")).isError).toBe(false);
+    writeFileSync(configPath, raw);
+    expect((await shell.run("echo ok")).isError).toBe(false);
+    unlinkSync(configPath);
+    const denied = await shell.run("echo ok");
+    expect(denied.isError).toBe(true);
+    expect(denied.output).toContain("config_unreadable");
   });
 });
