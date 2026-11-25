@@ -25,7 +25,8 @@ and only active path, with `off` disabling it; the Docker code stays in
   command and every subcommand is evaluated; the prompt names the triggering part and an
   unparsable command is refused before execution.
 - `once` approves one call; `always` writes a prefix rule in `shell.approvals` in the
-  project layer (a configured `deny` still wins) only on the host, never on Docker;
+  project layer (a configured `deny` still wins) only on the host, never on Docker
+  or the disabled transport (elsewhere `always` degrades to `once`);
   `reject` revokes the session grants and denies the current call — no pending queue.
   `external_directory` outranks a rule `allow`. A `!cmd` re-reads the config per run:
   a failed read denies (`config_unreadable`) and a removed `run_command` disables it.

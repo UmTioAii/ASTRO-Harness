@@ -156,6 +156,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
           allowMissing: opts.allowMissingConfig === true && !configSeen,
           ...(opts.env === undefined ? {} : { env: opts.env }),
         }).config;
+        if (existsSync(opts.configPath)) configSeen = true;
       } catch (error) {
         const code = error instanceof ConfigError && error.code !== undefined
           ? error.code
