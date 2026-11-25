@@ -1,5 +1,7 @@
 # Roadmap — fases concluídas
 
+> History, not the current plan. F0–F7 are closed; the active plan is `docs/alpha.5-roadmap.md`.
+
 Objetivo: registro verificável das fases F0–F7, com issue, PR e commit de fechamento.
 
 | Cobre | Não cobre |

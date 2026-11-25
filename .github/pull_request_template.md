@@ -1,28 +1,34 @@
 Closes #
 
-## O que muda
+## What changes
 
-<!-- Uma ou duas frases. -->
+<!-- One or two sentences. -->
 
-## Como foi testado (TDD)
+## TDD evidence
 
-- RED: <!-- comando e saída resumida que falhou antes -->
-- GREEN: <!-- comando e resultado -->
+- RED: <!-- command and the short failing output, before the change -->
+- GREEN: <!-- command and the passing result -->
 
-## Invariantes tocados
+<!-- Docs or config only? State here why RED does not apply. -->
 
-<!-- I-xx ou "nenhum" -->
+## Invariants touched
+
+<!-- I-xx, or "none". -->
 
 ## Checklist
 
-- [ ] `bun test` e `bun run typecheck` passam
-- [ ] Nenhum segredo no diff, em teste, log ou audit
-- [ ] Docs afetados atualizados (e `docs/INDEX.md` se houver arquivo novo)
-- [ ] Diff até 400 linhas, ou exceção justificada abaixo
-- [ ] Revisão solicitada em contexto novo (`docs/review-checklist.md`)
+- [ ] Issue `#n` exists with testable acceptance criteria
+- [ ] Branch `<type>/<n>-<slug>` created from an up-to-date `main`
+- [ ] RED committed before GREEN (`test:` before `feat:`/`fix:`)
+- [ ] `bun test` and `bun run typecheck` pass
+- [ ] No secret in the diff, tests, log, audit or ledger (I-03)
+- [ ] Affected docs updated; a new file in `docs/` is in `docs/INDEX.md`
+- [ ] Target 200 changed lines, ceiling 400 (justify below)
+- [ ] Two fresh-context reviews requested: A security, B correctness (`docs/review-checklist.md`)
+- [ ] English artifacts: title, body, comments and commits
 
-<!-- Exceção de tamanho, se houver: -->
+<!-- Size exception, if any: -->
 
-## Revisão
+## Review
 
-<!-- Preenchido pelo revisor: Revisão: APPROVE | REQUEST_CHANGES -->
+<!-- Filled by the reviewer: Review: APPROVE | Review: REQUEST_CHANGES -->

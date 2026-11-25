@@ -1,6 +1,13 @@
+# Every ecosystem the repository actually uses: `package.json` + `bun.lock`
+# for the runtime and dev dependencies, and the pinned actions in
+# `.github/workflows/`.
 version: 2
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
       interval: "weekly"

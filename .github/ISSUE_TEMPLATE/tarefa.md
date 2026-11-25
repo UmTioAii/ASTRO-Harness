@@ -1,29 +1,33 @@
 ---
-name: Tarefa
-about: Mudança de código, teste ou doc com critério de aceite
-title: "<tipo>: "
+name: Task
+about: Code, test or docs change with testable acceptance criteria
+title: "<type>: "
 labels: ["tipo:feat"]
 ---
 
-## Objetivo
+## Objective
 
-<!-- Uma frase. O que muda para o usuário ou para o sistema. -->
+<!-- One sentence: what changes for the user or the system. -->
 
-## Critério de aceite
+## Acceptance criteria
 
-<!-- Testável. Cada item vira um teste ou uma verificação. -->
+<!-- Testable. Each item becomes a test or a check. -->
 
 - [ ]
 - [ ]
 
-## Invariantes e decisões
+## Invariants and decisions
 
-<!-- I-xx, D-xx ou "nenhum". -->
+<!-- I-xx, D-xx, ADR-NNNN or "none". -->
 
-## Fora de escopo
+## TDD starting point
 
-<!-- O que esta issue não faz, para evitar expansão. -->
+<!-- The test or check that fails first. For docs-only changes, say why RED does not apply. -->
 
-## Fase
+## Out of scope
 
-<!-- F0 a F7, conforme docs/roadmap.md -->
+<!-- What this issue does not do, to avoid scope creep. -->
+
+## Phase
+
+<!-- alpha.5 phase P0–P7 (docs/alpha.5-roadmap.md), or "post-alpha". -->

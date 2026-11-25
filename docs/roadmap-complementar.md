@@ -1,5 +1,7 @@
 # Roadmap complementar — camadas 0 a 3
 
+> History, not the current plan. These layers belong to the F0–F7 era; the active plan is `docs/alpha.5-roadmap.md`.
+
 Objetivo: itens planejados das camadas de fundação, interface, capacidades e polimento, com dependências e bloqueios.
 
 | Cobre | Não cobre |
