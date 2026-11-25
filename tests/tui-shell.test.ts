@@ -446,6 +446,45 @@ describe("!cmd fail-closed reload (#650)", () => {
     expect(detail?.saves).toBeUndefined();
   });
 
+  test("a config deny audits the transport of the last successful read (#650)", async () => {
+    mock.restore();
+    mock = installDockerSpawnMock(() => "ran\n");
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const raw = readFileSync(configPath, "utf8");
+    const shell = createShellRunner({ configPath, cwd, env: process.env, approveTool: () => true });
+    expect((await shell.run("echo ok")).isError).toBe(false);
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed.tools = { run_command: { sandbox: true } };
+    writeFileSync(configPath, JSON.stringify(parsed));
+    expect((await shell.run("echo ok")).isError).toBe(false);
+    writeFileSync(configPath, "{ broken");
+    expect((await shell.run("echo ok")).isError).toBe(true);
+    const events = readFileSync(join(cwd, ".astro/audit.jsonl"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
+    expect(events).toContainEqual(expect.objectContaining({
+      tipo: "host_shell.decision",
+      payload: expect.objectContaining({ reason: "config_unreadable", transport: "docker" }),
+    }));
+  });
+
+  test("a provider removed mid-session keeps its variable out of the child env (#650)", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "ACME_VAULT_REF", false, false);
+    const raw = readFileSync(configPath, "utf8");
+    const shell = createShellRunner({
+      configPath, cwd,
+      env: { ...process.env, ACME_VAULT_REF: "s3cr3t-value" },
+      approveTool: () => true,
+    });
+    const first = await shell.run("echo ok");
+    expect(first.isError).toBe(false);
+    expect(mock.hostEnvs.at(-1)?.ACME_VAULT_REF).toBeUndefined();
+    writeFileSync(configPath, raw.replace('"ACME_VAULT_REF"', '"OTHER_REF"'));
+    expect((await shell.run("echo ok")).isError).toBe(false);
+    expect(mock.hostEnvs.at(-1)?.ACME_VAULT_REF).toBeUndefined();
+  });
+
   test("a config deny audits the runtime permission mode and its code", async () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
@@ -477,6 +516,7 @@ describe("!cmd fail-closed reload (#650)", () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
     const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const valid = readFileSync(configPath, "utf8");
     unlinkSync(configPath);
     const home = mkdtempSync(join(tmpdir(), "astro-shell-home-"));
     writeFileSync(join(home, "config.json"), JSON.stringify({
@@ -496,5 +536,8 @@ describe("!cmd fail-closed reload (#650)", () => {
     const denied = await shell.run("echo ok");
     expect(denied.isError).toBe(true);
     expect(denied.output).toContain("config_unreadable");
+    // A valid file that appears later is picked up without a restart.
+    writeFileSync(configPath, valid);
+    expect((await shell.run("echo ok")).isError).toBe(false);
   });
 });

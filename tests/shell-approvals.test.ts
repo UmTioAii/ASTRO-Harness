@@ -8,6 +8,7 @@ import { validateConfig } from "../src/core/config";
 import { ToolExecutor } from "../src/tools/executor";
 import { configureRunCommand, runCommandTool } from "../src/tools/run-command";
 import { approvalPattern } from "../src/tools/shell-policy";
+import { approvalSaveProblem } from "../src/tools/shell-approvals";
 import type { Tool, ToolContext } from "../src/tools/types";
 import { installNoDockerSpawnMock, isolatedRunCommand, type DockerMock } from "./helpers/docker-mock";
 
@@ -249,6 +250,13 @@ describe("shell.approvals config (#599)", () => {
     };
     expect(validateConfig(raw).shell?.approvals).toEqual([{ match: "echo *", effect: "allow" }]);
   });
+});
+
+test("a prefix hiding a secret behind an invisible character is refused (#650)", () => {
+  const dir = dirOf();
+  const configPath = join(dir, "astro.config.json");
+  writeFileSync(configPath, "{}");
+  expect(approvalSaveProblem("sk-\u200Blive-abcdefghijklmnop *", configPath)).toContain("secret");
 });
 
 test("always degrades instead of saving outside the host transport (#650)", async () => {
