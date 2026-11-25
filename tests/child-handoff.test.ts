@@ -130,7 +130,7 @@ interface Harness {
 }
 type Body = Harness["bodies"][number];
 function harness(handlers: { plan: (call: number, body: Body) => Response; child: (call: number, body: Body) => Response },
-  opts: { checkpointAt?: number; planSteps?: number } = {}): Harness {
+  opts: { checkpointAt?: number; planSteps?: number; rounds?: number } = {}): Harness {
   const cwd = mkdtempSync(join(tmpdir(), "astro-child-"));
   const calls = { plan: 0, child: 0 };
   const bodies: Harness["bodies"] = [];
@@ -149,7 +149,14 @@ function harness(handlers: { plan: (call: number, body: Body) => Response; child
       plan: { model: "p/m1", maxSteps: opts.planSteps ?? 3, tools: ["task", "read_file"], permission: "full", systemPrompt: "plan-agent" },
       build: { model: "p/m1", maxSteps: 2, tools: [], permission: "write", systemPrompt: "child-agent" },
     },
-    ...(opts.checkpointAt === undefined ? {} : { run: { checkpointAt: opts.checkpointAt } }),
+    ...(opts.checkpointAt === undefined && opts.rounds === undefined
+      ? {}
+      : {
+          run: {
+            ...(opts.checkpointAt === undefined ? {} : { checkpointAt: opts.checkpointAt }),
+            ...(opts.rounds === undefined ? {} : { maxRoundsPerTurn: opts.rounds, noProgressSegments: opts.rounds }),
+          },
+        }),
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
   return { cwd, configPath, bodies, calls, server };
@@ -445,4 +452,44 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
       expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ level: "L3", source: "fallback", output: "child-recovered" });
     } finally { h.server.stop(true); }
   });
+
+  test("an evicted handle rebuilds through the ledger and audits the new run", async () => {
+    const failureSession = (body: Body): string => {
+      for (const message of body.messages) {
+        if (message.role !== "tool" || !String(message.content).includes("child_failed")) continue;
+        try { return String((JSON.parse(String(message.content)) as { session_id?: string }).session_id ?? ""); } catch { /* not json */ }
+      }
+      return "";
+    };
+    let recovered = 0;
+    const h = harness({
+      plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "first fails" })
+        : call <= 33 ? toolCall("task", { agent: "build", prompt: `filler ${call}` })
+          : call === 34 ? toolCall("task", { session_id: failureSession(body), instruction: "recover" })
+            : final("parent-final"),
+      child: (call, body) => JSON.stringify(body.messages).includes("first fails")
+        ? new Response("bad request", { status: 400 })
+        : JSON.stringify(body.messages).includes("recover")
+          ? (++recovered === 1 ? toolCall("task", { agent: "plan", prompt: "grandchild" }) : final("child-recovered"))
+          : final("filler-ok"),
+    }, { planSteps: 40, rounds: 40 });
+    try {
+      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "evict-child",
+        env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
+      expect(result.final).toBe("parent-final");
+      const failed = failureSession(h.bodies.at(-1)!);
+      const rebuilt = toolResult(h.bodies.at(-1)!);
+      // The 33rd delegation evicted the failed handle: the resume rebuilt from
+      // the ledger artifact, so the result names a new run.
+      expect(rebuilt).toMatchObject({ level: "L3", source: "fallback", output: "child-recovered" });
+      expect([failed.length > 0, rebuilt?.session_id === failed]).toEqual([true, false]);
+      const rebuiltBodies = h.bodies.filter((body) => body.messages[0]?.content === "child-agent"
+        && JSON.stringify(body.messages).includes("recover"));
+      expect(JSON.stringify(rebuiltBodies.at(-1)!.messages)).toContain("permitida para o agent");
+      // The audit keeps the chain: requested session -> rebuilt run.
+      expect(new Auditor(join(h.cwd, ".astro", "audit.jsonl")).readAll()
+        .filter((item) => item.tipo === "task.resumed").at(-1)?.payload)
+        .toMatchObject({ session: failed, resumedSession: rebuilt?.session_id });
+    } finally { h.server.stop(true); }
+  }, 180000);
 });
