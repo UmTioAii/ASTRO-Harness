@@ -30,6 +30,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/superpowers/plans/` | Ao executar uma frente do planejamento; roadmap de issues abertas em `2026-11-01-roadmap-execucao-issues-abertas.md` | 1 por frente |
 | `docs/superpowers/specs/` | Antes de implementar uma frente aprovada; anexos em `2026-11-08-anexos-attachments-design.md` (#392) | 1 por frente |
 | `docs/alpha.5-roadmap.md` | **Roadmap atual**: ordem, dependências e decisões do pacote alpha.5 | ~290, exceção temporária registrada no próprio roadmap |
+| `docs/alpha.6-provider-lifecycle.md` | Provider, model and credential lifecycle: what alpha.6 adopts, rejects and still has to decide (#668) | ~58 |
 | `docs/superpowers/specs/2026-11-21-limits-and-profiles.md` | S1/P0: limites, schema 2.0.0 e perfis Default/Control | ~127 |
 | `docs/superpowers/specs/2026-11-21-setup-wizard.md` | S1b/P0: setup da primeira execução por camada (#611) | ~78 |
 | `docs/superpowers/specs/2026-11-21-host-shell.md` | S2/P0.5: shell no host, scanner e aprovações | ~124 |
