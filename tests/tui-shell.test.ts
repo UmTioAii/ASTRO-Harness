@@ -467,20 +467,21 @@ describe("!cmd fail-closed reload (#650)", () => {
     }));
   });
 
-  test("a provider removed mid-session keeps its variable out of the child env (#650)", async () => {
+  test("a provider first seen mid-session stays secret after removal (#650)", async () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
-    const { cwd, configPath } = config(["run_command"], "ACME_VAULT_REF", false, false);
+    const { cwd, configPath } = config(["run_command"], "OTHER_REF", false, false);
     const raw = readFileSync(configPath, "utf8");
     const shell = createShellRunner({
       configPath, cwd,
       env: { ...process.env, ACME_VAULT_REF: "s3cr3t-value" },
       approveTool: () => true,
     });
-    const first = await shell.run("echo ok");
-    expect(first.isError).toBe(false);
+    expect((await shell.run("echo ok")).isError).toBe(false);
+    writeFileSync(configPath, raw.replace('"OTHER_REF"', '"ACME_VAULT_REF"'));
+    expect((await shell.run("echo ok")).isError).toBe(false);
     expect(mock.hostEnvs.at(-1)?.ACME_VAULT_REF).toBeUndefined();
-    writeFileSync(configPath, raw.replace('"ACME_VAULT_REF"', '"OTHER_REF"'));
+    writeFileSync(configPath, raw);
     expect((await shell.run("echo ok")).isError).toBe(false);
     expect(mock.hostEnvs.at(-1)?.ACME_VAULT_REF).toBeUndefined();
   });

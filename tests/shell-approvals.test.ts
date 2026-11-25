@@ -259,6 +259,16 @@ test("a prefix hiding a secret behind an invisible character is refused (#650)",
   expect(approvalSaveProblem("sk-\u200Blive-abcdefghijklmnop *", configPath)).toContain("secret");
 });
 
+test("a prefix carrying a zero-width joiner is refused, not persisted (#650)", () => {
+  const dir = dirOf();
+  const configPath = join(dir, "astro.config.json");
+  writeFileSync(configPath, "{}");
+  // Fail-safe: the sanitizer cannot tell a ZWJ emoji from a hidden secret, so
+  // `always` degrades to once instead of writing the raw prefix.
+  expect(approvalSaveProblem("\u{1F468}\u200D\u{1F469}\u200D\u{1F467} *", configPath))
+    .toContain("secret");
+});
+
 test("always degrades instead of saving outside the host transport (#650)", async () => {
   const mod = await isolatedRunCommand("always-disabled");
   const dir = dirOf();
