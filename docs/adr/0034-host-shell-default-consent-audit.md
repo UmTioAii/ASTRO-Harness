@@ -37,8 +37,8 @@ and only active path, with `off` disabling it; the Docker code stays in
   without a terminal the run proceeds (as with #479) and the gate stays the control.
 - Every shell decision appends `host_shell.decision` with `commandHash`, `effect`,
   `origin` (`rule`/`approval`/`external_directory`/`unparsable`/`consent`/`mode`/`config`),
-  `stage` (`gate`/`execution`), `tool`, `transport`, `permissionMode` and, on a config deny,
-  `code`; an execution
+  `stage` (`gate`/`execution`), `tool`, `transport`, `permissionMode` and, on a
+  `config_unreadable` deny, `code`; an execution
   `allow` carries the selected `shell`, and `tests.result` carries the same hash instead
   of the argv. The raw command and the output never enter audit or ledger (D-11, I-03).
 - The hash is 16 hex of an unsalted SHA-256 (no pepper in alpha.5): it correlates one

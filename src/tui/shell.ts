@@ -83,10 +83,6 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
   }).config;
   const auditPath = resolve(opts.cwd, config.paths.audit);
   const creationSecretEnvNames = secretEnvNamesFor(config);
-  const creationMode = resolvePermissionMode(
-    opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
-    config.permissions.mode,
-  );
   // Fail-closed igual ao caminho do app (I-11): host é o default (#599) com
   // aprovação por comando; `sandbox: true`/`"docker"` exige o container.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
@@ -102,7 +98,12 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
           run: runId, agent: "default", tipo: "host_shell.decision",
           payload: {
             tool: "run_command", transport: runCommandMode, commandHash: shellCommandHash(command.trim()),
-            effect: "deny", origin: "config", stage: "gate", permissionMode: creationMode, reason: "tool_not_allowed",
+            effect: "deny", origin: "config", stage: "gate",
+            permissionMode: resolvePermissionMode(
+              opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
+              config.permissions.mode,
+            ),
+            reason: "tool_not_allowed",
           },
         });
         return { output: "run_command não está na allowlist de agent.tools", isError: true };
