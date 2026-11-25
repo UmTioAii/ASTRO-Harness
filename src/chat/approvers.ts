@@ -44,10 +44,11 @@ export function toolPrompt(request: ToolPermissionRequest): string {
   const detail = request.detail === undefined
     ? ""
     : `, ${request.detail.kind === "command" ? "comando" : "caminho"} \`${request.detail.value}\``;
+  const saves = request.detail?.saves === undefined ? "" : `, always saves \`${request.detail.saves}\``;
   const choices = request.perCall === true
     ? "[s] once, [a] always (saves a prefix rule), [r] reject, [n] deny"
     : "[s] once, [a] always, [r] reject, [n] deny";
-  return `tool "${request.name}" (ação ${request.action}, modo ${request.mode}${detail}). ${choices}: `;
+  return `tool "${request.name}" (ação ${request.action}, modo ${request.mode}${detail}${saves}). ${choices}: `;
 }
 
 /**

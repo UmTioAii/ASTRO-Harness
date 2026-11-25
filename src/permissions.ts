@@ -163,6 +163,8 @@ export interface ApprovalDetail {
   /** `command` (comando de shell) ou `path` (caminho de arquivo); define o rótulo no prompt. */
   kind: "command" | "path";
   value: string;
+  /** Prefix rule an `always` decision would persist (#650); absent when it cannot save. */
+  saves?: string;
 }
 
 /** Teto do valor de PATH exibido no prompt (#536); comando (`run_command`) nunca é elidido (#474). */
@@ -282,9 +284,13 @@ export function approvalDetailOf(call: ToolCallLike): ApprovalDetail | undefined
  */
 export function normalizeApprovalDetail(detail: ApprovalDetail): ApprovalDetail | undefined {
   const value = detailValue(detail.value);
-  return value === undefined
-    ? undefined
-    : { kind: detail.kind, value: elideDetailValue(value, APPROVAL_DETAIL_MAX_CHARS) };
+  if (value === undefined) return undefined;
+  const saves = detail.saves === undefined ? undefined : detailValue(detail.saves);
+  return {
+    kind: detail.kind,
+    value: elideDetailValue(value, APPROVAL_DETAIL_MAX_CHARS),
+    ...(saves === undefined ? {} : { saves: elideDetailValue(saves, APPROVAL_DETAIL_MAX_CHARS) }),
+  };
 }
 
 /** Pedido de aprovação entregue ao prompt (PERM-04). */

@@ -61,8 +61,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       enabled: false,
       run: async () => ({ output: "run_command não está na allowlist de agent.tools", isError: true }),
     };
-  }
-  // Fail-closed igual ao caminho do app (I-11): host é o default (#599) com
+  }  // Fail-closed igual ao caminho do app (I-11): host é o default (#599) com
   // aprovação por comando; `sandbox: true`/`"docker"` exige o container.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
   configureRunCommand({
@@ -91,9 +90,9 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
   secretEnvNames.push(...webSearchSecretEnvNames(config));
   const modelEntry = config.models.find((model) => `${model.provider}/${model.id}` === config.agent.model);
   let loadAudited = false;
-  // Last successfully loaded view. A transient read error (or a mid-save write)
-  // must not resurrect an allow that the file already removed (#599).
-  let lastGood = config;
+  // #650: a re-read that fails denies the command. Reusing the previous view would
+  // keep running with a `deny` that the file already removed (or that was written
+  // just before the read failed).
   return {
     enabled: true,
     run: async (command, signal) => {
@@ -112,20 +111,25 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
         config.permissions.mode,
       );
-      // Reload the shell layer per run: `always` writes `shell.approvals` to the
-      // project file after the runner was created, and a narrowed config (deny,
-      // `mode: "off"`) must apply to the next command. A failed read keeps the
-      // last good view, never the creation snapshot.
+      // #650: re-read the whole shell layer per run, including agent.tools. A failed
+      // read is fail-closed; a removed run_command disables the channel immediately.
+      let current: typeof config;
       try {
-        lastGood = loadEffectiveConfig(opts.configPath, {
+        current = loadEffectiveConfig(opts.configPath, {
           allowMissing: opts.allowMissingConfig === true,
           ...(opts.env === undefined ? {} : { env: opts.env }),
         }).config;
       } catch {
-        // lastGood stays the previous successful load.
+        return {
+          output: "config_unreadable: the shell refuses to run without re-reading the config; restore the file and retry",
+          isError: true,
+        };
       }
-      const shellConfig = lastGood.shell;
-      const effectiveRunCommandMode = resolveRunCommandMode(lastGood.tools?.run_command?.sandbox);
+      if (!current.agent.tools.includes("run_command")) {
+        return { output: "run_command não está na allowlist de agent.tools", isError: true };
+      }
+      const shellConfig = current.shell;
+      const effectiveRunCommandMode = resolveRunCommandMode(current.tools?.run_command?.sandbox);
       // #474: o modo do executor decide a confirmação extra do host em `bypass`.
       configureRunCommand({
         mode: effectiveRunCommandMode,

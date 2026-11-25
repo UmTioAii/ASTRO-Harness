@@ -794,9 +794,15 @@ function runCommandPolicyHint(input: unknown, ctx: ToolContext): ToolPermissionH
 function runCommandDetail(input: unknown, ctx?: ToolContext): ApprovalDetail | undefined {
   const command = commandOf(input);
   if (command === undefined) return undefined;
-  const part = ctx === undefined ? undefined : shellPolicyFor(command, ctx.cwd).trigger;
+  const policy = ctx === undefined ? undefined : shellPolicyFor(command, ctx.cwd);
+  const part = policy?.trigger;
+  // #650: name the prefix `always` persists, so approving does not hide a wider rule.
+  const saves = policy !== undefined && policy.origin !== "unparsable" && policy.origin !== "external_directory"
+    && policy.uncovered?.length === 1
+    ? approvalPattern(policy.uncovered[0]!)
+    : undefined;
   const value = part !== undefined && part !== command.trim() ? `${command} (part: ${part})` : command;
-  return { kind: "command", value: redactSecrets(value) };
+  return { kind: "command", value: redactSecrets(value), ...(saves === undefined ? {} : { saves }) };
 }
 
 /** Executa um comando de shell no diretório de trabalho, com timeout do manifesto. */
