@@ -429,6 +429,33 @@ describe("!cmd fail-closed reload (#650)", () => {
     }));
   });
 
+  test("a config deny audits the runtime permission mode and its code", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    let mode: "ask" | "bypass" = "ask";
+    const shell = createShellRunner({
+      configPath, cwd,
+      env: { ...process.env, ASTRO_HOST_SHELL_CONFIRM_BYPASS: "1" },
+      permissionMode: () => mode,
+      approveTool: () => true,
+    });
+    expect((await shell.run("echo ok")).isError).toBe(false);
+    mode = "bypass";
+    writeFileSync(configPath, "{ broken");
+    const denied = await shell.run("echo ok");
+    expect(denied.isError).toBe(true);
+    const events = readFileSync(join(cwd, ".astro/audit.jsonl"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
+    expect(events).toContainEqual(expect.objectContaining({
+      tipo: "host_shell.decision",
+      payload: expect.objectContaining({
+        effect: "deny", origin: "config", reason: "config_unreadable",
+        permissionMode: "bypass", code: expect.stringMatching(/^config_/),
+      }),
+    }));
+  });
+
   test("a never-seen config runs on defaults and a seen one denies after deletion", async () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
