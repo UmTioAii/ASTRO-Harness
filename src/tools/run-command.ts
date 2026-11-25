@@ -848,6 +848,9 @@ export const runCommandTool: Tool = {
 
   /** `always` (#599): a prefix rule in the project layer; deny rules still win. */
   rememberApproval(input: unknown, ctx: ToolContext): ApprovalSave {
+    if (commandMode !== "host") {
+      return { ok: false, reason: "transport (always only saves a prefix rule on the host)" };
+    }
     const command = commandOf(input);
     if (command === undefined) return { ok: false, reason: "invalid_input (no command to derive a prefix from)" };
     const policy = shellPolicyFor(command, ctx.cwd);

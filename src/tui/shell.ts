@@ -148,12 +148,14 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       let current: typeof config;
       try {
         const presentBeforeLoad = existsSync(opts.configPath);
+        // Presence, not a successful load, makes the layer "seen": a corrupt file
+        // that disappears afterwards must still deny (#650).
+        if (presentBeforeLoad) configSeen = true;
         current = loadEffectiveConfig(opts.configPath, {
           // A seen config cannot silently fall back to defaults when deleted (#650).
           allowMissing: opts.allowMissingConfig === true && !configSeen,
           ...(opts.env === undefined ? {} : { env: opts.env }),
         }).config;
-        if (presentBeforeLoad) configSeen = true;
       } catch (error) {
         const code = error instanceof ConfigError && error.code !== undefined
           ? error.code
