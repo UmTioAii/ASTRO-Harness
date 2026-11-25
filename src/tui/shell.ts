@@ -182,6 +182,9 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       const effectiveRunCommandMode = resolveRunCommandMode(current.tools?.run_command?.sandbox);
       liveTransport = effectiveRunCommandMode;
       liveConfigMode = current.permissions.mode;
+      // Learn the names on every successful read, even when the allowlist denies:
+      // a provider that only exists in a denied reload is still a secret (#650).
+      for (const name of secretEnvNamesFor(current)) secretEnvNames.add(name);
       if (!current.agent.tools.includes("run_command")) {
         return denyForConfig(
           "tool_not_allowed",
@@ -200,7 +203,6 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         configPath: opts.configPath,
         ...(shellConfig?.externalDirectory === undefined ? {} : { externalDirectory: shellConfig.externalDirectory }),
       });
-      for (const name of secretEnvNamesFor(current)) secretEnvNames.add(name);
       const modelEntry = current.models.find((model) => `${model.provider}/${model.id}` === current.agent.model);
       const executor = new ToolExecutor({
         tools: [runCommandTool],
