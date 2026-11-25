@@ -797,7 +797,7 @@ function runCommandDetail(input: unknown, ctx?: ToolContext): ApprovalDetail | u
   const policy = ctx === undefined ? undefined : shellPolicyFor(command, ctx.cwd);
   const part = policy?.trigger;
   // #650: name the prefix only when `persistShellApproval` would save it.
-  const candidate = commandMode !== "docker" && policy !== undefined
+  const candidate = commandMode === "host" && policy !== undefined
     && policy.origin !== "unparsable" && policy.origin !== "external_directory"
     && policy.uncovered?.length === 1
     ? approvalPattern(policy.uncovered[0]!)
