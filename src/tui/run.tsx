@@ -11,6 +11,7 @@ import { ensureTermsAccepted, ttyTermsAsk, type TermsAsk } from "../terms";
 import { setShellConsent } from "../tools/run-command";
 import { trustChoice, trustPrompt } from "../trust";
 import { Vault, vaultPath } from "../vault";
+import { probeActiveCredential, recoverActiveCredential, writeRecoveredCredentialRef } from "./credential-boot";
 import { createSecretHandlers } from "./vault-secret";
 import { createApprovalBridge } from "./approvals";
 import { createShellRunner, type ShellRunner } from "./shell";
@@ -185,6 +186,11 @@ export async function setupProvider(
   cwd: string,
   onSaveSecret?: (providerId: string, secret: string) => string,
   onDiscardSecret?: (ref: string) => void,
+  /** #616: boot recovery opens the credential step of the saved provider. */
+  opts: {
+    initial?: { mode: "list" | "add" | "edit" | "remove" | "credential"; target?: string };
+    onCredentialRef?: (providerId: string, ref: string) => void;
+  } = {},
 ): Promise<boolean> {
   const [{ render }, { ProviderScreen }] = await Promise.all([
     import("ink"),
@@ -207,6 +213,8 @@ export async function setupProvider(
         onClose={() => finish(false)}
         onActivate={() => finish(true)}
         onChanged={() => undefined}
+        {...(opts.initial === undefined ? {} : { initial: opts.initial })}
+        {...(opts.onCredentialRef === undefined ? {} : { onCredentialRef: opts.onCredentialRef })}
         {...(onSaveSecret === undefined ? {} : { onSaveSecret })}
         {...(onDiscardSecret === undefined ? {} : { onDiscardSecret })}
       />,
@@ -262,6 +270,27 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
       env: opts.env ?? process.env,
       ...(opts.provider === undefined ? {} : { provider: opts.provider }),
     });
+    // #616: a saved provider whose credential no longer resolves gets the credential step before the chat opens.
+    const credential = await recoverActiveCredential({
+      probe: () => probeActiveCredential({
+        configPath,
+        env: opts.env ?? process.env,
+        vault,
+        allowMissing: opts.allowMissingConfig === true,
+        ...(opts.provider === undefined ? {} : { provider: opts.provider }),
+      }),
+      recover: (missing) => setupProvider(manager, cwd, saveSecret, discardSecret, {
+        initial: { mode: "credential", target: missing.provider },
+        onCredentialRef: (providerId, ref) => writeRecoveredCredentialRef({
+          missing: { ...missing, provider: providerId }, ref, configPath, env: opts.env ?? process.env,
+        }),
+      }),
+      notify: (message) => console.error(`aviso: ${redactSecrets(message)}`),
+    });
+    if (credential.kind === "declined") {
+      console.error(`erro: ${redactSecrets(credential.message)}`);
+      return 1;
+    }
     const createSession = (model?: string) => new AgentSession({
       configPath, cwd, env: opts.env ?? process.env,
       ...(opts.provider === undefined ? {} : { provider: opts.provider }),

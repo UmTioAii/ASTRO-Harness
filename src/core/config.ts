@@ -2823,12 +2823,13 @@ export function updateConfigPermissionsMode(path: string, mode: PermissionMode):
 
 /**
  * Troca só `providers.<provider>.credentialRef` (migração para o cofre,
- * #311 B.3). Aceita apenas `vault:<credentialId>` para não abrir um canal para
- * gravar segredo no arquivo (I-03).
+ * #311 B.3; recuperação no boot, #616). Aceita `vault:<credentialId>` ou nome
+ * de variável de ambiente, com a mesma regra da camada global; nunca um valor
+ * (I-03).
  */
 export function updateConfigProviderCredentialRef(path: string, provider: string, credentialRef: string): void {
-  if (!isVaultCredentialRef(credentialRef)) {
-    throw new ConfigError('credentialRef de vault inválido: use vault:<credentialId>');
+  if (!isVaultCredentialRef(credentialRef) && !isEnvName(credentialRef)) {
+    throw new ConfigError('credentialRef inválido: use "vault:<credentialId>" ou um nome de variável de ambiente', "config_invalid_schema");
   }
   updateConfigFile(path, (raw) => {
     const providers = raw.providers;
