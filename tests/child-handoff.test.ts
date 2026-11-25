@@ -130,7 +130,7 @@ interface Harness {
 }
 type Body = Harness["bodies"][number];
 function harness(handlers: { plan: (call: number, body: Body) => Response; child: (call: number, body: Body) => Response },
-  opts: { checkpointAt?: number; planSteps?: number } = {}): Harness {
+  opts: { checkpointAt?: number; planSteps?: number; rounds?: number } = {}): Harness {
   const cwd = mkdtempSync(join(tmpdir(), "astro-child-"));
   const calls = { plan: 0, child: 0 };
   const bodies: Harness["bodies"] = [];
@@ -149,7 +149,14 @@ function harness(handlers: { plan: (call: number, body: Body) => Response; child
       plan: { model: "p/m1", maxSteps: opts.planSteps ?? 3, tools: ["task", "read_file"], permission: "full", systemPrompt: "plan-agent" },
       build: { model: "p/m1", maxSteps: 2, tools: [], permission: "write", systemPrompt: "child-agent" },
     },
-    ...(opts.checkpointAt === undefined ? {} : { run: { checkpointAt: opts.checkpointAt } }),
+    ...(opts.checkpointAt === undefined && opts.rounds === undefined
+      ? {}
+      : {
+          run: {
+            ...(opts.checkpointAt === undefined ? {} : { checkpointAt: opts.checkpointAt }),
+            ...(opts.rounds === undefined ? {} : { maxRoundsPerTurn: opts.rounds, noProgressSegments: opts.rounds }),
+          },
+        }),
     paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
   }));
   return { cwd, configPath, bodies, calls, server };
@@ -282,6 +289,19 @@ describe("live child resume handle (ADR-0036, #602)", () => {
     expect(resolve(registry, { sessionId: `r1.task.${CHILD_SESSION_HANDLES_MAX}` }).plan.level).toBe("L2");
   });
 
+  test("without a live handle, only the delegating parent rebuilds from the ledger artifact", () => {
+    const ledgerArtifact = artifact();
+    const rebuilt = resolveChildResume(new ChildSessionRegistry(), {
+      sessionId: ledgerArtifact.run, instruction: "recover",
+      caller: { run: "r1", agent: ledgerArtifact.from }, artifact: ledgerArtifact,
+    });
+    expect([rebuilt.handle, rebuilt.agent, rebuilt.plan.level, rebuilt.plan.source]).toEqual([undefined, ledgerArtifact.to, "L3", "fallback"]);
+    expect(rebuilt.prompt).toContain("recover");
+    expect(codeOf(() => resolveChildResume(new ChildSessionRegistry(), {
+      sessionId: ledgerArtifact.run, instruction: "x", caller: { run: "r1", agent: "other" }, artifact: ledgerArtifact,
+    }))).toBe("resume_forbidden");
+  });
+
   test("createTaskTool refuses a resume from an agent that did not delegate", async () => {
     const registry = registryOf();
     const resume: TaskResumer = async (input) => {
@@ -291,7 +311,7 @@ describe("live child resume handle (ADR-0036, #602)", () => {
           ...(input.level === undefined ? {} : { requested: input.level }),
           caller: { run: input.run, agent: input.fromAgent },
         });
-        return { status: "ok", output: resolved.prompt, level: resolved.plan.level, source: resolved.plan.source,
+        return { status: "ok", output: resolved.prompt, sessionId: input.sessionId, level: resolved.plan.level, source: resolved.plan.source,
           restored: resolved.plan.restored, truncated: resolved.truncated };
       } catch (error) {
         if (error instanceof ChildResumeError) return { status: "error", error: error.code, message: error.message };
@@ -345,14 +365,20 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
 
   test("a resume with no live session is typed, not a fresh child run", async () => {
     const h = harness({
-      plan: (call) => call === 1 ? toolCall("task", { session_id: "r1.task.missing", instruction: "continue" }) : final("parent-final"),
+      plan: (call) => call === 1 ? toolCall("task", { session_id: "r1.task.missing", instruction: "continue" })
+        : call === 2 ? toolCall("task", { session_id: "not-a-session", instruction: "continue" })
+          : final("parent-final"),
       child: () => final("should-not-run"),
     });
     try {
       const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "resume-missing",
         env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
-      expect([result.final, h.calls.child]).toEqual(["parent-final", 0]);
-      expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ error: "session_missing", session_id: "r1.task.missing" });
+      const results = h.bodies.at(-1)!.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => JSON.parse(String(message.content)) as Record<string, unknown>);
+      // A child id of another run is an explicit refusal; junk is missing.
+      expect([result.final, h.calls.child, ...results.map((item) => item.error)])
+        .toEqual(["parent-final", 0, "resume_forbidden", "session_missing"]);
     } finally { h.server.stop(true); }
   });
 
@@ -395,4 +421,79 @@ describe("task.resume live handle (ADR-0036, #602)", () => {
       expect(JSON.stringify(resumed.messages)).not.toContain("x".repeat(RESUME_INSTRUCTION_MAX_CHARS + 1));
     } finally { h.server.stop(true); }
   });
+
+  test("a failed child names its session so L3 is reachable", async () => {
+    const h = harness({
+      plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "implement" })
+        : call === 2 ? toolCall("task", { session_id: String(toolResult(body)?.session_id), instruction: "recover" })
+          : final("parent-final"),
+      child: (call) => call === 1 ? new Response("bad request", { status: 400 })
+        : call === 2 ? toolCall("task", { agent: "plan", prompt: "grandchild" })
+          : final("child-recovered"),
+    });
+    try {
+      const result = await runTask({ configPath: h.configPath, cwd: h.cwd, task: "recover-child",
+        env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
+      expect(result.final).toBe("parent-final");
+      // The failed result names the child run, survives the session sanitizer
+      // and carries no artifact hash (a 64-hex id would be redacted).
+      const failure = toolResult(h.bodies.find((body) => body.messages[0]?.content === "plan-agent"
+        && body.messages.some((message) => message.role === "tool"))!);
+      // Bun's toMatchObject may replace a matched property with its matcher, so
+      // capture the id and assert it as a value before comparing with the ledger.
+      const sessionId = failure?.session_id;
+      expect(failure?.error).toBe("child_failed");
+      expect(String(sessionId)).toContain(".task.");
+      expect(failure).not.toHaveProperty("handoff_id");
+      const created = new Ledger(join(h.cwd, ".astro", "ledger.jsonl")).readHandoffs()
+        .filter((entry) => entry.kind === "handoff.created");
+      expect(created).toHaveLength(1);
+      expect(sessionId).toBe(created[0]!.artifact.run);
+      // The default resume of a dead session with an artifact is the L3 fallback,
+      // and the rebuilt child keeps its own allowlist (no grandchild, I-01/I-02).
+      const childBodies = h.bodies.filter((body) => body.messages[0]?.content === "child-agent");
+      const prompt = JSON.stringify(childBodies[1]!.messages);
+      expect([prompt.includes("recover"), prompt.includes("child build"), prompt.includes("implement")]).toEqual([true, true, false]);
+      expect(JSON.stringify(childBodies[2]!.messages)).toContain("permitida para o agent");
+      expect(toolResult(h.bodies.at(-1)!)).toMatchObject({ level: "L3", source: "fallback", output: "child-recovered" });
+    } finally { h.server.stop(true); }
+  });
+
+  test("an evicted handle rebuilds for a long-named run and audits the new run", async () => {
+    // A child id longer than 160 chars must still rebuild: the lookup is gated
+    // by the parent-run prefix, not by a magic length cap.
+    const longRun = "run".repeat(40);
+    const failureSession = (body: Body): string => {
+      for (const message of body.messages) {
+        if (message.role !== "tool" || !String(message.content).includes("child_failed")) continue;
+        try { return String((JSON.parse(String(message.content)) as { session_id?: string }).session_id ?? ""); } catch { /* not json */ }
+      }
+      return "";
+    };
+    const h = harness({
+      plan: (call, body) => call === 1 ? toolCall("task", { agent: "build", prompt: "first fails" })
+        : call <= 33 ? toolCall("task", { agent: "build", prompt: `filler ${call}` })
+          : call === 34 ? toolCall("task", { session_id: failureSession(body), instruction: "recover" })
+            : final("parent-final"),
+      child: (call, body) => JSON.stringify(body.messages).includes("first fails")
+        ? new Response("bad request", { status: 400 })
+        : final(JSON.stringify(body.messages).includes("recover") ? "child-recovered" : "filler-ok"),
+    }, { planSteps: 40, rounds: 40 });
+    try {
+      const result = await runTask({ runId: longRun, configPath: h.configPath, cwd: h.cwd, task: "evict-child",
+        env: testEnv({ KEY: "k" }), permissionMode: "bypass", approveTool: () => true });
+      expect(result.final).toBe("parent-final");
+      const failed = failureSession(h.bodies.at(-1)!);
+      const rebuilt = toolResult(h.bodies.at(-1)!);
+      expect([failed.startsWith(`${longRun}.task.`), failed.length > 160]).toEqual([true, true]);
+      // The 33rd delegation evicted the failed handle: the resume rebuilt from
+      // the ledger artifact, so the result names a new run.
+      expect(rebuilt).toMatchObject({ level: "L3", source: "fallback", output: "child-recovered" });
+      expect([failed.length > 0, rebuilt?.session_id === failed]).toEqual([true, false]);
+      // The audit keeps the chain: requested session -> rebuilt run.
+      expect(new Auditor(join(h.cwd, ".astro", "audit.jsonl")).readAll()
+        .filter((item) => item.tipo === "task.resumed").at(-1)?.payload)
+        .toMatchObject({ session: failed, resumedSession: rebuilt?.session_id });
+    } finally { h.server.stop(true); }
+  }, 180000);
 });
