@@ -243,7 +243,9 @@ function parseSse(
   reasoningDeclared: boolean,
 ): CompletionResponse {
   let content = "";
-  let reasoning = "";
+  // #661: one accumulator per reasoning item, so interleaved items never mix and
+  // a late delta after `output_item.done` cannot duplicate the final summary.
+  const reasoningItems = new Map<string, { text: string; done: boolean }>();
   let usage = { inputTokens: 0, outputTokens: 0 };
   let completed = false;
   const calls = new Map<string, ToolCall>();
@@ -273,7 +275,10 @@ function parseSse(
     // #661: the Responses transport reports reasoning as summary deltas, not
     // `reasoning_content`. Only a card that declares reasoning exposes them.
     if (reasoningDeclared && event.type === "response.reasoning_summary_text.delta") {
-      if (typeof event.delta === "string") reasoning += event.delta;
+      const id = typeof event.item_id === "string" ? event.item_id : "";
+      const item = reasoningItems.get(id) ?? { text: "", done: false };
+      if (!item.done && typeof event.delta === "string") item.text += event.delta;
+      reasoningItems.set(id, item);
       continue;
     }
 
@@ -282,7 +287,11 @@ function parseSse(
       // so the text is never counted twice.
       if (reasoningDeclared && event.type === "response.output_item.done") {
         const summary = reasoningSummary(event.item);
-        if (summary !== undefined) reasoning = summary;
+        const id = isRecord(event.item) && typeof event.item.id === "string" ? event.item.id : "";
+        const item = reasoningItems.get(id) ?? { text: "", done: false };
+        if (summary !== undefined) item.text = summary;
+        item.done = true;
+        reasoningItems.set(id, item);
       }
       registerFunctionCall(event, event.type === "response.output_item.done", calls, callIdByItem, callIdByIndex);
       continue;
@@ -332,6 +341,7 @@ function parseSse(
   if (!completed) {
     throw new ProviderError("outage", "stream do provider Codex terminou sem response.completed");
   }
+  const reasoning = [...reasoningItems.values()].map((item) => item.text).join("");
 
   return {
     content,
