@@ -57,7 +57,7 @@ test("add pelo catálogo persiste o quotaDomain da entrada", async () => {
 
 test("add custom sem chave e sem ativar", async () => {
   const { home, manager } = setup();
-  const { io } = fakeIO(["custom", "Ollama", "http://localhost:11434/v1", "", "llama3.1", "S", "n"]);
+  const { io } = fakeIO(["custom", "Ollama", "http://localhost:11434/v1", "llama3.1", "", "S", "n"]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view?.credentialRef).toBeUndefined();
   expect(view?.baseUrl).toBe("http://localhost:11434/v1");
@@ -66,14 +66,14 @@ test("add custom sem chave e sem ativar", async () => {
 
 test("avisa quando a variável da chave não existe", async () => {
   const { manager } = setup();
-  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "MISSING_KEY", "m1", "S", "n"]);
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", "MISSING_KEY", "S", "n"]);
   await runProviderWizard(io, manager, { mode: "add" });
   expect(out.join(" ")).toContain("MISSING_KEY não encontrada");
 });
 
 test("cancelar no confirmar não grava", async () => {
   const { home, manager } = setup();
-  const { io } = fakeIO(["custom", "X", "http://x/v1", "", "m1", "n"]);
+  const { io } = fakeIO(["custom", "X", "http://x/v1", "m1", "S", "n"]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view).toBeUndefined();
   expect(existsSync(join(home, "providers.json"))).toBe(false);
@@ -104,25 +104,25 @@ test("modelos vazios não salvam", async () => {
 
 test("credentialRef inválido é re-perguntado até virar nome de variável válido (#286)", async () => {
   const { manager } = setup({ MINHA_CHAVE: "x" });
-  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "minha chave", "MINHA_CHAVE", "m1", "S", "n"]);
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", "minha chave", "MINHA_CHAVE", "S", "n"]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view?.credentialRef).toBe("MINHA_CHAVE");
-  expect(out.join(" ")).toContain("environment variable");
+  expect(out.join(" ")).toContain("variável");
 });
 
 test("chave colada no prompt de variável não vaza na mensagem (I-03)", async () => {
   const { manager } = setup();
   const secret = "sk-sentinel-do-not-store";
-  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", secret]);
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", secret]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view).toBeUndefined();
   expect(out.join("\n")).not.toContain(secret);
-  expect(out.join("\n")).toContain("environment variable");
+  expect(out.join("\n")).toContain("cofre");
 });
 
 test("credentialRef vazio continua sem chave (#286)", async () => {
   const { manager } = setup();
-  const { io } = fakeIO(["custom", "Local", "http://localhost:1/v1", "", "m1", "S", "n"]);
+  const { io } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", "", "S", "n"]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view?.credentialRef).toBeUndefined();
 });
