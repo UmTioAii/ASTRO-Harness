@@ -67,7 +67,7 @@ done
 Repositório: apagar branch após merge e permitir só squash.
 
 ```bash
-gh api -X PATCH repos/UmTioAii/ASTRO \
+gh api -X PATCH repos/UmTioAii/ASTRO-Harness \
   -f delete_branch_on_merge=true \
   -f allow_squash_merge=true -f allow_merge_commit=false -f allow_rebase_merge=false
 ```
@@ -75,7 +75,7 @@ gh api -X PATCH repos/UmTioAii/ASTRO \
 Proteção da `main` (arquivo `.github/branch-protection.json`):
 
 ```bash
-gh api -X PUT repos/UmTioAii/ASTRO/branches/main/protection --input .github/branch-protection.json
+gh api -X PUT repos/UmTioAii/ASTRO-Harness/branches/main/protection --input .github/branch-protection.json
 ```
 
-Observação: o GitHub não deixa o autor aprovar o próprio PR. Com conta solo, `required_approving_review_count` fica em `0`, e a revisão dupla obrigatória é garantida pelos 2 veredictos no PR (`Review: APPROVE` de A e de B) e pela regra deste documento. Quando houver um segundo revisor humano, suba para `1`.
+Observação: o GitHub não deixa o autor aprovar o próprio PR. Com conta solo, `required_approving_review_count` fica em `0`, e a revisão dupla obrigatória é garantida pelos 2 veredictos no PR (`Review: APPROVE` de A e de B) e pela regra deste documento. Quando houver um segundo revisor humano, suba para `1`. Required checks aplicados: `test (ubuntu-latest)`, `test (windows-latest)` e `secrets`; `eval`, `coverage`, `audit` e `bench-mock` rodam em todo PR mas não bloqueiam por proteção (`docs/ci.md` §Política de merge).
