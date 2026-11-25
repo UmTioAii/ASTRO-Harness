@@ -1,5 +1,8 @@
 # Roadmap alpha.5 — realinhamento
 
+> Current roadmap. Issues, ADRs and specs are linked in §6; the phase table is the source
+> of truth for what is open. History of F0–F7 lives in `docs/roadmap.md`.
+
 Este documento existe porque o harness saiu do rumo. Ele não é uma lista de tarefas: é o
 contrato do produto, e cada fase abaixo deriva dele.
 
@@ -152,22 +155,23 @@ P7   docs, README e repo público
 espinha dorsal e não pode esperar o catálogo, **P5/P5.5 depois**, **P7 por último** (traduzir
 documento que ainda muda é desperdício).
 
-| ID/fase | Issue | Status | Spec | Depende de |
-|---|---|---|---|---|
-| S1/P0 | #594 | **em andamento** — schema 2.0.0 e UI do `/config` mergeados em #607/#608; runtime, spawn e `/usage` na issue | `2026-11-21-limits-and-profiles.md` | — |
-| S1b/P0 | #611 | planejado | `2026-11-21-setup-wizard.md` | #594 |
-| S2/P0.5 | #599 | planejado | `2026-11-21-host-shell.md` | #594 |
-| S5a/P1 | #600 | planejado | `2026-11-21-turn-events.md` | #594 |
-| S5/P2 | #595 | planejado | `2026-11-21-tuix-design.md` | #594, #600 |
-| S3/P3 | #601 | planejado | `2026-11-21-model-catalog.md` | #594 |
-| S4/P4 | #602 | planejado | `2026-11-21-agents-and-handoff.md` | #594, #601 |
-| S6/P5 | #603 | planejado | `2026-11-21-tools-contract.md` | — |
-| S7/P5.5 | #604 | planejado | `2026-11-21-web-tools.md` | #603 |
-| P6 | #605 | planejado | `2026-11-21-carry-over.md` | #604 |
-| S8/P7 | #606 | planejado | `2026-11-21-docs-and-public-repo.md` | todas |
+| ID/fase | Issue | Status | Spec | ADR | Depende de |
+|---|---|---|---|---|---|
+| S1/P0 | [#594](https://github.com/UmTioAii/ASTRO-Harness/issues/594) | concluído | `2026-11-21-limits-and-profiles.md` | [ADR-0033](adr/0033-turn-round-limits-and-profiles.md) | — |
+| S1b/P0 | [#611](https://github.com/UmTioAii/ASTRO-Harness/issues/611) | implementado em [#627](https://github.com/UmTioAii/ASTRO-Harness/pull/627); issue aberta | `2026-11-21-setup-wizard.md` | — | #594 |
+| S2/P0.5 | [#599](https://github.com/UmTioAii/ASTRO-Harness/issues/599) | concluído | `2026-11-21-host-shell.md` | [ADR-0034](adr/0034-host-shell-default-consent-audit.md), supersede [ADR-0031](adr/0031-shell-no-host-com-aprovacao-por-comando.md) | #594 |
+| S5a/P1 | [#600](https://github.com/UmTioAii/ASTRO-Harness/issues/600) | concluído | `2026-11-21-turn-events.md` | [ADR-0020](adr/0020-event-bus-contrato-timeline.md) | #594 |
+| S5/P2 | [#595](https://github.com/UmTioAii/ASTRO-Harness/issues/595) | concluído | `2026-11-21-tuix-design.md` | [ADR-0035](adr/0035-tui-timeline.md) | #594, #600 |
+| S3/P3 | [#601](https://github.com/UmTioAii/ASTRO-Harness/issues/601) | concluído | `2026-11-21-model-catalog.md` | — | #594 |
+| S4/P4 | [#602](https://github.com/UmTioAii/ASTRO-Harness/issues/602) | concluído | `2026-11-21-agents-and-handoff.md` | [ADR-0036](adr/0036-agents-handoff-and-resume-levels.md), [ADR-0037](adr/0037-per-account-concurrency-and-bounded-agents.md) | #594, #601 |
+| S6/P5 | [#603](https://github.com/UmTioAii/ASTRO-Harness/issues/603) | concluído | `2026-11-21-tools-contract.md` | — | — |
+| S7/P5.5 | [#604](https://github.com/UmTioAii/ASTRO-Harness/issues/604) | concluído | `2026-11-21-web-tools.md` | — | #603 |
+| P6 | [#605](https://github.com/UmTioAii/ASTRO-Harness/issues/605) | concluído | `2026-11-21-carry-over.md` | — | #604 |
+| S8/P7 | [#606](https://github.com/UmTioAii/ASTRO-Harness/issues/606) | em andamento | `2026-11-21-docs-and-public-repo.md` | — | todas |
 
-Specs em `docs/superpowers/specs/`. Todas as issues estão abertas para planejamento; só as
-marcadas **em andamento** estão em execução. Aceite e ADR ficam na spec/issue dona do contrato.
+Specs em `docs/superpowers/specs/`; ADRs em `docs/adr/`. P0 a P6 estão concluídas; resta
+P7 (#606). Correções ainda abertas no marco: #611, #629, #635, #650 e #661. Aceite e ADR
+ficam na spec/issue dona do contrato.
 
 ### P6 — Carry-over verificado
 
