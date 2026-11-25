@@ -80,9 +80,9 @@ export interface CompletionResponse {
   /** Perfil aplicado à chamada (E7): lvl/effort/thinking e proibidos removidos. */
   call?: AppliedCallProfile;
   /**
-   * Runtime-only reasoning (#600): assembled from `reasoning_content` when the
-   * model card declares reasoning. Never persisted, replayed or sent back (I-03);
-   * absent when the provider has no reasoning channel.
+   * Runtime-only reasoning (#600, #661): assembled from `reasoning_content` or
+   * Responses reasoning summaries when the model card declares reasoning. Never
+   * persisted, replayed or sent back (I-03); absent without a reasoning channel.
    */
   reasoning?: string;
 }

@@ -283,13 +283,14 @@ function parseSse(
     }
 
     if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
-      // The final summary is authoritative: it replaces the deltas already seen,
-      // so the text is never counted twice.
-      if (reasoningDeclared && event.type === "response.output_item.done") {
+      // The final summary is authoritative, including an empty one: it replaces
+      // the deltas already seen, so the text is never counted twice or replayed.
+      if (reasoningDeclared && event.type === "response.output_item.done"
+        && isRecord(event.item) && event.item.type === "reasoning") {
         const summary = reasoningSummary(event.item);
-        const id = isRecord(event.item) && typeof event.item.id === "string" ? event.item.id : "";
+        const id = typeof event.item.id === "string" ? event.item.id : "";
         const item = reasoningItems.get(id) ?? { text: "", done: false };
-        if (summary !== undefined) item.text = summary;
+        item.text = summary ?? "";
         item.done = true;
         reasoningItems.set(id, item);
       }
