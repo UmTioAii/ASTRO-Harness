@@ -287,7 +287,7 @@ export function normalizeApprovalDetail(detail: ApprovalDetail): ApprovalDetail 
   if (value === undefined) return undefined;
   // Defence in depth (#650): a supplied `saves` must pass the redactor too. A
   // pattern that changes is dropped; the prompt never shows a secret.
-  const safeSaves = detail.saves !== undefined && redactSecrets(detail.saves) === detail.saves
+  const safeSaves = detail.saves !== undefined && sanitizePromptText(detail.saves) === detail.saves
     ? detail.saves
     : undefined;
   const saves = safeSaves === undefined ? undefined : detailValue(safeSaves);

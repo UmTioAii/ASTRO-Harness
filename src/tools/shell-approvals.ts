@@ -7,7 +7,7 @@
  */
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { redactSecrets } from "../sanitize-external";
+import { sanitizePromptText } from "../sanitize-external";
 import type { ShellRule } from "./shell-policy";
 import type { ApprovalSave } from "./types";
 
@@ -36,7 +36,7 @@ export function approvalSaveProblem(pattern: string, configPath?: string): strin
   if (safePrefix(pattern) === undefined) {
     return "unsafe_pattern (the command starts with a wildcard, so it cannot be saved as a prefix)";
   }
-  if (pattern.length > MAX_PATTERN_CHARS || redactSecrets(pattern) !== pattern) {
+  if (pattern.length > MAX_PATTERN_CHARS || sanitizePromptText(pattern) !== pattern) {
     return "unsafe_pattern (the prefix contains a secret)";
   }
   if (configPath === undefined || !existsSync(configPath)) {

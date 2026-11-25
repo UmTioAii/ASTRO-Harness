@@ -82,7 +82,9 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
     ...(opts.env === undefined ? {} : { env: opts.env }),
   }).config;
   const auditPath = resolve(opts.cwd, config.paths.audit);
-  const creationSecretEnvNames = secretEnvNamesFor(config);
+  // Names seen once stay secret for the session: a provider removed from the
+  // config must not un-redact its variable (#650).
+  const secretEnvNames = new Set(secretEnvNamesFor(config));
   // Fail-closed igual ao caminho do app (I-11): host é o default (#599) com
   // aprovação por comando; `sandbox: true`/`"docker"` exige o container.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
@@ -198,7 +200,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         configPath: opts.configPath,
         ...(shellConfig?.externalDirectory === undefined ? {} : { externalDirectory: shellConfig.externalDirectory }),
       });
-      const secretEnvNames = [...new Set([...creationSecretEnvNames, ...secretEnvNamesFor(current)])];
+      for (const name of secretEnvNamesFor(current)) secretEnvNames.add(name);
       const modelEntry = current.models.find((model) => `${model.provider}/${model.id}` === current.agent.model);
       const executor = new ToolExecutor({
         tools: [runCommandTool],
@@ -217,7 +219,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         const result = await executor.run(
           {
             cwd: opts.cwd, run: runId, agent: "default",
-            env: opts.env ?? process.env, secretEnvNames,
+            env: opts.env ?? process.env, secretEnvNames: [...secretEnvNames],
             ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
             ...(opts.allowSensitive === undefined ? {} : { allowSensitive: opts.allowSensitive }),
             // Mesmo cap do run (default quando o agent usa profile de outro modelo).
