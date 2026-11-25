@@ -18,9 +18,12 @@ export interface ProviderScreenProps {
   colors: ThemeColors;
   /** Modelo `provider/id` em uso pela sessão, para diferenciar do ativo salvo. */
   currentModel?: string;
-  initial?: { mode: "list" | "add" | "edit" | "remove"; target?: string };
+  /** `credential` (#616): recovery starts at the credential step, keeping the rest of the profile. */
+  initial?: { mode: "list" | "add" | "edit" | "remove" | "credential"; target?: string };
   onClose: () => void;
   onActivate: (id: string) => void;
+  /** Recovery (#616): writes the new ref in the layer that owns the provider. */
+  onCredentialRef?: (id: string, ref: string) => void;
   onChanged?: () => void;
   /** Modelos com metadados (cards) para a troca inline de modelo por provider (#555). */
   modelInfo?: readonly ModelOption[];
@@ -89,7 +92,7 @@ export function listActions(opts: {
 }
 
 export function ProviderScreen({
-  manager, colors, currentModel, initial, onClose, onActivate, onChanged, modelInfo, onSelectModel, onTest, onLogin, onSaveSecret, onDiscardSecret,
+  manager, colors, currentModel, initial, onClose, onActivate, onChanged, modelInfo, onSelectModel, onTest, onLogin, onSaveSecret, onDiscardSecret, onCredentialRef,
 }: ProviderScreenProps): ReactElement {
   const initialList = manager.list();
   const initialTarget = initial?.target === undefined
@@ -98,6 +101,7 @@ export function ProviderScreen({
       ?? initialList.find((item) => item.name.toLowerCase() === initial.target!.toLowerCase());
   const initialEdit = initial?.mode === "edit" && initialTarget?.source === "global" ? initialTarget : undefined;
   const initialRemove = initial?.mode === "remove" && initialTarget?.source === "global" ? initialTarget : undefined;
+  const recovering = initial?.mode === "credential" ? initialTarget : undefined;
   const [view, setView] = useState<"list" | "form" | "remove" | "models">(
     initial?.mode === "add"
       ? "form"
@@ -105,15 +109,15 @@ export function ProviderScreen({
         ? initialEdit === undefined ? "list" : "form"
         : initial?.mode === "remove"
           ? initialRemove === undefined ? "list" : "remove"
-          : "list",
+          : initial?.mode === "credential" ? (recovering === undefined ? "list" : "form") : "list",
   );
   const [selected, setSelected] = useState(() => {
     if (initialTarget === undefined) return 0;
     const index = initialList.findIndex((item) => item.id === initialTarget.id);
     return index < 0 ? 0 : index;
   });
-  const [editing, setEditing] = useState<ProfileView | undefined>(initialEdit);
-  const [step, setStep] = useState<Step>(initial?.mode === "edit" ? "name" : "catalog");
+  const [editing, setEditing] = useState<ProfileView | undefined>(initialEdit ?? recovering);
+  const [step, setStep] = useState<Step>(recovering !== undefined ? "credential" : initial?.mode === "edit" ? "name" : "catalog");
   const [catalogIndex, setCatalogIndex] = useState(0);
   const [name, setName] = useState(
     initialEdit?.name ?? (initial?.mode === "add" && initial.target !== undefined ? initial.target : ""),
@@ -287,6 +291,34 @@ export function ProviderScreen({
     }
     setView("list");
     setMessage(activationError === undefined ? `salvo: ${saved.id}` : `salvo: ${saved.id} (não ativado: ${activationError})`);
+  };
+
+  /** Recovery (#616): the key goes to the vault (or an env name is kept) and only the ref is written. */
+  const recoverCredential = (): void => {
+    const target = editing;
+    if (target === undefined) return;
+    if (onCredentialRef === undefined) { setMessage("recuperação de credencial indisponível nesta tela"); return; }
+    const value = credential.trim();
+    if (value === "") { onClose(); return; } // empty = cancel, nothing written
+    let created: string | undefined;
+    let ref = value;
+    if (looksLikeSecret(value)) {
+      if (onSaveSecret === undefined) { setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente"); return; }
+      try { ref = created = onSaveSecret(target.id, value); } catch (error) { setMessage(messageOf(error)); return; }
+    } else if (!isEnvName(value) && !isVaultCredentialRef(value)) {
+      setMessage("use o nome da variável (ex.: OPENAI_API_KEY) ou cole a chave completa");
+      return;
+    }
+    try {
+      onCredentialRef(target.id, ref);
+    } catch (error) {
+      if (created !== undefined) onDiscardSecret?.(created); // no orphan key on a refused write
+      setMessage(messageOf(error));
+      return;
+    }
+    secretRef.current = undefined;
+    setCredentialIsSecret(false);
+    onActivate(target.id);
   };
 
   const startLogin = (profile: ProfileView): void => {
@@ -521,6 +553,12 @@ export function ProviderScreen({
       return;
     }
 
+    if (recovering !== undefined) {
+      // Recovery is a single step: enter saves the ref, esc cancels (#616).
+      if (key.escape) { onClose(); return; }
+      if (key.return) { recoverCredential(); return; }
+    }
+
     if (key.escape) {
       const index = STEPS.indexOf(step);
       if (index <= 0) { setView("list"); return; }
@@ -662,7 +700,7 @@ export function ProviderScreen({
     return (
       <Box flexDirection="column" borderStyle="round" paddingX={1}>
         <Text bold>{editing === undefined ? "Novo provider" : `Editar ${editing.id}`}</Text>
-        <Text>{labels[step]}</Text>
+        <Text>{recovering === undefined ? labels[step] : "Chave colada (cofre) ou variável de ambiente · vazio = cancelar"}</Text>
         {step === "catalog"
           ? CATALOG.map((item, index) => (
               <Text key={item} color={index === catalogIndex ? colors.accent : undefined}>
@@ -681,7 +719,7 @@ export function ProviderScreen({
               )
             : <Text color={colors.accent}>{step === "credential" ? "*".repeat(value.length) || " " : value || " "}</Text>}
         <Text dimColor>
-          {step === "catalog" ? "↑↓ escolher · enter continuar · esc voltar" : `${STEPS.indexOf(step) + 1}/6 · enter continuar · esc voltar`}
+          {recovering !== undefined ? "enter salvar · esc cancelar" : step === "catalog" ? "↑↓ escolher · enter continuar · esc voltar" : `${STEPS.indexOf(step) + 1}/6 · enter continuar · esc voltar`}
         </Text>
         {message === undefined ? null : <Text color={colors.error}>{message}</Text>}
       </Box>
