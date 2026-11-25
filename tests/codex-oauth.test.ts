@@ -161,3 +161,110 @@ test("usa baseUrl customizado e mapeia a conversa", async () => {
   ]);
   expect(r.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
 });
+
+const summaryEvents = (text: string): object[] => [
+  { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: text.slice(0, 6) },
+  { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: text.slice(6) },
+  {
+    type: "response.output_item.done",
+    output_index: 0,
+    item: { id: "rs1", type: "reasoning", summary: [{ type: "summary_text", text }] },
+  },
+  { type: "response.completed", response: { usage: { input_tokens: 3, output_tokens: 9 } } },
+];
+
+test("exposes reasoning summaries when the card declares reasoning (#661)", async () => {
+  const fetchFn = async () => sse(summaryEvents("passo um\npasso dois"));
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBe("passo um\npasso dois");
+  expect(r.content).toBe("");
+  // O provider já contou o reasoning em completion_tokens; não soma de novo.
+  expect(r.usage.outputTokens).toBe(9);
+});
+
+test("o resumo final vence os deltas sem duplicar o texto (#661)", async () => {
+  const events = [
+    { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: "rascunho" },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "rs1", type: "reasoning", summary: [{ type: "summary_text", text: "final" }] },
+    },
+    { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+  ];
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn: async () => sse(events) });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBe("final");
+});
+
+test("an empty final summary discards earlier deltas (#661)", async () => {
+  const events = [
+    { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: "draft" },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "rs1", type: "reasoning", summary: [] },
+    },
+    { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+  ];
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn: async () => sse(events) });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBeUndefined();
+});
+
+test("a late delta after the final summary does not duplicate it (#661)", async () => {
+  const events = [
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "rs1", type: "reasoning", summary: [{ type: "summary_text", text: "final" }] },
+    },
+    { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: "final" },
+    { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+  ];
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn: async () => sse(events) });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBe("final");
+});
+
+test("interleaved items keep their own summaries (#661)", async () => {
+  const events = [
+    { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: "a" },
+    { type: "response.reasoning_summary_text.delta", item_id: "rs2", output_index: 1, summary_index: 0, delta: "b" },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "rs1", type: "reasoning", summary: [{ type: "summary_text", text: "A-FINAL" }] },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 1,
+      item: { id: "rs2", type: "reasoning", summary: [{ type: "summary_text", text: "B-FINAL" }] },
+    },
+    { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+  ];
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn: async () => sse(events) });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBe("A-FINALB-FINAL");
+});
+
+test("card sem reasoning não expõe os summaries (#661)", async () => {
+  const p = new CodexOAuthProvider({
+    credentialsPath: authPath(4102444800),
+    fetchFn: async () => sse(summaryEvents("ignorado")),
+  });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBeUndefined();
+});
+
+test("stream sem summaries não emite reasoning nem placeholder (#661)", async () => {
+  const events = [
+    { type: "response.output_text.delta", delta: "ok" },
+    { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+  ];
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn: async () => sse(events) });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBeUndefined();
+  expect(r.content).toBe("ok");
+});

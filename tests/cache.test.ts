@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -304,4 +305,24 @@ describe("cachedProvider (F6-4)", () => {
       cache.close();
     }
   });
+});
+
+test("reasoning is never persisted or replayed from the cache (#661)", async () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), "astro-cache-")), "cache.db");
+  const cache = new CompletionCache(dbPath);
+  const inner: Provider = { complete: async () => resp({ reasoning: "PRIVATE_REASONING" }) };
+  const wrapped = cachedProvider(inner, { cache, ttlHours: 1, maxEntries: 5 });
+  const first = await wrapped.complete(req());
+  expect(first.reasoning).toBe("PRIVATE_REASONING");
+  const raw = new Database(dbPath, { readonly: true })
+    .query("SELECT response FROM cache").get() as { response: string };
+  expect(raw.response).not.toContain("PRIVATE_REASONING");
+  expect((await wrapped.complete(req())).reasoning).toBeUndefined();
+  // An entry written before the fix still loses reasoning when read.
+  const db = new Database(dbPath);
+  db.run("INSERT OR REPLACE INTO cache (key, response, created_ms) VALUES (?, ?, ?)",
+    ["legacy", JSON.stringify(resp({ reasoning: "OLD_REASONING" })), Date.now()]);
+  expect(cache.get("legacy", 1)?.reasoning).toBeUndefined();
+  db.close();
+  cache.close();
 });

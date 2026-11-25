@@ -63,7 +63,9 @@ export class CompletionCache {
       .get(key) as CacheRow | null;
     if (row === null) return null;
     if (nowMs - row.created_ms > ttlHours * 3_600_000) return null;
-    return JSON.parse(row.response) as CompletionResponse;
+    // Entries written before #661 may still carry reasoning: never replay it.
+    const { reasoning: _legacyReasoning, ...withoutReasoning } = JSON.parse(row.response) as CompletionResponse;
+    return withoutReasoning;
   }
 
   /** Armazena a resposta redigida (I-03); acima de maxEntries, remove a mais antiga. */
@@ -72,7 +74,9 @@ export class CompletionCache {
     // intacto: redigir o JSON inteiro corromperia diffs de edit/write_file no
     // replay do cache (o argumento é o contrato executável, não conteúdo).
     // O SQLite recebe 0600 no POSIX (ver construtor e docs/security-threat-matrix.md).
-    const stored = JSON.stringify({ ...response, content: redactSecrets(response.content) });
+    // #661: reasoning is never persisted (`undefined` drops the key), so a hit
+    // cannot replay it either.
+    const stored = JSON.stringify({ ...response, content: redactSecrets(response.content), reasoning: undefined });
     const tx = this.#db.transaction(() => {
       this.#db.run(
         "INSERT OR REPLACE INTO cache (key, response, created_ms) VALUES (?, ?, ?)",

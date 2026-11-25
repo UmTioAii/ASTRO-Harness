@@ -30,6 +30,8 @@ interface CodexOAuthProviderOptions {
   now?: () => number;
   /** Call profile do modelo (E1–E8). */
   call?: CallConfig;
+  /** Model card declares reasoning (#661); absent = never expose the summaries. */
+  reasoning?: boolean;
 }
 
 const DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex";
@@ -225,8 +227,25 @@ function extractErrorDetail(text: string): string {
   return trimmed;
 }
 
-function parseSse(text: string, redact: (value: string) => string): CompletionResponse {
+/** Final reasoning summary of an `output_item.done` item (#661); absent outside a reasoning item. */
+function reasoningSummary(item: unknown): string | undefined {
+  if (!isRecord(item) || item.type !== "reasoning" || !Array.isArray(item.summary)) return undefined;
+  const text = item.summary
+    .map((part) => isRecord(part) && typeof part.text === "string" ? part.text : "")
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+  return text.length === 0 ? undefined : text;
+}
+
+function parseSse(
+  text: string,
+  redact: (value: string) => string,
+  reasoningDeclared: boolean,
+): CompletionResponse {
   let content = "";
+  // #661: one accumulator per reasoning item, so interleaved items never mix and
+  // a late delta after `output_item.done` cannot duplicate the final summary.
+  const reasoningItems = new Map<string, { text: string; done: boolean }>();
   let usage = { inputTokens: 0, outputTokens: 0 };
   let completed = false;
   const calls = new Map<string, ToolCall>();
@@ -253,7 +272,28 @@ function parseSse(text: string, redact: (value: string) => string): CompletionRe
       continue;
     }
 
+    // #661: the Responses transport reports reasoning as summary deltas, not
+    // `reasoning_content`. Only a card that declares reasoning exposes them.
+    if (reasoningDeclared && event.type === "response.reasoning_summary_text.delta") {
+      const id = typeof event.item_id === "string" ? event.item_id : "";
+      const item = reasoningItems.get(id) ?? { text: "", done: false };
+      if (!item.done && typeof event.delta === "string") item.text += event.delta;
+      reasoningItems.set(id, item);
+      continue;
+    }
+
     if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
+      // The final summary is authoritative, including an empty one: it replaces
+      // the deltas already seen, so the text is never counted twice or replayed.
+      if (reasoningDeclared && event.type === "response.output_item.done"
+        && isRecord(event.item) && event.item.type === "reasoning") {
+        const summary = reasoningSummary(event.item);
+        const id = typeof event.item.id === "string" ? event.item.id : "";
+        const item = reasoningItems.get(id) ?? { text: "", done: false };
+        item.text = summary ?? "";
+        item.done = true;
+        reasoningItems.set(id, item);
+      }
       registerFunctionCall(event, event.type === "response.output_item.done", calls, callIdByItem, callIdByIndex);
       continue;
     }
@@ -302,11 +342,13 @@ function parseSse(text: string, redact: (value: string) => string): CompletionRe
   if (!completed) {
     throw new ProviderError("outage", "stream do provider Codex terminou sem response.completed");
   }
+  const reasoning = [...reasoningItems.values()].map((item) => item.text).join("");
 
   return {
     content,
     toolCalls: [...calls.values()].filter((call) => call.name.length > 0),
     usage,
+    ...(reasoning === "" ? {} : { reasoning }),
   };
 }
 
@@ -325,6 +367,7 @@ export class CodexOAuthProvider implements Provider {
   private readonly timeoutMs: number;
   private readonly streamTimeoutMs: number | undefined;
   private readonly providerName: string | undefined;
+  private readonly reasoningDeclared: boolean;
 
   constructor(opts: CodexOAuthProviderOptions) {
     this.credentialsPath = opts.credentialsPath;
@@ -336,6 +379,7 @@ export class CodexOAuthProvider implements Provider {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
     this.streamTimeoutMs = opts.streamTimeoutMs;
     this.providerName = opts.providerName;
+    this.reasoningDeclared = opts.reasoning === true;
   }
 
   async complete(req: CompletionRequest, signal?: AbortSignal): Promise<CompletionResponse> {
@@ -378,7 +422,7 @@ export class CodexOAuthProvider implements Provider {
         throw this.errorFromResponse(response.status, text, tokens);
       }
 
-      return { ...parseSse(text, (value) => this.redact(value, tokens)), call };
+      return { ...parseSse(text, (value) => this.redact(value, tokens), this.reasoningDeclared), call };
     } finally {
       net.dispose();
     }
