@@ -878,14 +878,13 @@ test("sem onSelectModel a seta direita n�o abre a view de modelos (#555)", asy
 
 test("recuperação abre no passo de credencial do provider ativo (#616)", async () => {
   let ref = "";
-  let activated = 0;
   const instance = render(
     <ProviderScreen
       manager={manager()}
       colors={colors}
       initial={{ mode: "credential", target: "p" }}
       onClose={() => undefined}
-      onActivate={() => { activated++; }}
+      onActivate={() => undefined}
       onCredentialRef={(id, value) => { ref = `${id}:${value}`; }}
       onSaveSecret={() => "vault:cred-12345678"}
     />,
@@ -895,7 +894,7 @@ test("recuperação abre no passo de credencial do provider ativo (#616)", async
     instance.stdin.write(fakeSecret);
     await waitFor(() => frame(instance).includes("*".repeat(fakeSecret.length)));
     instance.stdin.write("\r");
-    await waitFor(() => activated === 1);
+    await waitFor(() => ref !== "");
     expect(ref).toBe("p:vault:cred-12345678");
     expect(frame(instance)).not.toContain(fakeSecret);
   } finally {

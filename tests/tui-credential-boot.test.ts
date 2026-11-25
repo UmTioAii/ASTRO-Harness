@@ -32,7 +32,6 @@ const vaultOf = (w: Dir) => new Vault(join(w.home, "vault.json"), plain);
 const probe = (w: Dir, vault: Vault, env: NodeJS.ProcessEnv = w.env) =>
   probeActiveCredential({ configPath: w.configPath, env, vault, allowMissing: true });
 
-/** Runs one recovery and returns the outcome plus everything printed (I-03 assertions). */
 async function recover(
   w: Dir, vault: Vault, recoverFn: (missing: MissingActiveCredential) => Promise<boolean>, env: NodeJS.ProcessEnv = w.env,
 ) {
@@ -53,17 +52,20 @@ describe("boot da TUI: credencial ativa ausente (#616)", () => {
     expect(missing?.message).not.toContain(SECRET);
   });
 
-  test("credencial presente não abre a recuperação", async () => {
+  test("credencial presente (env ou vault) não abre a recuperação", async () => {
     const w = workdir();
     writeFileSync(w.configPath, layer("p", "P_KEY"));
+    const vault = vaultOf(w);
     const env = { ...w.env, P_KEY: SECRET };
-    let prompts = 0;
-    const { outcome } = await recover(w, vaultOf(w), async () => { prompts++; return true; }, env);
-    expect(probe(w, vaultOf(w), env)).toBeUndefined();
-    expect(outcome).toEqual({ kind: "not-needed" });
-    expect(prompts).toBe(0);
+    let offers = 0;
+    const offer = async () => { offers++; return true; };
+    expect(probe(w, vault, env)).toBeUndefined();
+    expect((await recover(w, vault, offer, env)).outcome).toEqual({ kind: "not-needed" });
+    const created = vault.create({ providerId: "p", label: "api", secret: SECRET });
+    writeFileSync(w.configPath, layer("p", `vault:${created.id}`));
+    expect((await recover(w, vault, offer)).outcome).toEqual({ kind: "not-needed" });
+    expect(offers).toBe(0);
   });
-
   test("id de vault ausente é detectado pelo ref, nunca pelo valor", () => {
     const w = workdir();
     const ref = "vault:cred-missing-0000";
@@ -73,7 +75,6 @@ describe("boot da TUI: credencial ativa ausente (#616)", () => {
     expect(missing?.message).toContain(ref);
     expect(missing?.message).not.toContain(SECRET);
   });
-
   test("recusa não escreve nada e devolve a mensagem acionável", async () => {
     const w = workdir();
     writeFileSync(w.configPath, layer("p", "P_KEY"));
@@ -84,12 +85,21 @@ describe("boot da TUI: credencial ativa ausente (#616)", () => {
     expect(notes.join("\n")).toContain("P_KEY");
     expect(notes.join("\n")).not.toContain(SECRET);
   });
-
-  test("chave colada entra no cofre e o projeto guarda só credentialRef", async () => {
+  test("chave colada recupera um projeto parcial (só providers) mesclado com o global", async () => {
     const w = workdir();
-    writeFileSync(w.configPath, layer("p", "P_KEY"));
-    const before = JSON.parse(readFileSync(w.configPath, "utf8"));
+    mkdirSync(w.home, { recursive: true });
+    const globalPath = join(w.home, "config.json");
+    writeFileSync(globalPath, JSON.stringify({
+      models: [{ provider: "p", id: "m1", tags: ["writing-code"], context: 8192 }],
+      agent: { model: "p/m1", maxSteps: 2, tools: [] },
+      paths: { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" },
+    }, null, 2));
+    writeFileSync(w.configPath, JSON.stringify({
+      providers: { p: { kind: "openai-compat", baseUrl: "https://p.example/v1", credentialRef: "P_KEY" } },
+    }, null, 2));
+    const globalBefore = readFileSync(globalPath, "utf8");
     const vault = vaultOf(w);
+    expect(probe(w, vault)?.source).toBe("project");
     const { outcome, notes } = await recover(w, vault, async (missing) => {
       const created = vault.create({ providerId: missing.provider, label: "tui", secret: SECRET });
       writeRecoveredCredentialRef({ missing, ref: `vault:${created.id}`, configPath: w.configPath, env: w.env });
@@ -97,28 +107,26 @@ describe("boot da TUI: credencial ativa ausente (#616)", () => {
     });
     expect(outcome.kind).toBe("recovered");
     const after = JSON.parse(readFileSync(w.configPath, "utf8"));
-    expect(after).toMatchObject({
-      models: before.models, agent: before.agent,
-      providers: { p: { baseUrl: before.providers.p.baseUrl } },
-    });
+    expect(Object.keys(after)).toEqual(["providers"]);
     expect(after.providers.p.credentialRef).toMatch(/^vault:cred-/);
+    expect(readFileSync(globalPath, "utf8")).toBe(globalBefore);
     expect(readFileSync(w.configPath, "utf8") + notes.join("\n")).not.toContain(SECRET);
     expect(probe(w, vault)).toBeUndefined();
   });
-
-  test("projeto aceita nome de variável na recuperação e grava só o ref", async () => {
+  test("recuperação que ainda não resolve é declarada, sem segunda oferta", async () => {
     const w = workdir();
-    writeFileSync(w.configPath, layer("p", "OLD_KEY"));
-    const env = { ...w.env, NEW_KEY: SECRET };
-    const { outcome } = await recover(w, vaultOf(w), async (missing) => {
-      writeRecoveredCredentialRef({ missing, ref: "NEW_KEY", configPath: w.configPath, env });
+    writeFileSync(w.configPath, layer("p", "P_KEY"));
+    const vault = vaultOf(w);
+    let offers = 0;
+    const { outcome, notes } = await recover(w, vault, async (missing) => {
+      offers++;
+      writeRecoveredCredentialRef({ missing, ref: "STILL_MISSING", configPath: w.configPath, env: w.env });
       return true;
-    }, env);
-    expect(outcome.kind).toBe("recovered");
-    expect(JSON.parse(readFileSync(w.configPath, "utf8")).providers.p.credentialRef).toBe("NEW_KEY");
-    expect(readFileSync(w.configPath, "utf8")).not.toContain(SECRET);
+    });
+    expect(offers).toBe(1);
+    expect(outcome).toMatchObject({ kind: "unresolved", message: expect.stringContaining("STILL_MISSING") });
+    expect(notes.join("\n")).not.toContain(SECRET);
   });
-
   test("camada global aceita nome de variável e grava só credentialRef", async () => {
     const w = workdir();
     mkdirSync(w.home, { recursive: true });
