@@ -198,6 +198,42 @@ test("o resumo final vence os deltas sem duplicar o texto (#661)", async () => {
   expect(r.reasoning).toBe("final");
 });
 
+test("a late delta after the final summary does not duplicate it (#661)", async () => {
+  const events = [
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "rs1", type: "reasoning", summary: [{ type: "summary_text", text: "final" }] },
+    },
+    { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: "final" },
+    { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+  ];
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn: async () => sse(events) });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBe("final");
+});
+
+test("interleaved items keep their own summaries (#661)", async () => {
+  const events = [
+    { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: "a" },
+    { type: "response.reasoning_summary_text.delta", item_id: "rs2", output_index: 1, summary_index: 0, delta: "b" },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "rs1", type: "reasoning", summary: [{ type: "summary_text", text: "A-FINAL" }] },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 1,
+      item: { id: "rs2", type: "reasoning", summary: [{ type: "summary_text", text: "B-FINAL" }] },
+    },
+    { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+  ];
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn: async () => sse(events) });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBe("A-FINALB-FINAL");
+});
+
 test("card sem reasoning não expõe os summaries (#661)", async () => {
   const p = new CodexOAuthProvider({
     credentialsPath: authPath(4102444800),
