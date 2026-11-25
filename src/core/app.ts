@@ -344,6 +344,7 @@ export function createProvider(
         ...(providerConfig.streamTimeoutMs === undefined ? {} : { streamTimeoutMs: providerConfig.streamTimeoutMs }),
         providerName: model.provider,
         ...(model.call === undefined ? {} : { call: model.call }),
+        reasoning: cardDeclaresReasoning(model),
       }),
       credentialRef,
       quotaDomain,
