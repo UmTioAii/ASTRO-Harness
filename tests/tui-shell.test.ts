@@ -246,8 +246,8 @@ describe("!cmd always approval reloads the project layer (#599)", () => {
   });
 });
 
-describe("!cmd reload falls back to the last good config (#599)", () => {
-  test("a narrowed config survives a corrupt read: the denied command never runs", async () => {
+describe("!cmd reload fails closed when the config cannot be re-read (#650)", () => {
+  test("a deny written just before a corrupt read still blocks the command", async () => {
     mock.restore();
     mock = installNoDockerSpawnMock({ stdout: "ran\n" });
     const { cwd, configPath } = config(["run_command"], "KEY", false, false);
@@ -264,7 +264,24 @@ describe("!cmd reload falls back to the last good config (#599)", () => {
     writeFileSync(configPath, "{ broken");
     const corrupted = await shell.run("echo ok");
     expect(corrupted.isError).toBe(true);
-    expect(corrupted.output).toContain("shell_rule_denied");
+    expect(corrupted.output).toContain("config_unreadable");
+    expect(corrupted.output).not.toContain("ran");
+  });
+
+  test("a corrupt read never reuses the previous allow", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    writeFileSync(configPath, JSON.stringify({
+      ...JSON.parse(readFileSync(configPath, "utf8")),
+      shell: { rules: [{ match: "*", effect: "allow" }] },
+    }));
+    const shell = createShellRunner({ configPath, cwd, env: process.env });
+    writeFileSync(configPath, "{ broken");
+    const next = await shell.run("echo ok");
+    expect(next.isError).toBe(true);
+    expect(next.output).toContain("config_unreadable");
+    expect(next.output).not.toContain("ran");
   });
 
   test("switching shell.mode to off mid-session refuses the next command", async () => {
@@ -283,5 +300,51 @@ describe("!cmd reload falls back to the last good config (#599)", () => {
     const after = await shell.run("echo ok");
     expect(after.isError).toBe(true);
     expect(after.output).toContain("sandbox_required_for_shell");
+  });
+});
+
+describe("!cmd reload covers agent.tools (#650)", () => {
+  test("removing run_command from agent.tools mid-session refuses the next command", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, false);
+    const shell = createShellRunner({ configPath, cwd, env: process.env, approveTool: () => true });
+    const raw = JSON.parse(readFileSync(configPath, "utf8")) as { agent: { tools: string[] } };
+    raw.agent.tools = [];
+    writeFileSync(configPath, JSON.stringify(raw));
+    const result = await shell.run("echo blocked");
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("agent.tools");
+    expect(result.output).not.toContain("ran");
+  });
+});
+
+describe("!cmd approval names the prefix always will save (#650)", () => {
+  test("a single uncovered subcommand shows its saved pattern in the prompt", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, true, "ask");
+    let detail: { kind: string; value: string; saves?: string } | undefined;
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: (request) => { detail = request.detail; return false; },
+    });
+    const result = await shell.run("git push origin main");
+    expect(result.isError).toBe(true);
+    expect(detail?.value).toBe("git push origin main");
+    expect(detail?.saves).toBe("git push *");
+  });
+
+  test("no pattern is named when always cannot save the decision", async () => {
+    mock.restore();
+    mock = installNoDockerSpawnMock({ stdout: "ran\n" });
+    const { cwd, configPath } = config(["run_command"], "KEY", false, true, "ask");
+    let detail: { kind: string; value: string; saves?: string } | undefined;
+    const shell = createShellRunner({
+      configPath, cwd, env: process.env,
+      approveTool: (request) => { detail = request.detail; return false; },
+    });
+    await shell.run("git push origin main && echo ok");
+    expect(detail?.saves).toBeUndefined();
   });
 });
