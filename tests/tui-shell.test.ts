@@ -282,6 +282,12 @@ describe("!cmd reload fails closed when the config cannot be re-read (#650)", ()
     expect(next.isError).toBe(true);
     expect(next.output).toContain("config_unreadable");
     expect(next.output).not.toContain("ran");
+    const events = readFileSync(join(cwd, ".astro/audit.jsonl"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
+    expect(events).toContainEqual(expect.objectContaining({
+      tipo: "host_shell.decision",
+      payload: expect.objectContaining({ effect: "deny", origin: "config", reason: "config_unreadable" }),
+    }));
   });
 
   test("switching shell.mode to off mid-session refuses the next command", async () => {
@@ -316,6 +322,12 @@ describe("!cmd reload covers agent.tools (#650)", () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain("agent.tools");
     expect(result.output).not.toContain("ran");
+    const events = readFileSync(join(cwd, ".astro/audit.jsonl"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line) as { tipo: string; payload: Record<string, unknown> });
+    expect(events).toContainEqual(expect.objectContaining({
+      tipo: "host_shell.decision",
+      payload: expect.objectContaining({ effect: "deny", origin: "config", reason: "tool_not_allowed" }),
+    }));
   });
 });
 
