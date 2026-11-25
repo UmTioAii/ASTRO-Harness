@@ -1136,6 +1136,9 @@ function validateAgentWhen(
     }
   }
   const tags = raw.tags === undefined ? undefined : expectStringArray(raw.tags, `${field}.tags`);
+  if (tags !== undefined && tags.length === 0) {
+    fail(`invalid config: "${field}.tags" needs at least one tag; an empty list matches every model`);
+  }
   for (const tag of tags ?? []) {
     if (!isKnownTag(tag)) fail(`invalid config: "${field}.tags" contains "${tag}", which is not a model tag`);
   }

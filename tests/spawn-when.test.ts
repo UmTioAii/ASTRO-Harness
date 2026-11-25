@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SpawnRefusedError, spawnDeclaredChild, SpawnRegistry } from "../src/spawn";
+import { SpawnRefusedError, spawnDeclaredChild, spawnedPermission, SpawnRegistry } from "../src/spawn";
 import { matchDeclaredAgent, whenMatches } from "../src/agent-rules";
 import { acquireAgentLock } from "../src/agent-lock";
 import { Auditor } from "../src/audit";
@@ -116,6 +116,13 @@ describe("declarative spawn shares the spawn engine (#602)", () => {
     expect(audit.readAll().filter((event) => event.tipo === "agent.spawn")).toHaveLength(1);
 
     expect(() => spawnDeclaredChild(deps, { ...parent, agent: "sub-1" }, request)).toThrow(SpawnRefusedError);
+  });
+
+  test("a declared full permission never widens a restricted parent", () => {
+    expect(spawnedPermission({ permission: "full" }, "read-only", "full")).toBe("read-only");
+    expect(spawnedPermission({ permission: "full" }, "full", "read-only")).toBe("read-only");
+    expect(spawnedPermission({ permission: "read-only" }, "full", "full")).toBe("read-only");
+    expect(spawnedPermission({}, "full", "full")).toBe("full");
   });
 });
 

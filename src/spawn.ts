@@ -23,7 +23,7 @@ import {
 } from "./model-choice";
 import type { QuotaLimit } from "./quota";
 import type { AgentEntry, Registry } from "./core/registry";
-import type { AgentPermission } from "./permissions";
+import { mostRestrictive, type AgentPermission } from "./permissions";
 import { ROLE_TAGS } from "./tags";
 import type { Tool, ToolContext, ToolResult } from "./tools/types";
 
@@ -87,6 +87,18 @@ export interface SpawnedAgent {
   createdAt: number;
   /** Declared by the named agent (#602); absent = inherits the caller's restriction. */
   permission?: AgentPermission;
+}
+
+/**
+ * Effective permission of a spawned child (#602, D-24): the declared mould and
+ * the caller can only narrow the executor's base, never widen it.
+ */
+export function spawnedPermission(
+  spawned: Pick<SpawnedAgent, "permission">,
+  caller: AgentPermission | undefined,
+  base: AgentPermission | undefined,
+): AgentPermission {
+  return mostRestrictive(spawned.permission ?? "full", mostRestrictive(caller ?? "full", base ?? "full"));
 }
 
 /** Estado de spawns do run (v1 serial). */

@@ -24,9 +24,9 @@ harness heuristic: the model asks, the harness decides.
 
 `when` is a closed matcher, not code: `{ tags?: Tag[], provider?: string, model?: string }`.
 Every declared predicate must hold against the active model (tags are ANDed, `model` is the
-composite `provider/id`), and an empty matcher is invalid. **Last match wins in declaration
-order**, mirroring `shell.rules`, and at most one declared agent fires per turn, after the
-entry agent holds its slot. The matched agent is committed by the same engine as
+composite `provider/id`), and an empty matcher, including `tags: []`, is invalid. **Last
+match wins in declaration order**, mirroring `shell.rules`, and at most one declared agent
+fires per turn, after the entry agent holds its slot. The matched agent is committed by the same engine as
 `spawn_agent` (`src/spawn.ts` `commitSpawn`): depth one, run and account caps, the parent
 scope intersection and an `agent.spawn` event with `source: "rule"` and the agent name in
 `rule`. A rule that cannot be granted is skipped - the turn does not fail - and the cut is

@@ -15,15 +15,16 @@ export interface ActiveModelFacts {
 }
 
 /**
- * Every predicate present must hold (AND). An empty matcher never matches:
- * config validation rejects it, and a hand-built object must not fire on every
- * turn by accident.
+ * Every predicate present must hold (AND). A semantically empty predicate set
+ * never matches: config validation rejects it, and `[].every(...)` would be
+ * vacuously true, so a hand-built `{ tags: [] }` must not fire on every turn.
  */
 export function whenMatches(when: AgentWhenConfig, active: ActiveModelFacts): boolean {
-  if (when.tags === undefined && when.provider === undefined && when.model === undefined) return false;
+  const tags = when.tags ?? [];
+  if (tags.length === 0 && when.provider === undefined && when.model === undefined) return false;
   if (when.provider !== undefined && when.provider !== active.provider) return false;
   if (when.model !== undefined && when.model !== active.model) return false;
-  if (when.tags !== undefined && !when.tags.every((tag) => active.tags.includes(tag))) return false;
+  if (tags.length > 0 && !tags.every((tag) => active.tags.includes(tag))) return false;
   return true;
 }
 

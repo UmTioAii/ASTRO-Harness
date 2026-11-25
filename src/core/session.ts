@@ -28,7 +28,7 @@ import { CompactionPausedError } from "../compaction/breaker";
 import { DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "../compaction/engine";
 import { completeWithCompaction } from "../compaction/runtime";
 import { effectiveOutputCap, type OutputLimitConfig } from "../output-limit";
-import type { SpawnRegistry } from "../spawn";
+import { spawnedPermission, type SpawnRegistry } from "../spawn";
 import { mostRestrictive } from "../permissions";
 import { join } from "node:path";
 import { BackgroundCompactor } from "../compaction/background";
@@ -1178,7 +1178,7 @@ export async function runMultiAgentSession(
       opts.baseSystemPrompt,
       // #602: a declared mould keeps its own restriction; a model-spawned child
       // has none and inherits the caller's, as before.
-      mostRestrictive(spawned.permission ?? "full", mostRestrictive(currentAgent.permission ?? "full", opts.baseExecutor.permission)),
+      spawnedPermission(spawned, currentAgent.permission, opts.baseExecutor.permission),
     );
   };
   const knownFor = (name: string): string[] | undefined => {
