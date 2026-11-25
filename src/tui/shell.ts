@@ -91,7 +91,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
   // aprovação por comando; `sandbox: true`/`"docker"` exige o container.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
   let liveTransport: string = runCommandMode;
-  let liveMode: PermissionMode = creationMode;
+  let liveConfigMode: PermissionMode = config.permissions.mode;
   if (!config.agent.tools.includes("run_command")) {
     return {
       enabled: false,
@@ -146,21 +146,26 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       };
       let current: typeof config;
       try {
+        const presentBeforeLoad = existsSync(opts.configPath);
         current = loadEffectiveConfig(opts.configPath, {
           // A seen config cannot silently fall back to defaults when deleted (#650).
           allowMissing: opts.allowMissingConfig === true && !configSeen,
           ...(opts.env === undefined ? {} : { env: opts.env }),
         }).config;
-        if (existsSync(opts.configPath)) configSeen = true;
+        if (presentBeforeLoad) configSeen = true;
       } catch (error) {
         const code = error instanceof ConfigError && error.code !== undefined
           ? error.code
           : !existsSync(opts.configPath) ? "config_not_found" : "config_read_failed";
+        const runtimeMode = resolvePermissionMode(
+          opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
+          liveConfigMode,
+        );
         return denyForConfig(
           "config_unreadable",
           `config_unreadable (${code}): the shell refuses to run without re-reading the config; restore the file and retry`,
           liveTransport,
-          liveMode,
+          runtimeMode,
           code,
         );
       }
@@ -170,7 +175,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       );
       const effectiveRunCommandMode = resolveRunCommandMode(current.tools?.run_command?.sandbox);
       liveTransport = effectiveRunCommandMode;
-      liveMode = currentMode;
+      liveConfigMode = current.permissions.mode;
       if (!current.agent.tools.includes("run_command")) {
         return denyForConfig(
           "tool_not_allowed",
