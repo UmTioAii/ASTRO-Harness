@@ -796,9 +796,7 @@ function runCommandDetail(input: unknown, ctx?: ToolContext): ApprovalDetail | u
   if (command === undefined) return undefined;
   const policy = ctx === undefined ? undefined : shellPolicyFor(command, ctx.cwd);
   const part = policy?.trigger;
-  // #650: name the prefix `always` persists, but only when it actually can:
-  // Docker never saves (no per-call approval), and the same checks as
-  // `persistShellApproval` (wildcard, secret, length, file, cap) must pass.
+  // #650: name the prefix only when `persistShellApproval` would save it.
   const candidate = commandMode !== "docker" && policy !== undefined
     && policy.origin !== "unparsable" && policy.origin !== "external_directory"
     && policy.uncovered?.length === 1

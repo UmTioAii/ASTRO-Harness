@@ -82,6 +82,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
     ...(opts.env === undefined ? {} : { env: opts.env }),
   }).config;
   const auditPath = resolve(opts.cwd, config.paths.audit);
+  const creationSecretEnvNames = secretEnvNamesFor(config);
   const creationMode = resolvePermissionMode(
     opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
     config.permissions.mode,
@@ -115,9 +116,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
     ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
   });
   let loadAudited = false;
-  // #650: a re-read that fails denies the command. Reusing the previous view would
-  // keep running with a `deny` that the file already removed (or that was written
-  // just before the read failed).
+  // #650: a failed re-read denies instead of reusing the previous view.
   return {
     enabled: true,
     run: async (command, signal) => {
@@ -132,12 +131,13 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
           audit.append({ run: runId, agent: "default", tipo: "security.allowlist_applied", payload: { ...event } });
         }
       }
-      const denyForConfig = (reason: string, message: string, transport: string, mode: PermissionMode): ShellResult => {
+      const denyForConfig = (reason: string, message: string, transport: string, mode: PermissionMode, code?: string): ShellResult => {
         audit.append({
           run: runId, agent: "default", tipo: "host_shell.decision",
           payload: {
             tool: "run_command", transport, commandHash: shellCommandHash(input),
             effect: "deny", origin: "config", stage: "gate", permissionMode: mode, reason,
+            ...(code === undefined ? {} : { code }),
           },
         });
         return { output: message, isError: true };
@@ -151,16 +151,19 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         }).config;
         configSeen = true;
       } catch (error) {
-        const code = error instanceof ConfigError && error.code !== undefined ? error.code : "config_read_failed";
+        const code = error instanceof ConfigError && error.code !== undefined
+          ? error.code
+          : !existsSync(opts.configPath) ? "config_not_found" : "config_read_failed";
         const runtimeMode = resolvePermissionMode(
           opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
           config.permissions.mode,
         );
         return denyForConfig(
-          `config_unreadable:${code}`,
+          "config_unreadable",
           `config_unreadable (${code}): the shell refuses to run without re-reading the config; restore the file and retry`,
           runCommandMode,
           runtimeMode,
+          code,
         );
       }
       const currentMode = resolvePermissionMode(
@@ -186,7 +189,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         configPath: opts.configPath,
         ...(shellConfig?.externalDirectory === undefined ? {} : { externalDirectory: shellConfig.externalDirectory }),
       });
-      const secretEnvNames = secretEnvNamesFor(current);
+      const secretEnvNames = [...new Set([...creationSecretEnvNames, ...secretEnvNamesFor(current)])];
       const modelEntry = current.models.find((model) => `${model.provider}/${model.id}` === current.agent.model);
       const executor = new ToolExecutor({
         tools: [runCommandTool],

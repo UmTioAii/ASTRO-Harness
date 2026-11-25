@@ -26,10 +26,9 @@ function safePrefix(pattern: string): string | undefined {
 }
 
 /**
- * Preview of the `always` persistence (#650): returns the stable reason the
- * pattern cannot be saved, or `undefined` when it can. Shared by the approval
- * prompt and `persistShellApproval` so the prompt never names a rule that will
- * degrade, and a secret or oversized prefix never reaches the screen.
+ * Preview of the `always` persistence (#650): the stable reason a pattern cannot
+ * be saved, or `undefined` when it can. Shared by the prompt and the writer, so
+ * the prompt never names a rule that will degrade or show a secret.
  */
 export function approvalSaveProblem(pattern: string, configPath?: string): string | undefined {
   // A pattern carrying a wildcard in the prefix or a redaction marker came from
