@@ -10,6 +10,7 @@ import { loadEffectiveConfig } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { ToolExecutor, type ToolApprover } from "../tools/executor";
 import { configureRunCommand, resolveRunCommandMode, runCommandTool } from "../tools/run-command";
+import { shellCommandHash } from "../tools/shell-policy";
 import { webSearchSecretEnvNames } from "../tools/web-search";
 
 export interface ShellResult {
@@ -113,6 +114,16 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
       );
       // #650: re-read the whole shell layer per run, including agent.tools. A failed
       // read is fail-closed; a removed run_command disables the channel immediately.
+      const denyForConfig = (reason: string, message: string): ShellResult => {
+        audit.append({
+          run: runId, agent: "default", tipo: "host_shell.decision",
+          payload: {
+            tool: "run_command", transport: runCommandMode, commandHash: shellCommandHash(input),
+            effect: "deny", origin: "config", stage: "gate", permissionMode: currentMode, reason,
+          },
+        });
+        return { output: message, isError: true };
+      };
       let current: typeof config;
       try {
         current = loadEffectiveConfig(opts.configPath, {
@@ -120,13 +131,13 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
           ...(opts.env === undefined ? {} : { env: opts.env }),
         }).config;
       } catch {
-        return {
-          output: "config_unreadable: the shell refuses to run without re-reading the config; restore the file and retry",
-          isError: true,
-        };
+        return denyForConfig(
+          "config_unreadable",
+          "config_unreadable: the shell refuses to run without re-reading the config; restore the file and retry",
+        );
       }
       if (!current.agent.tools.includes("run_command")) {
-        return { output: "run_command não está na allowlist de agent.tools", isError: true };
+        return denyForConfig("tool_not_allowed", "run_command não está na allowlist de agent.tools");
       }
       const shellConfig = current.shell;
       const effectiveRunCommandMode = resolveRunCommandMode(current.tools?.run_command?.sandbox);

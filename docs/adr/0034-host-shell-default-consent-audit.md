@@ -35,7 +35,7 @@ and only active path, with `off` disabling it; the Docker code stays in
   off for the session and writes nothing, so the next interactive start asks again;
   without a terminal the run proceeds (as with #479) and the gate stays the control.
 - Every shell decision appends `host_shell.decision` with `commandHash`, `effect`,
-  `origin` (`rule`/`approval`/`external_directory`/`unparsable`/`consent`/`mode`),
+  `origin` (`rule`/`approval`/`external_directory`/`unparsable`/`consent`/`mode`/`config`),
   `stage` (`gate`/`execution`), `tool`, `transport` and `permissionMode`; an execution
   `allow` carries the selected `shell`, and `tests.result` carries the same hash instead
   of the argv. The raw command and the output never enter audit or ledger (D-11, I-03).
