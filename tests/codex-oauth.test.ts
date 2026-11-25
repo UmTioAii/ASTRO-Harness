@@ -198,6 +198,21 @@ test("o resumo final vence os deltas sem duplicar o texto (#661)", async () => {
   expect(r.reasoning).toBe("final");
 });
 
+test("an empty final summary discards earlier deltas (#661)", async () => {
+  const events = [
+    { type: "response.reasoning_summary_text.delta", item_id: "rs1", output_index: 0, summary_index: 0, delta: "draft" },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "rs1", type: "reasoning", summary: [] },
+    },
+    { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+  ];
+  const p = new CodexOAuthProvider({ credentialsPath: authPath(4102444800), reasoning: true, fetchFn: async () => sse(events) });
+  const r = await p.complete({ model: "gpt-5.5", messages: [{ role: "user", content: "oi" }] });
+  expect(r.reasoning).toBeUndefined();
+});
+
 test("a late delta after the final summary does not duplicate it (#661)", async () => {
   const events = [
     {

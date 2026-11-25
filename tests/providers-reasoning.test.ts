@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createProvider } from "../src/core/app";
 import { validateConfig } from "../src/core/config";
 import { Registry } from "../src/core/registry";
@@ -98,6 +101,54 @@ describe("reasoning channel in the openai-compat adapter (#600)", () => {
       const absent = await createProvider(plain, plainModel, {}).provider.complete({
         model: "openai/gpt-4o-mini", messages: [message],
       });
+      expect(absent.reasoning).toBeUndefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
+describe("reasoning channel in the Codex Responses adapter (#661)", () => {
+  test("createProvider wires the model card gate for reasoning summaries", async () => {
+    const credentialsPath = join(mkdtempSync(join(tmpdir(), "astro-codex-reasoning-")), "auth.json");
+    const jwt = ["e30", Buffer.from(JSON.stringify({ exp: 4102444800 })).toString("base64url"), "sig"].join(".");
+    writeFileSync(credentialsPath, JSON.stringify({
+      tokens: { access_token: jwt, refresh_token: "r1", account_id: "acct_1" },
+    }));
+    const events = [
+      { type: "response.reasoning_summary_text.delta", item_id: "rs1", delta: "plano do modelo" },
+      { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 2 } } },
+    ];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async () => new Response(
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    });
+    const providerConfig = {
+      kind: "codex-oauth",
+      baseUrl: `http://127.0.0.1:${server.port}/v1`,
+      credentialsPath,
+    } as const;
+    const paths = { ledger: ".astro/ledger.jsonl", audit: ".astro/audit.jsonl" };
+    const configFor = (id: string) => validateConfig({
+      providers: { codex: providerConfig },
+      models: [{ provider: "codex", id, tags: ["writing-code"], context: 400000 }],
+      agent: { model: `codex/${id}`, maxSteps: 1, tools: [] },
+      paths,
+    });
+    try {
+      const declaredConfig = configFor("gpt-5.5");
+      const declared = await createProvider(
+        declaredConfig, new Registry(declaredConfig).require("codex/gpt-5.5"), {},
+      ).provider.complete({ model: "gpt-5.5", messages: [message] });
+      expect(declared.reasoning).toBe("plano do modelo");
+
+      const plainConfig = configFor("unlisted-model");
+      const absent = await createProvider(
+        plainConfig, new Registry(plainConfig).require("codex/unlisted-model"), {},
+      ).provider.complete({ model: "unlisted-model", messages: [message] });
       expect(absent.reasoning).toBeUndefined();
     } finally {
       server.stop(true);
