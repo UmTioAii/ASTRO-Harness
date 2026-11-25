@@ -238,7 +238,7 @@ export function createTaskTool(deps: TaskToolDeps): Tool {
             payload: {
               fromAgent: ctx.agent, session: sessionId, instructionHash: taskPromptHash(instruction),
               ...(resumed.status === "ok"
-                ? { level: resumed.level, source: resumed.source, restored: resumed.restored, truncated: resumed.truncated }
+                ? { level: resumed.level, source: resumed.source, restored: resumed.restored, truncated: resumed.truncated, resumedSession: resumed.sessionId }
                 : { error: resumed.error }),
             },
           });
