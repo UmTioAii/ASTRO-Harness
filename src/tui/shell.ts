@@ -1,8 +1,10 @@
 /** `!cmd` da TUI: executa via run_command com allowlist, sandbox e timeout. */
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { Auditor } from "../audit";
 import { allowlistLoadEvents } from "../allowlists";
+import { ConfigError } from "../core/config";
 import { headerEnvNames } from "../mcp/headers";
 import { effectiveOutputCap } from "../output-limit";
 import { resolvePermissionMode, type PermissionMode } from "../permissions";
@@ -10,6 +12,7 @@ import { loadEffectiveConfig } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { ToolExecutor, type ToolApprover } from "../tools/executor";
 import { configureRunCommand, resolveRunCommandMode, runCommandTool } from "../tools/run-command";
+import { shellCommandHash } from "../tools/shell-policy";
 import { webSearchSecretEnvNames } from "../tools/web-search";
 
 export interface ShellResult {
@@ -47,24 +50,68 @@ const SYSTEM_ENV = new Set([
   "SHELL", "PWD", "LANG", "LC_ALL", "TERM",
 ]);
 
+/** Env names that must not reach a `!cmd` child, rebuilt from the current layer (#650). */
+function secretEnvNamesFor(config: ReturnType<typeof loadEffectiveConfig>["config"]): string[] {
+  const names: string[] = [];
+  for (const provider of Object.values(config.providers)) {
+    if (provider.kind === "openai-compat" && typeof provider.credentialRef === "string") {
+      names.push(provider.credentialRef);
+    }
+  }
+  for (const server of Object.values(config.mcpServers ?? {})) {
+    for (const name of Object.keys(server.env ?? {})) {
+      if (!SYSTEM_ENV.has(name.toUpperCase())) names.push(name);
+    }
+    for (const name of headerEnvNames(server.headers)) {
+      if (!SYSTEM_ENV.has(name.toUpperCase())) names.push(name);
+    }
+  }
+  names.push(...webSearchSecretEnvNames(config));
+  return names;
+}
+
 /**
  * Cria o executor de `!cmd`. Sem `run_command` em `agent.tools` o runner fica
  * desabilitado (I-01); sandbox e timeout vêm da config e da manifest.
  */
 export function createShellRunner(opts: ShellOptions): ShellRunner {
+  // A layer seen once cannot fall back to defaults if deleted later (#650).
+  let configSeen = existsSync(opts.configPath);
   const config = loadEffectiveConfig(opts.configPath, {
     allowMissing: opts.allowMissingConfig === true,
     ...(opts.env === undefined ? {} : { env: opts.env }),
   }).config;
-  if (!config.agent.tools.includes("run_command")) {
-    return {
-      enabled: false,
-      run: async () => ({ output: "run_command não está na allowlist de agent.tools", isError: true }),
-    };
-  }
+  const auditPath = resolve(opts.cwd, config.paths.audit);
+  // Names seen once stay secret for the session: a provider removed from the
+  // config must not un-redact its variable (#650).
+  const secretEnvNames = new Set(secretEnvNamesFor(config));
   // Fail-closed igual ao caminho do app (I-11): host é o default (#599) com
   // aprovação por comando; `sandbox: true`/`"docker"` exige o container.
   const runCommandMode = resolveRunCommandMode(config.tools?.run_command?.sandbox);
+  let liveTransport: string = runCommandMode;
+  let liveConfigMode: PermissionMode = config.permissions.mode;
+  if (!config.agent.tools.includes("run_command")) {
+    return {
+      enabled: false,
+      run: async (command) => {
+        const runId = randomUUID();
+        const audit = new Auditor(auditPath);
+        audit.append({
+          run: runId, agent: "default", tipo: "host_shell.decision",
+          payload: {
+            tool: "run_command", transport: runCommandMode, commandHash: shellCommandHash(command.trim()),
+            effect: "deny", origin: "config", stage: "gate",
+            permissionMode: resolvePermissionMode(
+              opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
+              config.permissions.mode,
+            ),
+            reason: "tool_not_allowed",
+          },
+        });
+        return { output: "run_command não está na allowlist de agent.tools", isError: true };
+      },
+    };
+  }
   configureRunCommand({
     mode: runCommandMode,
     ...(config.shell?.default === undefined ? {} : { shellDefault: config.shell.default }),
@@ -73,27 +120,8 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
     configPath: opts.configPath,
     ...(config.shell?.externalDirectory === undefined ? {} : { externalDirectory: config.shell.externalDirectory }),
   });
-  const auditPath = resolve(opts.cwd, config.paths.audit);
-  const secretEnvNames: string[] = [];
-  for (const provider of Object.values(config.providers)) {
-    if (provider.kind === "openai-compat" && typeof provider.credentialRef === "string") {
-      secretEnvNames.push(provider.credentialRef);
-    }
-  }
-  for (const server of Object.values(config.mcpServers ?? {})) {
-    for (const name of Object.keys(server.env ?? {})) {
-      if (!SYSTEM_ENV.has(name.toUpperCase())) secretEnvNames.push(name);
-    }
-    for (const name of headerEnvNames(server.headers)) {
-      if (!SYSTEM_ENV.has(name.toUpperCase())) secretEnvNames.push(name);
-    }
-  }
-  secretEnvNames.push(...webSearchSecretEnvNames(config));
-  const modelEntry = config.models.find((model) => `${model.provider}/${model.id}` === config.agent.model);
   let loadAudited = false;
-  // Last successfully loaded view. A transient read error (or a mid-save write)
-  // must not resurrect an allow that the file already removed (#599).
-  let lastGood = config;
+  // #650: a failed re-read denies instead of reusing the previous view.
   return {
     enabled: true,
     run: async (command, signal) => {
@@ -108,24 +136,64 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
           audit.append({ run: runId, agent: "default", tipo: "security.allowlist_applied", payload: { ...event } });
         }
       }
-      const currentMode = resolvePermissionMode(
-        opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
-        config.permissions.mode,
-      );
-      // Reload the shell layer per run: `always` writes `shell.approvals` to the
-      // project file after the runner was created, and a narrowed config (deny,
-      // `mode: "off"`) must apply to the next command. A failed read keeps the
-      // last good view, never the creation snapshot.
+      const denyForConfig = (reason: string, message: string, transport: string, mode: PermissionMode, code?: string): ShellResult => {
+        audit.append({
+          run: runId, agent: "default", tipo: "host_shell.decision",
+          payload: {
+            tool: "run_command", transport, commandHash: shellCommandHash(input),
+            effect: "deny", origin: "config", stage: "gate", permissionMode: mode, reason,
+            ...(code === undefined ? {} : { code }),
+          },
+        });
+        return { output: message, isError: true };
+      };
+      let current: typeof config;
       try {
-        lastGood = loadEffectiveConfig(opts.configPath, {
-          allowMissing: opts.allowMissingConfig === true,
+        const presentBeforeLoad = existsSync(opts.configPath);
+        // Presence, not a successful load, makes the layer "seen": a corrupt file
+        // that disappears afterwards must still deny (#650).
+        if (presentBeforeLoad) configSeen = true;
+        current = loadEffectiveConfig(opts.configPath, {
+          // A seen config cannot silently fall back to defaults when deleted (#650).
+          allowMissing: opts.allowMissingConfig === true && !configSeen,
           ...(opts.env === undefined ? {} : { env: opts.env }),
         }).config;
-      } catch {
-        // lastGood stays the previous successful load.
+        if (existsSync(opts.configPath)) configSeen = true;
+      } catch (error) {
+        const code = error instanceof ConfigError && error.code !== undefined
+          ? error.code
+          : !existsSync(opts.configPath) ? "config_not_found" : "config_read_failed";
+        const runtimeMode = resolvePermissionMode(
+          opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
+          liveConfigMode,
+        );
+        return denyForConfig(
+          "config_unreadable",
+          `config_unreadable (${code}): the shell refuses to run without re-reading the config; restore the file and retry`,
+          liveTransport,
+          runtimeMode,
+          code,
+        );
       }
-      const shellConfig = lastGood.shell;
-      const effectiveRunCommandMode = resolveRunCommandMode(lastGood.tools?.run_command?.sandbox);
+      const currentMode = resolvePermissionMode(
+        opts.permissionMode?.() ?? (opts.env ?? process.env).ASTRO_PERMISSION_MODE,
+        current.permissions.mode,
+      );
+      const effectiveRunCommandMode = resolveRunCommandMode(current.tools?.run_command?.sandbox);
+      liveTransport = effectiveRunCommandMode;
+      liveConfigMode = current.permissions.mode;
+      // Learn the names on every successful read, even when the allowlist denies:
+      // a provider that only exists in a denied reload is still a secret (#650).
+      for (const name of secretEnvNamesFor(current)) secretEnvNames.add(name);
+      if (!current.agent.tools.includes("run_command")) {
+        return denyForConfig(
+          "tool_not_allowed",
+          "run_command não está na allowlist de agent.tools",
+          effectiveRunCommandMode,
+          currentMode,
+        );
+      }
+      const shellConfig = current.shell;
       // #474: o modo do executor decide a confirmação extra do host em `bypass`.
       configureRunCommand({
         mode: effectiveRunCommandMode,
@@ -135,6 +203,7 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         configPath: opts.configPath,
         ...(shellConfig?.externalDirectory === undefined ? {} : { externalDirectory: shellConfig.externalDirectory }),
       });
+      const modelEntry = current.models.find((model) => `${model.provider}/${model.id}` === current.agent.model);
       const executor = new ToolExecutor({
         tools: [runCommandTool],
         allow: ["run_command"],
@@ -143,20 +212,20 @@ export function createShellRunner(opts: ShellOptions): ShellRunner {
         // não pergunta, ask/allow-edits perguntam por comando (ação shell).
         permissionMode: currentMode,
         // `!` segue o mesmo teto de aprovação da sessão (#526).
-        ...(config.permissions.approvalTimeoutMs === undefined
+        ...(current.permissions.approvalTimeoutMs === undefined
           ? {}
-          : { approvalTimeoutMs: config.permissions.approvalTimeoutMs }),
+          : { approvalTimeoutMs: current.permissions.approvalTimeoutMs }),
         ...(opts.approveTool === undefined ? {} : { approveTool: opts.approveTool }),
       });
       try {
         const result = await executor.run(
           {
             cwd: opts.cwd, run: runId, agent: "default",
-            env: opts.env ?? process.env, secretEnvNames,
+            env: opts.env ?? process.env, secretEnvNames: [...secretEnvNames],
             ...(opts.allowCritical === undefined ? {} : { allowCritical: opts.allowCritical }),
             ...(opts.allowSensitive === undefined ? {} : { allowSensitive: opts.allowSensitive }),
             // Mesmo cap do run (default quando o agent usa profile de outro modelo).
-            outputLimitTokens: effectiveOutputCap(config.outputLimit, modelEntry?.context),
+            outputLimitTokens: effectiveOutputCap(current.outputLimit, modelEntry?.context),
             ...(signal === undefined ? {} : { signal }),
           },
           { id: randomUUID(), name: "run_command", arguments: JSON.stringify({ command: input }) },

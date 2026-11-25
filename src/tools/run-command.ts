@@ -9,7 +9,7 @@ import { isSecretEnvName } from "../secrets";
 import { detectHostShells, hostShellArgv, selectHostShell } from "./host-shell";
 import { realpathPreservingDots, isWithin } from "./paths";
 import { evaluateShellPolicy, approvalPattern, shellCommandHash, EXTERNAL_DIRECTORY, type ShellExternalDirectory, type ShellPolicyResult, type ShellRule } from "./shell-policy";
-import { persistShellApproval } from "./shell-approvals";
+import { approvalSaveProblem, persistShellApproval } from "./shell-approvals";
 import { ToolError, type ApprovalSave, type AuditLike, type Tool, type ToolContext, type ToolDecisionAudit, type ToolPermissionHint, type ToolResult } from "./types";
 
 /** Teto da saída devolvida ao modelo (run_command e run_tests). */
@@ -794,9 +794,22 @@ function runCommandPolicyHint(input: unknown, ctx: ToolContext): ToolPermissionH
 function runCommandDetail(input: unknown, ctx?: ToolContext): ApprovalDetail | undefined {
   const command = commandOf(input);
   if (command === undefined) return undefined;
-  const part = ctx === undefined ? undefined : shellPolicyFor(command, ctx.cwd).trigger;
+  const policy = ctx === undefined ? undefined : shellPolicyFor(command, ctx.cwd);
+  const part = policy?.trigger;
+  // #650: name the prefix only when `persistShellApproval` would save it.
+  const candidate = commandMode === "host" && policy !== undefined
+    && policy.origin !== "unparsable" && policy.origin !== "external_directory"
+    && policy.uncovered?.length === 1
+    ? approvalPattern(policy.uncovered[0]!)
+    : undefined;
+  const configPath = ctx === undefined || projectConfigPath === undefined
+    ? undefined
+    : resolve(ctx.cwd, projectConfigPath);
+  const saves = candidate !== undefined && approvalSaveProblem(candidate, configPath) === undefined
+    ? candidate
+    : undefined;
   const value = part !== undefined && part !== command.trim() ? `${command} (part: ${part})` : command;
-  return { kind: "command", value: redactSecrets(value) };
+  return { kind: "command", value: redactSecrets(value), ...(saves === undefined ? {} : { saves }) };
 }
 
 /** Executa um comando de shell no diretório de trabalho, com timeout do manifesto. */
@@ -835,6 +848,9 @@ export const runCommandTool: Tool = {
 
   /** `always` (#599): a prefix rule in the project layer; deny rules still win. */
   rememberApproval(input: unknown, ctx: ToolContext): ApprovalSave {
+    if (commandMode !== "host") {
+      return { ok: false, reason: "transport (always only saves a prefix rule on the host)" };
+    }
     const command = commandOf(input);
     if (command === undefined) return { ok: false, reason: "invalid_input (no command to derive a prefix from)" };
     const policy = shellPolicyFor(command, ctx.cwd);

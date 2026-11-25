@@ -7,7 +7,7 @@
  */
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { redactSecrets } from "../sanitize-external";
+import { sanitizePromptText } from "../sanitize-external";
 import type { ShellRule } from "./shell-policy";
 import type { ApprovalSave } from "./types";
 
@@ -25,19 +25,39 @@ function safePrefix(pattern: string): string | undefined {
   return prefix === "" || prefix.includes("*") ? undefined : prefix;
 }
 
-export function persistShellApproval(configPath: string, pattern: string): ApprovalSave {
+/**
+ * Preview of the `always` persistence (#650): the stable reason a pattern cannot
+ * be saved, or `undefined` when it can. Shared by the prompt and the writer, so
+ * the prompt never names a rule that will degrade or show a secret.
+ */
+export function approvalSaveProblem(pattern: string, configPath?: string): string | undefined {
   // A pattern carrying a wildcard in the prefix or a redaction marker came from
   // a secret: never persist it.
   if (safePrefix(pattern) === undefined) {
-    return {
-      ok: false,
-      reason: "unsafe_pattern (the command starts with a wildcard, so it cannot be saved as a prefix)",
-    };
+    return "unsafe_pattern (the command starts with a wildcard, so it cannot be saved as a prefix)";
   }
-  if (pattern.length > MAX_PATTERN_CHARS || redactSecrets(pattern) !== pattern) {
-    return { ok: false, reason: "unsafe_pattern (the prefix contains a secret)" };
+  if (pattern.length > MAX_PATTERN_CHARS || sanitizePromptText(pattern) !== pattern) {
+    return "unsafe_pattern (the prefix contains a secret)";
   }
-  if (!existsSync(configPath)) return { ok: false, reason: "no_config (no project config file to write)" };
+  if (configPath === undefined || !existsSync(configPath)) {
+    return "no_config (no project config file to write)";
+  }
+  try {
+    const raw: unknown = JSON.parse(readFileSync(configPath, "utf8"));
+    if (!isObject(raw)) return "write_failed (the config is not an object)";
+    const shell = isObject(raw.shell) ? raw.shell : {};
+    const approvals = Array.isArray(shell.approvals) ? shell.approvals.filter(isObject) : [];
+    if (approvals.some((rule) => rule.match === pattern && rule.effect === "allow")) return undefined;
+    if (approvals.length >= MAX_SHELL_APPROVALS) return "limit_reached (too many saved approvals)";
+  } catch {
+    return "write_failed (the project config could not be read)";
+  }
+  return undefined;
+}
+
+export function persistShellApproval(configPath: string, pattern: string): ApprovalSave {
+  const problem = approvalSaveProblem(pattern, configPath);
+  if (problem !== undefined) return { ok: false, reason: problem };
   try {
     const raw: unknown = JSON.parse(readFileSync(configPath, "utf8"));
     if (!isObject(raw)) return { ok: false, reason: "write_failed (the config is not an object)" };

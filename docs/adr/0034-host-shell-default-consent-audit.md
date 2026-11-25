@@ -5,11 +5,9 @@
 
 ## Context
 
-ADR-0031 kept Docker as the preferred transport and made `"auto"` mean "Docker when
-available, host otherwise". Docker is absent on most machines and on CI, so the shell
-was either unusable or behaved differently per machine. #599 makes the host the default
-and only active path, with `off` disabling it; the Docker code stays in
-`src/tools/run-command.ts` behind the legacy alias.
+ADR-0031 made `"auto"` mean "Docker when available, host otherwise", but Docker is absent
+on most machines and CI, so the shell was unusable or machine-dependent. #599 makes the
+host the default and only active path (`off` disables it); Docker stays behind the alias.
 
 ## Decision
 
@@ -25,9 +23,12 @@ and only active path, with `off` disabling it; the Docker code stays in
   command and every subcommand is evaluated; the prompt names the triggering part and an
   unparsable command is refused before execution.
 - `once` approves one call; `always` writes a prefix rule in `shell.approvals` in the
-  project layer (a configured `deny` still wins); `reject` revokes the session grants
-  and denies the current call — there is no pending queue. `external_directory`
-  outranks a rule `allow` when the cwd or an inferred target leaves the project.
+  project layer (a configured `deny` still wins) only on the host; on Docker it is a
+  session-wide grant, not call-scoped, and on the disabled transport it degrades to
+  `once`; `reject` revokes session grants and denies the current call. `external_directory`
+  outranks a rule `allow`. A `!cmd` of a runner created with `run_command` in
+  `agent.tools` re-reads the config per run: a failed read denies (`config_unreadable`)
+  and a removed `run_command` disables it; a runner created disabled never re-reads.
 - `bypass` still needs `ASTRO_HOST_SHELL_CONFIRM_BYPASS=1`: every host command,
   including the human `!cmd` channel, is refused without it.
 - Shell-risk consent is captured once at the interactive gate, next to the terms, and
@@ -35,24 +36,23 @@ and only active path, with `off` disabling it; the Docker code stays in
   off for the session and writes nothing, so the next interactive start asks again;
   without a terminal the run proceeds (as with #479) and the gate stays the control.
 - Every shell decision appends `host_shell.decision` with `commandHash`, `effect`,
-  `origin` (`rule`/`approval`/`external_directory`/`unparsable`/`consent`/`mode`),
-  `stage` (`gate`/`execution`), `tool`, `transport` and `permissionMode`; an execution
-  `allow` carries the selected `shell`, and `tests.result` carries the same hash instead
-  of the argv. The raw command and the output never enter audit or ledger (D-11, I-03).
-- The hash is 16 hex of an unsalted SHA-256: it correlates records of one command, but a
-  short command is recoverable by enumeration; without a pepper (not in alpha.5), the
-  audit is command-equivalent metadata.
+  `origin` (`rule`/`approval`/`external_directory`/`unparsable`/`consent`/`mode`/`config`)
+  and `transport`; a `!cmd` record adds `tool`, `stage` (`gate`), `permissionMode` and,
+  on a `config_unreadable` deny, `code`, while the executor's execution record adds
+  `tool`, `stage`, `permissionMode` and the selected `shell`. `tests.result` carries the
+  same hash instead of the argv; the raw command and output never enter audit or ledger.
+- The hash is 16 hex of an unsalted SHA-256 (no pepper in alpha.5): it correlates one
+  command, but a short command is recoverable by enumeration (D-11).
 
 ## Consequences
 
-- `astro run` works without Docker and a command behaves the same on every machine.
-- The host loses what Docker provided: no `--network none`, no read-only rootfs, no
-  `:ro` masks of `.git`/hard-blocked paths, no `HOME=/tmp`, no git neutralization; the
-  command sees the user's filesystem, network and processes. What compensates:
-  per-command approval with no session grant, the whole command in the prompt,
-  hard-block at dispatch in every mode, sanitized env, redaction before truncation,
-  hashed audit, the extra `bypass` confirmation. I-11 stays: the host is the default,
-  confinement and hard-blocks remain active, and the Docker path keeps its own tests.
+- `astro run` works without Docker and behaves the same on every machine.
+- The host loses Docker's `--network none`, read-only rootfs, `:ro` masks, `HOME=/tmp`
+  and git neutralization; the command sees the user's filesystem, network and processes.
+  What compensates: per-command approval with no session grant, the whole command in the
+  prompt, hard-block at dispatch in every mode, sanitized env, redaction before
+  truncation, hashed audit, the extra `bypass` confirmation. I-11 stays: the host is the
+  default, confinement and hard-blocks remain active, and Docker keeps its own tests.
 
 ## Alternatives discarded
 
