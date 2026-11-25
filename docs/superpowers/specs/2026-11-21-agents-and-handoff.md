@@ -28,9 +28,9 @@ composite `provider/id`), and an empty matcher, including `tags: []`, is invalid
 match wins in declaration order**, mirroring `shell.rules`, and at most one declared agent
 fires per turn, after the entry agent holds its slot. The matched agent is committed by the same engine as
 `spawn_agent` (`src/spawn.ts` `commitSpawn`): depth one, run and account caps, the parent
-scope intersection and an `agent.spawn` event with `source: "rule"` and the agent name in
-`rule`. A rule that cannot be granted is skipped - the turn does not fail - and the cut is
-audited. The child prompt is the named agent's own `systemPrompt`; the harness never expands
+scope intersection and an `agent.spawn` event with `door: "rule"` and the agent name in
+`rule` (`source` stays the concurrency tier). A rule that cannot be granted is skipped - the
+turn does not fail - and the cut is audited. The child prompt is the named agent's own `systemPrompt`; the harness never expands
 the turn text into a brief.
 
 ## 3. Concurrency: the model asks, the harness grants
@@ -42,7 +42,9 @@ the turn text into a brief.
 | depth | **1, no grandchild**, not configurable (`src/spawn.ts:297`) |
 
 Every spawn is recorded as an `agent.spawn` audit event with `requested`, `granted`, `cap`,
-`source` (`request` | `config` | `default`) and `reason`. Above the cap the harness grants the
+`source` (`request` | `config` | `default`) and `reason`. `source` is the concurrency tier for
+both doors; `door` says who asked (`model` for `spawn_agent`, `rule` for a declared rule) and,
+for a rule, `rule` names the agent (ADR-0036). Above the cap the harness grants the
 cap and says so in the tool result — "requested 8, granted 2: profile cap" — so the model
 does not repeat the request blindly and the user sees the request in `/usage`.
 

@@ -360,10 +360,10 @@ export function commitSpawn(deps: SpawnToolDeps, ctx: ToolContext, req: SpawnCom
         requested: grant.requested,
         granted: grant.granted,
         cap: grant.cap,
-        // `source` names the door (tier or rule); `grant_source` keeps ADR-0037.
-        source: req.rule === undefined ? grant.source : "rule",
+        // `source` is always the concurrency tier; `door` names who asked.
+        source: grant.source,
+        door: req.rule === undefined ? "model" : "rule",
         ...(req.rule === undefined ? {} : { rule: req.rule }),
-        grant_source: grant.source,
         reason,
         grant_reason: grant.reason,
         truncated: grant.truncated,

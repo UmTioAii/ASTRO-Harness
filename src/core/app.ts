@@ -1401,7 +1401,12 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
         if (declarativeFired) return;
         declarativeFired = true;
         if (entryAgentEntry === undefined) return;
-        const entryModel = registry.resolveModel(entryAgentEntry);
+        // The first generation call uses `strongModel` when routing is declared
+        // (model-routing.ts); matching must see that model, not the base one.
+        const routedKey = entryAgentEntry.modelRouting?.strongModel;
+        const entryModel = routedKey === undefined
+          ? registry.resolveModel(entryAgentEntry)
+          : registry.require(routedKey);
         const matched = matchDeclaredAgent(config.agents, {
           provider: entryModel.provider,
           model: `${entryModel.provider}/${entryModel.id}`,
@@ -1444,7 +1449,7 @@ export async function runTask(opts: RunOptions): Promise<RunReport> {
               model: candidate.model,
               ...(candidate.profile === undefined ? {} : { profile: candidate.profile }),
               need: "declared", requested: 1, granted: 0, cap: cap.cap,
-              source: "rule", rule: matched.name, grant_source: cap.source,
+              source: cap.source, door: "rule", rule: matched.name,
               reason: `rule:${matched.name}`, truncated: true, cut: redactSecrets(error.message),
               limits: { rounds, turns: 1 },
             },
