@@ -29,7 +29,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/adr/0037-per-account-concurrency-and-bounded-agents.md` | Per-account concurrency, bounded spawn and shared-account budget (#602) | ~45 |
 | `docs/superpowers/plans/` | Ao executar uma frente do planejamento; roadmap de issues abertas em `2026-11-01-roadmap-execucao-issues-abertas.md` | 1 por frente |
 | `docs/superpowers/specs/` | Antes de implementar uma frente aprovada; anexos em `2026-11-08-anexos-attachments-design.md` (#392) | 1 por frente |
-| `docs/alpha.5-roadmap.md` | Ordem, dependências e decisões do pacote alpha.5 | ~290, exceção temporária registrada no próprio roadmap |
+| `docs/alpha.5-roadmap.md` | **Roadmap atual**: ordem, dependências e decisões do pacote alpha.5 | ~290, exceção temporária registrada no próprio roadmap |
 | `docs/superpowers/specs/2026-11-21-limits-and-profiles.md` | S1/P0: limites, schema 2.0.0 e perfis Default/Control | ~127 |
 | `docs/superpowers/specs/2026-11-21-setup-wizard.md` | S1b/P0: setup da primeira execução por camada (#611) | ~78 |
 | `docs/superpowers/specs/2026-11-21-host-shell.md` | S2/P0.5: shell no host, scanner e aprovações | ~124 |
@@ -42,7 +42,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/superpowers/specs/2026-11-21-carry-over.md` | P6: fechamento dos quatro gaps de segurança e CI (#605) | ~42 |
 | `docs/superpowers/specs/2026-11-21-docs-and-public-repo.md` | S8/P7: tradução, README e higiene do repositório | ~69 |
 | `docs/roadmap.md` | Histórico das fases concluídas (F0–F7) | ~70 |
-| `docs/roadmap-complementar.md` | Itens planejados das camadas 0–3 (F-xx, T, C, P) | ~120 |
+| `docs/roadmap-complementar.md` | Histórico: itens planejados das camadas 0–3 (F-xx, T, C, P) | ~120 |
 | `docs/providers.md` | Ao construir provider, validar credencial ou usar os SDKs | ~90 |
 | `docs/provider-cards.md` | Ao mover/editar model cards, adicionar um provider ou ler o contrato do card (#553) | ~45 |
 | `docs/doctor.md` | Ao usar ou alterar `astro doctor`: checks, `--online` e formato `doctor/v1` (#61) | ~90 |
