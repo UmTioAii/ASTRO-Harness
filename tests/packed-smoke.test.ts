@@ -73,15 +73,15 @@ function healthRequest(): RecordedRequest {
   return { method: "GET", path: "/v1/models", authorization: `Bearer ${SMOKE_KEY_VALUE}`, body: "" };
 }
 
-test("firstFrame acha o header mesmo com ANSI e código de controle", () => {
+test("firstFrame acha a zona de status mesmo com ANSI e código de controle", () => {
   const output = [
     "\u001b[?2026hastro · /help para comandos · /exit para sair",
-    `\u001b[2K\u001b[GASTRO v${version} · mock/${SMOKE_MODEL} · n/d`,
+    "\u001b[2K\u001b[Gmock/mock-model · /tmp/mock · modo: ask",
     "│ > ",
   ].join("\n");
-  expect(firstFrame(output, version)).toBe(`ASTRO v${version} · mock/${SMOKE_MODEL} · n/d`);
-  expect(firstFrame("│ > \n", version)).toBeUndefined();
-  expect(firstFrame(`ASTRO v9.9.9 · mock/${SMOKE_MODEL}`, version)).toBeUndefined();
+  expect(firstFrame(output)).toBe("mock/mock-model · /tmp/mock · modo: ask");
+  expect(firstFrame("│ > \n")).toBeUndefined();
+  expect(firstFrame("mock/mock-model\n")).toBeUndefined();
 });
 
 test("completionProblem aceita a requisição esperada", () => {
@@ -343,12 +343,12 @@ test("requiredProviderOkLine não inventa \"ok\" quando a linha não existe", ()
 });
 
 test("bootOutcome só passa com o primeiro frame; não existe boot pulado", () => {
-  const frame = `ASTRO v${version} · mock/${SMOKE_MODEL} · n/d`;
-  expect(bootOutcome(frame, null, version)).toEqual({ status: "passed", frame });
-  expect(bootOutcome(`\u001b[2K${frame}`, 0, version)).toEqual({ status: "passed", frame });
-  expect(() => bootOutcome("│ > \n", 0, version)).toThrow(SmokeError);
-  expect(() => bootOutcome("", null, version)).toThrow(/primeiro frame/);
-  expect(() => bootOutcome("astro: precisa de um terminal interativo", 3, version)).toThrow(/preload/);
+  const frame = `mock/${SMOKE_MODEL} · /tmp/mock · modo: ask`;
+  expect(bootOutcome(frame, null)).toEqual({ status: "passed", frame });
+  expect(bootOutcome(`\u001b[2K${frame}`, 0)).toEqual({ status: "passed", frame });
+  expect(() => bootOutcome("│ > \n", 0)).toThrow(SmokeError);
+  expect(() => bootOutcome("", null)).toThrow(/primeiro frame/);
+  expect(() => bootOutcome("astro: precisa de um terminal interativo", 3)).toThrow(/preload/);
 });
 
 test("requirePort recusa porta que apontaria a config para :0", () => {

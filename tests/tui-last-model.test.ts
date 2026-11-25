@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activateProvider } from "../src/tui/app";
+import { activateProvider } from "../src/tui/screens";
 import { projectKey } from "../src/home-layout";
 import type { SessionSnapshot } from "../src/chat/agent-session";
 

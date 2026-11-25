@@ -1,0 +1,28 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`empty frame at 80 columns is pinned across the extraction (#595) 1`] = `
+"astro · /help para comandos · /exit para sair
+                    █▀▀█ █▀▀ ▀█▀ █▀▀█ █▀▀█
+                    █▄▄█ ▀▀█  █  █▄▄▀ █  █
+                    ▀  ▀ ▀▀▀  ▀  ▀  ▀ ▀▀▀▀
+
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ❯                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  enter envia · shift+enter nova linha
+p/m1 · /tmp/astro (main) · 10/5 tokens · US$ 0.001000 · modo: ask"
+`;
+
+exports[`completed turn frame at 80 columns is pinned across the extraction (#595) 1`] = `
+"astro · /help para comandos · /exit para sair
+> oi
+
+eco:oi
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ❯                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  enter envia · shift+enter nova linha
+p/m1 · /tmp/astro (main) · 10/5 tokens · US$ 0.001000 · modo: ask"
+`;

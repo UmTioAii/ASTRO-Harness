@@ -200,9 +200,9 @@ test("live tool transitions come from tool.start/tool.end and redact arguments (
   }
 }, 10_000);
 
-test("footer at 80 columns keeps the model only in the header and follows the documented order (#635)", async () => {
+test("footer at 80 columns carries the model once and follows the documented order (#595)", async () => {
   for (const [mode, expected] of [
-    ["ask", "/tmp/astro (main) · US$ 0.001000 · modo: ask"], ["bypass", "/tmp/astro (main) · US$ 0.001000 · modo: bypass"],
+    ["ask", "p/m1 · /tmp/astro (main) · US$ 0.001000 · modo: ask"], ["bypass", "p/m1 · /tmp/astro (main) · US$ 0.001000 · modo: bypass"],
   ] as const) {
     const instance = render(<TuiApp session={fakeSession({ permissionMode: () => mode })} cwd="/tmp/astro" branch="main" />);
     try {
@@ -210,6 +210,7 @@ test("footer at 80 columns keeps the model only in the header and follows the do
       instance.stdout.emit("resize");
       await waitFor(() => (instance.lastFrame() ?? "").includes("enter envia"));
       const frame = instance.lastFrame() ?? "";
+      // The header is gone, so the model appears exactly once, in zone 4.
       expect(frame.split("p/m1")).toHaveLength(2);
       expect(frame.trimEnd().split("\n").at(-1)).toBe(expected);
     } finally {
@@ -484,6 +485,60 @@ test("the assistant final answer is sanitized before Markdown renders it (#653, 
     expect(frame).not.toContain(secret);
     expect(frame).toContain("[REDACTED]");
     expect(frame).toContain("    indented line");
+  } finally {
+    instance.unmount();
+  }
+}, 15_000);
+
+test("ctrl+o is append-only in <Static>: expanded history stays, the next live turn follows the flag (#595)", async () => {
+  const gate = new TurnGate();
+  const messages: ChatMessage[] = [];
+  const bodies = ["primeiro corpo", "segundo corpo"];
+  let turnIndex = 0;
+  const session = fakeSession({
+    snapshot: () => ({
+      id: "s1", startedAt: at, model: "p/m1", messages, turns: 0,
+      tokensIn: 0, tokensOut: 0, costUsd: 0.001,
+    }),
+    send: async (
+      _prompt: string, _signal?: AbortSignal, _onToken?: (text: string) => void, _attachments?: unknown,
+      turn?: { observer?: (event: TurnEvent) => void },
+    ) => {
+      const body = bodies[turnIndex++]!;
+      turn?.observer?.(start("c1", "read_file", { path: "a.ts" }));
+      messages.push({ role: "tool", content: body, toolCallId: "c1" });
+      await gate.enter();
+      turn?.observer?.(end("c1", false));
+      turn?.observer?.(turnEnd);
+      return resultOf(turnIndex === 1 ? "eco:um" : "eco:dois");
+    },
+  });
+  const instance = render(<TuiApp session={session} cwd={mkdtempSync(join(tmpdir(), "astro-tui-static-"))} />);
+  try {
+    instance.stdin.write("um");
+    instance.stdin.write("\r");
+    await waitFor(() => gate.parked === 1 && (instance.lastFrame() ?? "").includes("▸ read_file a.ts"), "first turn running");
+    expect(instance.lastFrame()).not.toContain("primeiro corpo");
+
+    instance.stdin.write("\u000f"); // ctrl+o ON while the turn is live
+    await waitFor(() => (instance.lastFrame() ?? "").includes("primeiro corpo"), "live body expanded");
+    gate.release();
+    await waitFor(() => (instance.lastFrame() ?? "").includes("eco:um"), "first turn committed");
+    // Printed while ON: the scrollback line keeps the body.
+    expect(instance.lastFrame()).toContain("primeiro corpo");
+
+    instance.stdin.write("\u000f"); // ctrl+o OFF
+    instance.stdin.write("dois");
+    instance.stdin.write("\r");
+    await waitFor(() => gate.parked === 1 && (instance.lastFrame() ?? "").includes("▸ read_file a.ts"), "second turn running");
+    // Committed lines were not rewritten, and the new live turn is collapsed.
+    expect(instance.lastFrame()).toContain("primeiro corpo");
+    expect(instance.lastFrame()).not.toContain("segundo corpo");
+
+    gate.release();
+    await waitFor(() => (instance.lastFrame() ?? "").includes("eco:dois"), "second turn committed");
+    // Printed while OFF: the second body is never revealed.
+    expect(instance.lastFrame()).not.toContain("segundo corpo");
   } finally {
     instance.unmount();
   }

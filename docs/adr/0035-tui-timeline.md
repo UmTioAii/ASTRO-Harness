@@ -20,7 +20,7 @@ The TUIX spec defines a four-zone continuous-flow screen and S5a (#600) already 
 | Redaction | Every dynamic string crosses `sanitizePromptText` before width measurement (I-03). Block content (answers, expanded output, reasoning) uses `sanitizeBlockText`: ANSI removed first, `redactSecrets` over the whole text (a PEM spans lines), then each line sanitized, keeping indentation; a reasoning block is capped at `MAX_REASONING_CHARS` (16k code points) with a `…` marker. One-line fields collapse whitespace. |
 | Purity | `renderTimeline(view, width) => string[]` and `renderTimelineZones` for the four zones have no Ink import, no TTY and no I/O; time and cost arrive as data. Ink zones only join the lines. |
 | Width | 120+: 100-column cap with a 2-column margin; 80–119: full width; 60–79: 2-column indent, no durations, last model segment; below 60: no indent and the `ASTRO` wordmark. No line exceeds the supplied width, measured in display columns. |
-| Expansion | Collapsed by default. `ctrl+o` reveals tool bodies by `callId`; `ctrl+t` reveals reasoning. A provider without reasoning emits no line, never a placeholder. |
+| Expansion | Collapsed by default. `ctrl+o` reveals tool bodies by `callId`; `ctrl+t` reveals reasoning. A provider without reasoning emits no line, never a placeholder. Both act on the live turn only: committed `<Static>` scrollback is immutable and keeps the state it was printed with. |
 | States | `empty`, `thinking`, `streaming`, `approval`, `error`, `done` own zones 2–3; zone 4 (`model · mode · cost`) is always last; until the Ink header is removed, the footer keeps `place · tokens · cost · budget · mode` and omits the model. Approval replaces the composer line while the timeline stays above it. |
 | Reuse | `markdown.tsx`, `diff-viewer.tsx` and the keybinding contracts keep theirs; the pure renderer emits plain text and Ink applies styling. `banner.tsx` is removed by the Ink slice, not here. |
 
@@ -29,3 +29,4 @@ The TUIX spec defines a four-zone continuous-flow screen and S5a (#600) already 
 - One contract: `callId` is the identity from `tool.start` through `tool.end` and the body map, and `status` is `running` until `tool.end` maps `isError` to `ok`/`failed`.
 - The renderer is testable at every width without a terminal; snapshots pin the six states at 120/80/60 and a property test covers 40–200.
 - Styling, live wiring, expansion keys, approval focus, `banner.tsx` removal and `app.tsx` size stay in the Ink slice (#635).
+- `ctrl+o`/`ctrl+t` are live flags applied when a line is printed: committed `<Static>` lines keep the expansion state they were printed with and are never rewritten (docs/tui-layout.md §Expansions, #595).

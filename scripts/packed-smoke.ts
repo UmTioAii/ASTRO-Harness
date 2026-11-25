@@ -298,12 +298,12 @@ export function prepareHome(home: string, projectDir: string, port: number): voi
   saveHomeState(trustState(canonicalFolder(projectDir)), join(home, "state.json"));
 }
 
-/** Primeira linha do header (`ASTRO v<versão> · provider/modelo · saúde`). */
-export function firstFrame(output: string, version: string): string | undefined {
+/** First status line (zone 4) after the TUI mounts: `<provider>/<model> · … · modo: …`. */
+export function firstFrame(output: string): string | undefined {
   return plainOutput(output)
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find((line) => line.includes(`ASTRO v${version}`) && line.includes(`${SMOKE_PROVIDER}/${SMOKE_MODEL}`));
+    .find((line) => line.includes(`${SMOKE_PROVIDER}/${SMOKE_MODEL}`) && line.includes("modo:"));
 }
 
 /**
@@ -583,8 +583,8 @@ export function tuiBootError(output: string, exitCode: number | null): SmokeErro
  * Decisão pura do boot, para teste: o tipo não admite `skipped`, então a etapa
  * não tem como "passar" sem primeiro frame (é o gate do #542).
  */
-export function bootOutcome(output: string, exitCode: number | null, version: string): TuiBoot {
-  const frame = firstFrame(output, version);
+export function bootOutcome(output: string, exitCode: number | null): TuiBoot {
+  const frame = firstFrame(output);
   if (frame === undefined) throw tuiBootError(output, exitCode);
   return { status: "passed", frame };
 }
@@ -651,10 +651,10 @@ async function runTui(ctx: TuiContext, registry: CleanupRegistry): Promise<StepO
     // Falha rápido quando o filho morre (ex.: "precisa de um terminal"): o
     // preload não rodou e esperar 30 s só atrasaria o mesmo erro.
     const deadline = Date.now() + FIRST_FRAME_MS;
-    while (Date.now() < deadline && firstFrame(out, ctx.version) === undefined && child.exitCode === null) {
+    while (Date.now() < deadline && firstFrame(out) === undefined && child.exitCode === null) {
       await Bun.sleep(POLL_MS);
     }
-    const frame = bootOutcome(tuiOutput(), child.exitCode, ctx.version).frame;
+    const frame = bootOutcome(tuiOutput(), child.exitCode).frame;
 
     // `/providers` → `t` → enter: health real (GET /v1/models) até `ok` com latência.
     await write("/providers");
