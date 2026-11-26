@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConfig } from "../src/core/config";
-import { runProviderWizard } from "../src/chat/provider-wizard";
+import { runProviderWizard, saveProviderProfile } from "../src/chat/provider-wizard";
 import { ProfileManager } from "../src/providers/profile-manager";
 import { profileStoreFromConfig } from "../src/providers/profiles";
 
@@ -118,6 +118,48 @@ test("chave colada no prompt de variável não vaza na mensagem (I-03)", async (
   expect(view).toBeUndefined();
   expect(out.join("\n")).not.toContain(secret);
   expect(out.join("\n")).toContain("cofre");
+});
+
+test("an invalid catalog answer never echoes a pasted key (#629)", async () => {
+  const { manager } = setup();
+  const secret = "sk-selector-sentinel";
+  const { io, out } = fakeIO([secret]);
+  await runProviderWizard(io, manager, { mode: "add" });
+  expect(out.join("\n")).toContain("unknown option");
+  expect(out.join("\n")).not.toContain(secret);
+});
+
+test("a vault write error never prints the pasted key (#629)", async () => {
+  const { manager } = setup();
+  const secret = "sk-vault-error-sentinel";
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", secret, "S"]);
+  const view = await runProviderWizard(io, manager, {
+    mode: "add",
+    saveSecret: () => { throw new Error(`vault write failed: ${secret}`); },
+    discardSecret: () => {},
+  });
+  expect(view).toBeUndefined();
+  expect(out.join("\n")).toContain("erro:");
+  expect(out.join("\n")).not.toContain(secret);
+});
+
+test("a pasted key requires rollback before any profile or vault write (#629)", () => {
+  const { manager } = setup();
+  let vaultWrites = 0;
+  const result = saveProviderProfile({
+    manager,
+    mode: "add",
+    draft: {
+      name: "Local", kind: "openai-compat", baseUrl: "http://localhost:1/v1",
+      models: [{ id: "m1", tags: [], context: 8192 }],
+    },
+    secret: "sk-rollback-sentinel",
+    saveSecret: () => { vaultWrites++; return "vault:cred-rollback"; },
+  });
+  expect(result.saved).toBeUndefined();
+  expect(result.error).toContain("cofre");
+  expect(vaultWrites).toBe(0);
+  expect(manager.list().some((profile) => profile.name === "Local")).toBe(false);
 });
 
 test("credentialRef vazio continua sem chave (#286)", async () => {

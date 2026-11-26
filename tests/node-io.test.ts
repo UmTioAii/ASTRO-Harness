@@ -32,3 +32,23 @@ describe("REPL: leitura de aprovação cancelável (#526)", () => {
     io.close();
   });
 });
+
+test("secret input is masked and cannot be recalled from history (#629)", async () => {
+  const input = Object.assign(new PassThrough(), { isTTY: true });
+  const output = new PassThrough();
+  let echoed = "";
+  output.on("data", (chunk) => { echoed += String(chunk); });
+  const io = nodeReplIO(input, output);
+  const secret = "sk-tty-history-sentinel";
+  try {
+    const reading = io.read("key: ", { secret: true });
+    input.write(`${secret}\r`);
+    await expect(reading).resolves.toBe(secret);
+    const recall = io.read("next: ");
+    input.write("\u001b[A\r");
+    await expect(recall).resolves.not.toBe(secret);
+    expect(echoed).not.toContain(secret);
+  } finally {
+    io.close();
+  }
+});
