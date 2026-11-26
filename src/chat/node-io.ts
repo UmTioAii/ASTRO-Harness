@@ -1,7 +1,7 @@
 /** I/O do REPL via readline (fila de linhas; SIGINT aborta o turno e encerra). */
 import { createInterface } from "node:readline";
 import type { ReplIO } from "./repl";
-import { maskSecretReadline } from "./readline-secret";
+import { protectReadline } from "./readline-secret";
 
 export interface NodeReplIO extends ReplIO {
   close(): void;
@@ -32,6 +32,7 @@ export function nodeReplIO(
     input,
     output,
   });
+  const protect = protectReadline(rl, output);
   const controller = new AbortController();
   const pending: string[] = [];
   const waiters: Array<(line: string | null) => void> = [];
@@ -56,31 +57,36 @@ export function nodeReplIO(
     signal: controller.signal,
     read: async (prompt, opts) => {
       write(prompt);
-      const unmask = opts?.secret === true ? maskSecretReadline(rl, output) : undefined;
+      const finish = protect(opts?.secret === true);
       const queued = pending.shift();
-      if (queued !== undefined) { unmask?.(queued); return queued; }
-      if (closed) { unmask?.(""); return null; }
+      if (queued !== undefined) { finish(queued); return queued; }
+      if (closed) { finish(""); return null; }
       const line = await new Promise<string | null>((resolve) => waiters.push(resolve));
-      unmask?.(line ?? "");
+      finish(line ?? "");
       return line;
     },
     /** Ignora linhas já enfileiradas: decisor no meio do turno espera resposta nova. */
     readFresh: async (prompt) => {
+      const finish = protect(false);
       write(prompt);
-      if (closed) return null;
-      return await new Promise<string | null>((resolve) => waiters.push(resolve));
+      if (closed) { finish(""); return null; }
+      const line = await new Promise<string | null>((resolve) => waiters.push(resolve));
+      finish(line ?? "");
+      return line;
     },
     /** #526: sair da fila no abort — sem isso a próxima linha cai num waiter morto. */
     readCancelable: async (prompt, signal) => {
       // Uma espera que já expirou não imprime prompt nem entra na fila.
       if (signal?.aborted === true) return null;
       if (closed) return null;
+      const done = protect(false);
       write(prompt);
       return await new Promise<string | null>((resolve) => {
         let settled = false;
         const finish = (line: string | null): void => {
           if (settled) return;
           settled = true;
+          done(line ?? "");
           const index = waiters.indexOf(finish);
           if (index >= 0) waiters.splice(index, 1);
           signal?.removeEventListener("abort", onAbort);
