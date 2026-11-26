@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { PassThrough } from "node:stream";
 import { nodeReplIO } from "../src/chat/node-io";
+import { ttySetupIO } from "../src/chat/setup";
+
+const terminalAdapters = [
+  ["REPL", (input: NodeJS.ReadableStream, output: NodeJS.WritableStream) => {
+    const io = nodeReplIO(input, output);
+    return { io, close: () => io.close() };
+  }],
+  ["setup", ttySetupIO],
+] as const;
 
 describe("REPL: leitura de aprovação cancelável (#526)", () => {
   test("abortar remove o waiter e a próxima linha vai para a leitura seguinte", async () => {
@@ -33,22 +42,34 @@ describe("REPL: leitura de aprovação cancelável (#526)", () => {
   });
 });
 
-test("secret input is masked and cannot be recalled from history (#629)", async () => {
-  const input = Object.assign(new PassThrough(), { isTTY: true });
-  const output = new PassThrough();
-  let echoed = "";
-  output.on("data", (chunk) => { echoed += String(chunk); });
-  const io = nodeReplIO(input, output);
-  const secret = "sk-tty-history-sentinel";
-  try {
-    const reading = io.read("key: ", { secret: true });
-    input.write(`${secret}\r`);
-    await expect(reading).resolves.toBe(secret);
-    const recall = io.read("next: ");
-    input.write("\u001b[A\r");
-    await expect(recall).resolves.not.toBe(secret);
-    expect(echoed).not.toContain(secret);
-  } finally {
-    io.close();
-  }
-});
+for (const [name, open] of terminalAdapters) {
+  test(`${name} masks direct and type-ahead secrets and excludes them from history (#629)`, async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: true });
+    const output = new PassThrough();
+    let echoed = "";
+    output.on("data", (chunk) => { echoed += String(chunk); });
+    const { io, close } = open(input, output);
+    const direct = "sk-tty-direct-sentinel";
+    const pasted = "sk-tty-typeahead-sentinel";
+    const expectNoRecall = async (secret: string) => {
+      const recall = io.read("next: ");
+      input.write("\u001b[A\r");
+      await expect(recall).resolves.not.toBe(secret);
+      expect(echoed).not.toContain(secret);
+    };
+    try {
+      const reading = io.read("key: ", { secret: true });
+      input.write(`${direct}\r`);
+      await expect(reading).resolves.toBe(direct);
+      await expectNoRecall(direct);
+      const first = io.read("name: ");
+      input.write(`Local\r${pasted}\r`);
+      await expect(first).resolves.toBe("Local");
+      expect(echoed).not.toContain(pasted);
+      await expect(io.read("key: ", { secret: true })).resolves.toBe(pasted);
+      await expectNoRecall(pasted);
+    } finally {
+      close();
+    }
+  });
+}

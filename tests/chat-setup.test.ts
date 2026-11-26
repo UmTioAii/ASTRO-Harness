@@ -4,7 +4,6 @@ import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PassThrough } from "node:stream";
 import * as setup from "../src/chat/setup";
 
 // RED: the module does not exist yet — the structural cast keeps the typecheck
@@ -203,24 +202,4 @@ describe("setup wizard — one layer per run (#611)", () => {
     expect(stderr).toContain("no interactive terminal");
     expect(existsSync(join(cwd, "astro.config.json")) || existsSync(join(home, "config.json"))).toBe(false);
   });
-});
-
-test("setup secret input is masked and cannot be recalled from history (#629)", async () => {
-  const input = Object.assign(new PassThrough(), { isTTY: true });
-  const output = Object.assign(new PassThrough(), { isTTY: true });
-  let echoed = "";
-  output.on("data", (chunk) => { echoed += String(chunk); });
-  const { io, close } = setup.ttySetupIO(input, output);
-  const secret = "sk-setup-tty-sentinel";
-  try {
-    const reading = io.read("key: ", { secret: true });
-    input.write(`${secret}\r`);
-    await expect(reading).resolves.toBe(secret);
-    const recall = io.read("next: ");
-    input.write("\u001b[A\r");
-    await expect(recall).resolves.not.toBe(secret);
-    expect(echoed).not.toContain(secret);
-  } finally {
-    close();
-  }
 });
