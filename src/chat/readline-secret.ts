@@ -11,12 +11,12 @@ export function protectReadline(rl: Interface, output: NodeJS.WritableStream): (
     else output.write("*");
   };
   masked._writeToOutput = mask;
-  rl.on("line", () => { masked._writeToOutput = mask; });
+  rl.on("line", (line) => {
+    if (masked._writeToOutput === mask) masked.history = masked.history.filter((entry) => entry !== line);
+    masked._writeToOutput = mask;
+  });
   return (secret) => {
     masked._writeToOutput = secret ? mask : original;
-    return (line) => {
-      if (secret) masked.history = masked.history.filter((entry) => entry !== line);
-      masked._writeToOutput = mask;
-    };
+    return () => { masked._writeToOutput = mask; };
   };
 }
