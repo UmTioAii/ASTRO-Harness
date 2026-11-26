@@ -1,6 +1,7 @@
 /** I/O do REPL via readline (fila de linhas; SIGINT aborta o turno e encerra). */
 import { createInterface } from "node:readline";
 import type { ReplIO } from "./repl";
+import { maskSecretReadline } from "./readline-secret";
 
 export interface NodeReplIO extends ReplIO {
   close(): void;
@@ -25,7 +26,7 @@ export function nodeReplIO(
   input: NodeJS.ReadableStream = process.stdin,
   output: NodeJS.WritableStream = process.stdout,
 ): NodeReplIO {
-  const terminal = input === process.stdin && process.stdin.isTTY === true;
+  const terminal = (input as NodeJS.ReadStream).isTTY === true;
   const rl = createInterface({
     ...nodeReplOptions(terminal),
     input,
@@ -53,12 +54,15 @@ export function nodeReplIO(
   };
   return {
     signal: controller.signal,
-    read: async (prompt) => {
+    read: async (prompt, opts) => {
       write(prompt);
-      const line = pending.shift();
-      if (line !== undefined) return line;
-      if (closed) return null;
-      return await new Promise<string | null>((resolve) => waiters.push(resolve));
+      const unmask = opts?.secret === true ? maskSecretReadline(rl, output) : undefined;
+      const queued = pending.shift();
+      if (queued !== undefined) { unmask?.(queued); return queued; }
+      if (closed) { unmask?.(""); return null; }
+      const line = await new Promise<string | null>((resolve) => waiters.push(resolve));
+      unmask?.(line ?? "");
+      return line;
     },
     /** Ignora linhas já enfileiradas: decisor no meio do turno espera resposta nova. */
     readFresh: async (prompt) => {

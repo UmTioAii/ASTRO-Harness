@@ -9,6 +9,7 @@ import { profileFromEnv, validateProjectLayer } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { activeModelRefFromGlobal, createFileExclusive } from "./init";
 import { runProviderWizard, type WizardIO } from "./provider-wizard";
+import { maskSecretReadline } from "./readline-secret";
 
 /** One line printed on a machine without a terminal: nothing is asked or written. */
 export const SETUP_UNATTENDED_NOTICE =
@@ -139,19 +140,24 @@ export async function runSetup(configPath: string, opts: SetupOptions = {}): Pro
 }
 
 /** Terminal channel of the wizard; one readline and one close listener, closed before Ink mounts. */
-export function ttySetupIO(): { io: WizardIO; close: () => void } {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+export function ttySetupIO(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): { io: WizardIO; close: () => void } {
+  const rl = createInterface({ input, output });
   let closed = false;
   let pending: ((value: string | null) => void) | undefined;
   rl.once("close", () => { closed = true; pending?.(null); });
   return {
     io: {
-      read: (prompt) => new Promise<string | null>((resolve) => {
+      read: (prompt, opts) => new Promise<string | null>((resolve) => {
         if (closed) { resolve(null); return; }
-        pending = resolve;
-        rl.question(prompt, (answer) => { pending = undefined; resolve(answer); }); // EOF resolves null above
+        let unmask: ((line: string) => void) | undefined;
+        pending = (value) => { unmask?.(value ?? ""); pending = undefined; resolve(value); };
+        rl.question(prompt, (answer) => pending?.(answer)); // EOF resolves null above
+        unmask = opts?.secret === true ? maskSecretReadline(rl, output) : undefined;
       }),
-      write: (text) => { process.stdout.write(`${text}\n`); },
+      write: (text) => { output.write(`${text}\n`); },
     },
     close: () => rl.close(),
   };

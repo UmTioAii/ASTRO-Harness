@@ -3,6 +3,7 @@ import { PROVIDER_CATALOG, type CatalogEntry } from "../providers/catalog";
 import type { ProfileDraft, ProfileManager, ProfileView } from "../providers/profile-manager";
 import type { ProfileModel, ProviderProfile } from "../providers/profiles";
 import { isEnvName, isVaultCredentialRef, looksLikeSecret } from "../secrets";
+import { redactSecrets } from "../sanitize-external";
 
 export interface WizardIO {
   read(prompt: string, opts?: { secret?: boolean }): Promise<string | null>;
@@ -34,8 +35,10 @@ const DEFAULT_CONTEXT = 128_000;
 /** Mesmo padrão de `ENV_NAME` em src/providers/profiles.ts: nome de variável de ambiente. */
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function messageOf(error: unknown, secret?: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const replaced = secret === undefined || secret === "" ? message : message.replaceAll(secret, "[redacted]");
+  return redactSecrets(replaced);
 }
 
 async function ask(io: WizardIO, label: string, fallback: string): Promise<string | undefined> {
@@ -57,7 +60,7 @@ async function choose(io: WizardIO, label: string, options: readonly string[], i
   if (value === "") return initial;
   const index = options.indexOf(value);
   if (index < 0) {
-    io.write(`unknown option: "${value}"`);
+    io.write("unknown option");
     return undefined;
   }
   return index;
@@ -102,7 +105,7 @@ export interface SaveProviderResult {
  * a profile failure after the vault write discards the new credential.
  */
 export function saveProviderProfile(opts: SaveProviderOptions): SaveProviderResult {
-  if (opts.secret !== undefined && opts.saveSecret === undefined) {
+  if (opts.secret !== undefined && (opts.saveSecret === undefined || opts.discardSecret === undefined)) {
     return { error: "cofre de credenciais indisponível nesta tela; use uma variável de ambiente" };
   }
   let saved: ProfileView | undefined;
@@ -128,7 +131,7 @@ export function saveProviderProfile(opts: SaveProviderOptions): SaveProviderResu
     if (addedId !== undefined) {
       try { opts.manager.remove(addedId); } catch { /* preserva o erro original */ }
     }
-    return { error: messageOf(error) };
+    return { error: messageOf(error, opts.secret) };
   }
   return { saved };
 }
@@ -201,7 +204,7 @@ export async function runProviderWizard(
       const value = answer.trim();
       if (value === "") break;
       if (looksLikeSecret(value)) {
-        if (opts.saveSecret === undefined) {
+        if (opts.saveSecret === undefined || opts.discardSecret === undefined) {
           io.write("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
           continue;
         }
@@ -276,7 +279,7 @@ export async function runProviderWizard(
         opts.onUse?.(saved.id);
         io.write(`provider ativo: ${saved.id}`);
       } catch (error) {
-        io.write(`erro: ${messageOf(error)}`);
+        io.write(`erro: ${messageOf(error, secret)}`);
       }
     }
   }
