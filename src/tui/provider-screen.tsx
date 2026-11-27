@@ -93,6 +93,7 @@ export function ProviderScreen({
           ? initialRemove === undefined ? "list" : "remove"
           : initial?.mode === "credential" ? (recovering === undefined ? "list" : "form") : "list",
   );
+  const [initialName, setInitialName] = useState(initial?.mode === "add" ? initial.target : undefined);
   const [selected, setSelected] = useState(() => {
     if (initialTarget === undefined) return 0;
     const index = initialList.findIndex((item) => item.id === initialTarget.id);
@@ -152,6 +153,7 @@ export function ProviderScreen({
   };
 
   const startAdd = (): void => {
+    setInitialName(undefined);
     setEditing(undefined);
     setMessage(undefined);
     setView("form");
@@ -529,7 +531,7 @@ export function ProviderScreen({
       <ProviderWizardForm
         manager={manager}
         colors={colors}
-        {...(initial?.mode === "add" && initial.target !== undefined ? { initialName: initial.target } : {})}
+        {...(initialName === undefined ? {} : { initialName })}
         {...(editing === undefined ? {} : { profile: editing })}
         {...(onSaveSecret === undefined ? {} : { saveSecret: onSaveSecret })}
         {...(onDiscardSecret === undefined ? {} : { discardSecret: onDiscardSecret })}

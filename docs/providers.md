@@ -38,7 +38,7 @@ Nenhum fetch de provider segue redirect: completion, health, refresh e login usa
 
 `astro models list [--config <path>] [--seeds] [--json]` lista os modelos da config efetiva (união projeto/global/env; projeto vence na mesma `provider/id`) com origem, status, tags, contexto e preço, sem ler valor de credencial (I-03). `--seeds` acrescenta as quatro sementes; `--json` imprime um único payload `{ models, seeds? }`. A descoberta `GET /models` no endpoint é entrega separada, fora desta frente.
 
-The shared `/provider add|edit` core (#629) serves the REPL and `astro setup`; the TUI renderer lands in the stacked follow-up. The flow is catalog, name, endpoint, models and key; a pasted key is masked, excluded from TTY history and written through the same save/discard vault handler pair with rollback and redacted errors, while `codex-oauth` asks for the credentials file instead.
+The shared `/provider add|edit` core (#629) serves the REPL, `astro setup`, and the TUI. The flow is catalog, name, endpoint, models and key; a pasted key is masked, kept out of React state and TTY history, and written through the same save/discard vault handler pair with rollback and redacted errors, while `codex-oauth` asks for the credentials file instead. In the TUI, Enter preserves the existing credential reference and explicitly emptying the field removes it; the REPL keeps its empty-input fallback.
 
 ## Perfis globais e `--provider` (#201)
 
