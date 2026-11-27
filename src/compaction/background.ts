@@ -10,9 +10,7 @@ import {
 import { join } from "node:path";
 import { isAbortError } from "../abort";
 import type { Auditor } from "../audit";
-import type { Ledger } from "../ledger";
 import type { ChatMessage } from "../providers/types";
-import { recordCompactionFailure } from "./breaker";
 import type { CompactResult } from "./engine";
 import { renderCompactionArtifact, type CompactionArtifactV1 } from "./types";
 
@@ -40,7 +38,6 @@ export interface BackgroundCompactorOptions {
   /** Diretório dos artefatos; um par run/agent por arquivo. */
   dir: string;
   run: string;
-  ledger: Ledger;
   audit: Auditor;
 }
 
@@ -130,14 +127,13 @@ export function applyBackgroundCompaction(messages: ChatMessage[], job: Backgrou
 }
 
 /**
- * Fila limitada: um job em voo; pré-aquece uma vez por crescimento relevante.
- * Falha conta no breaker uma vez por snapshot e é engolida (o próximo turno
- * retenta inline).
+ * Depth-1 queue: one job in flight; prewarms once per relevant growth. A
+ * failure is audited once per snapshot and swallowed (the inline path decides
+ * and never stops compacting).
  */
 export class BackgroundCompactor {
   readonly #dir: string;
   readonly #run: string;
-  readonly #ledger: Ledger;
   readonly #audit: Auditor;
   #running: Promise<void> | undefined;
   #memory: { agent: string; job: BackgroundCompaction } | undefined;
@@ -150,7 +146,6 @@ export class BackgroundCompactor {
   constructor(opts: BackgroundCompactorOptions) {
     this.#dir = opts.dir;
     this.#run = opts.run;
-    this.#ledger = opts.ledger;
     this.#audit = opts.audit;
   }
 
@@ -186,13 +181,13 @@ export class BackgroundCompactor {
         try { this.#persist(agent, job); } catch { /* sem disco a memória ainda vale */ }
       } catch (error) {
         if (controller.signal.aborted || isAbortError(error, controller.signal)) return;
-        // Uma falha por snapshot: tentativas em banda não podem abrir o breaker
-        // antes do gatilho real.
+        // One failure per snapshot. Prewarming is opportunistic: it never enters
+        // the breaker or the ledger, because the inline path still decides (and
+        // always compacts).
         const failureId = `${agent}\u0000${key}`;
         if (this.#failedKeys.has(failureId)) return;
         this.#failedKeys.add(failureId);
         try {
-          recordCompactionFailure(this.#ledger, this.#run, agent);
           this.#audit.append({
             run: this.#run, agent, tipo: "compaction.failed",
             payload: { reason: "background", error: error instanceof Error ? error.name : "unknown" },

@@ -79,7 +79,7 @@ function inBandStep(messages: ChatMessage[], index: number): void {
 describe("compactação em background (CMP-9)", () => {
   test("próximo turno aplica o artefato pronto sem compactar inline", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
 
@@ -109,7 +109,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("breaker pausado não consome o artefato pronto e não zera o contador", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
 
@@ -142,7 +142,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("resultado não pronto cai no inline e cancela o prewarm em voo", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const gate = deferred<string>();
     const messages = history();
     let summaries = 0;
@@ -188,7 +188,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("overflow cancela o prewarm e compacta inline antes do retry", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
     let completions = 0;
@@ -227,7 +227,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("N steps em banda geram um único resumo e não sobrescrevem o artefato", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
     let completions = 0;
@@ -253,7 +253,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("falha em banda não conta no breaker (o inline decide)", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
     const rejections: unknown[] = [];
@@ -290,7 +290,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("prefixo alterado entre agendar e consumir cai no inline", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
     await completeWithCompaction(messages, {
@@ -317,7 +317,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("turnos concorrentes não leem artefato parcial e a fila é limitada", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const gate = deferred<string>();
     let runs = 0;
 
@@ -341,21 +341,21 @@ describe("compactação em background (CMP-9)", () => {
   test("artefato sobrevive ao restart, exige marcador e identidade iguais", async () => {
     const { dir, ledger, audit } = setup();
     const messages = history();
-    const first = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const first = new BackgroundCompactor({ dir, run: "r1", audit });
     first.schedule("a", messages, 7_000, ID, async () => done("PERSISTIDO"));
     await first.drain();
 
     const marker = JSON.parse(readFileSync(compactionArtifactPaths(dir, "r1", "a").marker, "utf8"));
     expect(marker.identity).toEqual(ID);
 
-    const second = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const second = new BackgroundCompactor({ dir, run: "r1", audit });
     expect(second.take("a", messages, { ...ID, model: "outro" })).toBeUndefined();
     expect(second.take("a", messages, ID)?.artifact.importantContext).toBe("PERSISTIDO");
 
     first.schedule("b", messages, 7_000, ID, async () => done("PARCIAL"));
     await first.drain();
     unlinkSync(compactionArtifactPaths(dir, "r1", "b").marker);
-    const third = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const third = new BackgroundCompactor({ dir, run: "r1", audit });
     expect(third.take("b", messages, ID)).toBeUndefined();
     await first.close();
     await third.close();
@@ -363,13 +363,13 @@ describe("compactação em background (CMP-9)", () => {
 
   test("close aguarda o job, apaga artefato não consumido e varre tmp", async () => {
     const { dir, ledger, audit } = setup();
-    const producer = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const producer = new BackgroundCompactor({ dir, run: "r1", audit });
     producer.schedule("a", history(), 7_000, ID, async () => done("PRONTO"));
     await producer.drain();
 
-    const otherRun = new BackgroundCompactor({ dir, run: "r2", ledger, audit });
+    const otherRun = new BackgroundCompactor({ dir, run: "r2", audit });
     expect(otherRun.take("a", history(), ID)).toBeUndefined();
-    const otherAgent = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const otherAgent = new BackgroundCompactor({ dir, run: "r1", audit });
     expect(otherAgent.take("b", history(), ID)).toBeUndefined();
     expect(producer.take("a", history(), ID)?.artifact.importantContext).toBe("PRONTO");
 
@@ -387,7 +387,7 @@ describe("compactação em background (CMP-9)", () => {
 
     expect(existsSync(stale)).toBe(false);
     expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-    const fresh = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const fresh = new BackgroundCompactor({ dir, run: "r1", audit });
     expect(fresh.take("a", history(), ID)).toBeUndefined();
     await otherRun.close();
     await otherAgent.close();
