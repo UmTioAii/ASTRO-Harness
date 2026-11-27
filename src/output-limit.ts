@@ -10,8 +10,10 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { SUBAGENT_LIMITS, normalizeSubagentResult, xmlSafeJson, type SubagentResult } from "./subagents/types";
 import { redactSecrets } from "./sanitize-external";
 import { estimateTokens } from "./tokens";
+import type { ToolResult } from "./tools/types";
 
 /** Config `outputLimit` (D-CFG1): teto absoluto e fração da janela. */
 export interface OutputLimitConfig {
@@ -47,6 +49,77 @@ export interface LimitedOutput {
   truncated: boolean;
   artifactPath?: string;
   unrecoverable?: boolean;
+}
+
+const SUBAGENT_PAYLOAD_BYTES = SUBAGENT_LIMITS.payloadBytes; // spec §5 nested payload ceiling
+const NESTED_KEYS = ["output", "error"] as const;
+/** Byte cut that never splits a multi-byte UTF-8 sequence; a nonpositive budget is empty. */
+function boundBytes(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxBytes) return text;
+  let end = maxBytes;
+  // A continuation byte (`10xxxxxx`) after the cut means the character started before it.
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString("utf8");
+}
+
+/** ToolResult derived from the closed envelope: `isError`/`code` equal the JSON (spec §2). */
+function envelopeResult(result: ToolResult, envelope: SubagentResult): ToolResult {
+  const next: ToolResult = { ...result, output: xmlSafeJson(envelope), isError: envelope.isError === true, transient: true };
+  if (envelope.isError === true) next.code = envelope.code;
+  else delete next.code;
+  return next;
+}
+
+type AnyRecord = Record<string, unknown>;
+
+/**
+ * Envelope-aware limit for `subagent` (#680, spec §5). Malformed, unparseable or
+ * non-envelope output fails closed to a minimal stable `child_failed` JSON error
+ * instead of returning raw text; a trusted envelope keeps its fixed fields and
+ * only the nested `output`/`error` is redacted and bounded. The 8 KiB nested
+ * ceiling applies with or without a session cap, and with `capTokens` the final
+ * XML-safe serialization is measured with `estimateTokens` while the nested
+ * payload shrinks monotonically until it fits. The generic head/tail/artifact
+ * limiter never rewrites or persists this payload.
+ */
+export function limitSubagentEnvelope(result: ToolResult, capTokens?: number): ToolResult {
+  let parsed: unknown;
+  try {
+    parsed = result.output === "" ? undefined : JSON.parse(result.output);
+  } catch {
+    parsed = undefined;
+  }
+  const normalized = normalizeSubagentResult(parsed);
+  const fitted = (maxBytes: number): SubagentResult => {
+    const bounded: AnyRecord = { ...normalized };
+    for (const key of NESTED_KEYS) {
+      const payload = bounded[key];
+      if (typeof payload !== "string") continue;
+      const clean = redactSecrets(payload);
+      const cut = boundBytes(clean, maxBytes);
+      // A present nested field stays present, even when the budget empties it.
+      if (Buffer.byteLength(cut, "utf8") < Buffer.byteLength(clean, "utf8")) bounded.truncated = true;
+      bounded[key] = cut;
+    }
+    return bounded as SubagentResult;
+  };
+  if (capTokens === undefined) return envelopeResult(result, fitted(SUBAGENT_PAYLOAD_BYTES));
+  // Monotone search: the largest nested budget whose measured envelope fits the cap.
+  let low = 0;
+  let high = SUBAGENT_PAYLOAD_BYTES;
+  let best = fitted(0);
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (estimateTokens(xmlSafeJson(fitted(mid))) <= capTokens) {
+      best = fitted(mid);
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return envelopeResult(result, best);
 }
 
 /** Id seguro para cabeçalho/nome de arquivo (call ids vêm do modelo). */
