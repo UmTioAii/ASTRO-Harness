@@ -61,7 +61,8 @@ const DIGEST_MESSAGES = 12;
 /**
  * Extractive summary without a model (CMP-6): used when the summary model is
  * paused or failed. It keeps the latest turns and decisions instead of dropping
- * the whole older history — compaction always shrinks the context.
+ * the whole older history — the caller applies it only when it shrinks the
+ * context.
  */
 export function deterministicSummary(messages: readonly ChatMessage[]): string {
   const digest: string[] = [];

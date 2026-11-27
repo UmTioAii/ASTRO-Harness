@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { isAbortError } from "../abort";
 import type { Auditor } from "../audit";
 import type { ChatMessage } from "../providers/types";
+import { auditLabel } from "./audit-label";
 import type { CompactResult } from "./engine";
 import { renderCompactionArtifact, type CompactionArtifactV1 } from "./types";
 
@@ -182,15 +183,15 @@ export class BackgroundCompactor {
       } catch (error) {
         if (controller.signal.aborted || isAbortError(error, controller.signal)) return;
         // One failure per snapshot. Prewarming is opportunistic: it never enters
-        // the breaker or the ledger, because the inline path still decides (and
-        // always compacts).
+        // the breaker or the ledger, because the inline path decides and attempts
+        // the compaction.
         const failureId = `${agent}\u0000${key}`;
         if (this.#failedKeys.has(failureId)) return;
         this.#failedKeys.add(failureId);
         try {
           this.#audit.append({
             run: this.#run, agent, tipo: "compaction.failed",
-            payload: { reason: "background", error: error instanceof Error ? error.name : "unknown" },
+            payload: { reason: "background", error: auditLabel(error) },
           });
         } catch { /* bookkeeping nunca vira unhandled rejection */ }
       } finally {

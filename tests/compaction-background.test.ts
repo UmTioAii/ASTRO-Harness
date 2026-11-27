@@ -378,6 +378,32 @@ describe("compactação em background (CMP-9)", () => {
     await background.close();
   });
 
+  test("a raw prewarm failure is audited as `unclassified`, never as the JS error name", async () => {
+    const { dir, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const failing = async () => { throw new TypeError("boom"); };
+
+    background.schedule("a", history(), 7_000, ID, failing);
+    await background.drain();
+
+    expect(audit.readAll().find((event) => event.tipo === "compaction.failed")?.payload)
+      .toMatchObject({ reason: "background", error: "unclassified" });
+    await background.close();
+  });
+
+  test("a classified prewarm failure is audited with its D-18 class", async () => {
+    const { dir, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const failing = async () => { throw new ProviderError("auth", "missing credential"); };
+
+    background.schedule("a", history(), 7_000, ID, failing);
+    await background.drain();
+
+    expect(audit.readAll().find((event) => event.tipo === "compaction.failed")?.payload)
+      .toMatchObject({ reason: "background", error: "auth" });
+    await background.close();
+  });
+
   test("prefixo alterado entre agendar e consumir cai no inline", async () => {
     const { dir, ledger, audit } = setup();
     const background = new BackgroundCompactor({ dir, run: "r1", audit });

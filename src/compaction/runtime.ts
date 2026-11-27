@@ -9,6 +9,7 @@ import type { Auditor } from "../audit";
 import type { Ledger } from "../ledger";
 import { RETRYABLE_CLASSES } from "../providers/policy";
 import { ProviderError, type ChatMessage, type CompletionResponse } from "../providers/types";
+import { auditLabel } from "./audit-label";
 import {
   applyBackgroundCompaction,
   PREWARM_MARGIN,
@@ -81,11 +82,6 @@ const ARTIFACT_OVERHEAD = 2_000;
 /** Only transient failures are retried (D-18): a deterministic error repeats forever. */
 function isRetryableSummaryError(error: unknown): boolean {
   return error instanceof ProviderError && RETRYABLE_CLASSES.has(error.errClass);
-}
-
-/** Audit label of a failure: the D-18 class when known, `unclassified` otherwise. */
-function errorSummary(error: unknown): string {
-  return error instanceof ProviderError ? error.errClass : "unclassified";
 }
 
 /** Wait between attempts; aborting the run stops it immediately. */
@@ -180,7 +176,7 @@ async function applyCompaction(
           run: opts.run,
           agent,
           tipo: "compaction.failed",
-          payload: { reason, error: errorSummary(error), attempts: attempt + 1 },
+          payload: { reason, error: auditLabel(error), attempts: attempt + 1 },
         });
         if (after.paused) {
           // Later compactions skip the model until the pause expires; none of
@@ -193,7 +189,7 @@ async function applyCompaction(
           });
         }
         // The model failed: compaction continues through the extractive path.
-        return applyExtractive(messages, opts, reason, errorSummary(error));
+        return applyExtractive(messages, opts, reason, auditLabel(error));
       }
 
       // Retry with backoff
@@ -201,7 +197,7 @@ async function applyCompaction(
         run: opts.run,
         agent,
         tipo: "compaction.retry",
-        payload: { reason, error: errorSummary(error), attempt: attempt + 1, nextInMs: retryBackoffMs * 2 ** attempt },
+        payload: { reason, error: auditLabel(error), attempt: attempt + 1, nextInMs: retryBackoffMs * 2 ** attempt },
       });
       await backoff(retryBackoffMs * 2 ** attempt, opts.signal);
       throwIfAborted(opts.signal);
