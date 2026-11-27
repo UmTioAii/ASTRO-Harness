@@ -1,9 +1,7 @@
-/** Tela cheia de providers (TUI): lista + formulário + modelos por provider (#555), sem tocar segredo. */
+/** Tela cheia de providers (TUI): lista + wizard compartilhado + modelos por provider (#555), sem tocar segredo. */
 import { Box, Text, useInput } from "ink";
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { PROVIDER_CATALOG } from "../providers/catalog";
-import type { ProfileDraft, ProfileManager, ProfileView } from "../providers/profile-manager";
-import type { ProfileModel } from "../providers/profiles";
+import type { ProfileManager, ProfileView } from "../providers/profile-manager";
 import type { HealthCheck } from "../health";
 import type { CodexLoginStart } from "../providers/codex-login";
 import { priceLabel } from "../pricing";
@@ -12,6 +10,7 @@ import { isEnvName, isVaultCredentialRef, looksLikeSecret } from "../secrets";
 import { formatProviderCheck } from "./health";
 import type { ModelOption } from "./models";
 import type { ThemeColors } from "./theme";
+import { ProviderWizardForm } from "./provider-wizard-form";
 
 export interface ProviderScreenProps {
   manager: ProfileManager;
@@ -39,25 +38,8 @@ export interface ProviderScreenProps {
   onDiscardSecret?: (ref: string) => void;
 }
 
-type Step = "catalog" | "name" | "baseUrl" | "models" | "credential" | "confirm";
-
-const STEPS: Step[] = ["catalog", "name", "baseUrl", "models", "credential", "confirm"];
-const CATALOG = ["custom", ...PROVIDER_CATALOG.map((entry) => entry.key)];
-const DEFAULT_CONTEXT = 128_000;
-
 function messageOf(error: unknown): string {
   return redactSecrets(error instanceof Error ? error.message : String(error));
-}
-
-function parseModels(text: string, known: readonly ProfileModel[]): ProfileModel[] {
-  return text
-    .split(/[;,]/)
-    .map((id) => id.trim())
-    .filter((id) => id !== "")
-    .map((id) => {
-      const found = known.find((model) => model.id === id);
-      return found === undefined ? { id, tags: [], context: DEFAULT_CONTEXT } : found;
-    });
 }
 
 export interface ProviderAction {
@@ -111,23 +93,14 @@ export function ProviderScreen({
           ? initialRemove === undefined ? "list" : "remove"
           : initial?.mode === "credential" ? (recovering === undefined ? "list" : "form") : "list",
   );
+  const [initialName, setInitialName] = useState(initial?.mode === "add" ? initial.target : undefined);
   const [selected, setSelected] = useState(() => {
     if (initialTarget === undefined) return 0;
     const index = initialList.findIndex((item) => item.id === initialTarget.id);
     return index < 0 ? 0 : index;
   });
   const [editing, setEditing] = useState<ProfileView | undefined>(initialEdit ?? recovering);
-  const [step, setStep] = useState<Step>(recovering !== undefined ? "credential" : initial?.mode === "edit" ? "name" : "catalog");
-  const [catalogIndex, setCatalogIndex] = useState(0);
-  const [name, setName] = useState(
-    initialEdit?.name ?? (initial?.mode === "add" && initial.target !== undefined ? initial.target : ""),
-  );
-  const [baseUrl, setBaseUrl] = useState(initialEdit?.baseUrl ?? "");
-  const [models, setModels] = useState(initialEdit?.models.map((model) => model.id).join(";") ?? "");
   const [credential, setCredential] = useState(initialEdit?.credentialRef ?? "");
-  // Chave digitada fica só na ref até o save; nunca no estado/render (I-03).
-  const secretRef = useRef<string | undefined>(undefined);
-  const [credentialIsSecret, setCredentialIsSecret] = useState(false);
   const [message, setMessage] = useState<string | undefined>(() => {
     if (initial?.target === undefined) return undefined;
     if (initialTarget === undefined) return `provider "${initial.target}" não encontrado`;
@@ -179,19 +152,9 @@ export function ProviderScreen({
     }));
   };
 
-  const entry = catalogIndex === 0 ? undefined : PROVIDER_CATALOG[catalogIndex - 1];
-  const kind = editing?.kind ?? entry?.kind ?? "openai-compat";
-
   const startAdd = (): void => {
+    setInitialName(undefined);
     setEditing(undefined);
-    setStep("catalog");
-    setCatalogIndex(0);
-    setName("");
-    setBaseUrl("");
-    setModels("");
-    setCredential("");
-    secretRef.current = undefined;
-    setCredentialIsSecret(false);
     setMessage(undefined);
     setView("form");
   };
@@ -204,75 +167,11 @@ export function ProviderScreen({
       return;
     }
     setEditing(profile);
-    setStep("name");
-    setName(profile.name);
-    setBaseUrl(profile.baseUrl ?? "");
-    setModels(profile.models.map((model) => model.id).join(";"));
-    setCredential(profile.credentialRef ?? "");
-    secretRef.current = undefined;
-    setCredentialIsSecret(false);
     setMessage(undefined);
     setView("form");
   };
 
-  const save = (): void => {
-    const known = [...(editing?.models ?? []), ...(entry?.models ?? [])];
-    const parsedModels = parseModels(models, known);
-    if (parsedModels.length === 0) {
-      setMessage("informe ao menos um modelo");
-      return;
-    }
-    const secret = secretRef.current;
-    const baseDraft: ProfileDraft = {
-      name,
-      kind: editing?.kind ?? entry?.kind ?? "openai-compat",
-      models: parsedModels,
-      ...(baseUrl === "" ? {} : { baseUrl }),
-      ...(credential === "" || credentialIsSecret ? {} : { credentialRef: credential }),
-      ...(editing?.credentialsPath === undefined && entry?.credentialsPath === undefined
-        ? {}
-        : { credentialsPath: editing?.credentialsPath ?? entry?.credentialsPath }),
-      ...(editing?.quotaDomain === undefined && entry === undefined
-        ? {}
-        : { quotaDomain: editing?.quotaDomain ?? entry?.quotaDomain ?? entry?.key }),
-      ...(editing?.headers === undefined ? {} : { headers: editing.headers }),
-    };
-    if (secret !== undefined && onSaveSecret === undefined) {
-      setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
-      return;
-    }
-    let saved: ProfileView;
-    let addedId: string | undefined;
-    let createdRef: string | undefined;
-    try {
-      if (secret !== undefined && editing !== undefined) {
-        // Edição: cria no cofre ANTES de tocar no perfil; falha preserva a ref antiga.
-        createdRef = onSaveSecret!(editing.id, secret);
-        saved = manager.edit(editing.id, { ...baseDraft, credentialRef: createdRef });
-      } else if (editing === undefined) {
-        saved = manager.add(baseDraft);
-        addedId = saved.id;
-        if (secret !== undefined) {
-          createdRef = onSaveSecret!(saved.id, secret);
-          saved = manager.edit(saved.id, { ...baseDraft, credentialRef: createdRef });
-        }
-      } else {
-        saved = manager.edit(editing.id, baseDraft);
-      }
-    } catch (error) {
-      // Não deixa perfil novo sem a chave pretendida nem credencial órfã.
-      if (createdRef !== undefined) onDiscardSecret?.(createdRef);
-      if (addedId !== undefined) {
-        try { manager.remove(addedId); } catch { /* preserva o erro original */ }
-      }
-      setMessage(messageOf(error));
-      return;
-    }
-    if (createdRef !== undefined) {
-      secretRef.current = undefined;
-      setCredentialIsSecret(false);
-      setCredential(createdRef);
-    }
+  const handleSaved = (saved: ProfileView): void => {
     let activationError: string | undefined;
     if (editing === undefined) {
       try {
@@ -316,8 +215,6 @@ export function ProviderScreen({
       setMessage(messageOf(error));
       return;
     }
-    secretRef.current = undefined;
-    setCredentialIsSecret(false);
     onActivate(target.id);
   };
 
@@ -557,78 +454,13 @@ export function ProviderScreen({
       // Recovery is a single step: enter saves the ref, esc cancels (#616).
       if (key.escape) { onClose(); return; }
       if (key.return) { recoverCredential(); return; }
-    }
-
-    if (key.escape) {
-      const index = STEPS.indexOf(step);
-      if (index <= 0) { setView("list"); return; }
-      setStep(STEPS[index - 1] as Step);
+      if (key.backspace || key.delete) { setCredential((value) => value.slice(0, -1)); return; }
+      if (input !== "") setCredential((value) => value + input);
       return;
     }
 
-    if (step === "catalog") {
-      if (key.upArrow) { setCatalogIndex((value) => Math.max(0, value - 1)); return; }
-      if (key.downArrow) { setCatalogIndex((value) => Math.min(CATALOG.length - 1, value + 1)); return; }
-      if (key.return) {
-        const chosen = catalogIndex === 0 ? undefined : PROVIDER_CATALOG[catalogIndex - 1];
-        if (chosen !== undefined) {
-          setName(chosen.name);
-          setBaseUrl(chosen.baseUrl ?? "");
-          setModels(chosen.models.map((model) => model.id).join(";"));
-          setCredential(chosen.credentialRef ?? "");
-        }
-        setStep("name");
-      }
-      return;
-    }
-
-    if (key.return) {
-      const index = STEPS.indexOf(step);
-      if (step === "baseUrl" && baseUrl.trim() === "" && kind !== "codex-oauth") {
-        setMessage("base url é obrigatória");
-        return;
-      }
-      if (step === "credential" && kind !== "codex-oauth") {
-        const value = credential.trim();
-        if (value === "") {
-          secretRef.current = undefined;
-          setCredentialIsSecret(false);
-          setCredential("");
-        } else if (looksLikeSecret(value)) {
-          // Chave tem prioridade sobre "nome de env" (AKIA... também casa ENV_NAME).
-          if (onSaveSecret === undefined) {
-            setMessage("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
-            return;
-          }
-          secretRef.current = value;
-          setCredentialIsSecret(true);
-          setCredential("");
-        } else if (isEnvName(value) || isVaultCredentialRef(value)) {
-          secretRef.current = undefined;
-          setCredentialIsSecret(false);
-          setCredential(value);
-        } else {
-          setMessage("use o nome da variável (ex.: OPENAI_API_KEY) ou cole a chave completa");
-          return;
-        }
-      }
-      setMessage(undefined);
-      setStep(STEPS[index + 1] ?? "confirm");
-      if (step === "confirm") save();
-      return;
-    }
-    if (key.backspace || key.delete) {
-      if (step === "name") setName((value) => value.slice(0, -1));
-      else if (step === "baseUrl") setBaseUrl((value) => value.slice(0, -1));
-      else if (step === "models") setModels((value) => value.slice(0, -1));
-      else if (step === "credential") setCredential((value) => value.slice(0, -1));
-      return;
-    }
-    if (input === "") return;
-    if (step === "name") setName((value) => value + input);
-    else if (step === "baseUrl") setBaseUrl((value) => value + input);
-    else if (step === "models") setModels((value) => value + input);
-    else if (step === "credential") setCredential((value) => value + input);
+    // Add/edit is rendered and driven by the shared wizard (#629).
+    if (view === "form") return;
   });
 
   if (loginTarget !== undefined) {
@@ -684,45 +516,29 @@ export function ProviderScreen({
   }
 
   if (view === "form") {
-    const labels: Record<Step, string> = {
-      catalog: "De onde partir?",
-      name: "Nome",
-      baseUrl: "Base URL",
-      models: "Modelos (separe com ;)",
-      credential: "Variável da chave ou chave colada (vazio = sem chave)",
-      confirm: "Confirmar",
-    };
-    const value = step === "name" ? name
-      : step === "baseUrl" ? baseUrl
-        : step === "models" ? models
-          : step === "credential" ? credential
-            : "";
+    if (recovering !== undefined) {
+      return (
+        <Box flexDirection="column" borderStyle="round" paddingX={1}>
+          <Text bold>{`Editar ${recovering.id}`}</Text>
+          <Text>Chave colada (cofre) ou variável de ambiente · vazio = cancelar</Text>
+          <Text color={colors.accent}>{"*".repeat(credential.length) || " "}</Text>
+          <Text dimColor>enter salvar · esc cancelar</Text>
+          {message === undefined ? null : <Text color={colors.error}>{message}</Text>}
+        </Box>
+      );
+    }
     return (
-      <Box flexDirection="column" borderStyle="round" paddingX={1}>
-        <Text bold>{editing === undefined ? "Novo provider" : `Editar ${editing.id}`}</Text>
-        <Text>{recovering === undefined ? labels[step] : "Chave colada (cofre) ou variável de ambiente · vazio = cancelar"}</Text>
-        {step === "catalog"
-          ? CATALOG.map((item, index) => (
-              <Text key={item} color={index === catalogIndex ? colors.accent : undefined}>
-                {index === catalogIndex ? "> " : "  "}{item}
-              </Text>
-            ))
-          : step === "confirm"
-            ? (
-                <Box flexDirection="column">
-                  <Text>nome:    {name}</Text>
-                  <Text>baseUrl: {baseUrl || "-"}</Text>
-                  <Text>modelos: {models}</Text>
-                  <Text>chave:   {credentialIsSecret ? "vault:<novo>" : credential || "-"}</Text>
-                  <Text dimColor>enter salvar · esc voltar</Text>
-                </Box>
-              )
-            : <Text color={colors.accent}>{step === "credential" ? "*".repeat(value.length) || " " : value || " "}</Text>}
-        <Text dimColor>
-          {recovering !== undefined ? "enter salvar · esc cancelar" : step === "catalog" ? "↑↓ escolher · enter continuar · esc voltar" : `${STEPS.indexOf(step) + 1}/6 · enter continuar · esc voltar`}
-        </Text>
-        {message === undefined ? null : <Text color={colors.error}>{message}</Text>}
-      </Box>
+      <ProviderWizardForm
+        manager={manager}
+        colors={colors}
+        {...(initialName === undefined ? {} : { initialName })}
+        {...(editing === undefined ? {} : { profile: editing })}
+        {...(onSaveSecret === undefined ? {} : { saveSecret: onSaveSecret })}
+        {...(onDiscardSecret === undefined ? {} : { discardSecret: onDiscardSecret })}
+        onSaved={handleSaved}
+        onCancel={() => { setMessage(undefined); setView("list"); }}
+        onFailed={(text) => { setMessage(text); setView("list"); }}
+      />
     );
   }
 
