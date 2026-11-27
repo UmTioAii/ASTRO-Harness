@@ -356,6 +356,7 @@ export async function runTui(opts: RunTuiOptions): Promise<number> {
           saveSecret={saveSecret}
           discardSecret={discardSecret}
           onExit={() => instance?.unmount()}
+          streamThrottleMs={project?.tui?.streamThrottleMs}
         />,
         TUI_RENDER_OPTIONS,
       );

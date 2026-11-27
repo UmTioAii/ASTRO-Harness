@@ -438,6 +438,47 @@ export const DEFAULT_PATHS: Readonly<PathsConfig> = {
   audit: ".astro/audit.jsonl",
 };
 
+/** TUI preferences (verbosity, stream throttle) for project-level override (#679). */
+export interface TuiConfig {
+  /** Verbosity level for timeline rendering. Default: "standard". */
+  verbosity?: "minimal" | "standard" | "full";
+  /** Stream throttle in milliseconds. Default: 40. */
+  streamThrottleMs?: number;
+}
+
+const DEFAULT_TUI_CONFIG: Readonly<TuiConfig> = {
+  verbosity: "standard",
+  streamThrottleMs: 40,
+};
+
+/** Valida a seção `tui` (verbosity e streamThrottleMs). */
+function validateTui(value: unknown): TuiConfig {
+  if (value === undefined) return { ...DEFAULT_TUI_CONFIG };
+  if (!isPlainObject(value)) fail('config inválida: "tui" deve ser um objeto');
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (key !== "verbosity" && key !== "streamThrottleMs") {
+      fail(`config inválida: "tui.${key}" desconhecido`);
+    }
+  }
+  let verbosity: TuiConfig["verbosity"] = DEFAULT_TUI_CONFIG.verbosity;
+  if (raw.verbosity !== undefined) {
+    if (typeof raw.verbosity !== "string" || !["minimal", "standard", "full"].includes(raw.verbosity)) {
+      fail('config inválida: "tui.verbosity" deve ser "minimal", "standard" ou "full"');
+    }
+    verbosity = raw.verbosity as TuiConfig["verbosity"];
+  }
+  let streamThrottleMs: number = DEFAULT_TUI_CONFIG.streamThrottleMs ?? 40;
+  if (raw.streamThrottleMs !== undefined) {
+    const throttle = raw.streamThrottleMs;
+    if (typeof throttle !== "number" || !Number.isInteger(throttle) || throttle < 0) {
+      fail('config inválida: "tui.streamThrottleMs" deve ser inteiro >= 0');
+    }
+    streamThrottleMs = throttle;
+  }
+  return { verbosity, streamThrottleMs };
+}
+
 /** Memória persistida (#532): teto de caracteres injetados no system prompt. */
 export interface MemoryConfig {
   maxChars: number;
@@ -498,6 +539,8 @@ export interface AstroConfig {
   /** Memória persistida (#532): `maxChars` limita o que entra no system prompt. */
   memory?: MemoryConfig;
   paths: PathsConfig;
+  /** TUI preferences (#679): verbosity level and stream throttle. */
+  tui?: TuiConfig;
 }
 
 /**
@@ -1996,7 +2039,7 @@ const CONFIG_KEYS_V1: readonly string[] = [
   "tools", "shell", "telemetry", "quota", "budget", "run", "attachments", "cache",
   "plugins", "version", "team", "handoff", "spawn", "permissions", "security",
   "effort", "pricing", "mcpServers", "outputLimit", "compaction", "webSearch",
-  "memory", "paths",
+  "memory", "paths", "tui",
 ];
 
 export const CONFIG_KEYS: Readonly<Record<number, readonly string[]>> = Object.freeze({
@@ -2109,6 +2152,7 @@ const CONFIG_SHAPE: ConfigShape = {
     },
     memory: { keys: ["maxChars"] },
     paths: { keys: ["ledger", "audit"] },
+    tui: { keys: ["verbosity", "streamThrottleMs"] },
     provenance: { keys: ["registry", "plugins"] },
   },
 };
@@ -2658,11 +2702,14 @@ export function validateConfig(raw: unknown, options: { source?: string; aliases
 
   const paths = validatePaths(root.paths);
 
+  // TUI preferences (#679): verbosity e streamThrottleMs
+  const tui = root.tui === undefined ? undefined : validateTui(root.tui);
+
   // Segurança (ADR-0027, #391 slice 3b): ausente = sem seção `security`
   const security = root.security === undefined ? undefined : validateSecurity(root.security);
   const effort = root.effort === undefined ? undefined : validateEffort(root.effort);
 
-  const config: AstroConfig = { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools: effectiveTools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths };
+  const config: AstroConfig = { preset, providers, models, modelPool, agent, agents, ...(maxActive === undefined ? {} : { maxActive }), tools: effectiveTools, telemetry, quota, cache, plugins, version, ...(meta.migrated ? { migratedFrom: meta.declaredVersion } : {}), team, handoff, permissions: validatePermissions(root.permissions), ...(shell === undefined ? {} : { shell }), ...(security === undefined ? {} : { security }), ...(effort === undefined ? {} : { effort }), attachments: validateAttachments(root.attachments), outputLimit: validateOutputLimit(root.outputLimit), compaction: validateCompaction(root.compaction), ...(webSearch === undefined ? {} : { webSearch }), ...(memory === undefined ? {} : { memory }), ...(budget === undefined ? {} : { budget }), run, ...(spawn === undefined ? {} : { spawn }), ...(pricing === undefined ? {} : { pricing }), ...(mcpServers === undefined ? {} : { mcpServers }), paths, ...(tui === undefined ? {} : { tui }) };
   if (checked.preset === undefined || isDerivedPreset(checked)) Object.defineProperty(config, DERIVED_PRESET, { value: true });
   if (nestedSection(checked, "agent")?.maxSteps === undefined || hasDerivedAgentMaxSteps(checked)) Object.defineProperty(config, DERIVED_AGENT_MAX_STEPS, { value: true });
   if ((shell?.mode === "off" && legacySandbox === undefined) || hasDerivedShellSandbox(checked)) Object.defineProperty(config, DERIVED_SHELL_SANDBOX, { value: true });
