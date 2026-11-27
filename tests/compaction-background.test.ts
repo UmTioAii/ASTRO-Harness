@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { Ledger } from "../src/ledger";
 import { ProviderError, type ChatMessage, type CompletionResponse } from "../src/providers/types";
-import { compactionState } from "../src/compaction/breaker";
+import { compactionState, recordCompactionFailure } from "../src/compaction/breaker";
 import {
   BackgroundCompactor,
   compactionArtifactPaths,
@@ -104,6 +104,39 @@ describe("compactação em background (CMP-9)", () => {
     expect(seen[1]!.content).toContain("BG");
     expect(audit.readAll().find((event) => event.tipo === "compaction.applied")?.payload)
       .toMatchObject({ reason: "trigger", background: true });
+    await background.close();
+  });
+
+  test("breaker pausado não consome o artefato pronto e não zera o contador", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const messages = history();
+    let summaries = 0;
+
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => toolResp(),
+      summarize: async () => { summaries++; return "BG"; },
+    });
+    await background.drain();
+    expect(summaries).toBe(1);
+
+    // Três falhas depois do pré-aquecimento abrem o breaker.
+    for (let index = 0; index < 3; index++) recordCompactionFailure(ledger, "r1", "a");
+
+    overTrigger(messages);
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => resp("ok"),
+      summarize: async () => { summaries++; return "INLINE"; },
+    }).catch(() => undefined);
+
+    // O artefato foi pago antes da pausa: a pausa não o consome nem zera o contador.
+    expect(summaries).toBe(1);
+    expect(audit.readAll().some((event) => event.tipo === "compaction.applied")).toBe(false);
+    expect(compactionState(ledger, "r1").paused).toBe(true);
+    expect(compactionState(ledger, "r1").failures).toBe(3);
+    expect(existsSync(compactionArtifactPaths(dir, "r1", "a").artifact)).toBe(true);
     await background.close();
   });
 
@@ -218,7 +251,7 @@ describe("compactação em background (CMP-9)", () => {
     await background.close();
   });
 
-  test("falha repetida em banda conta uma vez e não pausa o breaker", async () => {
+  test("falha em banda não conta no breaker (o inline decide)", async () => {
     const { dir, ledger, audit } = setup();
     const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
     const messages = history();
@@ -248,9 +281,10 @@ describe("compactação em background (CMP-9)", () => {
 
     expect(summaries).toBe(1);
     expect(rejections).toEqual([]);
-    expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction").at(-1))
-      .toMatchObject({ failure_count: 1 });
+    // Pré-aquecimento é oportunista: a falha não entra no ledger nem no breaker.
+    expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction")).toHaveLength(0);
     expect(audit.readAll().filter((event) => event.tipo === "compaction.failed")).toHaveLength(1);
+    expect(compactionState(ledger, "r1").failures).toBe(0);
     expect(compactionState(ledger, "r1").paused).toBe(false);
   });
 
