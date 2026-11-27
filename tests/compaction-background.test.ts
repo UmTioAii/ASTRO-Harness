@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
-import { Ledger } from "../src/ledger";
+import { Ledger, LEDGER_SCHEMA_VERSION } from "../src/ledger";
 import { ProviderError, type ChatMessage, type CompletionResponse } from "../src/providers/types";
 import { compactionState, recordCompactionFailure } from "../src/compaction/breaker";
 import {
@@ -170,6 +170,42 @@ describe("compactação em background (CMP-9)", () => {
     expect(compactionState(ledger, "r1").failures).toBe(3);
     expect(compactionState(ledger, "r1").paused).toBe(true);
     expect(existsSync(compactionArtifactPaths(dir, "r1", "a").artifact)).toBe(true);
+    await background.close();
+  });
+
+  test("artefato antigo não zera o contador depois que a pausa expira", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const messages = history();
+    let summaries = 0;
+
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => toolResp(),
+      summarize: async () => { summaries++; return "BG"; },
+    });
+    await background.drain();
+    expect(summaries).toBe(1);
+
+    // Três falhas de 10 min atrás: a pausa de 5 min já expirou.
+    const expired = { schemaVersion: LEDGER_SCHEMA_VERSION, ts: new Date(Date.now() - 600_000).toISOString(), run: "r1", agent: "a", kind: "compaction", failure_count: 3, manual: false, seq: 0 };
+    writeFileSync(join(dir, "ledger.jsonl"), `${JSON.stringify(expired)}\n`);
+
+    overTrigger(messages);
+    let seen: readonly ChatMessage[] = [];
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async (current) => { seen = current; return resp("ok"); },
+      summarize: async () => { summaries++; return "INLINE"; },
+    });
+
+    // A pausa expirou: o modelo é sondado de novo e o artefato antigo não zera o contador.
+    expect(summaries).toBe(2);
+    expect(seen[1]!.content).toContain("INLINE");
+    const applied = audit.readAll().filter((event) => event.tipo === "compaction.applied");
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.payload?.background).toBeUndefined();
+    expect(compactionState(ledger, "r1").failures).toBe(0);
     await background.close();
   });
 
