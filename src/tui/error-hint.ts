@@ -2,6 +2,7 @@
 import { ConfigError } from "../core/config";
 import { NoProviderError } from "../providers/profiles";
 import { ProviderError } from "../providers/types";
+import { CompactionPausedError } from "../compaction/breaker";
 
 /**
  * Texto curto de próximo passo para o erro. `undefined` quando a causa é
@@ -27,6 +28,10 @@ export function errorHint(error: unknown): string | undefined {
   }
   if (error instanceof NoProviderError) return "configure com /provider";
   if (error instanceof ConfigError) return "rode astro doctor";
+  if (error instanceof CompactionPausedError) {
+    const retrySeconds = Math.ceil(error.remainingMs / 1000);
+    return `Compaction paused (3 failures, retry in ${retrySeconds}s) · /compact force para retentar agora`;
+  }
   return undefined;
 }
 
