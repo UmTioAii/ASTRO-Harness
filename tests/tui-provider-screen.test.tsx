@@ -259,6 +259,50 @@ test("add command forwards its initial provider name", async () => {
   }
 });
 
+test("initial add name does not leak into a second add", async () => {
+  const m = manager();
+  const instance = render(
+    <ProviderScreen
+      manager={m}
+      colors={colors}
+      initial={{ mode: "add", target: "Work" }}
+      onClose={() => undefined}
+      onActivate={() => undefined}
+    />,
+  );
+  try {
+    await fillCredentialsStep(instance, "");
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Confirmar"));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("salvo: work"));
+
+    instance.stdin.write("a");
+    await waitFor(() => frame(instance).includes("De onde partir?"));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Nome"));
+    expect(frame(instance)).not.toContain("Nome [Work]");
+
+    instance.stdin.write("Second");
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Base URL"));
+    instance.stdin.write("http://localhost:2/v1");
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Modelos"));
+    instance.stdin.write("m1");
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Variável da chave"));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("Confirmar"));
+    instance.stdin.write("\r");
+    await waitFor(() => frame(instance).includes("salvo: second"));
+    expect(m.list().map((item) => item.id)).toContain("work");
+    expect(m.list().map((item) => item.id)).toContain("second");
+  } finally {
+    instance.unmount();
+  }
+});
+
 test("negative confirmation returns to the provider list without saving", async () => {
   const m = manager();
   const instance = render(
@@ -288,11 +332,11 @@ const fakeSecret = ["s", "k", "-"].join("") + "live-abcdef12345";
 
 const frame = (instance: ReturnType<typeof render>): string => instance.lastFrame() ?? "";
 
-async function fillCredentialsStep(instance: ReturnType<typeof render>): Promise<void> {
+async function fillCredentialsStep(instance: ReturnType<typeof render>, name = "Local"): Promise<void> {
   await waitFor(() => frame(instance).includes("De onde partir?"));
   instance.stdin.write("\r");
   await waitFor(() => frame(instance).includes("Nome"));
-  instance.stdin.write("Local");
+  if (name !== "") instance.stdin.write(name);
   instance.stdin.write("\r");
   await waitFor(() => frame(instance).includes("Base URL"));
   instance.stdin.write("http://localhost:1/v1");
