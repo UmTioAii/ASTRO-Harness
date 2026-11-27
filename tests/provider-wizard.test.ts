@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConfig } from "../src/core/config";
-import { runProviderWizard } from "../src/chat/provider-wizard";
+import { runProviderWizard, saveProviderProfile } from "../src/chat/provider-wizard";
 import { ProfileManager } from "../src/providers/profile-manager";
 import { profileStoreFromConfig } from "../src/providers/profiles";
 
@@ -34,6 +34,8 @@ function fakeIO(answers: string[]) {
   };
 }
 
+const draft = { name: "Local", kind: "openai-compat", baseUrl: "http://localhost:1/v1", models: [{ id: "m1", tags: [], context: 8192 }] };
+
 test("add pelo catálogo grava, ativa e chama onUse", async () => {
   const { home, manager } = setup();
   const used: string[] = [];
@@ -44,6 +46,7 @@ test("add pelo catálogo grava, ativa e chama onUse", async () => {
   const store = profileStoreFromConfig(join(home, "config.json")); // #492: camada global
   expect(store.activeProfileId).toBe("nvidia-work");
   expect(store.profiles[0]!.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
+  expect([view?.credentialRef, store.profiles[0]!.credentialRef]).toEqual(["NVIDIA_API_KEY", "NVIDIA_API_KEY"]);
   expect(existsSync(join(home, "providers.json"))).toBe(false); // legado nunca é escrito
   expect(out.join(" ")).toContain("salvo: nvidia-work");
 });
@@ -57,7 +60,7 @@ test("add pelo catálogo persiste o quotaDomain da entrada", async () => {
 
 test("add custom sem chave e sem ativar", async () => {
   const { home, manager } = setup();
-  const { io } = fakeIO(["custom", "Ollama", "http://localhost:11434/v1", "", "llama3.1", "S", "n"]);
+  const { io } = fakeIO(["custom", "Ollama", "http://localhost:11434/v1", "llama3.1", "", "S", "n"]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view?.credentialRef).toBeUndefined();
   expect(view?.baseUrl).toBe("http://localhost:11434/v1");
@@ -66,14 +69,14 @@ test("add custom sem chave e sem ativar", async () => {
 
 test("avisa quando a variável da chave não existe", async () => {
   const { manager } = setup();
-  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "MISSING_KEY", "m1", "S", "n"]);
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", "MISSING_KEY", "S", "n"]);
   await runProviderWizard(io, manager, { mode: "add" });
   expect(out.join(" ")).toContain("MISSING_KEY não encontrada");
 });
 
 test("cancelar no confirmar não grava", async () => {
   const { home, manager } = setup();
-  const { io } = fakeIO(["custom", "X", "http://x/v1", "", "m1", "n"]);
+  const { io } = fakeIO(["custom", "X", "http://x/v1", "m1", "S", "n"]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view).toBeUndefined();
   expect(existsSync(join(home, "providers.json"))).toBe(false);
@@ -104,25 +107,70 @@ test("modelos vazios não salvam", async () => {
 
 test("credentialRef inválido é re-perguntado até virar nome de variável válido (#286)", async () => {
   const { manager } = setup({ MINHA_CHAVE: "x" });
-  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "minha chave", "MINHA_CHAVE", "m1", "S", "n"]);
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", "minha chave", "MINHA_CHAVE", "S", "n"]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view?.credentialRef).toBe("MINHA_CHAVE");
-  expect(out.join(" ")).toContain("environment variable");
+  expect(out.join(" ")).toContain("variável");
 });
 
 test("chave colada no prompt de variável não vaza na mensagem (I-03)", async () => {
   const { manager } = setup();
   const secret = "sk-sentinel-do-not-store";
-  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", secret]);
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", secret]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view).toBeUndefined();
   expect(out.join("\n")).not.toContain(secret);
-  expect(out.join("\n")).toContain("environment variable");
+  expect(out.join("\n")).toContain("cofre");
+});
+
+test("an invalid catalog answer never echoes a pasted key (#629)", async () => {
+  const { manager } = setup();
+  const secret = "sk-selector-sentinel";
+  const { io, out } = fakeIO([secret]);
+  await runProviderWizard(io, manager, { mode: "add" });
+  expect(out.join("\n")).toContain("unknown option");
+  expect(out.join("\n")).not.toContain(secret);
+});
+
+test("a vault write error never prints the pasted key (#629)", async () => {
+  const { manager } = setup();
+  const secret = "sk-vault-error-sentinel";
+  const { io, out } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", secret, "S"]);
+  const view = await runProviderWizard(io, manager, {
+    mode: "add",
+    saveSecret: () => { throw new Error(`vault write failed: ${secret}`); },
+    discardSecret: () => {},
+  });
+  expect(view).toBeUndefined();
+  expect(out.join("\n")).toContain("erro:");
+  expect(out.join("\n")).not.toContain(secret);
+});
+
+test("vault writes are preflighted and rolled back with the profile (#629)", () => {
+  const { manager } = setup();
+  let vaultWrites = 0;
+  const result = saveProviderProfile({
+    manager, mode: "add", draft, secret: "sk-rollback-sentinel",
+    saveSecret: () => { vaultWrites++; return "vault:cred-rollback"; },
+  });
+  expect(result.saved).toBeUndefined(); expect(result.error).toContain("cofre"); expect(vaultWrites).toBe(0);
+  const discarded: string[] = []; manager.edit = () => { throw new Error("profile write failed"); };
+  saveProviderProfile({ manager, mode: "add", draft, secret: "sk-rollback-sentinel",
+    saveSecret: () => "vault:created", discardSecret: (ref) => { discarded.push(ref); } });
+  expect(discarded).toEqual(["vault:created"]); expect(manager.list().some((profile) => profile.name === "Local")).toBe(false);
+});
+
+test("saveProviderProfile dispatches by mode, not profile presence (#629)", () => {
+  const { manager } = setup();
+  expect(saveProviderProfile({ manager, mode: "edit", draft }).saved).toBeUndefined(); expect(manager.list().some((item) => item.name === draft.name)).toBe(false);
+  const profile = manager.add({ ...draft, name: "Old", baseUrl: "http://old/v1" });
+  const added = saveProviderProfile({ manager, mode: "add", profile, draft: { ...draft, name: "New" } });
+  expect(added.saved?.id).toBe("new"); expect(manager.list().find((item) => item.id === profile.id)?.baseUrl).toBe("http://old/v1");
 });
 
 test("credentialRef vazio continua sem chave (#286)", async () => {
   const { manager } = setup();
-  const { io } = fakeIO(["custom", "Local", "http://localhost:1/v1", "", "m1", "S", "n"]);
+  const { io } = fakeIO(["custom", "Local", "http://localhost:1/v1", "m1", "", "S", "n"]);
   const view = await runProviderWizard(io, manager, { mode: "add" });
   expect(view?.credentialRef).toBeUndefined();
 });
