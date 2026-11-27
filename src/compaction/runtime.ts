@@ -17,6 +17,7 @@ import {
 import {
   CompactionPausedError,
   compactionState,
+  COMPACTION_FAILURE_LIMIT,
   recordCompactionFailure,
   recordCompactionSuccess,
 } from "./breaker";
@@ -177,15 +178,17 @@ async function applyCompaction(
 }
 
 /**
- * The ready background artifact, unless the breaker is paused. A paused breaker
- * gates the model summary: an artifact summarized before the pause is neither
- * consumed nor allowed to clear the breaker counter.
+ * The ready background artifact, unless the breaker still owes a model probe.
+ * A paused breaker gates the model summary; after the pause expires the
+ * counter is still open, so a pre-pause artifact is neither applied nor
+ * allowed to clear it — an inline model probe does that.
  */
 function takeReadyArtifact(
   messages: ChatMessage[],
   opts: CompactionRuntimeOptions,
 ): BackgroundCompaction | undefined {
-  if (compactionState(opts.ledger, opts.run).paused) return undefined;
+  const state = compactionState(opts.ledger, opts.run);
+  if (state.paused || state.failures >= COMPACTION_FAILURE_LIMIT) return undefined;
   return opts.background?.take(opts.agent(), messages, identityOf(opts));
 }
 
