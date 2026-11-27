@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { isAbortError } from "../abort";
 import type { Auditor } from "../audit";
 import type { ChatMessage } from "../providers/types";
+import { auditLabel } from "./audit-label";
 import type { CompactResult } from "./engine";
 import { renderCompactionArtifact, type CompactionArtifactV1 } from "./types";
 
@@ -190,7 +191,7 @@ export class BackgroundCompactor {
         try {
           this.#audit.append({
             run: this.#run, agent, tipo: "compaction.failed",
-            payload: { reason: "background", error: error instanceof Error ? error.name : "unknown" },
+            payload: { reason: "background", error: auditLabel(error) },
           });
         } catch { /* bookkeeping nunca vira unhandled rejection */ }
       } finally {
