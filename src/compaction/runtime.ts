@@ -78,20 +78,14 @@ function identityOf(opts: CompactionRuntimeOptions): CompactionIdentity {
 /** Overhead estimado do artefato no contexto compactado (tokens). */
 const ARTIFACT_OVERHEAD = 2_000;
 
-/**
- * Only transient failures are retried: a deterministic error (unknown model,
- * auth, oversized request) repeats the same failure forever.
- */
+/** Only transient failures are retried (D-18): a deterministic error repeats forever. */
 function isRetryableSummaryError(error: unknown): boolean {
-  if (error instanceof ProviderError) return RETRYABLE_CLASSES.has(error.errClass);
-  return error instanceof TypeError
-    || (error instanceof Error && error.name === "TimeoutError");
+  return error instanceof ProviderError && RETRYABLE_CLASSES.has(error.errClass);
 }
 
-/** Audit label of a failure: the D-18 class when known, the error name otherwise. */
+/** Audit label of a failure: the D-18 class when known, `unclassified` otherwise. */
 function errorSummary(error: unknown): string {
-  if (error instanceof ProviderError) return error.errClass;
-  return error instanceof Error ? error.name : "unknown";
+  return error instanceof ProviderError ? error.errClass : "unclassified";
 }
 
 /** Wait between attempts; aborting the run stops it immediately. */
@@ -216,38 +210,26 @@ async function applyCompaction(
   return false; // Should not reach here
 }
 
-/**
- * Extractive path: no provider call, always produces an artifact (CMP-6).
- * `cause` is the degradation reason: a paused breaker or the failed summary.
- */
+/** Extractive path (CMP-6): no provider call. `cause` is the degradation reason. */
 async function applyExtractive(
-  messages: ChatMessage[],
-  opts: CompactionRuntimeOptions,
-  reason: CompactReason,
-  cause: string,
+  messages: ChatMessage[], opts: CompactionRuntimeOptions, reason: CompactReason, cause: string,
 ): Promise<boolean> {
   const agent = opts.agent();
   const fallback = await compactSession({
-    run: opts.run,
-    messages,
-    window: opts.window(),
-    buffer: opts.compaction.buffer,
-    provider: opts.provider(),
-    summarize: async (input) => deterministicSummary(input),
+    run: opts.run, messages, window: opts.window(), buffer: opts.compaction.buffer,
+    provider: opts.provider(), summarize: async (input) => deterministicSummary(input),
     ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   });
-  if (fallback.olderCount === 0) {
-    // Nothing to reduce: the caller surfaces the original error, not the
-    // summary failure that led here.
+  // The fallback must shrink the context: otherwise the caller surfaces the
+  // original error, not the summary failure that led here.
+  if (fallback.returnedTokens >= fallback.originalTokens) {
     return false;
   }
   messages.length = 0;
   messages.push(...fallback.messages);
   opts.onCompacted?.(messages);
   opts.audit.append({
-    run: opts.run,
-    agent,
-    tipo: "compaction.degraded",
+    run: opts.run, agent, tipo: "compaction.degraded",
     payload: { reason, cause, reduction: fallback.reduction },
   });
   return true;
