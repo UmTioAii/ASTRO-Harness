@@ -183,8 +183,8 @@ export class BackgroundCompactor {
       } catch (error) {
         if (controller.signal.aborted || isAbortError(error, controller.signal)) return;
         // One failure per snapshot. Prewarming is opportunistic: it never enters
-        // the breaker or the ledger, because the inline path still decides (and
-        // always compacts).
+        // the breaker or the ledger, because the inline path decides and attempts
+        // the compaction.
         const failureId = `${agent}\u0000${key}`;
         if (this.#failedKeys.has(failureId)) return;
         this.#failedKeys.add(failureId);
