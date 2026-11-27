@@ -14,6 +14,7 @@ export interface ProviderWizardFormProps {
   colors: ThemeColors;
   /** Edit target; absent = add. */
   profile?: ProfileView;
+  initialName?: string;
   saveSecret?: (providerId: string, secret: string) => string;
   discardSecret?: (ref: string) => void;
   onSaved: (saved: ProfileView) => void;
@@ -22,7 +23,7 @@ export interface ProviderWizardFormProps {
 }
 
 export function ProviderWizardForm({
-  manager, colors, profile, saveSecret, discardSecret, onSaved, onCancel, onFailed,
+  manager, colors, profile, initialName, saveSecret, discardSecret, onSaved, onCancel, onFailed,
 }: ProviderWizardFormProps): ReactElement {
   const [prompt, setPrompt] = useState<Prompt | undefined>();
   const [value, setValue] = useState("");
@@ -44,9 +45,10 @@ export function ProviderWizardForm({
     const io: WizardIO = {
       read: (label, opts) => new Promise((resolve) => {
         pending.current = (answer) => resolve(typeof answer === "string" || answer === null ? answer : null);
-        valueRef.current = "";
-        setValue("");
-        show({ kind: "text", label, secret: opts?.secret === true });
+        const secret = opts?.secret === true;
+        valueRef.current = opts?.initialValue ?? "";
+        setValue(secret ? "*".repeat(valueRef.current.length) : valueRef.current);
+        show({ kind: "text", label, secret });
       }),
       select: (label, options, initial = 0) => new Promise((resolve) => {
         pending.current = (answer) => resolve(typeof answer === "number" ? answer : null);
@@ -62,6 +64,9 @@ export function ProviderWizardForm({
     void runProviderWizard(io, manager, {
       mode: profile === undefined ? "add" : "edit",
       ...(profile === undefined ? {} : { profile }),
+      ...(initialName === undefined ? {} : { initialName }),
+      clearCredentialOnEmpty: true,
+      onCancel: () => { cancelled.current = true; },
       ...(saveSecret === undefined ? {} : { saveSecret }),
       ...(discardSecret === undefined ? {} : { discardSecret }),
       activate: "never",
@@ -75,13 +80,19 @@ export function ProviderWizardForm({
     }).catch((error: unknown) => {
       onFailed(error instanceof Error ? error.message : String(error));
     });
+    return () => {
+      valueRef.current = "";
+      pending.current = undefined;
+    };
   }, []);
 
   const answer = (next: string | number | null): void => {
     const resolve = pending.current;
     pending.current = undefined;
     promptRef.current = undefined;
+    valueRef.current = "";
     setPrompt(undefined);
+    setValue("");
     resolve?.(next);
   };
 
@@ -116,12 +127,12 @@ export function ProviderWizardForm({
     if (key.return) { answer(valueRef.current); return; }
     if (key.backspace || key.delete) {
       valueRef.current = valueRef.current.slice(0, -1);
-      setValue(valueRef.current);
+      setValue(current.secret ? "*".repeat(valueRef.current.length) : valueRef.current);
       return;
     }
     if (input !== "") {
       valueRef.current += input;
-      setValue(valueRef.current);
+      setValue(current.secret ? "*".repeat(valueRef.current.length) : valueRef.current);
     }
   });
 
@@ -142,7 +153,7 @@ export function ProviderWizardForm({
       ) : prompt === undefined ? null : (
         <Box flexDirection="column">
           <Text>{prompt.label}</Text>
-          <Text color={colors.accent}>{prompt.secret ? "*".repeat(value.length) : value} </Text>
+          <Text color={colors.accent}>{value} </Text>
           <Text dimColor>enter continuar · esc cancelar</Text>
         </Box>
       )}

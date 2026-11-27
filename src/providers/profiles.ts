@@ -308,7 +308,9 @@ export function saveProfileStoreToConfig(store: ProviderStore, configPath: strin
   ));
   for (const profile of valid.profiles) {
     const existing = providers[profile.id];
-    providers[profile.id] = { ...(isPlainObject(existing) ? existing : {}), ...profileToProvider(profile) };
+    const provider: Record<string, unknown> = { ...(isPlainObject(existing) ? existing : {}), ...profileToProvider(profile) };
+    if (profile.credentialRef === undefined) delete provider.credentialRef;
+    providers[profile.id] = provider;
     // Rótulo igual ao id volta a ser implícito: apaga o `name` antigo do merge.
     if (profile.name === profile.id && isPlainObject(providers[profile.id])) {
       delete (providers[profile.id] as Record<string, unknown>).name;

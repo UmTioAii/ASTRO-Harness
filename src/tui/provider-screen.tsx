@@ -529,12 +529,13 @@ export function ProviderScreen({
       <ProviderWizardForm
         manager={manager}
         colors={colors}
+        {...(initial?.mode === "add" && initial.target !== undefined ? { initialName: initial.target } : {})}
         {...(editing === undefined ? {} : { profile: editing })}
         {...(onSaveSecret === undefined ? {} : { saveSecret: onSaveSecret })}
         {...(onDiscardSecret === undefined ? {} : { discardSecret: onDiscardSecret })}
         onSaved={handleSaved}
         onCancel={() => { setMessage(undefined); setView("list"); }}
-        onFailed={(text) => { setMessage(text); }}
+        onFailed={(text) => { setMessage(text); setView("list"); }}
       />
     );
   }
