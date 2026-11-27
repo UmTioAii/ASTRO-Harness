@@ -8,7 +8,6 @@ import { redactSecrets } from "../sanitize-external";
 export interface WizardIO {
   read(prompt: string, opts?: { secret?: boolean }): Promise<string | null>;
   write(text: string): void;
-  /** TUI renders an arrow selector; without it the answer is typed as text. */
   select?(label: string, options: readonly string[], initial?: number): Promise<number | null>;
 }
 
@@ -20,13 +19,8 @@ export interface WizardOptions {
   onUse?: (id: string) => void;
   /** Last check before saving; a returned message aborts without writing. */
   validate?: (draft: ProfileDraft) => string | undefined;
-  /**
-   * #629: the single vault write path. The TUI passes `createSecretHandlers`;
-   * without it a pasted secret is refused and only an env name is accepted.
-   */
   saveSecret?: (providerId: string, secret: string) => string;
   discardSecret?: (ref: string) => void;
-  /** `ask` (REPL default) or `never` (the TUI activates after the wizard returns). */
   activate?: "ask" | "never";
 }
 
@@ -59,10 +53,7 @@ async function choose(io: WizardIO, label: string, options: readonly string[], i
   const value = answer.trim();
   if (value === "") return initial;
   const index = options.indexOf(value);
-  if (index < 0) {
-    io.write("unknown option");
-    return undefined;
-  }
+  if (index < 0) { io.write("unknown option"); return undefined; }
   return index;
 }
 
@@ -94,38 +85,17 @@ export interface SaveProviderOptions {
   discardSecret?: (ref: string) => void;
 }
 
-export interface SaveProviderResult {
-  saved?: ProfileView;
-  error?: string;
-}
-
-/**
- * Single provider persistence path (#629): the profile first, then the vault ref,
- * with rollback when a later step fails. A vault failure on edit keeps the old ref;
- * a profile failure after the vault write discards the new credential.
- */
-export function saveProviderProfile(opts: SaveProviderOptions): SaveProviderResult {
-  if (opts.secret !== undefined && (opts.saveSecret === undefined || opts.discardSecret === undefined)) {
-    return { error: "cofre de credenciais indisponível nesta tela; use uma variável de ambiente" };
-  }
-  let saved: ProfileView | undefined;
-  let addedId: string | undefined;
-  let createdRef: string | undefined;
+/** Single persistence path with vault/profile rollback; an edit failure keeps the old ref (#629). */
+export function saveProviderProfile(opts: SaveProviderOptions): { saved?: ProfileView; error?: string } {
+  if (opts.secret !== undefined && (opts.saveSecret === undefined || opts.discardSecret === undefined)) return { error: "cofre de credenciais indisponível nesta tela; use uma variável de ambiente" };
+  const editId = opts.mode === "edit" ? opts.profile?.id : undefined;
+  if (opts.mode === "edit" && editId === undefined) return { error: "provider to edit was not provided" };
+  let saved: ProfileView | undefined, addedId: string | undefined, createdRef: string | undefined;
   try {
-    if (opts.secret !== undefined && opts.profile !== undefined) {
-      // Edit: the vault write happens before the profile; a failure keeps the old ref.
-      createdRef = opts.saveSecret!(opts.profile.id, opts.secret);
-      saved = opts.manager.edit(opts.profile.id, { ...opts.draft, credentialRef: createdRef });
-    } else if (opts.profile === undefined) {
-      saved = opts.manager.add(opts.draft);
-      addedId = saved.id;
-      if (opts.secret !== undefined) {
-        createdRef = opts.saveSecret!(saved.id, opts.secret);
-        saved = opts.manager.edit(saved.id, { ...opts.draft, credentialRef: createdRef });
-      }
-    } else {
-      saved = opts.manager.edit(opts.profile.id, opts.draft);
-    }
+    if (editId === undefined) { saved = opts.manager.add(opts.draft); addedId = saved.id; }
+    const id = editId ?? saved!.id;
+    if (opts.secret !== undefined) createdRef = opts.saveSecret!(id, opts.secret);
+    if (editId !== undefined || createdRef !== undefined) saved = opts.manager.edit(id, { ...opts.draft, ...(createdRef === undefined ? {} : { credentialRef: createdRef }) });
   } catch (error) {
     if (createdRef !== undefined) opts.discardSecret?.(createdRef);
     if (addedId !== undefined) {
@@ -194,7 +164,7 @@ export async function runProviderWizard(
     io.write("informe ao menos um modelo");
   }
 
-  let credentialRef = current?.credentialRef;
+  let credentialRef = current?.credentialRef ?? entry?.credentialRef;
   let secret: string | undefined;
   if (kind !== "codex-oauth") {
     for (;;) {

@@ -34,13 +34,13 @@ export function nodeReplIO(
   });
   const protect = protectReadline(rl, output);
   const controller = new AbortController();
-  const pending: string[] = [];
+  const pending: Array<{ text: string; secret: boolean }> = [];
   const waiters: Array<(line: string | null) => void> = [];
-  let closed = false;
-  rl.on("line", (line) => {
+  let closed = false, readingSecret = false;
+  rl.on("line", (text) => {
     const waiter = waiters.shift();
-    if (waiter !== undefined) waiter(line);
-    else pending.push(line);
+    if (waiter !== undefined) waiter(text);
+    else pending.push({ text, secret: readingSecret });
   });
   rl.on("close", () => {
     closed = true;
@@ -57,17 +57,19 @@ export function nodeReplIO(
     signal: controller.signal,
     read: async (prompt, opts) => {
       write(prompt);
-      const finish = protect(opts?.secret === true);
-      const queued = pending.shift();
-      if (queued !== undefined) { finish(queued); return queued; }
-      if (closed) { finish(""); return null; }
+      const secret = opts?.secret === true; readingSecret = secret;
+      const finish = protect(secret), queued = pending.shift();
+      if (queued !== undefined) {
+        if (secret) for (const line of pending) if (line.text === queued.text) line.secret = true;
+        finish(queued.text, secret || queued.secret); return queued.text;
+      }
+      if (closed) { finish("", secret); return null; }
       const line = await new Promise<string | null>((resolve) => waiters.push(resolve));
-      finish(line ?? "");
-      return line;
+      finish(line ?? "", secret); return line;
     },
     /** Ignora linhas já enfileiradas: decisor no meio do turno espera resposta nova. */
     readFresh: async (prompt) => {
-      const finish = protect(false);
+      readingSecret = false; const finish = protect(false);
       write(prompt);
       if (closed) { finish(""); return null; }
       const line = await new Promise<string | null>((resolve) => waiters.push(resolve));
@@ -77,6 +79,7 @@ export function nodeReplIO(
     /** #526: sair da fila no abort — sem isso a próxima linha cai num waiter morto. */
     readCancelable: async (prompt, signal) => {
       // Uma espera que já expirou não imprime prompt nem entra na fila.
+      readingSecret = false;
       if (signal?.aborted === true) return null;
       if (closed) return null;
       const done = protect(false);
