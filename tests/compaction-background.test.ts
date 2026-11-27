@@ -140,6 +140,39 @@ describe("compactação em background (CMP-9)", () => {
     await background.close();
   });
 
+  test("breaker pausado não consome o artefato no caminho de overflow", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const messages = history();
+    let summaries = 0;
+
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => toolResp(),
+      summarize: async () => { summaries++; return "BG"; },
+    });
+    await background.drain();
+    expect(summaries).toBe(1);
+
+    // Três falhas depois do pré-aquecimento abrem o breaker.
+    for (let index = 0; index < 3; index++) recordCompactionFailure(ledger, "r1", "a");
+
+    overTrigger(messages);
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => { throw new ProviderError("invalid_request", "maximum context length exceeded"); },
+      summarize: async () => { summaries++; return "INLINE"; },
+    }).catch(() => undefined);
+
+    // O overflow também não consome o artefato pausado.
+    expect(summaries).toBe(1);
+    expect(audit.readAll().some((event) => event.tipo === "compaction.applied")).toBe(false);
+    expect(compactionState(ledger, "r1").failures).toBe(3);
+    expect(compactionState(ledger, "r1").paused).toBe(true);
+    expect(existsSync(compactionArtifactPaths(dir, "r1", "a").artifact)).toBe(true);
+    await background.close();
+  });
+
   test("resultado não pronto cai no inline e cancela o prewarm em voo", async () => {
     const { dir, ledger, audit } = setup();
     const background = new BackgroundCompactor({ dir, run: "r1", audit });
@@ -286,6 +319,27 @@ describe("compactação em background (CMP-9)", () => {
     expect(audit.readAll().filter((event) => event.tipo === "compaction.failed")).toHaveLength(1);
     expect(compactionState(ledger, "r1").failures).toBe(0);
     expect(compactionState(ledger, "r1").paused).toBe(false);
+  });
+
+  test("o mesmo snapshot falha uma vez só no audit (dedup por chave)", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const messages = history();
+    let runs = 0;
+    const failing = async () => { runs++; throw new Error("resumo quebrou"); };
+
+    background.schedule("a", messages, 7_000, ID, failing);
+    await background.drain();
+    // O consume libera o próximo pré-aquecimento; o mesmo snapshot roda de novo.
+    background.take("a", messages, ID);
+    background.schedule("a", messages, 7_000, ID, failing);
+    await background.drain();
+
+    expect(runs).toBe(2);
+    // Uma falha por snapshot: o audit não duplica e o ledger fica intacto.
+    expect(audit.readAll().filter((event) => event.tipo === "compaction.failed")).toHaveLength(1);
+    expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction")).toHaveLength(0);
+    await background.close();
   });
 
   test("prefixo alterado entre agendar e consumir cai no inline", async () => {
