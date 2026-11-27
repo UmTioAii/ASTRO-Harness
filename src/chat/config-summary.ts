@@ -71,6 +71,13 @@ function knobEntries(config: AstroConfig): { key: EditableConfigKey; value: stri
       if (value !== undefined) knobs.push({ key: `team.${name}` as EditableConfigKey, value: fmt(value) });
     }
   }
+  const tui = config.tui;
+  if (tui !== undefined) {
+    knobs.push(
+      { key: "tui.verbosity" as EditableConfigKey, value: tui.verbosity ?? "standard" },
+      { key: "tui.streamThrottleMs" as EditableConfigKey, value: String(tui.streamThrottleMs ?? 40) },
+    );
+  }
   return knobs;
 }
 

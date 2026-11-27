@@ -1,6 +1,5 @@
 /** Setup wizard (#611): the first-run writer at the TUI terms gate, one config layer per run, never silent or TTY-less. */
 import { existsSync, mkdirSync } from "node:fs";
-import { createInterface } from "node:readline";
 import { dirname } from "node:path";
 import { globalConfigPath } from "../astro-home";
 import { loadConfigRaw } from "../core/config";
@@ -9,6 +8,7 @@ import { profileFromEnv, validateProjectLayer } from "../providers/profiles";
 import { redactSecrets } from "../sanitize-external";
 import { activeModelRefFromGlobal, createFileExclusive } from "./init";
 import { runProviderWizard, type WizardIO } from "./provider-wizard";
+import { nodeReplIO } from "./node-io";
 
 /** One line printed on a machine without a terminal: nothing is asked or written. */
 export const SETUP_UNATTENDED_NOTICE =
@@ -139,20 +139,10 @@ export async function runSetup(configPath: string, opts: SetupOptions = {}): Pro
 }
 
 /** Terminal channel of the wizard; one readline and one close listener, closed before Ink mounts. */
-export function ttySetupIO(): { io: WizardIO; close: () => void } {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  let closed = false;
-  let pending: ((value: string | null) => void) | undefined;
-  rl.once("close", () => { closed = true; pending?.(null); });
-  return {
-    io: {
-      read: (prompt) => new Promise<string | null>((resolve) => {
-        if (closed) { resolve(null); return; }
-        pending = resolve;
-        rl.question(prompt, (answer) => { pending = undefined; resolve(answer); }); // EOF resolves null above
-      }),
-      write: (text) => { process.stdout.write(`${text}\n`); },
-    },
-    close: () => rl.close(),
-  };
+export function ttySetupIO(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): { io: WizardIO; close: () => void } {
+  const io = nodeReplIO(input, output);
+  return { io, close: () => io.close() };
 }

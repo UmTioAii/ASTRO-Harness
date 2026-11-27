@@ -610,16 +610,42 @@ export async function runSession(
           ...(callSelection === undefined ? {} : { call: callSelection }),
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
         }, opts.signal),
-        summarize: (input, signal) => opts.provider.complete({
-          model: opts.model.id,
-          messages: safePrompt(input),
-          tools: undefined,
-          purpose: "cheap",
-          ...(opts.agentProfile === undefined ? {} : { profile: opts.agentProfile }),
-        }, signal ?? opts.signal).then((summary) => {
-          recordAuxUsage(summary, opts.model, opts.agent);
-          return summary.content;
-        }),
+        summarize: (input, signal) => {
+          const compactionConfig = opts.compaction ?? DEFAULT_COMPACTION_CONFIG;
+          const summaryModel = compactionConfig.summaryModel;
+          const summaryProvider = compactionConfig.summaryProvider;
+          let provider = opts.provider;
+          let model = opts.model;
+          
+          if (summaryModel !== undefined) {
+            const slashIndex = summaryModel.indexOf("/");
+            if (slashIndex > 0) {
+              const modelProvider = summaryModel.substring(0, slashIndex);
+              const modelId = summaryModel.substring(slashIndex + 1);
+              
+              if (modelProvider === model.provider) {
+                model = { ...model, id: modelId } as any;
+              } else {
+                model = { ...model, id: summaryModel, provider: modelProvider } as any;
+              }
+            } else {
+              model = { ...model, id: summaryModel } as any;
+            }
+          } else if (summaryProvider !== undefined) {
+            // Provider preference noted - would need provider registry to resolve
+          }
+          
+          return provider.complete({
+            model: model.id,
+            messages: safePrompt(input),
+            tools: undefined,
+            purpose: "cheap",
+            ...(opts.agentProfile === undefined ? {} : { profile: opts.agentProfile }),
+          }, signal ?? opts.signal).then((summary) => {
+            recordAuxUsage(summary, model, opts.agent);
+            return summary.content;
+          });
+        },
       }).catch((error) => {
         releaseReserve();
         throw error;
@@ -1479,16 +1505,42 @@ export async function runMultiAgentSession(
           ...(stepCall === undefined ? {} : { call: stepCall }),
           ...(opts.onToken === undefined ? {} : { onToken: opts.onToken }),
         }, opts.signal),
-        summarize: (input, signal) => stepProvider.complete({
-          model: stepModel.id,
-          messages: safePrompt(input),
-          tools: undefined,
-          purpose: "cheap",
-          ...(stepProfile === undefined ? {} : { profile: stepProfile }),
-        }, signal ?? opts.signal).then((summary) => {
-          recordAuxUsage(summary, stepModel, stepAgentName);
-          return summary.content;
-        }),
+        summarize: (input, signal) => {
+          const compactionConfig = opts.compaction ?? DEFAULT_COMPACTION_CONFIG;
+          const summaryModel = compactionConfig.summaryModel;
+          const summaryProvider = compactionConfig.summaryProvider;
+          let provider = stepProvider;
+          let model = stepModel;
+          
+          if (summaryModel !== undefined) {
+            const slashIndex = summaryModel.indexOf("/");
+            if (slashIndex > 0) {
+              const modelProvider = summaryModel.substring(0, slashIndex);
+              const modelId = summaryModel.substring(slashIndex + 1);
+              
+              if (modelProvider === model.provider) {
+                model = { ...model, id: modelId } as any;
+              } else {
+                model = { ...model, id: summaryModel, provider: modelProvider } as any;
+              }
+            } else {
+              model = { ...model, id: summaryModel } as any;
+            }
+          } else if (summaryProvider !== undefined) {
+            // Provider preference noted - would need provider registry to resolve
+          }
+          
+          return provider.complete({
+            model: model.id,
+            messages: safePrompt(input),
+            tools: undefined,
+            purpose: "cheap",
+            ...(stepProfile === undefined ? {} : { profile: stepProfile }),
+          }, signal ?? opts.signal).then((summary) => {
+            recordAuxUsage(summary, model, stepAgentName);
+            return summary.content;
+          });
+        },
         onCompacted: () => saveAgentState(currentAgentName),
       }).catch((error) => {
         releaseReserve();

@@ -23,6 +23,8 @@ export const EDITABLE_CONFIG_KEYS = [
   "team.weekBudgetUsd",
   "permissions.mode",
   "shell.default",
+  "tui.verbosity",
+  "tui.streamThrottleMs",
 ] as const;
 
 export type EditableConfigKey = (typeof EDITABLE_CONFIG_KEYS)[number]; export const CONTROL_ENTRY_WARNING = 'preset "control" is active: advanced limits and budgets are visible; use /config preset default to return';
@@ -105,6 +107,19 @@ export function parseConfigEditValue(key: EditableConfigKey, raw: string): unkno
       throw new ConfigError(`valor inválido para "shell.default": deve ser ${HOST_SHELLS.join(", ")}`);
     }
     return text;
+  }
+  if (key === "tui.verbosity") {
+    if (!["minimal", "standard", "full"].includes(text)) {
+      throw new ConfigError(`valor inválido para "tui.verbosity": deve ser minimal, standard ou full`);
+    }
+    return text;
+  }
+  if (key === "tui.streamThrottleMs") {
+    const value = Number(text);
+    if (text === "" || !Number.isInteger(value) || value < 0) {
+      throw new ConfigError(`valor inválido para "tui.streamThrottleMs": deve ser inteiro >= 0`);
+    }
+    return value;
   }
   if (!isPermissionMode(text)) {
     throw new ConfigError(`valor inválido para "permissions.mode": deve ser bypass, allow-edits ou ask`);

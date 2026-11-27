@@ -36,6 +36,8 @@ export interface TimelineView {
   readonly status: { model: string; mode: string; costUsd?: number | null };
   /** ctrl+o expands tool output, ctrl+t expands reasoning; both collapsed by default. */
   readonly expanded?: { tools?: boolean; reasoning?: boolean };
+  /** Verbosity level: minimal | standard | full. Default standard. */
+  readonly verbosity?: "minimal" | "standard" | "full";
   /** Tool bodies by `callId` (the id on `tool.start` and `tool.end`); read only when expanded. */
   readonly results?: Readonly<Record<string, string>>;
 }
@@ -133,6 +135,7 @@ const GLYPH: Record<TimelineToolStatus, string> = { running: "▸", ok: "✓", f
 const LOGO = ["█▀▀█ █▀▀ ▀█▀ █▀▀█ █▀▀█", "█▄▄█ ▀▀█  █  █▄▄▀ █  █", "▀  ▀ ▀▀▀  ▀  ▀  ▀ ▀▀▀▀"];
 export function renderTimeline(view: TimelineView, width: number): string[] {
   const layout = timelineLayout(width);
+  const verbosity = view.verbosity ?? "standard";
   const lines: string[] = [];
   const add = (text: string): void => {
     lines.push(`${layout.indent}${clipLine(inline(text), layout.contentWidth)}`);
@@ -143,17 +146,26 @@ export function renderTimeline(view: TimelineView, width: number): string[] {
   };
   const time = (ms: number | undefined): string =>
     layout.durations && ms !== undefined ? ` · ${formatDuration(ms)}` : "";
+  
+  // Determine expansion based on verbosity and explicit expanded flags
+  const reasoningExpanded = verbosity === "full" || view.expanded?.reasoning === true;
+  const toolsExpanded = verbosity === "full" || view.expanded?.tools === true;
+  
   const entry = (item: TimelineEntry): void => {
     switch (item.kind) {
       case "reasoning":
+        // minimal: skip reasoning entirely
+        if (verbosity === "minimal") return;
         add(`▸ reasoning${time(item.durationMs)}`);
         // Whole-block redaction before splitting: a multi-line secret dies here (I-03).
-        if (view.expanded?.reasoning === true) for (const line of sanitizeBlockText(item.text).split("\n")) addBlock(line, "  ");
+        if (reasoningExpanded) for (const line of sanitizeBlockText(item.text).split("\n")) addBlock(line, "  ");
         return;
       case "tool": {
+        // minimal: skip tool entries entirely
+        if (verbosity === "minimal") return;
         add(`${GLYPH[item.status]} ${toolLabel(item.name, item.arguments)}${time(item.durationMs)}`);
         const body = view.results !== undefined && Object.hasOwn(view.results, item.callId) ? view.results[item.callId] : undefined;
-        if (view.expanded?.tools === true && body !== undefined) {
+        if (toolsExpanded && body !== undefined) {
           for (const line of body.replace(/\r/g, "").split("\n")) addBlock(line, "  ");
         }
         return;

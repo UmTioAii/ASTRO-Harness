@@ -21,11 +21,15 @@ export interface TuiConfig {
   lastModel?: string;
   favoriteModels?: string[];
   recentModels?: string[];
+  /** Verbosity level for timeline rendering (#679). */
+  verbosity?: "minimal" | "standard" | "full";
+  /** Stream throttle in milliseconds (#679). */
+  streamThrottleMs?: number;
 }
 
 export type ThemeColors = { accent: string; warning: string; error: string };
 
-const DEFAULT_CONFIG: TuiConfig = { theme: "dark" };
+const DEFAULT_CONFIG: TuiConfig = { theme: "dark", verbosity: "standard", streamThrottleMs: 40 };
 
 function normalizeList(value: unknown, max = Number.POSITIVE_INFINITY): string[] {
   if (!Array.isArray(value)) return [];
@@ -49,11 +53,21 @@ function parseLayer(parsed: unknown): Partial<TuiConfig> {
   // lista presente (inclusive vazia) é decisão explícita: vence a camada de baixo
   const favoriteModels = Array.isArray(record.favoriteModels) ? normalizeList(record.favoriteModels) : undefined;
   const recentModels = Array.isArray(record.recentModels) ? normalizeList(record.recentModels, 10) : undefined;
+  const verbosityRaw = record.verbosity;
+  const verbosity = typeof verbosityRaw === "string" && ["minimal", "standard", "full"].includes(verbosityRaw)
+    ? verbosityRaw as TuiConfig["verbosity"]
+    : undefined;
+  const streamThrottleMsRaw = record.streamThrottleMs;
+  const streamThrottleMs = typeof streamThrottleMsRaw === "number" && Number.isInteger(streamThrottleMsRaw) && streamThrottleMsRaw >= 0
+    ? streamThrottleMsRaw
+    : undefined;
   return {
     ...(theme === undefined ? {} : { theme }),
     ...(lastModel === undefined ? {} : { lastModel }),
     ...(favoriteModels === undefined ? {} : { favoriteModels }),
     ...(recentModels === undefined ? {} : { recentModels }),
+    ...(verbosity === undefined ? {} : { verbosity }),
+    ...(streamThrottleMs === undefined ? {} : { streamThrottleMs }),
   };
 }
 
@@ -76,11 +90,15 @@ export function loadTuiConfig(cwd: string, env: NodeJS.ProcessEnv = process.env)
   const lastModel = project.lastModel ?? global.lastModel;
   const favoriteModels = project.favoriteModels || global.favoriteModels;
   const recentModels = project.recentModels ?? global.recentModels;
+  const verbosity = project.verbosity ?? global.verbosity;
+  const streamThrottleMs = project.streamThrottleMs ?? global.streamThrottleMs;
   return {
     theme: project.theme ?? global.theme ?? "dark",
     ...(lastModel === undefined ? {} : { lastModel }),
     ...(favoriteModels === undefined ? {} : { favoriteModels }),
     ...(recentModels === undefined ? {} : { recentModels }),
+    ...(verbosity === undefined ? {} : { verbosity }),
+    ...(streamThrottleMs === undefined ? {} : { streamThrottleMs }),
   };
 }
 
@@ -103,11 +121,15 @@ export function saveTuiConfig(cwd: string, config: Partial<TuiConfig>, env: Node
   const recentModels = config.recentModels === undefined
     ? current.recentModels
     : normalizeList(config.recentModels, 10);
+  const verbosity = config.verbosity ?? current.verbosity;
+  const streamThrottleMs = config.streamThrottleMs ?? current.streamThrottleMs;
   const merged: Partial<TuiConfig> = {
     theme: config.theme ?? current.theme,
     ...(lastModel === undefined ? {} : { lastModel }),
     ...(favoriteModels === undefined ? {} : { favoriteModels }),
     ...(recentModels === undefined ? {} : { recentModels }),
+    ...(verbosity === undefined ? {} : { verbosity }),
+    ...(streamThrottleMs === undefined ? {} : { streamThrottleMs }),
   };
   const temp = `${file}.${randomUUID()}.tmp`;
   try {

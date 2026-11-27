@@ -49,7 +49,7 @@ describe("setup wizard — one layer per run (#611)", () => {
     const home = tempDir("astro-setup-full-home-");
     const configPath = join(cwd, "astro.config.json");
     const secret = "sk-sentinel-do-not-store";
-    const { io } = fakeIO(["", "custom", "Local", "https://local.example/v1", "LOCAL_API_KEY", "m1", "", ""]);
+    const { io } = fakeIO(["", "custom", "Local", "https://local.example/v1", "m1", "LOCAL_API_KEY", "", ""]);
 
     const outcome = await run(configPath, { env: { ASTRO_HOME: home, LOCAL_API_KEY: secret }, allowMissing: true, io });
 
@@ -59,6 +59,12 @@ describe("setup wizard — one layer per run (#611)", () => {
     expect(JSON.parse(global).providers.local.credentialRef).toBe("LOCAL_API_KEY");
     expect(global.includes(secret)).toBe(false); // the key never reaches a layer (I-03)
     if (process.platform !== "win32") expect(statSync(configPath).mode & 0o777).toBe(0o600); // HARD_BLOCK file
+  });
+
+  test("catalog defaults keep the credential ref through astro setup (#629)", async () => {
+    const cwd = tempDir("astro-setup-catalog-"), home = tempDir("astro-setup-catalog-home-"), { io } = fakeIO(["", "nvidia", "NVIDIA Work", "", "", "", "", ""]);
+    expect((await run(join(cwd, "astro.config.json"), { env: { ASTRO_HOME: home, NVIDIA_API_KEY: "sk-env" }, allowMissing: true, io })).flow).toBe("full");
+    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).providers["nvidia-work"].credentialRef).toBe("NVIDIA_API_KEY");
   });
 
   test("global only: mini-setup writes the project layer and leaves the global byte for byte", async () => {
@@ -94,7 +100,7 @@ describe("setup wizard — one layer per run (#611)", () => {
   test("dangling credential ref: refused before saving, no layer written", async () => {
     const cwd = tempDir("astro-setup-dangling-");
     const home = tempDir("astro-setup-dangling-home-");
-    const { io, out } = fakeIO(["", "custom", "Local", "https://local.example/v1", "MISSING_KEY", "m1", "S", "S"]);
+    const { io, out } = fakeIO(["", "custom", "Local", "https://local.example/v1", "m1", "MISSING_KEY", "S", "S"]);
 
     const outcome = await run(join(cwd, "astro.config.json"), { env: { ASTRO_HOME: home }, allowMissing: true, io });
 
@@ -140,7 +146,7 @@ describe("setup wizard — one layer per run (#611)", () => {
     const outcome = await run(switched, {
       env: { ...env, LOCAL_API_KEY: "sk-sentinel-do-not-store" },
       allowMissing: true,
-      io: fakeIO(["y", "", "custom", "Local", "https://local.example/v1", "LOCAL_API_KEY", "m1", "", ""]).io,
+      io: fakeIO(["y", "", "custom", "Local", "https://local.example/v1", "m1", "LOCAL_API_KEY", "", ""]).io,
     });
     expect(outcome.flow).toBe("full");
     expect(JSON.parse(readFileSync(switched, "utf8")).agent.model).toBe("local/m1");

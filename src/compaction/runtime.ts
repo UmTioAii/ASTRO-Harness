@@ -108,51 +108,72 @@ async function applyCompaction(
   if (state.paused) throw new CompactionPausedError(state.remainingMs);
 
   const agent = opts.agent();
-  try {
-    const result = await compactSession({
-      run: opts.run,
-      messages,
-      window: opts.window(),
-      buffer: opts.compaction.buffer,
-      provider: opts.provider(),
-      summarize: opts.summarize,
-      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
-    });
-    if (result.olderCount === 0) {
-      // Nada anterior para substituir (ex.: primeira tarefa já grande): não há
-      // compactação possível e repetir a cada step só gastaria tokens.
-      return false;
+  const maxRetries = opts.compaction.maxRetries ?? 2;
+  const retryBackoffMs = opts.compaction.retryBackoffMs ?? 1000;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await compactSession({
+        run: opts.run,
+        messages,
+        window: opts.window(),
+        buffer: opts.compaction.buffer,
+        provider: opts.compaction.summaryProvider ?? opts.provider(),
+        summarize: opts.summarize,
+        ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+      });
+      if (result.olderCount === 0) {
+        // Nada anterior para substituir (ex.: primeira tarefa já grande): não há
+        // compactação possível e repetir a cada step só gastaria tokens.
+        return false;
+      }
+      messages.length = 0;
+      messages.push(...result.messages);
+      recordCompactionSuccess(opts.ledger, opts.run, agent);
+      opts.onCompacted?.(messages);
+      opts.audit.append({
+        run: opts.run,
+        agent,
+        tipo: "compaction.applied",
+        payload: {
+          reason,
+          reduction: result.reduction,
+          originalTokens: result.originalTokens,
+          returnedTokens: result.returnedTokens,
+          attempt: attempt + 1,
+        },
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof CompactionPausedError) throw error;
+      if (isAbortError(error, opts.signal)) throw error;
+
+      // Last attempt - record failure and potentially open breaker
+      if (attempt === maxRetries) {
+        const after = recordCompactionFailure(opts.ledger, opts.run, agent);
+        opts.audit.append({
+          run: opts.run,
+          agent,
+          tipo: "compaction.failed",
+          payload: { reason, error: error instanceof Error ? error.name : "unknown", attempts: attempt + 1 },
+        });
+        if (after.paused) throw new CompactionPausedError(after.remainingMs);
+        if (reason === "overflow") throw error;
+        return false;
+      }
+
+      // Retry with backoff
+      opts.audit.append({
+        run: opts.run,
+        agent,
+        tipo: "compaction.retry",
+        payload: { reason, error: error instanceof Error ? error.name : "unknown", attempt: attempt + 1, nextInMs: retryBackoffMs },
+      });
+      await new Promise((resolve) => setTimeout(resolve, retryBackoffMs));
+      // Continue to next attempt
     }
-    messages.length = 0;
-    messages.push(...result.messages);
-    recordCompactionSuccess(opts.ledger, opts.run, agent);
-    opts.onCompacted?.(messages);
-    opts.audit.append({
-      run: opts.run,
-      agent,
-      tipo: "compaction.applied",
-      payload: {
-        reason,
-        reduction: result.reduction,
-        originalTokens: result.originalTokens,
-        returnedTokens: result.returnedTokens,
-      },
-    });
-    return true;
-  } catch (error) {
-    if (error instanceof CompactionPausedError) throw error;
-    if (isAbortError(error, opts.signal)) throw error;
-    const after = recordCompactionFailure(opts.ledger, opts.run, agent);
-    opts.audit.append({
-      run: opts.run,
-      agent,
-      tipo: "compaction.failed",
-      payload: { reason, error: error instanceof Error ? error.name : "unknown" },
-    });
-    if (after.paused) throw new CompactionPausedError(after.remainingMs);
-    if (reason === "overflow") throw error;
-    return false;
   }
+  return false; // Should not reach here
 }
 
 /**
