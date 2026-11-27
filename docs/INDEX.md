@@ -28,6 +28,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/adr/0036-agents-handoff-and-resume-levels.md` | Agents, child handoff and the L1/L2/L3 resume levels (#602) | ~45 |
 | `docs/adr/0037-per-account-concurrency-and-bounded-agents.md` | Per-account concurrency, bounded spawn and shared-account budget (#602) | ~45 |
 | `docs/superpowers/plans/` | Ao executar uma frente do planejamento; roadmap de issues abertas em `2026-11-01-roadmap-execucao-issues-abertas.md` | 1 por frente |
+| `docs/superpowers/plans/2026-11-26-subagents.md` | Background subagents implementation: two phases, twelve TDD tasks and real dev-path acceptance (#680) | ~150 |
 | `docs/superpowers/specs/` | Antes de implementar uma frente aprovada; anexos em `2026-11-08-anexos-attachments-design.md` (#392) | 1 por frente |
 | `docs/alpha.5-roadmap.md` | **Roadmap atual**: ordem, dependências e decisões do pacote alpha.5 | ~290, exceção temporária registrada no próprio roadmap |
 | `docs/alpha.6-provider-lifecycle.md` | Provider, model and credential lifecycle: what alpha.6 adopts, rejects and still has to decide (#668) | ~58 |
@@ -38,6 +39,7 @@ Objetivo: apontar o documento certo para cada tarefa.
 | `docs/superpowers/specs/2026-11-21-tuix-design.md` | S5/P2: timeline TUIX em fluxo contínuo | ~140 |
 | `docs/superpowers/specs/2026-11-21-model-catalog.md` | S3/P3: fatos, ofertas e overrides de modelos | ~85 |
 | `docs/superpowers/specs/2026-11-21-agents-and-handoff.md` | S4/P4: agentes, concorrência e handoff | ~93 |
+| `docs/superpowers/specs/2026-11-25-subagents-design.md` | Read-only background subagent runtime, admission, lifecycle and parent delivery (#680) | ~113 |
 | `docs/superpowers/specs/2026-11-21-tools-contract.md` | S6/P5: contrato de saída das tools | ~44 |
 | `docs/superpowers/specs/2026-11-21-web-tools.md` | S7/P5.5: busca, fetch, cache e citações | ~62 |
 | `docs/superpowers/specs/2026-11-21-carry-over.md` | P6: fechamento dos quatro gaps de segurança e CI (#605) | ~42 |
