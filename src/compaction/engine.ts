@@ -53,6 +53,34 @@ const MIN_SUMMARY_BUDGET = 2_000;
 const CLIP_TOOL_CHARS = 2_000;
 const CLIP_INPUT_CHARS = 4_000;
 
+/** Teto do resumo extrativo (chars): cabe no orçamento de `SUMMARY_CLIP`. */
+const DETERMINISTIC_SUMMARY_CHARS = 3_500;
+const DIGEST_MESSAGE_CHARS = 240;
+const DIGEST_MESSAGES = 12;
+
+/**
+ * Extractive summary without a model (CMP-6): used when the summary model is
+ * paused or failed. It keeps the latest turns and decisions instead of dropping
+ * the whole older history — compaction always shrinks the context.
+ */
+export function deterministicSummary(messages: readonly ChatMessage[]): string {
+  const digest: string[] = [];
+  let used = 0;
+  for (let index = messages.length - 1; index >= 0 && digest.length < DIGEST_MESSAGES; index--) {
+    const message = messages[index]!;
+    if (message.role === "system" || message.role === "tool") continue;
+    const text = redactSecrets(message.content).replace(/\s+/g, " ").trim();
+    if (text.length === 0) continue;
+    const line = `[${message.role}] ${text.slice(0, DIGEST_MESSAGE_CHARS)}`;
+    if (used + line.length + 1 > DETERMINISTIC_SUMMARY_CHARS) break;
+    digest.unshift(line);
+    used += line.length + 1;
+  }
+  return digest.length === 0
+    ? "older history omitted (summary unavailable)"
+    : `extractive summary (model unavailable): ${digest.join(" / ")}`;
+}
+
 /** Reserva da janela (CMP-1): max(15% da janela, 16.000) ou `buffer` explícito. */
 export function reserveTokens(window: number, buffer?: number | null): number {
   if (buffer !== null && buffer !== undefined && buffer < window) return buffer;
