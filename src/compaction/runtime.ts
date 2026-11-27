@@ -79,9 +79,8 @@ function identityOf(opts: CompactionRuntimeOptions): CompactionIdentity {
 const ARTIFACT_OVERHEAD = 2_000;
 
 /**
- * Only transient failures are retried: repeating a deterministic error (unknown
- * model, auth, oversized context) wastes time and opens the breaker with no
- * chance of recovery.
+ * Only transient failures are retried: a deterministic error (unknown model,
+ * auth, oversized request) repeats the same failure forever.
  */
 function isRetryableSummaryError(error: unknown): boolean {
   if (error instanceof ProviderError) return RETRYABLE_CLASSES.has(error.errClass);
@@ -122,18 +121,17 @@ function projectionCanClear(messages: readonly ChatMessage[], opts: CompactionRu
 
 /**
  * Compacts, records success/failure and opens the breaker when needed.
- *
- * The breaker gates only the model summary: when it is paused, or the summary
- * fails, compaction continues through the extractive path (no provider). This
- * way compaction never interrupts the run (CMP-6).
+ * The breaker gates only the model summary: paused or failed, compaction
+ * continues through the extractive path (no provider) and never interrupts
+ * the run (CMP-6).
  */
 async function applyCompaction(
   messages: ChatMessage[],
   opts: CompactionRuntimeOptions,
   reason: CompactReason,
 ): Promise<boolean> {
-  // Without older history or a projection that clears the trigger, repeating on
-  // every step would only spend summary tokens without shrinking the context.
+  // Without older history or a projection that clears the trigger, repeating
+  // on every step would only spend summary tokens without shrinking context.
   if (reason === "trigger" && !projectionCanClear(messages, opts)) return false;
   const state = compactionState(opts.ledger, opts.run);
 
@@ -141,8 +139,8 @@ async function applyCompaction(
   const maxRetries = opts.compaction.maxRetries ?? 2;
   const retryBackoffMs = opts.compaction.retryBackoffMs ?? 1000;
 
-  // A paused breaker gates the model summary: compaction goes straight to the
-  // extractive path and the run keeps going (CMP-6).
+  // A paused breaker gates the model summary: compaction goes extractive and
+  // the run keeps going (CMP-6).
   if (state.paused) return applyExtractive(messages, opts, reason, "paused");
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -157,8 +155,7 @@ async function applyCompaction(
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),
       });
       if (result.olderCount === 0) {
-        // Nothing older to replace (e.g. a first task that is already large):
-        // there is no compaction to make and repeating only spends tokens.
+        // Nothing older to replace (e.g. a first task that is already large).
         return false;
       }
       messages.length = 0;
@@ -181,8 +178,8 @@ async function applyCompaction(
     } catch (error) {
       if (isAbortError(error, opts.signal)) throw error;
 
-      // Only transient failures are retried: a deterministic error (unknown
-      // model, auth, oversized request) repeats the same failure forever.
+      // Only transient failures are retried: a deterministic error repeats the
+      // same failure forever.
       if (!isRetryableSummaryError(error) || attempt === maxRetries) {
         const after = recordCompactionFailure(opts.ledger, opts.run, agent);
         opts.audit.append({
@@ -193,7 +190,7 @@ async function applyCompaction(
         });
         if (after.paused) {
           // Later compactions skip the model until the pause expires; none of
-          // them stops compacting because of it.
+          // them stops compacting.
           opts.audit.append({
             run: opts.run,
             agent,
@@ -202,7 +199,7 @@ async function applyCompaction(
           });
         }
         // The model failed: compaction continues through the extractive path.
-        return applyExtractive(messages, opts, reason, errorSummary(error), error);
+        return applyExtractive(messages, opts, reason, errorSummary(error));
       }
 
       // Retry with backoff
@@ -221,14 +218,13 @@ async function applyCompaction(
 
 /**
  * Extractive path: no provider call, always produces an artifact (CMP-6).
- * `failure` is the model error that caused the degradation, when there was one.
+ * `cause` is the degradation reason: a paused breaker or the failed summary.
  */
 async function applyExtractive(
   messages: ChatMessage[],
   opts: CompactionRuntimeOptions,
   reason: CompactReason,
   cause: string,
-  failure?: unknown,
 ): Promise<boolean> {
   const agent = opts.agent();
   const fallback = await compactSession({
@@ -241,8 +237,8 @@ async function applyExtractive(
     ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   });
   if (fallback.olderCount === 0) {
-    // Nothing to reduce: on overflow the original error surfaces.
-    if (reason === "overflow" && failure !== undefined) throw failure;
+    // Nothing to reduce: the caller surfaces the original error, not the
+    // summary failure that led here.
     return false;
   }
   messages.length = 0;

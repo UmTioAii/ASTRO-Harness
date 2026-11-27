@@ -53,7 +53,7 @@ const MIN_SUMMARY_BUDGET = 2_000;
 const CLIP_TOOL_CHARS = 2_000;
 const CLIP_INPUT_CHARS = 4_000;
 
-/** Teto do resumo extrativo (chars): cabe no orçamento de `SUMMARY_CLIP`. */
+/** Ceiling of the extractive summary (chars): it fits the `SUMMARY_CLIP` budget. */
 const DETERMINISTIC_SUMMARY_CHARS = 3_500;
 const DIGEST_MESSAGE_CHARS = 240;
 const DIGEST_MESSAGES = 12;
