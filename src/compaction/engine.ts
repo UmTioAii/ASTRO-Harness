@@ -11,9 +11,21 @@ import { buildCompactionArtifact, renderCompactionArtifact, type CompactionArtif
 /** Config `compaction` (D-CFG1): `buffer: null` usa o default do ADR-0015. */
 export interface CompactionConfig {
   buffer: number | null;
+  /** Modelo dedicado para resumo (provider/id); default = mesmo modelo ativo. */
+  summaryModel?: string;
+  /** Provider explícito para resumo; default = provider do modelo ativo. */
+  summaryProvider?: string;
+  /** Máximo de retentativas para falhas de resumo (default: 2). */
+  maxRetries?: number;
+  /** Backoff entre retentativas em ms (default: 1000). */
+  retryBackoffMs?: number;
 }
 
-export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = { buffer: null };
+export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
+  buffer: null,
+  maxRetries: 2,
+  retryBackoffMs: 1000,
+};
 
 /** Parte recente preservada, em tokens (CMP-2). */
 export const RECENT_TOKENS = 15_000;
@@ -175,6 +187,8 @@ export interface CompactInput {
   summarize: (messages: ChatMessage[], signal?: AbortSignal) => Promise<string>;
   /** Cancelamento do job de background (CMP-9). */
   signal?: AbortSignal;
+  /** Modelo dedicado para resumo (provider/id); default = provider/modelo ativo. */
+  summaryModel?: string;
 }
 
 export interface CompactResult {

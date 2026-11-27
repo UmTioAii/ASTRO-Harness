@@ -1887,14 +1887,57 @@ function validateCompaction(value: unknown): CompactionConfig {
   if (!isPlainObject(value)) fail('config inválida: "compaction" deve ser um objeto');
   const raw = value as Record<string, unknown>;
   for (const key of Object.keys(raw)) {
-    if (key !== "buffer") fail(`config inválida: "compaction.${key}" desconhecido`);
+    if (key !== "buffer" && key !== "summaryModel" && key !== "summaryProvider" && key !== "maxRetries" && key !== "retryBackoffMs") {
+      fail(`config inválida: "compaction.${key}" desconhecido`);
+    }
   }
-  if (raw.buffer === undefined || raw.buffer === null) return { buffer: null };
-  const buffer = raw.buffer;
-  if (typeof buffer !== "number" || !Number.isInteger(buffer) || buffer < 0) {
-    fail('config inválida: "compaction.buffer" deve ser inteiro >= 0 ou null');
+  
+  let buffer: number | null = DEFAULT_COMPACTION_CONFIG.buffer;
+  if (raw.buffer !== undefined) {
+    if (raw.buffer === null) {
+      buffer = null;
+    } else if (typeof raw.buffer !== "number" || !Number.isInteger(raw.buffer) || raw.buffer < 0) {
+      fail('config inválida: "compaction.buffer" deve ser inteiro >= 0 ou null');
+    } else {
+      buffer = raw.buffer;
+    }
   }
-  return { buffer };
+  
+  let summaryModel: string | undefined;
+  if (raw.summaryModel !== undefined) {
+    if (typeof raw.summaryModel !== "string" || raw.summaryModel.trim() === "") {
+      fail('config inválida: "compaction.summaryModel" deve ser string não vazia (ex.: "openai/gpt-4o-mini")');
+    }
+    summaryModel = raw.summaryModel.trim();
+  }
+  
+  let summaryProvider: string | undefined;
+  if (raw.summaryProvider !== undefined) {
+    if (typeof raw.summaryProvider !== "string" || raw.summaryProvider.trim() === "") {
+      fail('config inválida: "compaction.summaryProvider" deve ser string não vazia');
+    }
+    summaryProvider = raw.summaryProvider.trim();
+  }
+  
+  let maxRetries: number = DEFAULT_COMPACTION_CONFIG.maxRetries ?? 2;
+  if (raw.maxRetries !== undefined) {
+    const retries = raw.maxRetries;
+    if (typeof retries !== "number" || !Number.isInteger(retries) || retries < 0 || retries > 10) {
+      fail('config inválida: "compaction.maxRetries" deve ser inteiro entre 0 e 10');
+    }
+    maxRetries = retries;
+  }
+  
+  let retryBackoffMs: number = DEFAULT_COMPACTION_CONFIG.retryBackoffMs ?? 1000;
+  if (raw.retryBackoffMs !== undefined) {
+    const backoff = raw.retryBackoffMs;
+    if (typeof backoff !== "number" || !Number.isInteger(backoff) || backoff < 0 || backoff > 60000) {
+      fail('config inválida: "compaction.retryBackoffMs" deve ser inteiro entre 0 e 60000');
+    }
+    retryBackoffMs = backoff;
+  }
+  
+  return { buffer, summaryModel, summaryProvider, maxRetries, retryBackoffMs };
 }
 
 /**
@@ -2145,7 +2188,7 @@ const CONFIG_SHAPE: ConfigShape = {
       },
     },
     outputLimit: { keys: ["maxTokens", "shareOfWindow"] },
-    compaction: { keys: ["buffer"] },
+    compaction: { keys: ["buffer", "summaryModel", "summaryProvider", "maxRetries", "retryBackoffMs"] },
     webSearch: {
       keys: ["provider", "apiKeyEnv", "baseUrl", "defaultMaxResults", "fallback"],
       children: { fallback: { items: { keys: ["provider", "apiKeyEnv", "baseUrl"] } } },
