@@ -61,6 +61,12 @@ describe("setup wizard — one layer per run (#611)", () => {
     if (process.platform !== "win32") expect(statSync(configPath).mode & 0o777).toBe(0o600); // HARD_BLOCK file
   });
 
+  test("catalog defaults keep the credential ref through astro setup (#629)", async () => {
+    const cwd = tempDir("astro-setup-catalog-"), home = tempDir("astro-setup-catalog-home-"), { io } = fakeIO(["", "nvidia", "NVIDIA Work", "", "", "", "", ""]);
+    expect((await run(join(cwd, "astro.config.json"), { env: { ASTRO_HOME: home, NVIDIA_API_KEY: "sk-env" }, allowMissing: true, io })).flow).toBe("full");
+    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).providers["nvidia-work"].credentialRef).toBe("NVIDIA_API_KEY");
+  });
+
   test("global only: mini-setup writes the project layer and leaves the global byte for byte", async () => {
     const cwd = tempDir("astro-setup-project-");
     const home = tempDir("astro-setup-project-home-");

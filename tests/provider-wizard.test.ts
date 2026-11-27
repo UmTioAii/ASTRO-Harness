@@ -34,6 +34,8 @@ function fakeIO(answers: string[]) {
   };
 }
 
+const draft = { name: "Local", kind: "openai-compat", baseUrl: "http://localhost:1/v1", models: [{ id: "m1", tags: [], context: 8192 }] };
+
 test("add pelo catálogo grava, ativa e chama onUse", async () => {
   const { home, manager } = setup();
   const used: string[] = [];
@@ -44,6 +46,7 @@ test("add pelo catálogo grava, ativa e chama onUse", async () => {
   const store = profileStoreFromConfig(join(home, "config.json")); // #492: camada global
   expect(store.activeProfileId).toBe("nvidia-work");
   expect(store.profiles[0]!.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
+  expect([view?.credentialRef, store.profiles[0]!.credentialRef]).toEqual(["NVIDIA_API_KEY", "NVIDIA_API_KEY"]);
   expect(existsSync(join(home, "providers.json"))).toBe(false); // legado nunca é escrito
   expect(out.join(" ")).toContain("salvo: nvidia-work");
 });
@@ -143,23 +146,26 @@ test("a vault write error never prints the pasted key (#629)", async () => {
   expect(out.join("\n")).not.toContain(secret);
 });
 
-test("a pasted key requires rollback before any profile or vault write (#629)", () => {
+test("vault writes are preflighted and rolled back with the profile (#629)", () => {
   const { manager } = setup();
   let vaultWrites = 0;
   const result = saveProviderProfile({
-    manager,
-    mode: "add",
-    draft: {
-      name: "Local", kind: "openai-compat", baseUrl: "http://localhost:1/v1",
-      models: [{ id: "m1", tags: [], context: 8192 }],
-    },
-    secret: "sk-rollback-sentinel",
+    manager, mode: "add", draft, secret: "sk-rollback-sentinel",
     saveSecret: () => { vaultWrites++; return "vault:cred-rollback"; },
   });
-  expect(result.saved).toBeUndefined();
-  expect(result.error).toContain("cofre");
-  expect(vaultWrites).toBe(0);
-  expect(manager.list().some((profile) => profile.name === "Local")).toBe(false);
+  expect(result.saved).toBeUndefined(); expect(result.error).toContain("cofre"); expect(vaultWrites).toBe(0);
+  const discarded: string[] = []; manager.edit = () => { throw new Error("profile write failed"); };
+  saveProviderProfile({ manager, mode: "add", draft, secret: "sk-rollback-sentinel",
+    saveSecret: () => "vault:created", discardSecret: (ref) => { discarded.push(ref); } });
+  expect(discarded).toEqual(["vault:created"]); expect(manager.list().some((profile) => profile.name === "Local")).toBe(false);
+});
+
+test("saveProviderProfile dispatches by mode, not profile presence (#629)", () => {
+  const { manager } = setup();
+  expect(saveProviderProfile({ manager, mode: "edit", draft }).saved).toBeUndefined(); expect(manager.list().some((item) => item.name === draft.name)).toBe(false);
+  const profile = manager.add({ ...draft, name: "Old", baseUrl: "http://old/v1" });
+  const added = saveProviderProfile({ manager, mode: "add", profile, draft: { ...draft, name: "New" } });
+  expect(added.saved?.id).toBe("new"); expect(manager.list().find((item) => item.id === profile.id)?.baseUrl).toBe("http://old/v1");
 });
 
 test("credentialRef vazio continua sem chave (#286)", async () => {
