@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
-import { CompactionPausedError, recordCompactionFailure } from "../src/compaction/breaker";
+import { recordCompactionFailure } from "../src/compaction/breaker";
 import { compactionArtifactPaths } from "../src/compaction/background";
 import { Ledger } from "../src/ledger";
 import type { BudgetConfig } from "../src/core/config";
@@ -198,11 +198,15 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
     const provider: Provider = {
       complete: async () => {
         calls++;
-        if (calls === 1) {
-          const args = { to: "coder", task: "x".repeat(40_000), objective: "o", decisions: [], constraints: [], next_steps: [] };
-          return resp({ toolCalls: [{ id: "h1", name: "handoff", arguments: JSON.stringify(args) }] });
-        }
-        return resp({ content: "feito pelo receptor" });
+        if (calls > 1) return resp({ content: "feito pelo receptor" });
+        return resp({ toolCalls: [{ id: "h1", name: "handoff", arguments: JSON.stringify({
+          to: "coder",
+          task: "x".repeat(40_000),
+          objective: "o",
+          decisions: [],
+          constraints: [],
+          next_steps: [],
+        }) }] });
       },
     };
 

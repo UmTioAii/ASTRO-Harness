@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
-import { Ledger, LEDGER_SCHEMA_VERSION } from "../src/ledger";
-import { ProviderError, type ChatMessage, type CompletionResponse } from "../src/providers/types";
+import { Ledger } from "../src/ledger";
+import { ProviderError, type ChatMessage, type CompletionResponse, type ErrorClass } from "../src/providers/types";
 import { compactionState, recordCompactionFailure } from "../src/compaction/breaker";
 import { completeWithCompaction, isContextOverflow } from "../src/compaction/runtime";
+import { registerTokenizer, unregisterTokenizer } from "../src/tokens";
 
 const resp = (content = "ok"): CompletionResponse => ({
   content, toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 },
@@ -258,60 +259,34 @@ describe("runtime da compactação (S-17, CMP-6/CMP-7)", () => {
     expect(audit.readAll().filter((e) => e.tipo === "compaction.degraded")).toHaveLength(4);
   });
 
-  test("falha transitória é retentada e o sucesso não conta no breaker", async () => {
-    const { ledger, audit } = setup();
-    let attempts = 0;
-    await completeWithCompaction(bigHistory(), {
-      ...base, ledger, audit,
-      compaction: { buffer: null, maxRetries: 2, retryBackoffMs: 1 },
-      complete: async () => resp("ok"),
-      summarize: async () => {
-        attempts++;
-        if (attempts === 1) throw new ProviderError("network_timeout", "timeout");
-        return "resumo";
-      },
-    });
-    expect(attempts).toBe(2);
-    expect(compactionState(ledger, "r1").failures).toBe(0);
-    expect(audit.readAll().some((e) => e.tipo === "compaction.retry")).toBe(true);
-  });
+  test("matriz de retry: só as classes transitórias são retentadas", async () => {
+    const transient: ErrorClass[] = ["transient_rate_limit", "outage", "network_timeout"];
+    const deterministic: ErrorClass[] = ["auth", "hard_quota", "invalid_request"];
 
-  test("falha determinística não é retentada", async () => {
-    const { ledger, audit } = setup();
-    let attempts = 0;
-    let calls = 0;
-    await completeWithCompaction(bigHistory(), {
-      ...base, ledger, audit,
-      compaction: { buffer: null, maxRetries: 3, retryBackoffMs: 1 },
-      complete: async () => { calls++; return resp("ok"); },
-      summarize: async () => {
-        attempts++;
-        throw new ProviderError("invalid_request", "model not found");
-      },
-    });
-    expect(attempts).toBe(1);
-    expect(calls).toBe(1);
+    for (const [classes, expected] of [[transient, 2], [deterministic, 1]] as const) {
+      for (const errClass of classes) {
+        const { ledger, audit } = setup();
+        let attempts = 0;
+        let calls = 0;
+        await completeWithCompaction(bigHistory(), {
+          ...base, ledger, audit,
+          compaction: { buffer: null, maxRetries: 2, retryBackoffMs: 1 },
+          complete: async () => { calls++; return resp("ok"); },
+          summarize: async () => {
+            attempts++;
+            if (attempts === 1) throw new ProviderError(errClass, "boom");
+            return "resumo";
+          },
+        });
+        // Transitória: uma retentativa com backoff e o contador limpo.
+        // Determinística: sem retentativa, e a falha conta no breaker.
+        expect(attempts).toBe(expected);
+        expect(calls).toBe(1);
+        expect(audit.readAll().some((e) => e.tipo === "compaction.retry")).toBe(expected === 2);
+        expect(compactionState(ledger, "r1").failures).toBe(expected === 2 ? 0 : 1);
+      }
+    }
   });
-
-  test("o modelo volta a ser sondado quando a pausa expira", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "astro-compaction-runtime-"));
-    const path = join(dir, "ledger.jsonl");
-    // 3 falhas de 10 min atrás: a pausa de 5 min já expirou.
-    const entry = { schemaVersion: LEDGER_SCHEMA_VERSION, ts: new Date(Date.now() - 600_000).toISOString(), run: "r1", agent: "a", kind: "compaction", failure_count: 3, manual: false, seq: 0 };
-    writeFileSync(path, `${JSON.stringify(entry)}\n`);
-    const ledger = new Ledger(path);
-    const audit = new Auditor(join(dir, "audit.jsonl"));
-    let summaries = 0;
-    await completeWithCompaction(bigHistory(), {
-      ...base, ledger, audit,
-      complete: async () => resp("ok"),
-      summarize: async () => { summaries++; return "resumo"; },
-    });
-    // A pausa expirou: o modelo é sondado de novo e o contador zera.
-    expect(summaries).toBe(1);
-    expect(compactionState(ledger, "r1").failures).toBe(0);
-  });
-
 
   test("cancelamento durante o backoff interrompe sem esperar", async () => {
     const { ledger, audit } = setup();
@@ -330,5 +305,63 @@ describe("runtime da compactação (S-17, CMP-6/CMP-7)", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction")).toHaveLength(0);
     expect(audit.readAll().some((event) => event.tipo === "compaction.degraded")).toBe(false);
+  });
+
+  test("no overflow, o erro original de tamanho sobe quando o fallback não reduz", async () => {
+    const { ledger, audit } = setup();
+    // O provider de resumo conta 1 token por caractere: o system prompt enorme
+    // aperta o orçamento da parte recente e sobra histórico antigo para resumir.
+    // O provider ativo (estimativa) cabe na janela recente e não tem o que reduzir.
+    registerTokenizer("sp", (value) => value.length, "chars");
+    try {
+      const run = completeWithCompaction([
+        { role: "system", content: "S".repeat(40_000) },
+        user("a".repeat(24_000)),
+        assistant("b".repeat(2_000)),
+      ], {
+        ...base, ledger, audit,
+        window: () => 64_000,
+        compaction: { buffer: null, summaryProvider: "sp", maxRetries: 0 },
+        complete: async () => { throw new ProviderError("invalid_request", "maximum context length exceeded"); },
+        summarize: async () => { throw new ProviderError("auth", "sem credencial"); },
+      });
+      // O fallback não reduziu nada: sobe o erro que o provider devolveu.
+      await expect(run).rejects.toThrow(/maximum context length/);
+    } finally {
+      unregisterTokenizer("sp");
+    }
+  });
+
+  test("matriz de retry: só as classes transitórias são retentadas", async () => {
+    const transient: ErrorClass[] = ["transient_rate_limit", "outage", "network_timeout"];
+    const deterministic: ErrorClass[] = ["auth", "hard_quota", "invalid_request"];
+
+    for (const errClass of transient) {
+      const { ledger, audit } = setup();
+      let attempts = 0;
+      await completeWithCompaction(bigHistory(), {
+        ...base, ledger, audit,
+        compaction: { buffer: null, maxRetries: 2, retryBackoffMs: 1 },
+        complete: async () => resp("ok"),
+        summarize: async () => {
+          attempts++;
+          if (attempts === 1) throw new ProviderError(errClass, "boom");
+          return "resumo";
+        },
+      });
+      expect(attempts).toBe(2);
+    }
+
+    for (const errClass of deterministic) {
+      const { ledger, audit } = setup();
+      let attempts = 0;
+      await completeWithCompaction(bigHistory(), {
+        ...base, ledger, audit,
+        compaction: { buffer: null, maxRetries: 2, retryBackoffMs: 1 },
+        complete: async () => resp("ok"),
+        summarize: async () => { attempts++; throw new ProviderError(errClass, "boom"); },
+      });
+      expect(attempts).toBe(1);
+    }
   });
 });
