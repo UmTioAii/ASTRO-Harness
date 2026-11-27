@@ -51,6 +51,7 @@ IDs estáveis; não renumerar.
 | Adapter `openai-compat` | até 3 tentativas (1 + 2); backoff exponencial 250ms→10s com jitter ±25%; `Retry-After` vence o backoff | 1 tentativa |
 | `errorPolicy`/`maxRetriesFor` (`src/providers/policy.ts`) | `transient_rate_limit`: até 10 retries com `retry_after`; `outage`/`network_timeout`: até 3 com `retry_backoff` | `hard_quota` → `skip`; `auth`/`invalid_request` → `abort` no profile-fallback |
 | Cadeia C6 (`FallbackProvider`) | retry do mesmo provider até `maxRetries` (config, default 2), backoff linear `retryBackoffMs × attempt`, sem `Retry-After` | não retenta: vai direto ao próximo provider |
+| Compactação (`src/compaction/runtime.ts`) | `transient_rate_limit`/`outage`/`network_timeout`: até `compaction.maxRetries` (default 2) com backoff exponencial abortável (`compaction.retryBackoffMs`) | qualquer outro erro, inclusive erro cru do resumidor: sem retentativa; vai direto ao fallback extrativo (`compaction.degraded`) |
 
 No C6 a matriz contribui só o bit retryable/não-retryable; os limites por classe valem no roteador. `auth` no C6 pula para o próximo provider (a credencial do primário pode estar inválida — é para isso que a cadeia existe); o `abort` de `auth` é do profile-fallback.
 

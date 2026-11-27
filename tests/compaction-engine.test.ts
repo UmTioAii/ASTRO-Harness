@@ -5,6 +5,7 @@ import {
   RECENT_TOKENS,
   applyReduction,
   compactSession,
+  deterministicSummary,
   recentSliceStart,
   reserveTokens,
   shouldCompact,
@@ -125,6 +126,29 @@ describe("níveis de redução (S-17, CMP-5)", () => {
 
   test("nível 5 omite o histórico antigo", () => {
     expect(applyReduction(older, 5)).toEqual({ level: 5, messages: [] });
+  });
+});
+
+describe("resumo determinístico (sem modelo)", () => {
+  test("preserva instrução e próximo passo e ignora ruído de tool", () => {
+    const digest = deterministicSummary([
+      { role: "system", content: "SYS" },
+      user("tarefa antiga importante"),
+      assistant("decisão: usar o cache"),
+      { role: "tool", content: "ruído de tool", toolCallId: "c1" },
+    ]);
+    expect(digest).toContain("tarefa antiga importante");
+    expect(digest).toContain("decisão: usar o cache");
+    expect(digest).not.toContain("ruído de tool");
+  });
+
+  test("sem texto aproveitável devolve o marcador de omissão", () => {
+    expect(deterministicSummary([{ role: "system", content: "SYS" }])).toContain("omitted");
+  });
+
+  test("respeita o teto de caracteres do artefato", () => {
+    const digest = deterministicSummary(Array.from({ length: 50 }, () => user(text(4_000))));
+    expect(digest.length).toBeLessThanOrEqual(4_000);
   });
 });
 

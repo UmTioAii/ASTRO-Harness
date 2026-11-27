@@ -3,9 +3,11 @@
  * chamada, retenta UMA vez quando o provider rejeita por tamanho e respeita a
  * pausa do breaker.
  */
+import { setTimeout as delay } from "node:timers/promises";
 import { throwIfAborted, isAbortError } from "../abort";
 import type { Auditor } from "../audit";
 import type { Ledger } from "../ledger";
+import { RETRYABLE_CLASSES } from "../providers/policy";
 import { ProviderError, type ChatMessage, type CompletionResponse } from "../providers/types";
 import {
   applyBackgroundCompaction,
@@ -15,7 +17,6 @@ import {
   type CompactionIdentity,
 } from "./background";
 import {
-  CompactionPausedError,
   compactionState,
   COMPACTION_FAILURE_LIMIT,
   recordCompactionFailure,
@@ -24,6 +25,7 @@ import {
 import {
   RECENT_TOKENS,
   compactSession,
+  deterministicSummary,
   effectiveRecentBudget,
   recentSliceStart,
   reserveTokens,
@@ -76,6 +78,21 @@ function identityOf(opts: CompactionRuntimeOptions): CompactionIdentity {
 /** Overhead estimado do artefato no contexto compactado (tokens). */
 const ARTIFACT_OVERHEAD = 2_000;
 
+/** Only transient failures are retried (D-18): a deterministic error repeats forever. */
+function isRetryableSummaryError(error: unknown): boolean {
+  return error instanceof ProviderError && RETRYABLE_CLASSES.has(error.errClass);
+}
+
+/** Audit label of a failure: the D-18 class when known, `unclassified` otherwise. */
+function errorSummary(error: unknown): string {
+  return error instanceof ProviderError ? error.errClass : "unclassified";
+}
+
+/** Wait between attempts; aborting the run stops it immediately. */
+function backoff(ms: number, signal?: AbortSignal): Promise<void> {
+  return delay(ms, undefined, signal === undefined ? {} : { signal });
+}
+
 /** A compactação consegue projetar o contexto abaixo do gatilho? */
 function projectionCanClear(messages: readonly ChatMessage[], opts: CompactionRuntimeOptions): boolean {
   const window = opts.window();
@@ -96,21 +113,29 @@ function projectionCanClear(messages: readonly ChatMessage[], opts: CompactionRu
   return systemTokens + recentTokens + ARTIFACT_OVERHEAD < window - reserveTokens(window, opts.compaction.buffer);
 }
 
-/** Compacta, grava sucesso/falha e abre o breaker quando necessário. */
+/**
+ * Compacts, records success/failure and opens the breaker when needed.
+ * The breaker gates only the model summary: paused or failed, compaction
+ * continues through the extractive path (no provider) and never interrupts
+ * the run (CMP-6).
+ */
 async function applyCompaction(
   messages: ChatMessage[],
   opts: CompactionRuntimeOptions,
   reason: CompactReason,
 ): Promise<boolean> {
-  // Sem histórico anterior ou sem projeção para sair do gatilho, repetir a cada
-  // step só gastaria tokens de resumo sem reduzir o contexto.
+  // Without older history or a projection that clears the trigger, repeating
+  // on every step would only spend summary tokens without shrinking context.
   if (reason === "trigger" && !projectionCanClear(messages, opts)) return false;
   const state = compactionState(opts.ledger, opts.run);
-  if (state.paused) throw new CompactionPausedError(state.remainingMs);
 
   const agent = opts.agent();
   const maxRetries = opts.compaction.maxRetries ?? 2;
   const retryBackoffMs = opts.compaction.retryBackoffMs ?? 1000;
+
+  // A paused breaker gates the model summary: compaction goes extractive and
+  // the run keeps going (CMP-6).
+  if (state.paused) return applyExtractive(messages, opts, reason, "paused");
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -124,8 +149,7 @@ async function applyCompaction(
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),
       });
       if (result.olderCount === 0) {
-        // Nada anterior para substituir (ex.: primeira tarefa já grande): não há
-        // compactação possível e repetir a cada step só gastaria tokens.
+        // Nothing older to replace (e.g. a first task that is already large).
         return false;
       }
       messages.length = 0;
@@ -146,21 +170,30 @@ async function applyCompaction(
       });
       return true;
     } catch (error) {
-      if (error instanceof CompactionPausedError) throw error;
       if (isAbortError(error, opts.signal)) throw error;
 
-      // Last attempt - record failure and potentially open breaker
-      if (attempt === maxRetries) {
+      // Only transient failures are retried: a deterministic error repeats the
+      // same failure forever.
+      if (!isRetryableSummaryError(error) || attempt === maxRetries) {
         const after = recordCompactionFailure(opts.ledger, opts.run, agent);
         opts.audit.append({
           run: opts.run,
           agent,
           tipo: "compaction.failed",
-          payload: { reason, error: error instanceof Error ? error.name : "unknown", attempts: attempt + 1 },
+          payload: { reason, error: errorSummary(error), attempts: attempt + 1 },
         });
-        if (after.paused) throw new CompactionPausedError(after.remainingMs);
-        if (reason === "overflow") throw error;
-        return false;
+        if (after.paused) {
+          // Later compactions skip the model until the pause expires; none of
+          // them stops compacting.
+          opts.audit.append({
+            run: opts.run,
+            agent,
+            tipo: "compaction.paused",
+            payload: { reason, remainingMs: after.remainingMs },
+          });
+        }
+        // The model failed: compaction continues through the extractive path.
+        return applyExtractive(messages, opts, reason, errorSummary(error));
       }
 
       // Retry with backoff
@@ -168,13 +201,38 @@ async function applyCompaction(
         run: opts.run,
         agent,
         tipo: "compaction.retry",
-        payload: { reason, error: error instanceof Error ? error.name : "unknown", attempt: attempt + 1, nextInMs: retryBackoffMs },
+        payload: { reason, error: errorSummary(error), attempt: attempt + 1, nextInMs: retryBackoffMs * 2 ** attempt },
       });
-      await new Promise((resolve) => setTimeout(resolve, retryBackoffMs));
-      // Continue to next attempt
+      await backoff(retryBackoffMs * 2 ** attempt, opts.signal);
+      throwIfAborted(opts.signal);
     }
   }
   return false; // Should not reach here
+}
+
+/** Extractive path (CMP-6): no provider call. `cause` is the degradation reason. */
+async function applyExtractive(
+  messages: ChatMessage[], opts: CompactionRuntimeOptions, reason: CompactReason, cause: string,
+): Promise<boolean> {
+  const agent = opts.agent();
+  const fallback = await compactSession({
+    run: opts.run, messages, window: opts.window(), buffer: opts.compaction.buffer,
+    provider: opts.provider(), summarize: async (input) => deterministicSummary(input),
+    ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+  });
+  // The fallback must shrink the context: otherwise the caller surfaces the
+  // original error, not the summary failure that led here.
+  if (fallback.returnedTokens >= fallback.originalTokens) {
+    return false;
+  }
+  messages.length = 0;
+  messages.push(...fallback.messages);
+  opts.onCompacted?.(messages);
+  opts.audit.append({
+    run: opts.run, agent, tipo: "compaction.degraded",
+    payload: { reason, cause, reduction: fallback.reduction },
+  });
+  return true;
 }
 
 /**
@@ -193,8 +251,8 @@ function takeReadyArtifact(
 }
 
 /**
- * Aplica um artefato pronto (já resumido): sem chamada ao provider e sem
- * reescrever o schema do ledger/auditoria.
+ * Applies a ready artifact (already summarized): no provider call and no rewrite
+ * of the ledger/audit schema.
  */
 function applyReadyCompaction(
   messages: ChatMessage[],
@@ -202,8 +260,6 @@ function applyReadyCompaction(
   opts: CompactionRuntimeOptions,
   reason: CompactReason,
 ): void {
-  const state = compactionState(opts.ledger, opts.run);
-  if (state.paused) throw new CompactionPausedError(state.remainingMs);
   const agent = opts.agent();
   applyBackgroundCompaction(messages, job);
   recordCompactionSuccess(opts.ledger, opts.run, agent);
