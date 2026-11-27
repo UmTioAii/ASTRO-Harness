@@ -3,9 +3,9 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
-import { Ledger } from "../src/ledger";
+import { Ledger, LEDGER_SCHEMA_VERSION } from "../src/ledger";
 import { ProviderError, type ChatMessage, type CompletionResponse } from "../src/providers/types";
-import { compactionState } from "../src/compaction/breaker";
+import { compactionState, recordCompactionFailure } from "../src/compaction/breaker";
 import {
   BackgroundCompactor,
   compactionArtifactPaths,
@@ -79,7 +79,7 @@ function inBandStep(messages: ChatMessage[], index: number): void {
 describe("compactação em background (CMP-9)", () => {
   test("próximo turno aplica o artefato pronto sem compactar inline", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
 
@@ -107,9 +107,111 @@ describe("compactação em background (CMP-9)", () => {
     await background.close();
   });
 
+  test("breaker pausado não consome o artefato pronto e não zera o contador", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const messages = history();
+    let summaries = 0;
+
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => toolResp(),
+      summarize: async () => { summaries++; return "BG"; },
+    });
+    await background.drain();
+    expect(summaries).toBe(1);
+
+    // Três falhas depois do pré-aquecimento abrem o breaker.
+    for (let index = 0; index < 3; index++) recordCompactionFailure(ledger, "r1", "a");
+
+    overTrigger(messages);
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => resp("ok"),
+      summarize: async () => { summaries++; return "INLINE"; },
+    }).catch(() => undefined);
+
+    // O artefato foi pago antes da pausa: a pausa não o consome nem zera o contador.
+    expect(summaries).toBe(1);
+    expect(audit.readAll().some((event) => event.tipo === "compaction.applied")).toBe(false);
+    expect(compactionState(ledger, "r1").paused).toBe(true);
+    expect(compactionState(ledger, "r1").failures).toBe(3);
+    expect(existsSync(compactionArtifactPaths(dir, "r1", "a").artifact)).toBe(true);
+    await background.close();
+  });
+
+  test("breaker pausado não consome o artefato no caminho de overflow", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const messages = history();
+    let summaries = 0;
+
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => toolResp(),
+      summarize: async () => { summaries++; return "BG"; },
+    });
+    await background.drain();
+    expect(summaries).toBe(1);
+
+    // Três falhas depois do pré-aquecimento abrem o breaker.
+    for (let index = 0; index < 3; index++) recordCompactionFailure(ledger, "r1", "a");
+
+    overTrigger(messages);
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => { throw new ProviderError("invalid_request", "maximum context length exceeded"); },
+      summarize: async () => { summaries++; return "INLINE"; },
+    }).catch(() => undefined);
+
+    // O overflow também não consome o artefato pausado.
+    expect(summaries).toBe(1);
+    expect(audit.readAll().some((event) => event.tipo === "compaction.applied")).toBe(false);
+    expect(compactionState(ledger, "r1").failures).toBe(3);
+    expect(compactionState(ledger, "r1").paused).toBe(true);
+    expect(existsSync(compactionArtifactPaths(dir, "r1", "a").artifact)).toBe(true);
+    await background.close();
+  });
+
+  test("artefato antigo não zera o contador depois que a pausa expira", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const messages = history();
+    let summaries = 0;
+
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async () => toolResp(),
+      summarize: async () => { summaries++; return "BG"; },
+    });
+    await background.drain();
+    expect(summaries).toBe(1);
+
+    // Três falhas de 10 min atrás: a pausa de 5 min já expirou.
+    const expired = { schemaVersion: LEDGER_SCHEMA_VERSION, ts: new Date(Date.now() - 600_000).toISOString(), run: "r1", agent: "a", kind: "compaction", failure_count: 3, manual: false, seq: 0 };
+    writeFileSync(join(dir, "ledger.jsonl"), `${JSON.stringify(expired)}\n`);
+
+    overTrigger(messages);
+    let seen: readonly ChatMessage[] = [];
+    await completeWithCompaction(messages, {
+      ...options(ledger, audit, background),
+      complete: async (current) => { seen = current; return resp("ok"); },
+      summarize: async () => { summaries++; return "INLINE"; },
+    });
+
+    // A pausa expirou: o modelo é sondado de novo e o artefato antigo não zera o contador.
+    expect(summaries).toBe(2);
+    expect(seen[1]!.content).toContain("INLINE");
+    const applied = audit.readAll().filter((event) => event.tipo === "compaction.applied");
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.payload?.background).toBeUndefined();
+    expect(compactionState(ledger, "r1").failures).toBe(0);
+    await background.close();
+  });
+
   test("resultado não pronto cai no inline e cancela o prewarm em voo", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const gate = deferred<string>();
     const messages = history();
     let summaries = 0;
@@ -155,7 +257,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("overflow cancela o prewarm e compacta inline antes do retry", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
     let completions = 0;
@@ -194,7 +296,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("N steps em banda geram um único resumo e não sobrescrevem o artefato", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
     let completions = 0;
@@ -218,9 +320,9 @@ describe("compactação em background (CMP-9)", () => {
     await background.close();
   });
 
-  test("falha repetida em banda conta uma vez e não pausa o breaker", async () => {
+  test("falha em banda não conta no breaker (o inline decide)", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
     const rejections: unknown[] = [];
@@ -248,15 +350,37 @@ describe("compactação em background (CMP-9)", () => {
 
     expect(summaries).toBe(1);
     expect(rejections).toEqual([]);
-    expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction").at(-1))
-      .toMatchObject({ failure_count: 1 });
+    // Pré-aquecimento é oportunista: a falha não entra no ledger nem no breaker.
+    expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction")).toHaveLength(0);
     expect(audit.readAll().filter((event) => event.tipo === "compaction.failed")).toHaveLength(1);
+    expect(compactionState(ledger, "r1").failures).toBe(0);
     expect(compactionState(ledger, "r1").paused).toBe(false);
+  });
+
+  test("o mesmo snapshot falha uma vez só no audit (dedup por chave)", async () => {
+    const { dir, ledger, audit } = setup();
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
+    const messages = history();
+    let runs = 0;
+    const failing = async () => { runs++; throw new Error("resumo quebrou"); };
+
+    background.schedule("a", messages, 7_000, ID, failing);
+    await background.drain();
+    // O consume libera o próximo pré-aquecimento; o mesmo snapshot roda de novo.
+    background.take("a", messages, ID);
+    background.schedule("a", messages, 7_000, ID, failing);
+    await background.drain();
+
+    expect(runs).toBe(2);
+    // Uma falha por snapshot: o audit não duplica e o ledger fica intacto.
+    expect(audit.readAll().filter((event) => event.tipo === "compaction.failed")).toHaveLength(1);
+    expect(ledger.readAllEntries().filter((entry) => entry.kind === "compaction")).toHaveLength(0);
+    await background.close();
   });
 
   test("prefixo alterado entre agendar e consumir cai no inline", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const messages = history();
     let summaries = 0;
     await completeWithCompaction(messages, {
@@ -283,7 +407,7 @@ describe("compactação em background (CMP-9)", () => {
 
   test("turnos concorrentes não leem artefato parcial e a fila é limitada", async () => {
     const { dir, ledger, audit } = setup();
-    const background = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const background = new BackgroundCompactor({ dir, run: "r1", audit });
     const gate = deferred<string>();
     let runs = 0;
 
@@ -307,21 +431,21 @@ describe("compactação em background (CMP-9)", () => {
   test("artefato sobrevive ao restart, exige marcador e identidade iguais", async () => {
     const { dir, ledger, audit } = setup();
     const messages = history();
-    const first = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const first = new BackgroundCompactor({ dir, run: "r1", audit });
     first.schedule("a", messages, 7_000, ID, async () => done("PERSISTIDO"));
     await first.drain();
 
     const marker = JSON.parse(readFileSync(compactionArtifactPaths(dir, "r1", "a").marker, "utf8"));
     expect(marker.identity).toEqual(ID);
 
-    const second = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const second = new BackgroundCompactor({ dir, run: "r1", audit });
     expect(second.take("a", messages, { ...ID, model: "outro" })).toBeUndefined();
     expect(second.take("a", messages, ID)?.artifact.importantContext).toBe("PERSISTIDO");
 
     first.schedule("b", messages, 7_000, ID, async () => done("PARCIAL"));
     await first.drain();
     unlinkSync(compactionArtifactPaths(dir, "r1", "b").marker);
-    const third = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const third = new BackgroundCompactor({ dir, run: "r1", audit });
     expect(third.take("b", messages, ID)).toBeUndefined();
     await first.close();
     await third.close();
@@ -329,13 +453,13 @@ describe("compactação em background (CMP-9)", () => {
 
   test("close aguarda o job, apaga artefato não consumido e varre tmp", async () => {
     const { dir, ledger, audit } = setup();
-    const producer = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const producer = new BackgroundCompactor({ dir, run: "r1", audit });
     producer.schedule("a", history(), 7_000, ID, async () => done("PRONTO"));
     await producer.drain();
 
-    const otherRun = new BackgroundCompactor({ dir, run: "r2", ledger, audit });
+    const otherRun = new BackgroundCompactor({ dir, run: "r2", audit });
     expect(otherRun.take("a", history(), ID)).toBeUndefined();
-    const otherAgent = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const otherAgent = new BackgroundCompactor({ dir, run: "r1", audit });
     expect(otherAgent.take("b", history(), ID)).toBeUndefined();
     expect(producer.take("a", history(), ID)?.artifact.importantContext).toBe("PRONTO");
 
@@ -353,7 +477,7 @@ describe("compactação em background (CMP-9)", () => {
 
     expect(existsSync(stale)).toBe(false);
     expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-    const fresh = new BackgroundCompactor({ dir, run: "r1", ledger, audit });
+    const fresh = new BackgroundCompactor({ dir, run: "r1", audit });
     expect(fresh.take("a", history(), ID)).toBeUndefined();
     await otherRun.close();
     await otherAgent.close();

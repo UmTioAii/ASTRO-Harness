@@ -412,7 +412,6 @@ export async function runSession(
   const compactionBackground = new BackgroundCompactor({
     dir: join(opts.cwd, ".astro", "compaction"),
     run: opts.run,
-    ledger: opts.ledger,
     audit: opts.audit,
   });
   if (
@@ -1158,7 +1157,6 @@ export async function runMultiAgentSession(
   const compactionBackground = new BackgroundCompactor({
     dir: join(opts.cwd, ".astro", "compaction"),
     run: opts.run,
-    ledger: opts.ledger,
     audit: opts.audit,
   });
   // L5/L6 (#135): checkpoint por agente ativo e guarda de não-progresso por agente.

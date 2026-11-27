@@ -17,6 +17,7 @@ import {
 import {
   CompactionPausedError,
   compactionState,
+  COMPACTION_FAILURE_LIMIT,
   recordCompactionFailure,
   recordCompactionSuccess,
 } from "./breaker";
@@ -177,6 +178,21 @@ async function applyCompaction(
 }
 
 /**
+ * The ready background artifact, unless the breaker still owes a model probe.
+ * A paused breaker gates the model summary; after the pause expires the
+ * counter is still open, so a pre-pause artifact is neither applied nor
+ * allowed to clear it — an inline model probe does that.
+ */
+function takeReadyArtifact(
+  messages: ChatMessage[],
+  opts: CompactionRuntimeOptions,
+): BackgroundCompaction | undefined {
+  const state = compactionState(opts.ledger, opts.run);
+  if (state.paused || state.failures >= COMPACTION_FAILURE_LIMIT) return undefined;
+  return opts.background?.take(opts.agent(), messages, identityOf(opts));
+}
+
+/**
  * Aplica um artefato pronto (já resumido): sem chamada ao provider e sem
  * reescrever o schema do ledger/auditoria.
  */
@@ -249,7 +265,7 @@ export async function completeWithCompaction(
   throwIfAborted(opts.signal);
 
   if (shouldCompact(messages, opts.window(), opts.compaction.buffer, { provider: opts.provider() })) {
-    const ready = opts.background?.take(opts.agent(), messages, identityOf(opts));
+    const ready = takeReadyArtifact(messages, opts);
     if (ready !== undefined) applyReadyCompaction(messages, ready, opts, "trigger");
     else await applyCompaction(messages, opts, "trigger");
     throwIfAborted(opts.signal);
@@ -261,7 +277,7 @@ export async function completeWithCompaction(
     return response;
   } catch (error) {
     if (!isContextOverflow(error)) throw error;
-    const ready = opts.background?.take(opts.agent(), messages, identityOf(opts));
+    const ready = takeReadyArtifact(messages, opts);
     let compacted = true;
     if (ready !== undefined) applyReadyCompaction(messages, ready, opts, "overflow");
     else compacted = await applyCompaction(messages, opts, "overflow");
