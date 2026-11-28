@@ -129,6 +129,8 @@ export interface ToolResult {
   failure?: ToolFailure;
   /** O que foi omitido e como pedir o restante (S6, #603). */
   truncation?: TruncationInfo;
+  /** Provisional `subagent` result (#680, spec §2): the generation has not settled. */
+  transient?: true;
 }
 
 /** Taxonomia fechada de falha (S6, #603): código estável, nunca prosa. */

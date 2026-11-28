@@ -1,7 +1,7 @@
 import { auditDurationMs, type Auditor } from "../audit";
 import { callId } from "../call-id";
 import { NoProgressError } from "../loop-guard";
-import { limitToolOutput } from "../output-limit";
+import { limitSubagentEnvelope, limitToolOutput } from "../output-limit";
 import { redactSecrets } from "../sanitize-external";
 import {
   actionClassOf,
@@ -757,6 +757,8 @@ export class ToolExecutor {
   /** Cap de saída por tool (CMP-10): head+tail+origem, artefato em `.astro/outputs`. */
   private limitOutput(ctx: ToolContext, call: ToolCall, result: ToolResult): ToolResult {
     const capTokens = ctx.outputLimitTokens;
+    // `subagent` keeps its JSON envelope with or without a session cap (#680, spec §5).
+    if (call.name === "subagent") return limitSubagentEnvelope(result, capTokens);
     if (capTokens === undefined || result.output.length === 0) return result;
     // O artefato de handoff é parseado pela sessão antes de virar mensagem e já
     // é compactado (compactDraft); truncar aqui perderia o handoff em silêncio.
