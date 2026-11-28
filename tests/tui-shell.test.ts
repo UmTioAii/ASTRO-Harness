@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
+import { processAlive } from "../src/file-lock";
 import { createShellRunner } from "../src/tui/shell";
 import {
   configureRunCommand,
@@ -199,28 +200,72 @@ describe("!cmd segue o modo de permissão resolvido, por comando (#557)", () => 
   });
 });
 
+// The explicit timeout keeps the failed path reachable: the default 5s per-test
+// timeout would expire inside the death poll, before the assertion and the
+// cleanup, and a failing run would leave the child behind. The worst case is 5s
+// to read the PID plus 5s to see it die, well under the budget, and the child's
+// own 30s timer bounds any run that stretches past it.
 test("abortar mata o processo filho, não só o shell", async () => {
   const { cwd, configPath } = config(["run_command"]);
   const shell = createShellRunner({ approveTool: () => true, configPath, cwd, env: process.env });
-  writeFileSync(join(cwd, "slow.js"), 'require("fs").writeFileSync("child.pid", String(process.pid)); setTimeout(() => {}, 30000);', "utf8");
+  // The PID is published atomically: a reader never sees a partial number, so
+  // the probe below always targets the child and never an unrelated PID.
+  writeFileSync(
+    join(cwd, "slow.js"),
+    'const fs = require("fs"); fs.writeFileSync("child.pid.tmp", String(process.pid)); fs.renameSync("child.pid.tmp", "child.pid"); setTimeout(() => {}, 30000);',
+    "utf8",
+  );
   const controller = new AbortController();
   const pending = shell.run("bun slow.js", controller.signal);
   let childPid: number | undefined;
-  for (let i = 0; i < 60 && childPid === undefined; i++) {
+  for (let i = 0; i < 100 && childPid === undefined; i++) {
     await new Promise((resolve) => setTimeout(resolve, 50));
     try {
-      childPid = Number(readFileSync(join(cwd, "child.pid"), "utf8"));
+      const raw = readFileSync(join(cwd, "child.pid"), "utf8").trim();
+      // Digits only: a PID is written as a decimal integer, so anything else
+      // (empty, exponent form, a partial read) is not a PID.
+      if (/^\d+$/.test(raw)) {
+        const pid = Number(raw);
+        if (Number.isInteger(pid) && pid > 0) childPid = pid;
+      }
     } catch {
-      // ainda não escreveu
+      // not written yet
     }
   }
-  expect(childPid).toBeDefined();
-  controller.abort();
-  const result = await pending;
-  expect(result.output).toContain("cancelado");
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  expect(() => process.kill(childPid!, 0)).toThrow();
-});
+  // The abort and the cleanup are armed before any assertion that can fail, so
+  // a failed test never leaves the shell or the child running.
+  try {
+    expect(childPid).toBeDefined();
+    const pid = childPid!;
+    expect(processAlive(pid)).toBe(true);
+    controller.abort();
+    const result = await pending;
+    expect(result.output).toContain("cancelado");
+    // The tree kill goes through `taskkill /T` on Windows: the child can outlive
+    // the shell by a few hundred ms, so a fixed window races the runner. Poll
+    // until the child is gone instead of assuming a deadline. `processAlive`
+    // reads EPERM as "still there", so a permission error cannot pass as death.
+    let alive = true;
+    for (let i = 0; i < 100 && alive; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      alive = processAlive(pid);
+    }
+    expect(alive).toBe(false);
+  } finally {
+    controller.abort();
+    // If the tree kill regressed, the child would stay alive until its 30s timer.
+    // The PID is the one the child published and the test confirmed alive, so the
+    // kill targets the fixture; only an OS PID reuse inside the few ms between the
+    // last probe and here could redirect it.
+    if (childPid !== undefined && processAlive(childPid)) {
+      try {
+        process.kill(childPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+  }
+}, { timeout: 30_000 });
 describe("!cmd always approval reloads the project layer (#599)", () => {
   test("one runner: the second identical command does not prompt", async () => {
     mock.restore();
