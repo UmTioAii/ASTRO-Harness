@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import {
   applyFixes,
   collectFacts,
@@ -485,8 +485,10 @@ test("$ASTRO_HOME relativo não diverge do loader (resolvido pelo cwd do process
   const home = sandbox();
   const relativeHome = relative(process.cwd(), home);
   expect(relativeHome).not.toBe("");
-  // o loader resolve o caminho relativo contra o cwd do processo, não contra o projeto
-  writeSkill(projectSkillsRoot(projectCwd, { ASTRO_HOME: relativeHome }), "rel-skill", VALID_SKILL);
+  // The loader resolves the relative path against the process cwd, not the project.
+  // The fixture is written via the absolute path: Bun 1.4.2 on win32 fails mkdirSync
+  // with ENOENT on long relative paths; the loader itself always resolves before fs calls.
+  writeSkill(resolve(projectSkillsRoot(projectCwd, { ASTRO_HOME: relativeHome })), "rel-skill", VALID_SKILL);
   const collected = collectFacts(process.cwd(), {
     projectCwd,
     env: { ...process.env, ASTRO_HOME: relativeHome },
