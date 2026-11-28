@@ -6,7 +6,7 @@ import { isEnvName, isVaultCredentialRef, looksLikeSecret } from "../secrets";
 import { redactSecrets } from "../sanitize-external";
 
 export interface WizardIO {
-  read(prompt: string, opts?: { secret?: boolean }): Promise<string | null>;
+  read(prompt: string, opts?: { secret?: boolean; initialValue?: string }): Promise<string | null>;
   write(text: string): void;
   select?(label: string, options: readonly string[], initial?: number): Promise<number | null>;
 }
@@ -16,6 +16,10 @@ export interface WizardOptions {
   profile?: ProviderProfile;
   /** Nome inicial vindo de `/provider add <nome>`. */
   initialName?: string;
+  /** Ink edits the existing ref; an explicitly emptied field removes it. */
+  clearCredentialOnEmpty?: boolean;
+  /** Distinguishes cancellation from validation and persistence failures. */
+  onCancel?: () => void;
   onUse?: (id: string) => void;
   /** Last check before saving; a returned message aborts without writing. */
   validate?: (draft: ProfileDraft) => string | undefined;
@@ -112,12 +116,13 @@ export async function runProviderWizard(
   opts: WizardOptions,
 ): Promise<ProfileView | undefined> {
   const current = opts.profile;
+  const cancel = (): undefined => { opts.onCancel?.(); return undefined; };
   let entry: CatalogEntry | undefined;
 
   if (opts.mode === "add") {
     const options = ["custom", ...PROVIDER_CATALOG.map((item) => item.key)];
     const index = await choose(io, "De onde partir?", options, 0);
-    if (index === undefined) return undefined;
+    if (index === undefined) return cancel();
     if (index > 0) {
       entry = catalogFor(options[index]!);
       if (entry === undefined) return undefined;
@@ -127,7 +132,7 @@ export async function runProviderWizard(
   const name = await ask(io, "Nome", current?.name ?? opts.initialName ?? entry?.name ?? "");
   if (name === undefined || name === "") {
     io.write("cancelado");
-    return undefined;
+    return cancel();
   }
   const kind = current?.kind ?? entry?.kind ?? "openai-compat";
   const knownModels = [...(current?.models ?? []), ...(entry?.models ?? [])];
@@ -141,11 +146,11 @@ export async function runProviderWizard(
       "Credenciais (arquivo)",
       current?.credentialsPath ?? entry?.credentialsPath ?? "~/.codex/auth.json",
     );
-    if (credentialsPath === undefined) return undefined;
+    if (credentialsPath === undefined) return cancel();
   } else {
     for (;;) {
       baseUrl = await ask(io, "Base URL", current?.baseUrl ?? entry?.baseUrl ?? "");
-      if (baseUrl === undefined) return undefined;
+      if (baseUrl === undefined) return cancel();
       if (baseUrl !== "") break;
       io.write("base url é obrigatória");
     }
@@ -158,7 +163,7 @@ export async function runProviderWizard(
       "Modelos (separe com ;)",
       (current?.models ?? entry?.models ?? []).map((model) => model.id).join(";"),
     );
-    if (modelsAnswer === undefined) return undefined;
+    if (modelsAnswer === undefined) return cancel();
     models = modelsFrom(modelsAnswer, knownModels);
     if (models.length > 0) break;
     io.write("informe ao menos um modelo");
@@ -169,10 +174,16 @@ export async function runProviderWizard(
   if (kind !== "codex-oauth") {
     for (;;) {
       const suffix = credentialRef === undefined ? "" : ` [${credentialRef}]`;
-      const answer = await io.read(`Variável da chave (vazio = sem chave)${suffix}: `, { secret: true });
-      if (answer === null) return undefined;
+      const answer = await io.read(`Variável da chave (vazio = sem chave)${suffix}: `, {
+        secret: true,
+        ...(credentialRef === undefined ? {} : { initialValue: credentialRef }),
+      });
+      if (answer === null) return cancel();
       const value = answer.trim();
-      if (value === "") break;
+      if (value === "") {
+        if (opts.clearCredentialOnEmpty === true) credentialRef = undefined;
+        break;
+      }
       if (looksLikeSecret(value)) {
         if (opts.saveSecret === undefined || opts.discardSecret === undefined) {
           io.write("cofre de credenciais indisponível nesta tela; use uma variável de ambiente");
@@ -219,7 +230,7 @@ export async function runProviderWizard(
   const confirm = await ask(io, "Confirmar", "S");
   if (confirm === undefined || confirm.toLowerCase().startsWith("n")) {
     io.write("cancelado");
-    return undefined;
+    return cancel();
   }
 
   const result = saveProviderProfile({

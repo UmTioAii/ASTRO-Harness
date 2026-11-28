@@ -8,7 +8,7 @@ Skills, sessões e estado da TUI vivem em `$ASTRO_HOME` (#468, S2 de #401); a ch
 
 ## Layout
 
-`$ASTRO_HOME` é `ASTRO_HOME` quando definido, senão `~/.astro` (`src/astro-home.ts`).
+`$ASTRO_HOME` is `ASTRO_HOME` when set, otherwise `~/.astro` (`src/astro-home.ts`). A relative value resolves against the process cwd, so every state path is absolute.
 
 | Caminho | Conteúdo | Dono |
 |---|---|---|

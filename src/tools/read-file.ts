@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { astroHomePath } from "../astro-home";
 import { resolveEntropyThreshold } from "../core/config";
 import { shannonEntropyBitsPerChar } from "../entropy";
 import { classifyPath } from "../path-class";
@@ -118,7 +118,7 @@ export const readFileTool: Tool = {
       const pathClass = classifyPath({
         realPath: resolved,
         cwd: ctx.cwd,
-        astroHome: env.ASTRO_HOME?.trim() || join(homedir(), ".astro"),
+        astroHome: astroHomePath(env),
         ...(ctx.protectedPaths === undefined ? {} : { protectedPaths: ctx.protectedPaths }),
         ...(ctx.allowCritical === undefined ? {} : { allowCritical: ctx.allowCritical }),
         ...(ctx.allowSensitive === undefined ? {} : { allowSensitive: ctx.allowSensitive }),

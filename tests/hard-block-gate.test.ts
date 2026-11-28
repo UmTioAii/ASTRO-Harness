@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { classifyPath } from "../src/path-class";
 import {
   PATH_HARD_BLOCKED,
@@ -86,7 +86,7 @@ describe("helpers do gate de hard-block (ADR-0027, #391 slice 1)", () => {
   test("resolveAstroHome/resolveArtifactRoot: env ou defaults", () => {
     expect(resolveAstroHome({})).toBe(join(homedir(), ".astro"));
     expect(resolveAstroHome({ ASTRO_HOME: "   " })).toBe(join(homedir(), ".astro"));
-    expect(resolveAstroHome({ ASTRO_HOME: "/tmp/custom-astro-home" })).toBe("/tmp/custom-astro-home");
+    expect(resolveAstroHome({ ASTRO_HOME: "/tmp/custom-astro-home" })).toBe(resolve("/tmp/custom-astro-home"));
     expect(resolveArtifactRoot({})).toBeNull();
     expect(resolveArtifactRoot({ ASTRO_ARTIFACT_ROOT: "  " })).toBeNull();
     expect(resolveArtifactRoot({ ASTRO_ARTIFACT_ROOT: "/tmp/arts" })).toBe("/tmp/arts");

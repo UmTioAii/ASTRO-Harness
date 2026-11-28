@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auditor } from "../src/audit";
 import { runTask } from "../src/core/app";
-import { CompactionPausedError, recordCompactionFailure } from "../src/compaction/breaker";
+import { recordCompactionFailure } from "../src/compaction/breaker";
 import { compactionArtifactPaths } from "../src/compaction/background";
 import { Ledger } from "../src/ledger";
 import type { BudgetConfig } from "../src/core/config";
@@ -142,31 +142,33 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
     }
   });
 
-  test("breaker pausado interrompe o run com a mensagem do CMP-6", async () => {
+  test("breaker pausado não interrompe o run: compacta sem modelo", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "astro-compaction-paused-"));
     mkdirSync(join(cwd, ".astro"), { recursive: true });
     const ledger = new Ledger(join(cwd, ".astro", "ledger.jsonl"));
     for (let index = 0; index < 3; index++) recordCompactionFailure(ledger, "r-paused", "default");
 
-    const mock = server(() => ok("não deveria chamar"));
+    const mock = server(() => ok("resposta sem compactar no modelo"));
     try {
       const configPath = writeConfig(cwd, mock.instance.port!, {
         models: [{ provider: "mock", id: "m1", tags: ["writing-code"], context: 24_000 }],
         agent: { model: "mock/m1", maxSteps: 3, tools: [], systemPrompt: "SYS-PROMPT" },
         compaction: { buffer: null },
       });
-      const error = await runTask({
+      const result = await runTask({
         configPath, task: "oi", cwd, env: testEnv({ KEY: "k" }), runId: "r-paused",
         history: [
           { role: "user", content: "a".repeat(40_000) },
           { role: "assistant", content: "b".repeat(40_000) },
         ],
-      }).then(() => null, (caught: unknown) => caught);
+      });
 
-      expect(error).toBeInstanceOf(CompactionPausedError);
-      expect((error as Error).message).toMatch(/^Compaction paused \(3 failures, retry in \d+s\)$/);
-      expect(mock.calls()).toBe(0);
-      expect(ledger.lastState("r-paused")).toMatchObject({ state: "interrupted", reason: "compaction_paused" });
+      // A pausa gateia só o modelo de resumo: o turno segue com o extrativo.
+      expect(result.final).toContain("resposta sem compactar no modelo");
+      expect(mock.calls()).toBe(1);
+      expect(ledger.lastState("r-paused")).not.toMatchObject({ state: "interrupted" });
+      const audit = new Auditor(join(cwd, ".astro", "audit.jsonl"));
+      expect(audit.readAll().some((event) => event.tipo === "compaction.degraded")).toBe(true);
     } finally {
       mock.instance.stop(true);
     }
@@ -192,9 +194,11 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
     };
     let calls = 0;
     // Handoff com task grande: o receptor herda ~10k tokens e dispara o gatilho.
+    // Depois do handoff ele responde normalmente — o run segue mesmo pausado.
     const provider: Provider = {
       complete: async () => {
         calls++;
+        if (calls > 1) return resp({ content: "feito pelo receptor" });
         return resp({ toolCalls: [{ id: "h1", name: "handoff", arguments: JSON.stringify({
           to: "coder",
           task: "x".repeat(40_000),
@@ -206,22 +210,22 @@ describe("compactação na sessão (S-17, CMP-8)", () => {
       },
     };
 
-    const error = await runMultiAgentSession({
+    const result = await runMultiAgentSession({
       run: "r1", credentialRef: "K", quotaDomain: "d", cwd, provider, registry,
       baseModel: model, baseExecutor: new ToolExecutor({
         tools: [handoffTool], allow: ["handoff"], audit,
       }),
       ledger, audit, baseMaxSteps: 3, entryAgent: "planner", compaction: { buffer: null },
-    }, "plan").then(() => null, (caught: unknown) => caught);
+    }, "plan");
 
-    expect(error).toBeInstanceOf(CompactionPausedError);
-    expect(calls).toBe(1); // o receptor nem chama o provider
+    expect(result.final).toBe("feito pelo receptor");
+    expect(calls).toBe(2); // o receptor segue depois do handoff
     const events = ledger.readAllEntries()
       .map((entry) => (entry as { kind?: string }).kind)
       .filter((kind): kind is string => typeof kind === "string" && kind.startsWith("handoff."));
     expect(events).toContain("handoff.received");
     expect(events).not.toContain("handoff.failed");
-    expect(ledger.lastState("r1")).toMatchObject({ state: "interrupted", reason: "compaction_paused" });
+    expect(ledger.lastState("r1")).not.toMatchObject({ state: "interrupted", reason: "compaction_paused" });
   });
 
   test("rejeição por tamanho compacta e retenta uma vez (CMP-7)", async () => {

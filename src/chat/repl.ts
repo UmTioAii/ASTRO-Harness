@@ -35,7 +35,7 @@ import type { BudgetStatus } from "../budget";
 import type { QuotaStatus } from "../quota";
 
 export interface ReplIO {
-  read(prompt: string, opts?: { secret?: boolean }): Promise<string | null>;
+  read(prompt: string, opts?: { secret?: boolean; initialValue?: string }): Promise<string | null>;
   /** Lê só uma linha nova (ignora a fila do REPL); para decisores no meio do turno. */
   readFresh?(prompt: string): Promise<string | null>;
   /**
