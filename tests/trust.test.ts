@@ -30,7 +30,7 @@ function errOf(fn: () => void): Error {
 }
 describe("store de trust (#267)", () => {
   test("trustStatePath: $ASTRO_HOME ou ~/.astro/state.json; arquivo ausente → vazio", () => {
-    expect(trustStatePath({ ASTRO_HOME: join("C:", "x") } as NodeJS.ProcessEnv)).toBe(join("C:", "x", "state.json"));
+    expect(trustStatePath({ ASTRO_HOME: join(tmpdir(), "astro-trust-home") } as NodeJS.ProcessEnv)).toBe(join(tmpdir(), "astro-trust-home", "state.json"));
     const env = { ...process.env } as NodeJS.ProcessEnv;
     delete env.ASTRO_HOME;
     expect(trustStatePath(env)).toBe(join(homedir(), ".astro", "state.json"));
