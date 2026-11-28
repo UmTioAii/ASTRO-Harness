@@ -1,10 +1,9 @@
 /** Perfis de provider persistidos fora do projeto (~/.astro/providers.json). Sem segredo. */
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BASELINE_MAX_STEPS, canonicalizeConfigAliases, ConfigError, DEFAULT_AGENT_TOOLS, DEFAULT_ATTACHMENTS, DEFAULT_PATHS, hasDerivedAgentMaxSteps, hasDerivedShellSandbox, inspectConfigDocument, isPlainObject, loadConfigRaw, mergeDerivedPresetMetadata, validateConfig, writeConfigFileAtomic, type AstroConfig, type ModelConfig, type ProviderConfig } from "../core/config";
-import { globalConfigPath, statePath } from "../astro-home";
+import { globalConfigPath, astroHomePath, statePath } from "../astro-home";
 import { loadHomeState, saveHomeState } from "../home-state";
 import { assertDeclaredProviders, assertLayerSchema, assertNarrowed, mergeConfigLayers, mergeModelLayers } from "../config-overlay";
 import { isKnownTag } from "../tags";
@@ -194,9 +193,7 @@ export function validateProfileStore(raw: unknown): ProviderStore {
 
 /** Caminho do store: `$ASTRO_HOME/providers.json` ou `~/.astro/providers.json`. */
 export function profilesPath(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.ASTRO_HOME?.trim();
-  const base = home === undefined || home === "" ? join(homedir(), ".astro") : home;
-  return join(base, "providers.json");
+  return join(astroHomePath(env), "providers.json");
 }
 
 /** Store legado inválido: nomeia o arquivo e nunca ecoa o conteúdo (I-03). */

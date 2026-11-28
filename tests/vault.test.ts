@@ -34,7 +34,7 @@ const CRED = {
 
 describe("vaultPath/defaultScheme (#311)", () => {
   test("$ASTRO_HOME sobrescreve; default ~/.astro/vault.json; scheme por plataforma", () => {
-    expect(vaultPath({ ASTRO_HOME: join("C:", "x") } as NodeJS.ProcessEnv)).toBe(join("C:", "x", "vault.json"));
+    expect(vaultPath({ ASTRO_HOME: join(tmpdir(), "astro-vault-home") } as NodeJS.ProcessEnv)).toBe(join(tmpdir(), "astro-vault-home", "vault.json"));
     const env = { ...process.env } as NodeJS.ProcessEnv;
     delete env.ASTRO_HOME;
     expect(vaultPath(env)).toBe(join(homedir(), ".astro", "vault.json"));

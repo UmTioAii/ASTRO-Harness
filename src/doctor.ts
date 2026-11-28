@@ -923,8 +923,9 @@ export function collectFacts(
   const env = options.env ?? process.env;
   const projectCwd = resolve(options.projectCwd ?? process.cwd());
   const configPath = resolve(projectCwd, options.configPath ?? "astro.config.json");
-  // Sem opção explícita, a raiz é a do runtime, sem `resolve`: `$ASTRO_HOME` relativo é
-  // resolvido contra o cwd do processo pelo loader, não contra o projeto (#468).
+  // Without an explicit option, the root is the runtime's: a relative
+  // `$ASTRO_HOME` resolves against the process cwd, never against the project
+  // (#468). The runtime already hands over an absolute path.
   const projectSkillsRoot = options.projectSkillsRoot === undefined
     ? projectSkillsRootFor(projectCwd, env)
     : resolve(projectCwd, options.projectSkillsRoot);
