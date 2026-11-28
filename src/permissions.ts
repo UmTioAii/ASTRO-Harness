@@ -12,6 +12,7 @@
  */
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { astroHomePath } from "./astro-home";
 import { redactSecrets, sanitizePromptText } from "./sanitize-external";
 import { ToolError, isToolClass, type SideEffects, type Tool, type ToolClass, type ToolManifest } from "./tools/types";
 
@@ -471,8 +472,7 @@ export class PathHardBlockedError extends Error {
 
 /** `$ASTRO_HOME` do processo (ADR-0019/ADR-0027): env `ASTRO_HOME` ou default `~/.astro`. */
 export function resolveAstroHome(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.ASTRO_HOME?.trim();
-  return home === undefined || home === "" ? join(homedir(), ".astro") : home;
+  return astroHomePath(env);
 }
 
 /** Raiz de artefatos, único subtree isento do hard-block em `$ASTRO_HOME` (ADR-0026): env `ASTRO_ARTIFACT_ROOT`. */
